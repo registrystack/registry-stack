@@ -1,951 +1,136 @@
 ---
-title: Connect an institution source
-description: Repoint a scaffolded Evidence project from its placeholder source at a real institution API, draft the source configuration from an OpenAPI document, and prove the adapter offline with sanitized synthetic fixtures.
-status: draft
-draft: true
+title: Draft an Evidence source from OpenAPI
+description: Turn one institution API operation into a bounded Evidence source draft, then review the decisions OpenAPI cannot make for you.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
-doc_type: tutorial
+last_reviewed: "2026-08-04"
+doc_type: how-to
 persona:
   - assertion provider
 locale: en
 standards_referenced: []
 ---
 
-import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+OpenAPI can remove much of the mechanical work when you connect Evidence to an institution API.
+It can describe operations and response shapes. It cannot decide which subjects a caller may name,
+which facts a requirement needs, how zero or several matches are represented, or what the minimum
+answer should be.
 
-A scaffolded Evidence project answers its acceptance definition from a placeholder source called
-`source-a`, pointed at `https://source.invalid`, which never answers. Here you replace that
-placeholder with an adapter for an institution's own read API: you draft the source configuration
-from the institution's OpenAPI document, review the draft by hand, and prove the whole adapter
-offline against sanitized fixtures. No request leaves your machine at any point.
+This page gets you to a reviewable source draft. It does not generate a complete deployment or
+invent fixtures unrelated to your project.
 
-<QuickstartMeta
-  outcome="A scaffolded Evidence project whose placeholder source has been replaced by a reviewed adapter for an institution API, proven offline against twelve sanitized fixture cases."
-  time="About 30 minutes"
-  level="Local development with synthetic fixtures"
-  prerequisites={['The Evidence toolset on PATH (evidence and evidencectl)', 'Familiarity with the scaffolded Evidence project layout', 'An OpenAPI document for the API you intend to read']}
-/>
+## Before you start
 
-Everything in this tutorial is synthetic: a fictional institution, a fictional API on a hostname
-that never resolves, and fixture data invented for the purpose. Do not put production endpoints,
-source credentials, real sample responses, or personal data into a project you share.
+You need an OpenAPI 3.0 or 3.1 document for the API Evidence will read. Use a sanitized copy during
+authoring. Keep credentials, real responses, and personal data outside the project.
 
-## Check the operation before you draft from it
+Choose an operation that can answer one bounded lookup:
 
-Evidence answers one bounded question about one subject, so the operation you read has to be able
-to say three different things in a single bounded request: nothing matched, exactly one thing
-matched, or more than one thing matched. An operation that cannot distinguish those three is not a
-Version 1 integration, and no amount of adapter work fixes it.
+- The request selects one subject from explicit fields.
+- The response lets you distinguish no match, one match, and several matches.
+- Response strings and collections have defensible bounds.
+- The deployment can call it with a service credential, not an end-user session.
 
-Read the candidate operation against these four questions before writing any configuration:
+If an operation lists broad records and expects Evidence to filter them locally, choose a narrower
+operation or improve the API first.
 
-1. Can one request select a single subject from the selector fields the deployment holds? An
-   operation that only lists everything and expects the caller to filter is not usable: filtering
-   locally means reading records that are not the subject's.
-2. Does the response distinguish zero matches from many? A bare array is ambiguous at the edges,
-   because a truncated page of one looks the same as a genuine single match. A separate total, an
-   exact-match endpoint, or a documented uniqueness guarantee resolves it.
-3. Is the response bounded? Every array needs a maximum length, every string a maximum size. If
-   the API documents neither, the deployment has to impose bounds and defend them in review.
-4. Does the operation authenticate a service, rather than a person? Evidence holds a deployment
-   credential, never an end user's session.
+## Explore the document interactively
 
-The synthetic API in this tutorial answers all four, and it answers the second one with a
-`matchCount` field that is the operation's own count of matching records, independent of how many
-records the page returns.
-
-## Scaffold a project to work in
-
-Create a fresh project and enter it:
+Run the source assistant without a project:
 
 ```sh
-evidencectl new connect-a-source
-cd connect-a-source
+evidencectl source suggest --openapi <institution.openapi.yaml>
 ```
 
-Generate the key material the runtime requires:
+The assistant lists supported HTTP operations, then the candidate response leaves. Choose only the
+fields required to resolve cardinality and derive the answer. With no `--project`, it prints a
+draft and writes nothing.
 
-```sh
-evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1
-evidencectl keygen secret --out secrets/audit-hmac-key
-evidencectl keygen secret --out secrets/subject-binding-hmac-key
-```
+`--openapi` also accepts an `https` URL. Evidencectl fetches the document, not the source endpoint
+named inside it. Remote `$ref` documents are not fetched.
 
-Expected output:
+## Make the draft reproducible
 
-```text
-wrote secrets/signing-ed25519-private-jwk
-wrote secrets/signing-ed25519-public.jwk.json
-kid: scaffold-signing-key-1
-wrote secrets/audit-hmac-key
-wrote secrets/subject-binding-hmac-key
-```
-
-Leave the bundle writable for now: the freeze comes at the end, once the adapter is finished.
-
-## Save the institution's API document
-
-An adopter normally downloads this document from the institution, or is sent it. Write the
-synthetic stand-in used by this tutorial:
-
-```sh
-mkdir -p provider
-cat > provider/records-office.openapi.yaml <<'YAML'
-# Public API document of the Norhaven Records Office, a fictional institution.
-# It stands in for the document a real institution publishes. Nothing in it
-# resolves: `records.norhaven.example` is a reserved name that never answers.
-openapi: 3.0.3
-info:
-  title: Norhaven Records Office public API
-  version: "2.4.0"
-servers:
-  - url: https://records.norhaven.example/public-api
-paths:
-  /v1/event-records:
-    get:
-      operationId: searchEventRecords
-      summary: Search recorded events by reference and issuing office.
-      parameters:
-        - name: reference
-          in: query
-          required: true
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 64
-        - name: office
-          in: query
-          required: true
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 32
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 25
-            default: 10
-      responses:
-        "200":
-          description: A page of matching records, with the total match count.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EventRecordPage'
-components:
-  schemas:
-    EventRecordPage:
-      type: object
-      required: [matchCount, records]
-      properties:
-        matchCount:
-          type: integer
-          minimum: 0
-          maximum: 100000
-        records:
-          type: array
-          items:
-            $ref: '#/components/schemas/EventRecord'
-    EventRecord:
-      type: object
-      required: [recordId, officeCode, registeredAt, eventDate]
-      properties:
-        recordId:
-          type: string
-          format: uuid
-        eventDate:
-          type: string
-          format: date
-        officeCode:
-          type: string
-          maxLength: 32
-        registeredAt:
-          type: string
-          format: date-time
-        remarks:
-          type: string
-          maxLength: 4096
-        office:
-          $ref: '#/components/schemas/Office'
-    # Offices nest: a district office names the regional office above it, and
-    # so on. The document expresses that as a schema that refers to itself.
-    Office:
-      type: object
-      required: [code]
-      properties:
-        code:
-          type: string
-          maxLength: 32
-        parent:
-          $ref: '#/components/schemas/Office'
-YAML
-```
-
-This tutorial passes a file, so nothing is fetched. `--openapi` also accepts the URL a description
-is published at, read under the same rule the runtime applies to the source URLs it will itself
-call; `products/evidence/README.md` states that rule. Either way `evidencectl` does not resolve
-remote `$ref` targets and does not contact the server the document names.
-
-## Draft the source configuration
-
-The scaffold's acceptance definition needs exactly one fact: the recorded event date. That is one
-leaf of one operation, so the selection is two JSON pointers: the count that resolves cardinality,
-and the date itself.
+Repeat the accepted choices as flags so another reviewer can reproduce them:
 
 ```sh
 evidencectl source suggest \
-  --openapi provider/records-office.openapi.yaml \
-  --operation 'GET /v1/event-records' \
-  --source-id event-records \
-  --project . \
-  --select /matchCount \
-  --select '/records/*/eventDate'
+  --openapi <institution.openapi.yaml> \
+  --operation 'GET /people/{person_id}' \
+  --source-id people \
+  --select /date_of_birth
 ```
 
-Run without `--operation` and `--select` and the command becomes interactive, listing the
-operations it found and the candidate leaves of the response you pick. The flags make the same run
-reproducible in a script or a review.
+Use one `--select` per required JSON pointer. Array members use `*`, for example
+`/results/*/status`. Add `--sample <sanitized-response.json>` only when the API document omits a
+bound and you need a starting suggestion. A sample can suggest a bound but cannot prove it, so the
+report marks that provenance for review.
 
-Three notes go to standard error, and they are the most important lines of the run:
+## Write into a complete project
 
-```text
-evidencectl: `/records/*/office/parent` repeats the $ref cycle `#/components/schemas/Office`; the repeat is cut there, so nothing below it can be projected
-evidencectl: `/records/*/office/parent` repeats the $ref cycle `#/components/schemas/Office`; a schema with no end cannot be projected, so the repeat is skipped
-evidencectl: adopting maxItems 25 for `/records`, derived from a page-size parameter in the spec
-```
-
-The first two report the self-referring `Office` schema. A document that describes a hierarchy this
-way describes a shape with no end, and Evidence projects only shapes with an end, so the repeat is
-cut at the first repetition and the candidate leaves stop there. Nothing is lost here, because this
-selection never reaches an office. It matters for your own document: if the leaf you need sits
-below such a cut, select the members you need individually rather than the subtree above it.
-
-Expected output, first part:
-
-```text
-wrote ./bundle/schemas/event-records-response.schema.yaml
-wrote ./bundle/adapters/event-records-extract.rhai
-wrote ./bundle/schemas/event-records-facts.schema.yaml
---- the block to paste under `sources:` in bundle/evidence.yaml ---
-# Paste this block under `sources:` in bundle/evidence.yaml, then resolve
-# every TODO(evidencectl) comment below before running `evidence check`.
-sources:
-  event-records:
-    transport: http-json
-    # TODO(evidencectl): confirm this base URL against the intended deployment;
-    # derived from the OpenAPI servers list, which states an origin only here
-    # and any path prefix on the request path below.
-    baseUrl: https://records.norhaven.example
-    # TODO(evidencectl): upgrade to field-projected or source-derived only if the
-    # source's pre-projection response really carries no more than this.
-    posture: record-transformed
-    # TODO(evidencectl): review authentication; static-bearer is a placeholder.
-    # See CONFIG.md#source-authentication for the other supported kinds. Do not
-    # map OpenAPI security schemes automatically.
-    authentication:
-      kind: static-bearer
-      tokenRef: secret:file/event-records-bearer-token
-    request:
-      method: GET
-      path: /public-api/v1/event-records
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      # TODO(evidencectl): selectorInputs — copy the shape from
-      # bundle/evidence.yaml (sources.source-a.request.selectorInputs)
-      # and name this source's real selector profile and fields.
-      # TODO(evidencectl): prepareScript — author this script from
-      # bundle/adapters/source-a-prepare.rhai.
-      # TODO(evidencectl): adapterParameters and adapterParametersSchema — copy the
-      # shape from bundle/evidence.yaml and
-      # bundle/schemas/adapter-parameters.schema.yaml.
-      preparationLimits:
-        query: required
-        jsonBody: forbidden
-        maximumQueryPairs: 8
-        maximumQueryNameBytes: 32
-        maximumQueryValueBytes: 256
-        maximumNormalizedBytes: 4096
-      projection: [/matchCount, /records/*/eventDate]
-      redirects: deny
-      timeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      concurrencyLimit: 8
-    responseSchema: schemas/event-records-response.schema.yaml
-    extractScript: adapters/event-records-extract.rhai
-    factSchema: schemas/event-records-facts.schema.yaml
-```
-
-Expected output, second part:
-
-```text
-not verified: pass --evidence-bin to run `evidence check` once the project is frozen and provisioned.
-evidencectl source suggest: draft for source `event-records` (GET /v1/event-records)
-
-Derived automatically:
-  - /records (maxItems): derived from a page-size parameter in the spec
-
-Still needs your input (the source block below):
-  - TODO(evidencectl): sources.<id>.request selectorInputs, prepareScript,
-    adapterParameters, and adapterParametersSchema in the pasted source block.
-  - TODO(evidencectl): review authentication and baseUrl in the pasted source block.
-
-Next steps:
-  1. Resolve every TODO(evidencectl) comment in schemas/event-records-response.schema.yaml,
-     adapters/event-records-extract.rhai, schemas/event-records-facts.schema.yaml, and the pasted source block.
-  2. Paste the source block under `sources:` in bundle/evidence.yaml.
-  3. Run `evidence check --runtime <project>/runtime.yaml`.
-
-Until step 2 is done `evidence check` fails, naming every drafted file, with
-`deployment artifact closure is invalid`: the bundle now carries artifacts
-evidence.yaml does not declare yet. That error is the remaining to-do list, not a
-broken draft.
-
-Reproduce this run with:
-  evidencectl source suggest --openapi provider/records-office.openapi.yaml --operation 'GET /v1/event-records' --status 200 --media-type application/json --source-id event-records --project . --select /matchCount --select '/records/*/eventDate'
-```
-
-## Read the draft as a draft
-
-The command wrote three files and printed a fourth thing it refuses to write: the source block for
-`bundle/evidence.yaml`. That split is the point. `evidencectl` will draft shapes it can derive from
-a document, and it will not silently edit the governed contract that says which system a deployment
-reads and with what credential.
-
-Read the run report as a list of claims to check, in three groups.
-
-**What it derived, with its provenance.** One line: `maxItems 25 for /records`. The document does
-not bound the `records` array, so a maximum length was taken from the `limit` parameter's own
-`maximum`. A page-size maximum is a real bound and a weak one: it is the largest page the operation
-will return, not a promise about the collection. Every derived bound carries a provenance comment
-in the file for exactly this reason. A bound from the response schema is stronger than one from a
-parameter, which is stronger than one observed in a sample.
-
-**What it refuses to guess.** `selectorInputs`, `prepareScript`, `adapterParameters` and its
-schema stay as TODO comments, because they encode which of the deployment's selector fields are
-allowed to reach this institution, which is a disclosure decision and not a fact about the
-document. `authentication` is drafted as `static-bearer` and flagged for review: OpenAPI security
-schemes are deliberately not mapped, because the credential kind a deployment holds is an operator
-decision.
-
-**What it got structurally right and you still have to confirm.** `baseUrl` carries the origin only
-and the document's `/public-api` prefix moved onto `request.path`, because an Evidence `baseUrl` is
-a bare origin. The `posture` is `record-transformed`, which is the honest label when a whole record
-crosses the wire and the projection narrows it locally. Weakening that to `field-projected` claims
-the source itself disclosed no more than the projection keeps, which this operation does not.
-
-The drafted response schema is the file worth reading closely, because it is the shape contract the
-runtime enforces before your script sees anything:
-
-```text
-type: object
-additionalProperties: false
-required: [matchCount, records]
-properties:
-  matchCount:
-    type: integer
-    minimum: 0
-    maximum: 100000
-  # derived from a page-size parameter in the spec
-  records:
-    type: array
-    minItems: 0
-    maxItems: 25
-    items:
-      type: object
-      additionalProperties: false
-      required: [eventDate]
-      properties:
-        eventDate:
-          type: string
-          format: date
-```
-
-Two properties, and everything else the API returns is gone: `recordId`, `officeCode`,
-`registeredAt` and `remarks` were never selected, so the projection discards them before this
-schema runs and before any script is compiled.
-
-## Narrow the drafted response schema
-
-One line of that draft is wrong, and it is wrong in a way worth understanding. The drafting tool
-copied the document's record-level `required` list into the projected record shape, because the
-document is the only evidence it has. But a published document states the shape a provider intends
-to return, and an Evidence response schema is a boundary check, not a restatement of that intent.
-Records do arrive without a field their own document marks required.
-
-The consequence is not a rejected record. It is the wrong answer to the requester. A response that
-fails the schema is a source-protocol failure, so the requester is told `dependency_unavailable`, as
-though the institution were down, when the truthful answer is `evidence_not_available`: the source
-answered, and this subject's record cannot support the claim.
-
-Find this line in `bundle/schemas/event-records-response.schema.yaml`:
-
-```yaml
-      required: [eventDate]
-```
-
-Replace it with:
-
-```yaml
-      required: []
-```
-
-The rule has two halves and only one of them is a defect. Requiring a projected leaf of every record
-is the defect, and the check belongs in the extract script instead, on the records that have to carry
-the field, where you choose which problem the requester sees. Requiring an intermediate container is
-merely redundant: an intermediate cannot be absent, because projection rejects the response before
-this schema is read. That is why `required: [matchCount, records]` at the top of the draft stays
-exactly as drafted.
-
-## Write the request adapter
-
-The prepare script turns validated selector values into the query this operation expects. It reads
-two things and nothing else: the selector values the requester supplied, and reviewed constants
-from the bundle. It cannot reach configuration, the environment, or the network.
+After reviewing the print-only draft, write its source artifacts into a complete deployment
+project:
 
 ```sh
-cat > bundle/adapters/event-records-prepare.rhai <<'RHAI'
-// Request preparation for event-records. Turns the already validated selector
-// values and the reviewed adapter parameters into the query the operation
-// expects. Preparation may not invent fields: every pair emitted comes from a
-// selector value or from a closed adapter parameter.
-fn prepare(selectors, parameters) {
-    let subject = selectors["subject"];
-    #{
-        query: [
-            #{name: "reference", value: subject["values"]["record_reference"]},
-            #{name: "office", value: subject["values"]["registry_code"]},
-            #{name: "limit", value: parameters["resultLimit"]}
-        ],
-        body: ()
-    }
-}
-RHAI
-cat > bundle/schemas/event-records-adapter-parameters.schema.yaml <<'YAML'
-# Closed schema for the reviewed adapter parameters of event-records. Constants
-# keep the request shape under review rather than under operator control.
-type: object
-additionalProperties: false
-required: [resultLimit]
-properties:
-  resultLimit:
-    const: "1"
-YAML
+evidencectl source suggest \
+  --openapi <institution.openapi.yaml> \
+  --operation 'GET /people/{person_id}' \
+  --source-id people \
+  --project <evidence-project> \
+  --select /date_of_birth
 ```
 
-`resultLimit` is pinned to `"1"` by a `const` in the schema, so a page of one is a reviewed
-property of the deployment rather than a value an operator can raise. Asking for one record is a
-minimization decision: cardinality comes from `matchCount`, so a larger page would fetch records
-belonging to people who are not the subject in order to learn nothing extra. The value is a string
-because query values are strings on the wire.
+The command writes only new draft artifacts and refuses collisions. It does not silently edit the
+governed `bundle/evidence.yaml`. Its report gives you the source block to review and place under
+`sources`, followed by every unresolved `TODO(evidencectl)` decision.
 
-## Write the extract script and the facts schema
+The generated files are a starting point:
 
-The generated extract script is a skeleton with the cardinality decision left as a TODO, which is
-correct: nothing in an OpenAPI document says which field means "several subjects matched". Replace
-it with the real mapping, and replace the placeholder facts schema with the one fact the derivation
-consumes.
+- The response schema closes and bounds the source shape.
+- The prepare script materializes one bounded HTTP request.
+- The extract script must map the source's own cardinality semantics to `match`, `no_match`, or
+  `ambiguous`.
+- The facts schema contains only the facts the derivation may receive.
+
+## Review the decisions OpenAPI cannot make
+
+Resolve every generated TODO before checking the project:
+
+1. Confirm the exact base URL, path, method, redirect policy, timeout, response ceiling, and
+   concurrency limit.
+2. Bind only authorized subject selectors into the request. Do not forward arbitrary caller query
+   parameters.
+3. Choose the deployment credential reference. Never put credential values in the bundle, sample,
+   script, command line, or fixture.
+4. Confirm the projection excludes fields the derivation does not need.
+5. Implement explicit zero, one, and several-match behavior from the API contract.
+6. Define the requirement, purpose, allowed audience, derivation, and disclosed concept. These are
+   governance decisions, not OpenAPI facts.
+
+Run the real bundle loader when the project is complete:
 
 ```sh
-cat > bundle/adapters/event-records-extract.rhai <<'RHAI'
-// Fact extraction for event-records, from the skeleton
-// `evidencectl source suggest` drafted for GET /v1/event-records.
-//
-// The response schema has already rejected anything outside the declared shape,
-// so this script carries no presence or type checks. What is left is the part a
-// shape cannot state: matchCount is the operation's own count of matching
-// records, so it, and not the length of the returned page, decides whether the
-// lookup resolved to zero, one, or several subjects.
-fn extract(source_response, parameters) {
-    let match_count = source_response["matchCount"];
-    if match_count == 0 {
-        // The operation says it matched nothing, so it must not also return a
-        // record. A response that does is a source change, not an answer.
-        let records = get_path(source_response, "/records");
-        if !is_missing(records) && records.len != 0 { throw("source_protocol_error"); }
-        return #{outcome: "no_match"};
-    }
-    if match_count > 1 {
-        return #{outcome: "ambiguous"};
-    }
-    // Exactly one match, and the request asked for a page of one, so index 0 is
-    // the only element the page can carry.
-    let event_date = get_path(source_response, "/records/0/eventDate");
-    if is_missing(event_date) {
-        return #{outcome: "match", facts: #{}};
-    }
-    #{outcome: "match", facts: #{event_date: event_date}}
-}
-RHAI
-cat > bundle/schemas/event-records-facts.schema.yaml <<'YAML'
-# Closed schema for the facts extraction may hand to the derivation for
-# event-records. Extraction output that does not match exactly is rejected
-# before any derivation runs.
-type: object
-additionalProperties: false
-required: [event_date]
-properties:
-  event_date:
-    type: string
-    format: date
-YAML
+evidence check --runtime <evidence-project>/runtime.yaml
 ```
 
-Three details in that script repay attention.
+A draft that is not yet referenced by `bundle/evidence.yaml` fails artifact closure. Treat that as
+an unfinished project, not as permission to weaken closure checks.
 
-The three outcomes are named, not inferred. `no_match` and `ambiguous` are outcomes an adapter
-returns, not errors it raises, and Evidence turns both into the same `evidence_not_available`
-answer for the requester. A source that cannot tell them apart has to return one of them for both,
-which is a real loss of fidelity and the reason the operation check comes first.
+## Local and deployable assurance differ
 
-`source_response["matchCount"]` indexes directly, because the response schema has already made that
-key required. `get_path` is used for `/records` and for the date, because both can legitimately be
-absent from the projected response and direct indexing throws on an absent key. Reach for `get_path`
-plus `is_missing` exactly where the schema permits absence.
+`assuranceProfile: local` may omit fixtures while you are learning and iterating. Production and
+evidence-grade projects must carry complete, project-specific fixtures. Do not copy a fictional
+fixture suite whose selectors, source shape, or answer has nothing to do with your integration.
 
-`records.len` is a property on an array, not a function call. The scaffold's own extract script
-writes `len(source_response)`, which is the function form, and that form works there because the
-argument is a map. Passing an array to `len()` fails at runtime.
+Continue with [Prove and promote an Evidence project](../prove-an-evidence-project/) once the
+source and requirement describe your actual project.
 
-## Replace the placeholder source
+## Related reference
 
-The drafted source block goes into `bundle/evidence.yaml` by hand, with the TODO comments resolved.
-Find this block:
-
-```yaml
-# One generic JSON over HTTP source. Point baseUrl and path at the system that
-# already holds the data, and keep the projection as narrow as the derivation
-# needs: anything outside the projection is discarded before extraction runs.
-sources:
-  source-a:
-    transport: http-json
-    # Replace with the origin of the system that holds the data. The path below
-    # is appended to it.
-    baseUrl: https://source.invalid
-    posture: field-projected
-    # The bearer token is read from the runtime secret root, never from this
-    # file. Name the secret file here and put its bytes there.
-    authentication:
-      kind: static-bearer
-      tokenRef: secret:file/source-bearer-token
-    request:
-      method: POST
-      path: /v1/facts
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      # Which selector profile fields reach this source, and in which role.
-      # Add an alternative for each accepted combination of fields.
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: subject-lookup-v1
-              fields: [record_reference, registry_code]
-      prepareScript: adapters/source-a-prepare.rhai
-      # Reviewed constants the prepare script may read. They are validated
-      # against the schema below, so change the two together.
-      adapterParameters:
-        requestedFields: [event_date]
-        resultLimit: 2
-      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
-      preparationLimits:
-        query: forbidden
-        jsonBody: required
-        maximumJsonDepth: 8
-        maximumCollectionItems: 16
-        maximumStringBytes: 256
-        maximumNormalizedBytes: 4096
-      projection: [/total, /event_date]
-      redirects: deny
-      timeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      concurrencyLimit: 8
-    # Shape contract for the projected response, checked before extraction runs.
-    responseSchema: schemas/response.schema.yaml
-    extractScript: adapters/source-a-extract.rhai
-    factSchema: schemas/facts.schema.yaml
-```
-
-Replace it with the reviewed block:
-
-```yaml
-# The institution's own read API. baseUrl carries an origin and nothing else:
-# the `/public-api` prefix the OpenAPI servers list declared belongs on the
-# request path instead. Keep the projection as narrow as the derivation needs:
-# anything outside the projection is discarded before extraction runs.
-sources:
-  event-records:
-    transport: http-json
-    baseUrl: https://records.norhaven.example
-    # The operation answers with whole records and this deployment narrows them
-    # after the fact, so record-transformed is the honest posture: a local
-    # projection bounds what Evidence keeps, never what the source disclosed.
-    posture: record-transformed
-    # The bearer token is read from the runtime secret root, never from this
-    # file. Name the secret file here and put its bytes there.
-    authentication:
-      kind: static-bearer
-      tokenRef: secret:file/event-records-bearer-token
-    request:
-      method: GET
-      path: /public-api/v1/event-records
-      fixedHeaders:
-        - name: Accept
-          value: application/json
-      # Which selector profile fields reach this source, and in which role.
-      selectorInputs:
-        - role: subject
-          alternatives:
-            - profile: subject-lookup-v1
-              fields: [record_reference, registry_code]
-      prepareScript: adapters/event-records-prepare.rhai
-      # Reviewed constants the prepare script may read. They are validated
-      # against the schema named under them, so change the two together.
-      adapterParameters:
-        resultLimit: "1"
-      adapterParametersSchema: schemas/event-records-adapter-parameters.schema.yaml
-      preparationLimits:
-        query: required
-        jsonBody: forbidden
-        maximumQueryPairs: 8
-        maximumQueryNameBytes: 32
-        maximumQueryValueBytes: 256
-        maximumNormalizedBytes: 4096
-      projection: [/matchCount, /records/*/eventDate]
-      redirects: deny
-      timeoutMilliseconds: 3000
-      maximumResponseBytes: 65536
-      concurrencyLimit: 8
-    # Shape contract for the projected response, checked before extraction runs.
-    responseSchema: schemas/event-records-response.schema.yaml
-    extractScript: adapters/event-records-extract.rhai
-    factSchema: schemas/event-records-facts.schema.yaml
-```
-
-The `preparationLimits` changed shape along with the method. The placeholder was a POST source, so
-it declared `jsonBody: required` and JSON body limits. A GET source declares `query: required`,
-`jsonBody: forbidden`, and per-pair query limits instead. Declaring the wrong family is a
-configuration error, not a silently ignored setting.
-
-## Repoint the requirement
-
-The requirement still names the source that no longer exists. Find this line:
-
-```yaml
-    source: source-a
-```
-
-Replace it with:
-
-```yaml
-    source: event-records
-```
-
-## Remove the placeholder artifacts
-
-A bundle's artifact list is closed in both directions: an artifact `evidence.yaml` does not
-reference is refused, and a reference to a file that is not present is refused. The five files the
-placeholder source used are now referenced by nothing, so remove them.
-
-```sh
-rm bundle/adapters/source-a-prepare.rhai \
-   bundle/adapters/source-a-extract.rhai \
-   bundle/schemas/response.schema.yaml \
-   bundle/schemas/facts.schema.yaml \
-   bundle/schemas/adapter-parameters.schema.yaml
-```
-
-Between drafting the source and finishing this edit the project does not load, and
-`deployment artifact closure is invalid` names every file that is on one side of the contract and
-not the other. That message is a to-do list.
-
-## Sanitize a sample response into fixture cases
-
-Ask the institution for a sample response, or capture one against a test instance. A real one for
-this operation looks like this:
-
-```text
-{
-  "matchCount": 1,
-  "records": [
-    {
-      "recordId": "7d1f0a26-9c4b-4f3e-8a12-5b6e4c0d2f18",
-      "eventDate": "1994-03-17",
-      "officeCode": "NRW-114",
-      "registeredAt": "1994-03-24T11:02:00Z",
-      "remarks": "Amended 1996-08-02 under file 114/96."
-    }
-  ]
-}
-```
-
-That sample is personal data. It is useful for its shape and nothing else, so read the shape off it
-and delete it. It must not enter the bundle, a commit, a snapshot, or a log, and the fixture cases
-you write from it carry invented values only.
-
-The cases file is the substitute. It replays the real evaluation pipeline (request preparation,
-projection, response schema, extraction, derivation, output gate) with the source response supplied
-from disk. The bundle refuses to load unless the case identifiers cover every required category, so
-the set is a floor and not a sample.
-
-```sh
-cat > bundle/fixtures/cases.yaml <<'YAML'
-# Synthetic acceptance cases for the requirement, sanitized from one sample
-# response of GET /v1/event-records. `evidence evaluate` replays every case
-# offline against the reviewed adapter, derivation and output gate, so no
-# source and no network are involved.
-#
-# Every `source:` block is the response as the operation returns it, before this
-# deployment's projection runs. The extra fields in the first case are there on
-# purpose: the projection is what drops them, and a case carrying them proves it.
-#
-# The bundle is rejected unless the case identifiers cover every required
-# category: `positive`, `no-match`, `source-failure`, `anti-reconstruction`,
-# and at least one identifier each starting with `negative`, `boundary`,
-# `missing` and `ambiguous`.
-fixture: registry.evidence.scaffold.example-flag/v1
-coequal_acceptance_definition: true
-synthetic_only: true
-
-common:
-  observed_at: '2026-08-02T00:00:00Z'
-  legal_local_date: '2026-08-02'
-  selectors:
-    subject:
-      profile: subject-lookup-v1
-      # Synthetic identifiers only. These are asserted to be absent from
-      # diagnostics at the end of this file, so keep them distinctive.
-      values:
-        record_reference: RCD-000123
-        registry_code: RGC-07
-
-cases:
-  # One match past the threshold produces a signed true. This is the only case
-  # that carries a whole record: everything outside the projection is discarded
-  # before the response schema runs, so the case passes only if that happens.
-  - id: positive
-    source:
-      matchCount: 1
-      records:
-        - recordId: 00000000-0000-4000-8000-000000000001
-          eventDate: '2000-01-01'
-          officeCode: OFC-01
-          registeredAt: '2000-01-08T09:00:00Z'
-          remarks: not projected
-    expected_value: true
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  # One match short of the threshold produces a signed false. A negative answer
-  # is a successful answer, not an error.
-  - id: negative-false-is-success
-    source:
-      matchCount: 1
-      records:
-        - eventDate: '2010-01-01'
-    expected_value: false
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  - id: boundary-before
-    legal_local_date: '2026-08-01'
-    source:
-      matchCount: 1
-      records:
-        - eventDate: '2008-08-02'
-    expected_value: false
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  - id: boundary-on
-    legal_local_date: '2026-08-02'
-    source:
-      matchCount: 1
-      records:
-        - eventDate: '2008-08-02'
-    expected_value: true
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  - id: boundary-after
-    legal_local_date: '2026-08-03'
-    source:
-      matchCount: 1
-      records:
-        - eventDate: '2008-08-02'
-    expected_value: true
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  - id: boundary-leap-day
-    legal_local_date: '2026-02-28'
-    source:
-      matchCount: 1
-      records:
-        - eventDate: '2008-02-29'
-    expected_value: true
-    expected_lookup: match
-    derivation_runs: true
-    signed_success: true
-
-  # One record resolved, but it carries no event date. The operation's own
-  # schema marks that field required, and a source that returns this record
-  # anyway is exactly why the response schema does not require it: the script
-  # catches the gap, so the requester learns only that evidence is not
-  # available rather than that the institution is down.
-  - id: missing-event-date
-    source:
-      matchCount: 1
-      records:
-        - recordId: 00000000-0000-4000-8000-000000000002
-          officeCode: OFC-01
-          registeredAt: '2019-05-02T08:15:00Z'
-    expected_public_problem: evidence_not_available
-    derivation_runs: false
-    signed_success: false
-
-  - id: no-match
-    source:
-      matchCount: 0
-      records: []
-    expected_lookup: no_match
-    expected_public_problem: evidence_not_available
-    derivation_runs: false
-    signed_success: false
-
-  # The count, not the length of the returned page, is what says several
-  # subjects matched. The page carries one record because the request asked for
-  # one; the answer is still ambiguous.
-  - id: ambiguous-multiple-matches
-    source:
-      matchCount: 3
-      records:
-        - eventDate: '2000-01-01'
-    expected_lookup: ambiguous
-    expected_public_problem: evidence_not_available
-    derivation_runs: false
-    signed_success: false
-
-  # A source that never answers is a dependency problem, never a negative.
-  - id: source-failure
-    source_failure: timeout
-    expected_public_problem: dependency_unavailable
-    signed_success: false
-
-  # The output gate rejects a derivation result whose type contradicts the
-  # declared concept form, so a script defect cannot become signed evidence.
-  - id: negative-wrong-derived-type
-    injected_derivation:
-      - concept_id: 'urn:example:scaffold:concept:example-flag'
-        value: 'true'
-    expected: output-gate-rejection
-
-  # Two requirements that share a disclosure family could be combined to
-  # reconstruct the underlying value, so such a bundle must not load.
-  - id: anti-reconstruction
-    companion_bundle: threshold-ladder
-    expected: bundle-rejection
-
-# What the signed assertion must and must not carry.
-privacy_expectation:
-  evidence_contains: ['urn:example:scaffold:concept:example-flag']
-  evidence_excludes:
-    - event_date
-    - eventDate
-    - matchCount
-    - recordId
-    - officeCode
-    - record_reference
-    - registry_code
-    - selector-profile
-  diagnostics_exclude: [RCD-000123, RGC-07, OFC-01, '2000-01-01']
-YAML
-```
-
-The `privacy_expectation` block at the end is the part specific to connecting a source. Every field
-name this API taught the deployment about is asserted absent from the signed assertion, and the
-synthetic identifier values are asserted absent from diagnostics. Adding a source adds vocabulary
-that could leak, so extend both lists whenever an adapter learns a new field.
-
-## Freeze and prove the adapter offline
-
-Evidence refuses mutable deployment input, so make the bundle and the runtime file read-only:
-
-```sh
-chmod -R a-w bundle && chmod 444 runtime.yaml
-```
-
-Run the whole project:
-
-```sh
-evidencectl fixtures run --project .
-```
-
-Expected output:
-
-```text
-PASS: check
-PASS: fixtures/cases.yaml (12 cases)
-2 passed, 0 failed (12 cases evaluated)
-```
-
-`check` proved the configuration is coherent: the source resolves, the selector profile fields the
-prepare script reads are the ones `selectorInputs` admits, the adapter parameters match their
-schema, all three scripts compile, and every artifact is declared exactly once. Then twelve cases
-replayed through the real pipeline. The adapter is proven without a request, a credential, or a
-network.
-
-To keep editing, make the bundle writable again with `chmod -R u+w bundle` and freeze it after each
-round.
-
-## What is still missing before a live request
-
-Passing fixtures prove the adapter's logic against responses you wrote. Three things separate that
-from a working integration, and none is in scope for a local project:
-
-- **A credential.** `tokenRef: secret:file/event-records-bearer-token` names a file under the
-  runtime's secret root that does not exist yet. The institution issues that token to the
-  deployment, not to a person, and its bytes never enter the bundle. Write it to that path with
-  mode 0600. (`evidencectl keygen token` generates one for a stand-in source you control;
-  `keygen secret` does not, because it produces raw HMAC key material that an HTTP header value
-  rejects.)
-- **A confirmed contract.** The bounds in the response schema came from a document. Bounds derived
-  from a page-size parameter, and any bound a sample suggested, are the ones to raise with the
-  institution: an operation that can return a longer array than its documented page size will be
-  refused at runtime rather than silently truncated.
-- **An agreement.** An institution granting read access to records about people is a governance
-  decision with a lawful basis, a retention position, and an audit expectation behind it. The
-  narrow projection and the `privacy_expectation` assertions are what a deployment brings to that
-  conversation.
-
-## Cleanup
-
-To remove the project:
-
-```sh
-cd ..
-chmod -R u+w connect-a-source
-rm -rf connect-a-source
-```
-
-## Next
-
-- [Serve assertions over HTTP](../serve-assertions-over-http/) is the next tutorial: it stops
-  running the project offline and answers a real caller holding a real access token.
-- [Configure Evidence](../../configure/evidence/) documents every source field this tutorial
-  edited, including the other authentication kinds and postures.
-- [Evidence security model](../../security/evidence/) explains the projection, the closed response
-  schema, and the artifact closure rule as invariants rather than as configuration.
-- [Evidence problems](../../reference/evidence-problems/) lists what a requester sees for each
-  outcome, including `evidence_not_available` and `dependency_unavailable`.
+- [Configure Evidence](../../configure/evidence/) describes the complete runtime and bundle.
+- [Source integration patterns](../../explanation/integration-patterns/) compares flat, paged, and
+  record-search source shapes.
+- [Evidence security model](../../security/evidence/) explains why selector, projection, and
+  disclosure decisions stay explicit.
