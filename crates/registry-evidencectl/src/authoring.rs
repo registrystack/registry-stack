@@ -150,8 +150,8 @@ struct CompilePlan {
     subject_role: String,
     selector_field: String,
     concept_alias: String,
-    requirement_id: String,
-    concept_id: String,
+    requirement_uri: String,
+    concept_uri: String,
     bundle: Value,
     response_schema: Value,
     fact_schema: Value,
@@ -429,6 +429,14 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
 
 fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
     let question = &inputs.question;
+    reject_unsupported_keys(
+        inputs
+            .openapi
+            .as_object()
+            .ok_or_else(|| anyhow!("retained OpenAPI document must be an object"))?,
+        &["openapi", "info", "servers", "paths"],
+        "OpenAPI document",
+    )?;
     if inputs.openapi.get("security").is_some() {
         bail!("the local tutorial source must omit top-level OpenAPI security");
     }
@@ -444,11 +452,21 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
     {
         bail!("the local tutorial operation must use the document's one server");
     }
+    reject_unsupported_keys(
+        operation.path_item,
+        &["get", "parameters"],
+        "selected OpenAPI path item",
+    )?;
+    reject_unsupported_keys(
+        operation.operation,
+        &["operationId", "parameters", "responses"],
+        "selected OpenAPI operation",
+    )?;
 
     exact_path_selector(&operation, &question.subject.selector)?;
     let fact_properties = selected_fact_schemas(&operation, &question.source.facts)?;
-    let requirement_id = local_uri(&format!("requirement:{}", question.id));
-    let concept_id = local_uri(&format!(
+    let requirement_uri = local_uri(&format!("requirement:{}", question.id));
+    let concept_uri = local_uri(&format!(
         "concept:{}:{}",
         question.id, question.answer.concept
     ));
@@ -467,14 +485,14 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
     let prepare_script =
         "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
     let extract_script = render_extract_script(&question.source.facts);
-    let derivation_script = render_derivation(&inputs.derivation, &concept_id);
+    let derivation_script = render_derivation(&inputs.derivation, &concept_uri);
     let bundle = render_bundle(
         question,
         &base_url,
         operation.path,
         &question.subject.selector,
-        &requirement_id,
-        &concept_id,
+        &requirement_uri,
+        &concept_uri,
     );
 
     Ok(CompilePlan {
@@ -484,8 +502,8 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         subject_role: question.subject.role.clone(),
         selector_field: question.subject.selector.clone(),
         concept_alias: question.answer.concept.clone(),
-        requirement_id,
-        concept_id,
+        requirement_uri,
+        concept_uri,
         bundle,
         response_schema,
         fact_schema,
@@ -598,16 +616,21 @@ fn exact_path_selector(operation: &Operation<'_>, expected: &str) -> Result<()> 
     let parameter = parameters[0]
         .as_object()
         .ok_or_else(|| anyhow!("the path selector must be an object"))?;
+    reject_unsupported_keys(
+        parameter,
+        &["name", "in", "required", "schema"],
+        "path selector",
+    )?;
+    let parameter_schema = parameter
+        .get("schema")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the path selector schema must be an object"))?;
+    reject_unsupported_keys(parameter_schema, &["type"], "path selector schema")?;
     if parameter.contains_key("$ref")
         || parameter.get("name").and_then(Value::as_str) != Some(expected)
         || parameter.get("in").and_then(Value::as_str) != Some("path")
         || parameter.get("required").and_then(Value::as_bool) != Some(true)
-        || parameter
-            .get("schema")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("type"))
-            .and_then(Value::as_str)
-            != Some("string")
+        || parameter_schema.get("type").and_then(Value::as_str) != Some("string")
     {
         bail!(
             "the question selector must equal the operation's one required string path parameter"
@@ -655,20 +678,33 @@ fn selected_fact_schemas(
     if response.contains_key("$ref") {
         bail!("response references are outside the local tutorial subset");
     }
+    reject_unsupported_keys(response, &["description", "content"], "200 response")?;
     let content = response
         .get("content")
         .and_then(Value::as_object)
         .filter(|content| content.len() == 1)
         .ok_or_else(|| anyhow!("the 200 response must declare exactly one JSON media type"))?;
-    let schema = content
+    let media = content
         .get("application/json")
-        .and_then(|media| media.get("schema"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("the 200 response must declare an application/json media type"))?;
+    reject_unsupported_keys(media, &["schema"], "application/json media type")?;
+    let schema = media
+        .get("schema")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             anyhow!("the 200 response must declare an application/json object schema")
         })?;
+    reject_unsupported_keys(
+        schema,
+        &["type", "required", "properties", "additionalProperties"],
+        "200 JSON response schema",
+    )?;
     if schema.get("type").and_then(Value::as_str) != Some("object")
-        || schema.get("additionalProperties").and_then(Value::as_bool) == Some(true)
+        || !matches!(
+            schema.get("additionalProperties"),
+            None | Some(Value::Bool(false))
+        )
     {
         bail!("the 200 JSON response schema must be an exact object");
     }
@@ -706,34 +742,40 @@ fn selected_fact_schemas(
 fn local_scalar_schema(name: &str, property: &Map<String, Value>) -> Result<Value> {
     let value_type = property.get("type").and_then(Value::as_str);
     match value_type {
-        Some("boolean") => Ok(json!({"type": "boolean"})),
+        Some("boolean") => {
+            reject_unsupported_keys(property, &["type"], &format!("selected fact `{name}`"))?;
+            Ok(json!({"type": "boolean"}))
+        }
         Some("integer") => {
-            let minimum = property
-                .get("minimum")
-                .and_then(Value::as_i64)
-                .unwrap_or(-9_007_199_254_740_991);
-            let maximum = property
-                .get("maximum")
-                .and_then(Value::as_i64)
-                .unwrap_or(9_007_199_254_740_991);
+            reject_unsupported_keys(
+                property,
+                &["type", "minimum", "maximum"],
+                &format!("selected fact `{name}`"),
+            )?;
+            let minimum =
+                optional_i64(property, "minimum", name)?.unwrap_or(-9_007_199_254_740_991);
+            let maximum = optional_i64(property, "maximum", name)?.unwrap_or(9_007_199_254_740_991);
             if minimum > maximum {
                 bail!("selected integer fact `{name}` has inconsistent bounds");
             }
             Ok(json!({"type": "integer", "minimum": minimum, "maximum": maximum}))
         }
         Some("string") => {
-            let format = property.get("format").and_then(Value::as_str);
+            reject_unsupported_keys(
+                property,
+                &["type", "format", "minLength", "maxLength"],
+                &format!("selected fact `{name}`"),
+            )?;
+            let format = match property.get("format") {
+                Some(Value::String(format)) => Some(format.as_str()),
+                Some(_) => bail!("selected string fact `{name}` has an invalid format"),
+                None => None,
+            };
             if format.is_some_and(|format| !matches!(format, "date" | "date-time")) {
                 bail!("selected string fact `{name}` uses an unsupported format");
             }
-            let maximum = property
-                .get("maxLength")
-                .and_then(Value::as_u64)
-                .unwrap_or(16_384);
-            let minimum = property
-                .get("minLength")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let maximum = optional_u64(property, "maxLength", name)?.unwrap_or(16_384);
+            let minimum = optional_u64(property, "minLength", name)?.unwrap_or(0);
             if maximum == 0 || maximum > 65_536 || minimum > maximum {
                 bail!("selected string fact `{name}` has inconsistent bounds");
             }
@@ -751,6 +793,37 @@ fn local_scalar_schema(name: &str, property: &Map<String, Value>) -> Result<Valu
     }
 }
 
+fn reject_unsupported_keys(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    description: &str,
+) -> Result<()> {
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        bail!("{description} contains unsupported key `{key}`");
+    }
+    Ok(())
+}
+
+fn optional_i64(object: &Map<String, Value>, key: &str, fact: &str) -> Result<Option<i64>> {
+    match object.get(key) {
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("selected integer fact `{fact}` has an invalid `{key}`")),
+        None => Ok(None),
+    }
+}
+
+fn optional_u64(object: &Map<String, Value>, key: &str, fact: &str) -> Result<Option<u64>> {
+    match object.get(key) {
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("selected string fact `{fact}` has an invalid `{key}`")),
+        None => Ok(None),
+    }
+}
+
 fn closed_object_schema(selected: &[String], properties: &BTreeMap<String, Value>) -> Value {
     let properties = properties
         .iter()
@@ -765,24 +838,27 @@ fn closed_object_schema(selected: &[String], properties: &BTreeMap<String, Value
 }
 
 fn render_extract_script(facts: &[String]) -> String {
-    let members = facts
+    let assignments = facts
         .iter()
-        .map(|fact| format!("            {fact}: source_response[{}]", json_string(fact)))
+        .map(|fact| {
+            let key = json_string(fact);
+            format!("    facts[{key}] = source_response[{key}];")
+        })
         .collect::<Vec<_>>()
-        .join(",\n");
+        .join("\n");
     format!(
-        "fn extract(source_response, parameters) {{\n    #{{\n        outcome: \"match\",\n        facts: #{{\n{members}\n        }}\n    }}\n}}\n"
+        "fn extract(source_response, parameters) {{\n    let facts = #{{}};\n{assignments}\n    #{{outcome: \"match\", facts: facts}}\n}}\n"
     )
 }
 
-fn render_derivation(authored: &str, concept_id: &str) -> String {
+fn render_derivation(authored: &str, concept_uri: &str) -> String {
     let mut rendered = authored.trim_end().to_owned();
     rendered.push_str("\n\n");
     rendered.push_str("fn derive(facts, selectors, evaluation_context) {\n");
     rendered.push_str("    [#{\n");
     rendered.push_str(&format!(
         "        concept_id: {},\n",
-        json_string(concept_id)
+        json_string(concept_uri)
     ));
     // The equality is also the closed boolean gate: the runtime exposes only
     // bool-to-bool equality here, so any other authored return shape fails
@@ -797,8 +873,8 @@ fn render_bundle(
     base_url: &str,
     path_template: &str,
     selector: &str,
-    requirement_id: &str,
-    concept_id: &str,
+    requirement_uri: &str,
+    concept_uri: &str,
 ) -> Value {
     let framework_id = local_uri(&format!("framework:{}", question.id));
     let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
@@ -917,7 +993,7 @@ fn render_bundle(
                 "kind": "explicit-request",
                 "requesterTags": [AUTHORITY_PROFILE_ID],
                 "grants": [{
-                    "requirement": requirement_id,
+                    "requirement": requirement_uri,
                     "purpose": question.purpose,
                     "audienceFrom": "authenticated-requester",
                     "responseFormats": ["signed-jws"],
@@ -930,7 +1006,7 @@ fn render_bundle(
             }
         },
         "requirements": [{
-            "id": requirement_id,
+            "id": requirement_uri,
             "kind": "criterion",
             "source": SOURCE_ID,
             "purposes": [question.purpose],
@@ -948,7 +1024,7 @@ fn render_bundle(
                 "parameters": {},
             },
             "concepts": [{
-                "id": concept_id,
+                "id": concept_uri,
                 "form": "boolean",
                 "required": true,
                 "constraints": {},
@@ -1031,13 +1107,13 @@ fn write_plan(
     Ok(CompiledQuestion {
         question_alias: plan.question_id.clone(),
         runtime_path,
-        requirement_uri: plan.requirement_id.clone(),
+        requirement_uri: plan.requirement_uri.clone(),
         purpose: plan.purpose.clone(),
         subject_role: plan.subject_role.clone(),
         selector_profile: SELECTOR_PROFILE_ID.to_owned(),
         selector_field: plan.selector_field.clone(),
         concept_alias: plan.concept_alias.clone(),
-        concept_uri: plan.concept_id.clone(),
+        concept_uri: plan.concept_uri.clone(),
         concept_form: CompiledConceptForm::Boolean,
         local_audience: LOCAL_AUDIENCE.to_owned(),
     })
@@ -1335,6 +1411,78 @@ disclosure:
     }
 
     #[test]
+    fn unsupported_openapi_constraints_fail_before_staging() {
+        let cases = [
+            OPENAPI.replace(
+                "date_of_birth: {type: string}",
+                "date_of_birth: {type: string, enum: ['2000-01-01']}",
+            ),
+            OPENAPI.replace(
+                "date_of_birth: {type: string}",
+                "date_of_birth: {type: string, pattern: '^2000-'}",
+            ),
+            OPENAPI.replace(
+                "date_of_birth: {type: string}",
+                "date_of_birth: {type: integer, exclusiveMinimum: 0}",
+            ),
+            OPENAPI.replace(
+                "date_of_birth: {type: string}",
+                "date_of_birth: {type: string, x-extra: true}",
+            ),
+            OPENAPI.replace(
+                "          required: true\n          schema:",
+                "          required: true\n          style: simple\n          schema:",
+            ),
+            OPENAPI.replacen(
+                "schema: {type: string}",
+                "schema: {type: string, pattern: '^person-'}",
+                1,
+            ),
+            OPENAPI.replace(
+                "      operationId: getPerson",
+                "      operationId: getPerson\n      summary: Unsupported metadata",
+            ),
+            OPENAPI.replace(
+                "          description: A person",
+                "          description: A person\n          headers: {}",
+            ),
+            OPENAPI.replace(
+                "            application/json:\n              schema:",
+                "            application/json:\n              example: {}\n              schema:",
+            ),
+            OPENAPI.replace(
+                "                type: object\n                required:",
+                "                type: object\n                minProperties: 1\n                required:",
+            ),
+        ];
+        for openapi in cases {
+            let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("unpreserved OpenAPI constraint is rejected");
+            assert!(error.to_string().contains("unsupported key"), "{error:#}");
+            assert!(fixture.staging_is_empty(), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn punctuated_selector_and_fact_names_are_safely_quoted() {
+        let (openapi, question, answer) = punctuated_inputs();
+        let fixture = Fixture::new(&openapi, &question, &answer, true);
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("punctuated names compile");
+
+        assert_eq!(compiled.selector_field, "person-id.v1");
+        let extract = fs::read_to_string(
+            fixture
+                .staging
+                .join("bundle/adapters/local-source-extract.rhai"),
+        )
+        .expect("extract script reads");
+        assert!(extract.contains("facts[\"date-of.birth\"] = source_response[\"date-of.birth\"];"));
+    }
+
+    #[test]
     fn input_files_and_private_staging_are_fail_closed() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         fs::set_permissions(&fixture.staging, fs::Permissions::from_mode(0o755))
@@ -1366,6 +1514,27 @@ disclosure:
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts generated inputs");
+
+        let (openapi, question, answer) = punctuated_inputs();
+        let fixture = Fixture::new(&openapi, &question, &answer, true);
+        crate::keygen::generate_scaffold_key_material(
+            &fixture.project.join("secrets"),
+            SIGNING_KEY_ID,
+        )
+        .expect("generate local keys");
+        compile_local_project(&fixture.project, &fixture.staging, &evidence)
+            .expect("real Evidence loader accepts safely quoted punctuated names");
+    }
+
+    fn punctuated_inputs() -> (String, String, String) {
+        let openapi = OPENAPI
+            .replace("person_id", "person-id.v1")
+            .replace("date_of_birth", "date-of.birth");
+        let question = QUESTION
+            .replace("person_id", "person-id.v1")
+            .replace("date_of_birth", "date-of.birth");
+        let answer = ANSWER.replace("facts.date_of_birth", "facts[\"date-of.birth\"]");
+        (openapi, question, answer)
     }
 
     struct Fixture {
