@@ -75,7 +75,7 @@ test('archived Notary redirects resolve current retirement and Evidence replacem
   );
   assert.equal(
     redirects['/products/registry-notary/source-claim-modeling-guide/'],
-    'https://docs.registrystack.org/dev/tutorials/author-an-acceptance-definition/',
+    'https://docs.registrystack.org/dev/configure/evidence/',
   );
 });
 

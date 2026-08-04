@@ -38,7 +38,7 @@ one for subject-binding pseudonyms. All three live under an owner-only (mode
 `0700`) secret root, each file mode `0600`
 (`products/evidence/OPERATOR-CONTRACT.md`).
 
-`evidencectl new` scaffolds this exact layout:
+The runtime requires a complete deployment layout like this:
 
 ```text
 project_root/
@@ -53,7 +53,11 @@ project_root/
   audit/                  audit records written by the service
 ```
 
-(`crates/registry-evidencectl/templates/README.md`)
+The current `evidencectl new <dir> --openapi <file-or-url> --profile local` command does not create
+this layout. It starts an incomplete authoring workspace containing the retained OpenAPI document
+and empty `questions/` and `derivations/` directories. `--generate-keys` can add disposable,
+owner-only local keys, but the command creates no bundle, runtime, fixtures, Mint configuration,
+or runnable deployment (`crates/registry-evidencectl/src/scaffold.rs`).
 
 ## Dependencies
 
@@ -114,7 +118,7 @@ A static compose reference deployment sits beside the images, in
 `docker/compose/`. `docker-compose.yaml` wires one user-defined network with
 a static private address per service (the listener refuses wildcard and
 public bind addresses, so each service needs a real address to bind to),
-mounts an `evidencectl`-provisioned project read-only, and keeps the audit
+mounts an operator-provisioned complete deployment project read-only, and keeps the audit
 chain in a named volume so it outlives the container. `runtime.docker.yaml`
 is a container-shaped runtime file that overlays the project's host-shaped
 one, so the same bundle bytes serve local and containerized runs without
@@ -139,12 +143,11 @@ older cached assertion will fail to check it
 ### Deployment inputs
 
 Both `runtime.yaml` and the bundle directory must be non-writable before
-Evidence will start; a read-only mount is preferred, and the reference
-scaffold freezes them with `chmod -R a-w` on the bundle directory and
-`chmod 444` on `runtime.yaml`. Editing either input means unfreezing,
-editing, and refreezing, then rerunning `evidence check`
-(`crates/registry-evidencectl/templates/README.md`,
-`products/evidence/OPERATOR-CONTRACT.md`). There is no hot reload, override
+Evidence will start; a read-only mount is preferred. An operator can remove
+write bits with `chmod -R a-w bundle` and `chmod 444 runtime.yaml` before
+running `evidence check`. Editing either input means restoring write access,
+making the change, removing write access again, and rerunning the check
+(`products/evidence/OPERATOR-CONTRACT.md`). There is no hot reload, override
 layer, or runtime mutation API.
 
 ### Audit trail

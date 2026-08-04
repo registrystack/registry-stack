@@ -77,13 +77,19 @@ neutral.
 `evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
 beside the runtime, like `registryctl` for the rest of the stack. It sits
 outside the frozen Version 1 runtime contract: it generates signing, holder,
-and HMAC key material, assembles public JWKS documents, scaffolds a neutral
-deployment project that passes `evidence check` and `evidence evaluate`
-without edits after one keygen pass, and drives fixture runs. It shells out to
-the `evidence` binary for every Evidence semantic decision and never
-re-implements evaluation, signing, or verification. Its source and scaffold
-templates are covered by the same source-product and domain neutrality checks
-as the runtime.
+and HMAC key material, assembles public JWKS documents, starts incomplete
+OpenAPI-assisted authoring workspaces, and drives fixture runs for complete
+deployment projects. It shells out to the `evidence` binary for every Evidence
+semantic decision and never re-implements evaluation, signing, or verification.
+Its source remains covered by the same source-product and domain neutrality
+checks as the runtime.
+
+`evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
+OpenAPI document exactly as `source.openapi.yaml` and creates empty `questions/`
+and `derivations/` directories. `--generate-keys` adds owner-only disposable
+local key material that is not bound to a runtime. The command does not select
+an API operation, invent a question, or generate source policy, fixtures,
+authentication, a runtime file, Mint configuration, or a deployable bundle.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema

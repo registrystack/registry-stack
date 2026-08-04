@@ -20,32 +20,29 @@ before `evidence serve` runs it.
 
 ## The project layout
 
-`evidencectl new <dir>` scaffolds a neutral deployment project
+`evidencectl new` starts an incomplete local authoring workspace from an OpenAPI document
 (`crates/registry-evidencectl/src/scaffold.rs`):
+
+```sh
+project_dir="<dir>"
+openapi_source="<file-or-url>"
+evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
+```
 
 ```text
 <dir>/
-  bundle/              governed, reviewed, mounted read-only
-    evidence.yaml      the bundle document
-    adapters/          request preparation and extraction scripts (Rhai)
-    derivations/       requirement derivation scripts (Rhai)
-    schemas/           adapter-parameter, response, and fact schemas
-    fixtures/          synthetic acceptance cases
-  runtime.yaml         process-local paths and listener, not governed
-  secrets/             key material, created empty and owner-only
-  audit/               audit records the running service writes
+  .gitignore
+  source.openapi.yaml  retained OpenAPI document
+  questions/           empty question-authoring directory
+  derivations/         empty derivation-authoring directory
+  secrets/             optional owner-only, unbound local keys
 ```
 
-Two more bundle directories are allowed but not scaffolded by default: `codelists/` for
-controlled-code, category, and bucket-scheme tables, and `public-keys/` for retired public
-signing JWKs (`products/evidence/contracts/bundle.schema.yaml`, `bundle_layout`). A requirement
-that declares a controlled-code concept or a rotated signing key adds the directory it needs.
-
-Passing `--with-mint` also renders a paired `mint/` directory: a Registry Mint configuration and
-an example client registration, for a deployment with no identity provider of its own. Registry
-Mint is a supporting service, not a fourth Evidence pattern, and the dependency runs one way:
-Registry Mint issues the access tokens the bundle's `authentication` block verifies, never the
-reverse (`AGENTS.md`).
+The command retains the OpenAPI bytes exactly and creates no question, source policy, runtime file,
+fixture, Mint configuration, README, or deployable bundle. Add `--generate-keys` to create
+disposable local signing and HMAC material, but the command does not bind those keys to a runtime.
+The current toolset does not compile this workspace into the complete deployment layout described
+in the rest of this page.
 
 ## The runtime file
 
@@ -178,10 +175,10 @@ selector values or creating one identifier that every audience can reuse.
 ## Immutability
 
 Evidence refuses to start from a deployment input it could write to, and reports a
-non-immutable-input error rather than starting on it (`products/evidence/OPERATOR-CONTRACT.md`;
-`crates/registry-evidencectl/templates/README.md`). Version 1 permits no reload, merge, mutation,
-governed-field override, or fallback bundle or runtime file: a project is either the exact bytes
-Evidence loaded at startup, or it is a different revision that requires a restart.
+non-immutable-input error rather than starting on it (`products/evidence/OPERATOR-CONTRACT.md`).
+Version 1 permits no reload, merge, mutation, governed-field override, or fallback bundle or
+runtime file: a project is either the exact bytes Evidence loaded at startup, or it is a different
+revision that requires a restart.
 
 Freeze the project before validating or serving it:
 
@@ -212,9 +209,10 @@ audit chain or contacting a source. `evidence evaluate` replays one fixture file
 cases through the reviewed adapter, derivation, and output gate, with no source and no network
 involved.
 
-`evidencectl fixtures run --project <dir>` drives both for you across the whole project: it runs
-`check`, then `evaluate` against every fixture path the bundle's requirements reference, and
-reports `PASS` or `FAIL` per step (`crates/registry-evidencectl/src/fixtures.rs`). A
-`fixtures run --project .` run against a scaffolded and frozen project reports PASS for `check`
-and for each fixture case. Both `check` and `fixtures run` must pass before `evidence serve` runs
-the revision.
+`evidencectl fixtures run --project <dir>` drives both commands across a complete deployment
+project: it runs `check`, then `evaluate` against every fixture path the bundle's requirements
+reference, and reports `PASS` or `FAIL` per step
+(`crates/registry-evidencectl/src/fixtures.rs`). The incomplete workspace created by
+`evidencectl new` has no bundle, runtime, or fixtures, so it cannot pass this gate. After an
+operator supplies those deployment artifacts, both `check` and `fixtures run` must pass before
+`evidence serve` runs the revision.

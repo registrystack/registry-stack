@@ -15,11 +15,10 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-[Serve assertions over HTTP](../serve-assertions-over-http/) ends with a signed assertion in a file
-and one sentence: verifying it is a consumer's job. This is that job. You take one stored response,
-a key set you pinned, and a policy written from what your own service kept, and you answer two
-questions that a relying service has to be able to answer months later: was this authentic, and was
-it current when you acted on it.
+This tutorial starts with a signed assertion captured from a synthetic Evidence deployment. You
+take that stored response, a key set you pinned, and a policy written from what your own service
+kept, and you answer two questions that a relying service has to be able to answer months later:
+was this authentic, and was it current when you acted on it.
 
 <QuickstartMeta
   outcome="One stored Evidence response re-verified offline against a pinned key set and a policy built from retained state, plus five refusals that prove the checks are real."
@@ -65,14 +64,13 @@ cat >stored-response.json <<'JSON'
 JSON
 ```
 
-This is a real flattened JWS produced by the deployment the previous tutorial builds, kept exactly
-as it arrived except for the line breaks, which are there so you can read it. JSON whitespace is
-not part of what was signed: the signature covers the two base64url members and the dot between
-them, so reformatting the envelope changes nothing and editing either member changes everything.
+This is a real flattened JWS produced by a synthetic test deployment, kept exactly as it arrived
+except for the line breaks, which are there so you can read it. JSON whitespace is not part of what
+was signed: the signature covers the two base64url members and the dot between them, so
+reformatting the envelope changes nothing and editing either member changes everything.
 
-You cannot regenerate this file, and you are not meant to. A consumer receives assertions; it does
-not produce them. To make your own, run
-[Serve assertions over HTTP](../serve-assertions-over-http/) and keep its `out/response.json`.
+You cannot regenerate this file from the current authoring scaffold, and you are not meant to. A
+consumer receives assertions; it does not produce them.
 
 Nothing in the payload identifies a person. It carries one boolean, an opaque subject binding, and
 the identifiers of the requirement it answers, which is what
@@ -432,5 +430,3 @@ think about, because it is a description of what your procedure promised to chec
   response formats, including the media types that select between them.
 - [Configure Evidence](../../configure/evidence/) covers building a pinned key set from published
   public keys with `evidencectl jwks`, and the key rotation that makes you rebuild it.
-- [Serve assertions over HTTP](../serve-assertions-over-http/) is the other side of this exchange,
-  if you also run a deployment.

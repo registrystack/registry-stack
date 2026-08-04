@@ -92,7 +92,7 @@ test('removes authored Notary pages but publishes the retirement decision', () =
 });
 
 test('redirects every removed current Notary route to Evidence or the retirement decision', () => {
-  const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:configure\/evidence|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/(?:author-an-acceptance-definition|first-run-with-solmara-lab|move-evidence-to-production-signing))\/)$/;
+  const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:configure\/evidence|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/(?:first-run-with-solmara-lab|move-evidence-to-production-signing))\/)$/;
 
   for (const route of [...authoredNotaryRoutes, ...mirroredNotaryRoutes]) {
     const target = redirects[route];

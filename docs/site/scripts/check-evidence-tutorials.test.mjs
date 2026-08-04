@@ -12,7 +12,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const gate = resolve(scriptDir, 'check-evidence-tutorials.sh');
 const fenceHelper = resolve(scriptDir, 'evidence-tutorial-fence.sh');
 const docsRoot = resolve(scriptDir, '../src/content/docs/tutorials');
-const authoringTutorial = 'author-an-acceptance-definition.mdx';
+const consumerTutorial = 'verify-an-assertion-as-a-consumer.mdx';
 
 async function runGate(env = {}, args = ['--dry-run']) {
   try {
@@ -36,17 +36,17 @@ async function scratchDocsRoot() {
 test('the dry-run gate passes against every registered tutorial', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /author-an-acceptance-definition: 13 sh fences/u);
+  assert.match(output, /verify-an-assertion-as-a-consumer: 9 sh fences/u);
 });
 
 test('removing a documented command block fails the drift check', async () => {
   const root = await scratchDocsRoot();
   try {
-    const target = join(root, authoringTutorial);
+    const target = join(root, consumerTutorial);
     const source = await readFile(target, 'utf8');
-    const tampered = source.replace(
-      'evidencectl fixtures run --project .',
-      'evidencectl fixtures run',
+    const tampered = source.replaceAll(
+      'evidence verify --jws stored-response.json',
+      'evidence verify stored-response.json',
     );
     assert.notEqual(tampered, source, 'the tampering target must exist');
     await writeFile(target, tampered);
@@ -73,7 +73,7 @@ test('a relative toolset binary path is refused before anything runs', async () 
 test('changing the fence count fails the drift check', async () => {
   const root = await scratchDocsRoot();
   try {
-    const target = join(root, authoringTutorial);
+    const target = join(root, consumerTutorial);
     const source = await readFile(target, 'utf8');
     await writeFile(target, `${source}\n\`\`\`sh\necho extra\n\`\`\`\n`);
     const { code, output } = await runGate({ EVIDENCE_TUTORIAL_DOCS_ROOT: root });
@@ -89,7 +89,7 @@ test('a registered tutorial that is not on disk fails by name', async () => {
   try {
     const { code, output } = await runGate({ EVIDENCE_TUTORIAL_DOCS_ROOT: root });
     assert.notEqual(code, 0, 'a missing tutorial must fail the gate');
-    assert.match(output, /author-an-acceptance-definition/u);
+    assert.match(output, /verify-an-assertion-as-a-consumer/u);
     assert.match(output, /not found/u);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -106,7 +106,7 @@ test('--only narrows the run to one registered tutorial', async () => {
   const { code, output } = await runGate({}, [
     '--dry-run',
     '--only',
-    'author-an-acceptance-definition',
+    'verify-an-assertion-as-a-consumer',
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);

@@ -48,9 +48,6 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # ---------------------------------------------------------------------------
 
 EVIDENCE_TUTORIALS=(
-	author-an-acceptance-definition
-	connect-an-institution-source
-	serve-assertions-over-http
 	verify-an-assertion-as-a-consumer
 )
 
@@ -61,114 +58,15 @@ load_spec() {
 	SPEC_OUTPUTS=()
 
 	case "$1" in
-	author-an-acceptance-definition)
-		SPEC_FENCES=13
-		# The reader already has the toolset, so the whole page is executable.
-		# Each edit applies a documented before/after
-		# yaml pair under one heading: occurrence 1 is found, 2 replaces it.
-		SPEC_STEPS=(
-			'run:1-3'
-			'edit:Add a narrower selector profile|yaml|1|Add a narrower selector profile|yaml|2|bundle/evidence.yaml'
-			'edit:Add the register as a second source|yaml|1|Add the register as a second source|yaml|2|bundle/evidence.yaml'
-			'run:4-9'
-			'edit:Add the residence-region requirement|yaml|1|Add the residence-region requirement|yaml|2|bundle/evidence.yaml'
-			'edit:Grant the new requirement|yaml|1|Grant the new requirement|yaml|2|bundle/evidence.yaml'
-			'run:10-13'
-		)
-		SPEC_LITERALS=(
-			'evidencectl new region-evidence'
-			'mkdir -p bundle/codelists'
-			'chmod -R a-w bundle && chmod 444 runtime.yaml'
-			'evidencectl fixtures run --project .'
-			'3 passed, 0 failed (23 cases evaluated)'
-		)
-		SPEC_OUTPUTS=(
-			'PASS: check'
-			'PASS: fixtures/cases.yaml (12 cases)'
-			'PASS: fixtures/residence-region-cases.yaml (11 cases)'
-			'3 passed, 0 failed (23 cases evaluated)'
-		)
-		;;
-	connect-an-institution-source)
-		SPEC_FENCES=11
-		# The drafting tool writes three files into the project, so two of the
-		# edits repair its output in place and one repoints the requirement.
-		SPEC_STEPS=(
-			'run:1-4'
-			'edit:Narrow the drafted response schema|yaml|1|Narrow the drafted response schema|yaml|2|bundle/schemas/event-records-response.schema.yaml'
-			'run:5-6'
-			'edit:Replace the placeholder source|yaml|1|Replace the placeholder source|yaml|2|bundle/evidence.yaml'
-			'edit:Repoint the requirement|yaml|1|Repoint the requirement|yaml|2|bundle/evidence.yaml'
-			'run:7-11'
-		)
-		SPEC_LITERALS=(
-			'evidencectl new connect-a-source'
-			'evidencectl source suggest'
-			'chmod -R a-w bundle && chmod 444 runtime.yaml'
-			'evidencectl fixtures run --project .'
-			'2 passed, 0 failed (12 cases evaluated)'
-		)
-		SPEC_OUTPUTS=(
-			# The page quotes this drafting run verbatim, so pin the two
-			# lines it leans on: a reworded report fails here instead of
-			# leaving the quoted transcript silently stale.
-			'Still needs your input (the source block below):'
-			'the repeat is cut there, so nothing below it can be projected'
-			'PASS: check'
-			'PASS: fixtures/cases.yaml (12 cases)'
-			'2 passed, 0 failed (12 cases evaluated)'
-		)
-		;;
-	serve-assertions-over-http)
-		SPEC_FENCES=14
-		# The only tutorial that runs the product as a service, so the reader
-		# journey leaves four background processes running from fence 9 until
-		# the teardown fence stops them. Three of the four edits retarget the
-		# scaffold's placeholder issuer at the local TLS terminator, and the
-		# fourth retargets the placeholder source at the stand-in.
-		SPEC_STEPS=(
-			'run:1-3'
-			'edit:Point the deployment at a local issuer URL|yaml|1|Point the deployment at a local issuer URL|yaml|2|bundle/evidence.yaml'
-			'edit:Point Mint at the same URL|yaml|1|Point Mint at the same URL|yaml|2|mint/mint.yaml'
-			'edit:Point Mint at the same URL|yaml|3|Point Mint at the same URL|yaml|4|mint/mint.yaml'
-			'run:4-7'
-			'edit:Repoint the source|yaml|1|Repoint the source|yaml|2|bundle/evidence.yaml'
-			'run:8-14'
-		)
-		SPEC_LITERALS=(
-			'evidencectl new serve-evidence --with-mint'
-			'evidencectl keygen token --out secrets/source-bearer-token'
-			'mint check --config mint/mint.yaml'
-			'chmod -R a-w bundle && chmod 444 runtime.yaml'
-			'SSL_CERT_FILE=dev/ca.pem evidence serve --runtime runtime.yaml'
-			'mint token --url https://localhost:8443/token'
-			'http://127.0.0.1:8080/v1/evidence'
-		)
-		SPEC_OUTPUTS=(
-			# The page quotes this line, and a caller registration left
-			# as an example file would be skipped silently here and only
-			# fail much later, at the token request.
-			'"message":"configuration is valid"'
-			'HTTP 200'
-			'"kid": "scaffold-signing-key-1"'
-			'"providesValueFor": "urn:example:scaffold:concept:example-flag"'
-			# The negative control. Without it a passing run would prove
-			# only that a request succeeded, never that a token is checked.
-			'HTTP 401'
-			'the access-token issuer key set could not be retrieved'
-		)
-		;;
 	verify-an-assertion-as-a-consumer)
 		SPEC_FENCES=9
 		# The only tutorial with no deployment, no network, and no edits: a
 		# consumer re-verifies bytes it was handed. The stored response and
 		# key set are embedded because a consumer cannot mint either, and
 		# `evidence evaluate --fixture` signs with an ephemeral in-memory key
-		# and writes nothing. To regenerate them, replay
-		# serve-assertions-over-http through its request fence, then keep
-		# out/response.json and GET /.well-known/evidence/jwks.json; every
-		# pinned value in the page's policy and `--at` instants comes from
-		# that pair and must be refreshed together.
+		# and writes nothing. The embedded synthetic fixture and every pinned
+		# value in the page's policy and `--at` instants are retained and
+		# refreshed together from a reviewed test deployment.
 		SPEC_STEPS=('run:1-9')
 		SPEC_LITERALS=(
 			'evidence verify --jws stored-response.json'

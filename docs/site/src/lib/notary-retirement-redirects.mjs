@@ -20,7 +20,7 @@ export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/products/registry-notary/client-sdk-guide/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/identity-and-record-matching/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/source-claim-modeling-guide/':
-    '/tutorials/author-an-acceptance-definition/',
+    '/configure/evidence/',
   '/products/registry-notary/operator-config-reference/': '/configure/evidence/',
   '/products/registry-notary/postgresql-state-operations/': NOTARY_RETIREMENT_ROUTE,
   '/products/registry-notary/credential-lifecycle-status/': NOTARY_RETIREMENT_ROUTE,
@@ -43,8 +43,7 @@ export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/products/registry-notary/sidecar-trust-and-secrets/': NOTARY_RETIREMENT_ROUTE,
   '/projects/registry-notary/': NOTARY_RETIREMENT_ROUTE,
   '/projects/registry-notary/run-locally/': NOTARY_RETIREMENT_ROUTE,
-  '/projects/registry-notary/configure-a-claim/':
-    '/tutorials/author-an-acceptance-definition/',
+  '/projects/registry-notary/configure-a-claim/': '/configure/evidence/',
   '/projects/registry-notary/reference/': '/configure/evidence/',
   '/api/registry-notary.html': '/reference/apis/evidence/',
 };
