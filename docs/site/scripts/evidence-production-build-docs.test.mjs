@@ -49,6 +49,14 @@ test('the maintained Compose adapter keeps Evidence independent from Mint scaffo
   assert.doesNotMatch(compose, /--with-mint/u);
   assert.doesNotMatch(compose, /MINT_(?:IMAGE|CONFIG_DIR|SECRET_ROOT)/u);
   assert.match(readme, /intentionally absent from the base adapter/u);
+  for (const name of [
+    'EVIDENCE_CANDIDATE_DIR',
+    'EVIDENCE_RUNTIME_FILE',
+    'EVIDENCE_SECRET_ROOT',
+    'EVIDENCE_IMAGE',
+  ]) {
+    assert.match(readme, new RegExp(`export ${name}=`, 'u'));
+  }
   assert.match(compose, /EVIDENCE_CANDIDATE_DIR/u);
   assert.match(compose, /EVIDENCE_SECRET_ROOT/u);
   assert.match(compose, /user: "65532:65532"/u);
