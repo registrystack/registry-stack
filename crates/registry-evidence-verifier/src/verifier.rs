@@ -25,7 +25,7 @@ use crate::{
 const MAX_JWS_BYTES: usize = 256 * 1024;
 const MAX_PROTECTED_BYTES: usize = 8 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
-const MAX_TRUSTED_KEYS: usize = 33;
+pub(crate) const MAX_TRUSTED_KEYS: usize = 33;
 /// One disclosure per Supported Value, bounded well above the largest
 /// requirement a Version 1 bundle can declare.
 const MAX_DISCLOSURES: usize = 64;

@@ -297,3 +297,100 @@ redacted_debug!(
     FlattenedJws,
     UnsignedEvidenceEnvelope,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every wire type this crate declares takes its `Debug` from
+    /// `redacted_debug!`, so a verified payload cannot leak disclosed material
+    /// into a log line, a panic message, or a snapshot. Each value below is
+    /// built from canary strings that must not survive formatting.
+    #[test]
+    fn debug_surfaces_redact_every_wire_type_this_crate_owns() {
+        let evidence = Evidence {
+            schema: "protected-schema-canary".to_owned(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
+            request_nonce: "protected-request-nonce-canary".to_owned(),
+            id: "protected-evidence-id-canary".to_owned(),
+            evidence_type_name: EvidenceObjectType::Evidence,
+            supports_requirement: "protected-requirement-canary".to_owned(),
+            is_conformant_to: "protected-evidence-type-canary".to_owned(),
+            issued_by: "protected-issuer-canary".to_owned(),
+            provided_by: "protected-provider-canary".to_owned(),
+            issued_at: "2026-08-05T00:00:00Z".to_owned(),
+            observed_at: "2026-08-05T00:00:00Z".to_owned(),
+            valid_until: "2026-08-06T00:00:00Z".to_owned(),
+            purpose: "protected-purpose-canary".to_owned(),
+            audience: "protected-audience-canary".to_owned(),
+            configuration_revision: "protected-revision-canary".to_owned(),
+            subjects: vec![SubjectBinding {
+                role: "subject".to_owned(),
+                binding: "protected-binding-canary".to_owned(),
+            }],
+            supported_values: vec![SupportedValue {
+                provides_value_for: "protected-concept-canary".to_owned(),
+                value: PublicValue::String("protected-supported-value-canary".to_owned()),
+            }],
+        };
+        let holder_key = HolderPublicKey {
+            kty: "OKP".to_owned(),
+            crv: "Ed25519".to_owned(),
+            x: "protected-holder-coordinate-canary".to_owned(),
+            alg: Some("EdDSA".to_owned()),
+            kid: Some("protected-holder-key-id-canary".to_owned()),
+        };
+        let bucket = BucketValue {
+            form: BucketForm::DateBucket,
+            scheme: "protected-bucket-scheme-canary".to_owned(),
+            bucket: "protected-bucket-canary".to_owned(),
+        };
+        let entity_reference = EntityReferenceValue {
+            form: EntityReferenceForm::AudienceScopedEntityReference,
+            reference: "protected-reference-canary".to_owned(),
+        };
+        let structured = StructuredValue {
+            form: StructuredValueForm::ReviewedStructuredValue,
+            schema: "protected-structured-schema-canary".to_owned(),
+            fields: BTreeMap::from([(
+                "protected-field-name-canary".to_owned(),
+                Value::String("protected-field-value-canary".to_owned()),
+            )]),
+        };
+        let signed = FlattenedJws {
+            protected: "protected-header-canary".to_owned(),
+            payload: "protected-payload-canary".to_owned(),
+            signature: "protected-signature-canary".to_owned(),
+        };
+        let unsigned_envelope = UnsignedEvidenceEnvelope {
+            schema: crate::EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1.to_owned(),
+            envelope_type: UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
+            integrity_protection: UnsignedIntegrityProtection::None,
+            warning: UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
+            evidence: evidence.clone(),
+        };
+
+        for diagnostic in [
+            format!("{holder_key:?}"),
+            format!("{evidence:?}"),
+            format!("{:?}", evidence.subjects[0]),
+            format!("{:?}", evidence.supported_values[0]),
+            format!(
+                "{:?}",
+                PublicValue::String("protected-supported-value-canary".to_owned())
+            ),
+            format!(
+                "{:?}",
+                ScalarOrEntityReference::String("protected-list-item-canary".to_owned())
+            ),
+            format!("{bucket:?}"),
+            format!("{entity_reference:?}"),
+            format!("{structured:?}"),
+            format!("{signed:?}"),
+            format!("{unsigned_envelope:?}"),
+        ] {
+            assert!(diagnostic.contains("<redacted>"), "{diagnostic}");
+            assert!(!diagnostic.contains("canary"), "{diagnostic}");
+        }
+    }
+}

@@ -66,7 +66,12 @@ products/evidence/scripts/check-verifier-portability.sh
 
 The second command proves the normal dependency tree still carries no async
 runtime, HTTP stack, script engine, command line parser, or logging framework,
-so client tooling can link this crate on any platform.
+so client tooling links none of the service runtime.
+
+It does not make the crate target independent. The crypto stack reaches
+`aws-lc-sys`, so a build needs a C toolchain and is limited to the targets
+`aws-lc-sys` supports. Native Windows, macOS, and Linux builds work; `wasm32`
+and cross-compiles without a toolchain for the target do not.
 
 ## License
 

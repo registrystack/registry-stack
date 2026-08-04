@@ -2,9 +2,12 @@
 //!
 //! This crate owns the response wire formats, the Evidence payload contract,
 //! and the strict relying-party verifier. It carries no server, no source
-//! access, no configuration loading, and no platform-specific requirement, so
-//! any consumer that can parse JSON can verify a stored response with the same
-//! rules the runtime applies.
+//! access, no configuration loading, and no service-runtime dependency, so a
+//! client can verify a stored response with the same rules the runtime applies.
+//!
+//! Portable here means free of the service runtime, not target independent.
+//! The crypto stack reaches `aws-lc-sys`, so a build needs a C toolchain and is
+//! limited to the targets `aws-lc-sys` supports, which excludes `wasm32`.
 
 pub mod contracts;
 pub mod model;
