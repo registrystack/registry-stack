@@ -61,22 +61,27 @@ def ed25519_jwk(kid: str) -> tuple[dict, dict]:
 
 
 def write(path: Path, text: str, mode: int = 0o644) -> Path:
-    """Write a file that is never wider than its final mode, not even briefly.
-
-    Creating the file and then narrowing it would leave a signing key readable
-    by anyone on the machine for the length of the write. `os.open` carries the
-    mode into the creation; the `chmod` after it only undoes the umask.
-    """
+    """Write a file everyone on the machine may read: certificates, configuration."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    path.write_text(text, encoding="utf-8")
     path.chmod(mode)
     return path
 
 
 def write_secret(path: Path, text: str) -> Path:
-    return write(path, text, 0o600)
+    """Write a file that is never wider than owner read/write, not even briefly.
+
+    Creating the file and then narrowing it would leave a freshly generated
+    signing key readable by anyone on the machine for the length of the write.
+    `os.open` carries the mode into the creation; the `chmod` after it only
+    undoes the umask.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    path.chmod(0o600)
+    return path
 
 
 def issue_tls_certificate(root: Path) -> None:

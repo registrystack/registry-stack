@@ -36,5 +36,9 @@ POST /v1/consultations/{profile_id}/execute added `subschema #1, subschema #2, s
 # of any other kind, so every value this route can return is a profile
 # identifier. Keeping the annotation would have declared a constraint the
 # server's own legitimate values fail.
-GET /metadata/evidence-offerings the 'evidence_offerings/items/access/conforms_to' response's property type/format changed from 'string, null'/'uri' to 'string, null'/'' for status '200'
-GET /metadata/evidence-offerings/{offering_id} the 'access/conforms_to' response's property type/format changed from 'string, null'/'uri' to 'string, null'/'' for status '200'
+#
+# A line has to reproduce oasdiff's own rendering of the error, backticks and
+# all, and that rendering changes between oasdiff releases. Write these against
+# the version CI pins in OASDIFF_VERSION, not whatever is on your PATH.
+GET /metadata/evidence-offerings the `evidence_offerings/items/access/conforms_to` response's property `format` changed from `uri` to `none` for status `200`
+GET /metadata/evidence-offerings/{offering_id} the `access/conforms_to` response's property `format` changed from `uri` to `none` for status `200`

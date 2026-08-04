@@ -35,9 +35,8 @@ def load_module():
 
 try:
     provision = load_module()
-except unittest.SkipTest as skip:  # pragma: no cover - depends on the environment
+except unittest.SkipTest:  # pragma: no cover - depends on the environment
     provision = None
-    SKIP_REASON = str(skip)
 
 
 @unittest.skipIf(provision is None, "cryptography is not installed")
@@ -57,7 +56,7 @@ class SecretFileModeTests(unittest.TestCase):
         modes = []
         real_open = os.open
 
-        def spy(path, flags, mode=0o777, **rest):
+        def spy(path, flags, mode, **rest):
             modes.append(mode)
             return real_open(path, flags, mode, **rest)
 

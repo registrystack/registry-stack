@@ -76,7 +76,8 @@ class Handler(BaseHTTPRequestHandler):
     def forward(self, method, body):
         target = route_for(method, self.path)
         if target is None:
-            return self.refuse(404, "no such route")
+            self.refuse(404, "no such route")
+            return
 
         headers = {
             name: value
@@ -84,7 +85,8 @@ class Handler(BaseHTTPRequestHandler):
             if name.lower() not in ("host", "connection")
         }
         if not all(well_formed(name, value) for name, value in headers.items()):
-            return self.refuse(400, "request header carried a control character")
+            self.refuse(400, "request header carried a control character")
+            return
 
         upstream = http.client.HTTPConnection("127.0.0.1", UPSTREAM_PORT, timeout=10)
         try:
@@ -101,7 +103,8 @@ class Handler(BaseHTTPRequestHandler):
             upstream.close()
 
         if not all(well_formed(name, value) for name, value in relayed):
-            return self.refuse(502, "upstream header carried a control character")
+            self.refuse(502, "upstream header carried a control character")
+            return
 
         self.send_response(status)
         for name, value in relayed:
