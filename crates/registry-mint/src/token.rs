@@ -51,6 +51,29 @@ pub struct MintedToken {
     pub access_token: String,
     pub token_type: &'static str,
     pub expires_in: u64,
+    #[serde(skip)]
+    token_id: String,
+    #[serde(skip)]
+    signing_key_id: String,
+    #[serde(skip)]
+    expires_at_unix: i64,
+}
+
+impl MintedToken {
+    #[must_use]
+    pub(crate) fn token_id(&self) -> &str {
+        &self.token_id
+    }
+
+    #[must_use]
+    pub(crate) fn signing_key_id(&self) -> &str {
+        &self.signing_key_id
+    }
+
+    #[must_use]
+    pub(crate) fn expires_at_unix(&self) -> i64 {
+        self.expires_at_unix
+    }
 }
 
 /// Signs access tokens with the configured active key.
@@ -148,16 +171,14 @@ impl TokenMinter {
     ) -> Result<MintedToken, TokenError> {
         let client: &RegisteredClient = &authenticated.client;
         let expires_at = now + self.lifetime_seconds;
+        let token_id = ulid::Ulid::new().to_string();
         let mut claims = Map::new();
         claims.insert("iss".to_owned(), Value::String(self.issuer.clone()));
         claims.insert("aud".to_owned(), self.audience.clone());
         claims.insert("iat".to_owned(), json!(now));
         claims.insert("nbf".to_owned(), json!(now));
         claims.insert("exp".to_owned(), json!(expires_at));
-        claims.insert(
-            "jti".to_owned(),
-            Value::String(ulid::Ulid::new().to_string()),
-        );
+        claims.insert("jti".to_owned(), Value::String(token_id.clone()));
         // `client_id` records which registration authenticated; the principal
         // is what the resource server acts on. They are allowed to differ.
         claims.insert(
@@ -239,6 +260,9 @@ impl TokenMinter {
             access_token: format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature)),
             token_type: "Bearer",
             expires_in: self.lifetime_seconds as u64,
+            token_id,
+            signing_key_id: self.signer.key_id().to_owned(),
+            expires_at_unix: expires_at,
         })
     }
 }
@@ -383,6 +407,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: mint-2026-01
   activeKeyFile: signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
   lifetimeSeconds: 300

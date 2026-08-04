@@ -6,7 +6,7 @@
 //! been verified against that client's own registered keys.
 //!
 //! The service holds two kinds of state with deliberately different lifetimes.
-//! Issuer identity, signing keys, listener, and token policy are startup-only:
+//! Issuer identity, signing and audit keys, listener, and token policy are startup-only:
 //! changing them means restarting. The client registry is reloadable, so
 //! onboarding or removing a caller never restarts a resource server.
 
@@ -36,6 +36,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     assertion::ClientAuthenticator,
+    audit::{MintAuditError, MintAuditLog},
     clients::{ClientRegistry, ClientRegistryError},
     config::{MintConfig, MINT_TOKEN_PATH},
     error::TokenError,
@@ -55,6 +56,8 @@ pub enum ServiceError {
     Minter(#[from] MinterError),
     #[error("the client registry could not be loaded: {0}")]
     Registry(#[from] ClientRegistryError),
+    #[error("the audit boundary could not be initialized: {0}")]
+    Audit(#[from] MintAuditError),
     #[error("client {0} cannot be served: {1}")]
     Delegation(String, &'static str),
 }
@@ -69,6 +72,7 @@ pub struct MintService {
     /// Owned by the service rather than the authenticator so that reloading the
     /// registry never forgets which assertion identifiers were already spent.
     replay: Arc<ReplayCache>,
+    audit: MintAuditLog,
     metadata: Value,
 }
 
@@ -83,8 +87,8 @@ impl std::fmt::Debug for MintService {
 }
 
 impl MintService {
-    /// Load the signing key and the client registry described by `config`.
-    pub fn load(config: MintConfig) -> Result<Self, ServiceError> {
+    /// Load the keys, audit chain, and client registry described by `config`.
+    pub async fn load(config: MintConfig) -> Result<Self, ServiceError> {
         let minter = TokenMinter::new(&config)?;
         let registry = Arc::new(ClientRegistry::load(&config.clients.directory)?);
         check_delegations(&registry, minter.claims())?;
@@ -93,12 +97,14 @@ impl MintService {
         ));
         let authenticator =
             ClientAuthenticator::new(registry, &config.client_assertion, Arc::clone(&replay));
+        let audit = MintAuditLog::initialize(&config.audit, &config.issuer).await?;
         let metadata = build_metadata(&config);
         Ok(Self {
             config,
             minter,
             authenticator: RwLock::new(Arc::new(authenticator)),
             replay,
+            audit,
             metadata,
         })
     }
@@ -151,7 +157,12 @@ impl MintService {
 
     /// Authenticate a token request and mint the authority its registry entry
     /// carries. Nothing is read from the assertion payload.
-    async fn issue(&self, request: &TokenRequest, now: i64) -> Result<Response, TokenError> {
+    async fn issue(
+        &self,
+        operation: &str,
+        request: &TokenRequest,
+        now: i64,
+    ) -> Result<Response, TokenError> {
         if request.grant_type != GRANT_TYPE_CLIENT_CREDENTIALS {
             return Err(TokenError::unsupported_grant_type(
                 "grant type is not supported",
@@ -169,10 +180,36 @@ impl MintService {
             .authenticate(&request.client_assertion, now)
             .await?;
         let token = self.minter.mint(&authenticated, now).await?;
+        let body = serde_json::to_vec(&token)
+            .map_err(|_| TokenError::server_error("the token response could not be serialized"))?;
+        self.audit
+            .append_issued(operation, &authenticated, &token)
+            .await
+            .map_err(|_| TokenError::server_error("the token release could not be audited"))?;
+        Ok(json_response(StatusCode::OK, JSON_MEDIA_TYPE, body))
+    }
 
-        serde_json::to_vec(&token)
-            .map(|body| json_response(StatusCode::OK, JSON_MEDIA_TYPE, body))
-            .map_err(|_| TokenError::server_error("the token response could not be serialized"))
+    async fn reject(&self, operation: &str, error: TokenError) -> Response {
+        if self
+            .audit
+            .append_rejected(operation, error.code().as_str())
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                target: "registry_mint::audit",
+                operation,
+                "the token denial could not be audited"
+            );
+            return TokenError::server_error("the token decision could not be audited")
+                .into_operation_response(operation);
+        }
+        error.into_operation_response(operation)
+    }
+
+    #[must_use]
+    fn ready(&self) -> bool {
+        self.client_count() > 0 && self.audit.ready()
     }
 }
 
@@ -333,8 +370,14 @@ where
 }
 
 async fn token(State(service): State<Arc<MintService>>, request: Request<Body>) -> Response {
+    let operation = format!("urn:ulid:{}", ulid::Ulid::new());
     if !has_exact_content_type(request.headers(), FORM_MEDIA_TYPE) {
-        return TokenError::invalid_request("content type must be form encoded").into_response();
+        return service
+            .reject(
+                &operation,
+                TokenError::invalid_request("content type must be form encoded"),
+            )
+            .await;
     }
 
     let maximum_bytes = service.config.listener.maximum_request_bytes as usize;
@@ -343,22 +386,31 @@ async fn token(State(service): State<Arc<MintService>>, request: Request<Body>) 
         match tokio::time::timeout(timeout, to_bytes(request.into_body(), maximum_bytes)).await {
             Ok(Ok(body)) => body,
             Ok(Err(_)) => {
-                return TokenError::invalid_request("the request body could not be read")
-                    .into_response()
+                return service
+                    .reject(
+                        &operation,
+                        TokenError::invalid_request("the request body could not be read"),
+                    )
+                    .await
             }
             Err(_) => {
-                return TokenError::invalid_request("the request body timed out").into_response();
+                return service
+                    .reject(
+                        &operation,
+                        TokenError::invalid_request("the request body timed out"),
+                    )
+                    .await;
             }
         };
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let parsed = match parse_token_request(&body) {
         Ok(parsed) => parsed,
-        Err(error) => return error.into_response(),
+        Err(error) => return service.reject(&operation, error).await,
     };
-    match service.issue(&parsed, now).await {
+    match service.issue(&operation, &parsed, now).await {
         Ok(response) => response,
-        Err(error) => error.into_response(),
+        Err(error) => service.reject(&operation, error).await,
     }
 }
 
@@ -385,13 +437,13 @@ async fn health() -> Response {
 }
 
 async fn ready(State(service): State<Arc<MintService>>) -> Response {
-    // A Mint with no registered clients is running but cannot serve anybody,
-    // so it reports live but not ready rather than failing every request.
-    if service.client_count() == 0 {
+    // A Mint with no clients or a poisoned audit writer is live but cannot
+    // safely issue a token, so admission fails until the process is repaired.
+    if !service.ready() {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             JSON_MEDIA_TYPE,
-            br#"{"status":"no clients registered"}"#.to_vec(),
+            br#"{"status":"not ready"}"#.to_vec(),
         );
     }
     json_response(

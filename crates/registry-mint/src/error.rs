@@ -92,12 +92,17 @@ impl TokenError {
     pub fn reason(&self) -> &'static str {
         self.reason
     }
-}
 
-impl IntoResponse for TokenError {
-    fn into_response(self) -> Response {
+    /// Render a token-operation failure with its privacy-safe correlation id.
+    #[must_use]
+    pub fn into_operation_response(self, operation: &str) -> Response {
+        self.respond(Some(operation))
+    }
+
+    fn respond(self, operation: Option<&str>) -> Response {
         tracing::warn!(
             target: "registry_mint::token",
+            operation,
             error = self.code.as_str(),
             reason = self.reason,
             "token request rejected"
@@ -116,6 +121,12 @@ impl IntoResponse for TokenError {
             );
         }
         response
+    }
+}
+
+impl IntoResponse for TokenError {
+    fn into_response(self) -> Response {
+        self.respond(None)
     }
 }
 

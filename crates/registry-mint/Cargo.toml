@@ -23,6 +23,7 @@ clap.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-audit.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-oidc.workspace = true
 reqwest.workspace = true

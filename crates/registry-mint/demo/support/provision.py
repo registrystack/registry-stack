@@ -135,6 +135,7 @@ def provision_mint(root: Path) -> None:
     mint = root / "mint"
     signing_private, _ = ed25519_jwk("mint-key-1")
     write_secret(mint / "secrets/signing.jwk", json.dumps(signing_private))
+    write_secret(mint / "secrets/audit-hmac-key", secrets.token_hex(32))
 
     for client_id in ("scheduler", "service-desk"):
         private, public = ed25519_jwk(f"{client_id}-key-1")
@@ -171,6 +172,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: mint-key-1
   activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [evidence.demo.invalid]
   lifetimeSeconds: 300

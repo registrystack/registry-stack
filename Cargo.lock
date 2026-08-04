@@ -5533,6 +5533,7 @@ dependencies = [
  "http",
  "jsonwebtoken",
  "registry-evidence",
+ "registry-platform-audit",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-oidc",

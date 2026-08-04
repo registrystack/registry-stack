@@ -54,6 +54,7 @@ sequenceDiagram
     Client->>Mint: POST /token, assertion carrying on_behalf_of
     Mint->>Mint: Verify the signature against the keys registered for scheduler
     Mint->>Mint: Check the actor and the subject fields against that registration
+    Mint->>Mint: Durably append the keyed token-release audit record
     Mint-->>Client: Access token with evidence_actor and identity.* claims
 
     Note over Client,Evidence: The person is named nowhere in the request below.

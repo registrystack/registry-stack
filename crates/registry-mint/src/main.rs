@@ -19,12 +19,14 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use registry_mint::{
+    audit::MintAuditLog,
     caller::{sign_client_assertion, AssertionRequest},
     config::MintConfig,
     secretfile,
     server::{serve, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
+use registry_platform_audit::OptionalHashHex;
 use serde_json::Value;
 
 #[derive(Debug, Parser)]
@@ -36,13 +38,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Load the configuration, signing key, and client registry, then exit.
+    /// Load the configuration, keys, audit chain, and client registry, then exit.
     Check {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
     /// Serve the token endpoint until terminated.
     Serve {
+        #[arg(long, env = "MINT_CONFIG")]
+        config: PathBuf,
+    },
+    /// Verify the retained keyed Mint audit chain named by the configuration.
+    VerifyAudit {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
@@ -120,7 +127,11 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Check { config } => {
-            let service = load(&config)?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("the async runtime could not start: {error}"))?;
+            let service = runtime.block_on(load(&config))?;
             tracing::info!(
                 target: "registry_mint",
                 issuer = service.issuer(),
@@ -130,18 +141,30 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Command::Serve { config } => {
-            let service = Arc::new(load(&config)?);
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|error| format!("the async runtime could not start: {error}"))?;
             runtime.block_on(async move {
+                let service = Arc::new(load(&config).await?);
                 let reloads = Arc::clone(&service);
                 tokio::spawn(async move { reload_on_hangup(reloads).await });
                 serve(service, shutdown_signal())
                     .await
                     .map_err(|error| format!("the listener failed: {error}"))
             })
+        }
+        Command::VerifyAudit { config } => {
+            let config = MintConfig::load(&config)
+                .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
+            let summary = MintAuditLog::verify(&config.audit)
+                .map_err(|error| format!("the audit chain did not verify: {error}"))?;
+            println!(
+                "audit ok: records={} tail={}",
+                summary.records,
+                OptionalHashHex(summary.last_hash)
+            );
+            Ok(())
         }
         Command::Token {
             url,
@@ -268,10 +291,12 @@ fn now_seconds() -> Result<i64, String> {
         .map_err(|_| "the system clock is before the Unix epoch".to_owned())
 }
 
-fn load(config: &Path) -> Result<MintService, String> {
+async fn load(config: &Path) -> Result<MintService, String> {
     let config = MintConfig::load(config)
         .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
-    MintService::load(config).map_err(|error| format!("the service could not start: {error}"))
+    MintService::load(config)
+        .await
+        .map_err(|error| format!("the service could not start: {error}"))
 }
 
 /// Reload the client registry on every `SIGHUP`, keeping the previous registry

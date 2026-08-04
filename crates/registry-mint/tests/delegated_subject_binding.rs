@@ -57,11 +57,12 @@ fn key_pair(seed: u8) -> (PrivateJwk, Value, Value) {
 struct Deployment {
     _directory: tempfile::TempDir,
     service: Arc<MintService>,
+    audit_path: std::path::PathBuf,
 }
 
 /// A Mint deployment whose claim names, issuer, and audience are the ones the
 /// demonstration bundle expects.
-fn deployment() -> Deployment {
+async fn deployment() -> Deployment {
     let directory = tempfile::tempdir().expect("temp dir");
     let root = directory.path();
     fs::create_dir(root.join("secrets")).expect("create secrets directory");
@@ -72,6 +73,11 @@ fn deployment() -> Deployment {
     fs::write(&signing_path, signing_document.to_string()).expect("write signing key");
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
         .expect("restrict signing key");
+    let audit_key_path = root.join("secrets/audit-hmac-key");
+    fs::write(&audit_key_path, "0123456789abcdef0123456789abcdef").expect("write audit key");
+    fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
+        .expect("restrict audit key");
+    let audit_path = root.join("audit/mint.jsonl");
 
     // The delegated caller: it may act as one agent, over exactly three
     // selector fields, minted at exactly the paths the bundle reads.
@@ -106,6 +112,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: key-9
   activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [{EVIDENCE_AUDIENCE}]
   lifetimeSeconds: 300
@@ -127,10 +137,15 @@ clients:
     .expect("write config");
 
     let config = MintConfig::load(&config_path).expect("the deployment configuration is valid");
-    let service = Arc::new(MintService::load(config).expect("the deployment loads"));
+    let service = Arc::new(
+        MintService::load(config)
+            .await
+            .expect("the deployment loads"),
+    );
     Deployment {
         _directory: directory,
         service,
+        audit_path,
     }
 }
 
@@ -330,7 +345,7 @@ async fn context_for(http: &TestServer, jwks: &Value, assertion: &str) -> Authen
 /// subject Evidence resolves, and the client never names it again.
 #[tokio::test]
 async fn a_delegated_token_authorizes_evidence_about_exactly_its_own_subject() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let jwks = http.get("/.well-known/jwks.json").await.json::<Value>();
     let loaded = demo_bundle();
@@ -349,6 +364,27 @@ async fn a_delegated_token_authorizes_evidence_about_exactly_its_own_subject() {
     );
     let context = context_for(&http, &jwks, &assertion).await;
     assert_eq!(context.actor(), Some(AGENT));
+
+    let audit = fs::read_to_string(&deployment.audit_path).expect("read Mint audit");
+    assert!(audit.contains("\"phase\":\"token-release\""));
+    assert!(audit.contains("\"decision\":\"issued\""));
+    assert!(audit.contains("\"clientPseudonym\":\"hmac-sha256:v1:"));
+    assert!(audit.contains("\"authorityPseudonym\":\"hmac-sha256:v1:"));
+    assert!(audit.contains("\"subjectPseudonym\":\"hmac-sha256:v1:"));
+    for protected in [
+        "scheduler",
+        "urn:example:demo:principal:scheduler",
+        AGENT,
+        "Amara",
+        "Okafor",
+        "1998-04-02",
+        &assertion,
+    ] {
+        assert!(
+            !audit.contains(protected),
+            "Mint audit retained protected token input"
+        );
+    }
 
     let authorization = authorize_and_resolve(&loaded.bundle, &subject_bound_request(), &context)
         .expect("a delegated token authorizes its own subject");
@@ -375,7 +411,7 @@ async fn a_delegated_token_authorizes_evidence_about_exactly_its_own_subject() {
 /// version of this request that reaches a different subject.
 #[tokio::test]
 async fn a_delegated_token_cannot_be_pointed_at_a_different_subject() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let jwks = http.get("/.well-known/jwks.json").await.json::<Value>();
     let loaded = demo_bundle();
@@ -442,7 +478,7 @@ async fn a_delegated_token_cannot_be_pointed_at_a_different_subject() {
 /// people, so the binding is a property of the token rather than of the client.
 #[tokio::test]
 async fn each_token_carries_its_own_subject() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let jwks = http.get("/.well-known/jwks.json").await.json::<Value>();
     let loaded = demo_bundle();
@@ -497,7 +533,7 @@ async fn each_token_carries_its_own_subject() {
 /// values come from the request, an undelegated token would reach it.
 #[tokio::test]
 async fn an_undelegated_token_cannot_use_the_delegated_grant() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let jwks = http.get("/.well-known/jwks.json").await.json::<Value>();
     let loaded = demo_bundle();
@@ -541,7 +577,7 @@ async fn an_undelegated_token_cannot_use_the_delegated_grant() {
 /// this registration may act as.
 #[tokio::test]
 async fn mint_refuses_an_actor_the_registration_does_not_permit() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let (private, _, _) = key_pair(1);
@@ -559,13 +595,38 @@ async fn mint_refuses_an_actor_the_registration_does_not_permit() {
     let response = http.post("/token").form(&token_form(&assertion)).await;
     assert_eq!(response.status_code(), 401);
     assert_eq!(response.json::<Value>(), json!({"error": "invalid_client"}));
+    let audit = fs::read_to_string(&deployment.audit_path).expect("read Mint audit");
+    assert!(audit.contains("\"phase\":\"denial\""));
+    assert!(audit.contains("\"safeErrorCategory\":\"invalid_client\""));
+    assert!(!audit.contains("someone-else"));
+}
+
+/// A signed access token is not released unless its audit record is durable.
+#[tokio::test]
+async fn an_unwritable_audit_chain_prevents_token_release() {
+    let deployment = deployment().await;
+    fs::set_permissions(&deployment.audit_path, fs::Permissions::from_mode(0o400))
+        .expect("make audit unwritable");
+    let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
+
+    let (private, _, _) = key_pair(2);
+    let assertion = sign_assertion(
+        &private,
+        &assertion_claims("service-desk", "jti-audit-down"),
+    );
+    let response = http.post("/token").form(&token_form(&assertion)).await;
+    assert_eq!(response.status_code(), 500);
+    assert_eq!(response.json::<Value>(), json!({"error": "server_error"}));
+
+    let readiness = http.get("/ready").await;
+    assert_eq!(readiness.status_code(), 503);
 }
 
 /// The other direction: an undelegated registration cannot obtain a subject
 /// binding by asking for one.
 #[tokio::test]
 async fn mint_refuses_a_delegation_from_an_undelegated_client() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let (private, _, _) = key_pair(2);

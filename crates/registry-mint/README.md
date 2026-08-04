@@ -63,13 +63,13 @@ Endpoints:
 | `POST /token` | Issue an access token |
 | `GET /.well-known/jwks.json` | Public keys for verifying minted tokens (path is configurable) |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the above |
-| `GET /health`, `GET /ready` | Liveness, and readiness (503 while no client is registered) |
+| `GET /health`, `GET /ready` | Liveness, and readiness (503 without clients or a writable audit chain) |
 
 ## Configuration
 
 One YAML document. Every path in it resolves relative to the document's own
-directory. Everything here is startup-only: issuer identity, signing keys,
-listener, and token policy are fixed for the life of the process.
+directory. Everything here is startup-only: issuer identity, signing and audit
+keys, listener, and token policy are fixed for the life of the process.
 
 ```yaml
 version: 1
@@ -83,6 +83,10 @@ signing:
   activeKeyFile: secrets/signing.jwk
   # Public JWKs of keys that no longer sign but may still have live tokens.
   retiredPublicJwkFiles: []
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
   lifetimeSeconds: 300
@@ -110,6 +114,22 @@ bearer token is the thing Mint exists to avoid.
 
 The signing key file must be a private JWK and must be readable only by its
 owner. Never commit it, print it, or pass it on a command line.
+
+The audit key file is also owner-only and must contain at least 32 bytes. The
+audit directory, chain, and lock file must be owned by the Mint process user and
+unavailable to group and other users. For a new deployment, `openssl rand -hex
+32 > secrets/audit-hmac-key` followed by `chmod 600
+secrets/audit-hmac-key` is sufficient. Mint verifies the keyed chain at startup
+and holds a single-writer lock for the process lifetime. It writes a durable
+release record before returning every access token; if that write fails, the
+request returns `server_error` and readiness fails. Denials are recorded with
+value-free error categories. Raw assertions, tokens, client ids, actors,
+principals, and subject values never enter the chain; successful records use
+keyed pseudonyms where correlation is needed.
+
+Mint does not rotate or delete the audit file. Monitor its capacity and perform
+retention as an explicit stop, archive, verify, and restart operation while
+retaining the matching audit key.
 
 ## Registering a client
 
@@ -222,9 +242,15 @@ mint check --config /etc/mint/mint.yaml
 mint serve --config /etc/mint/mint.yaml
 ```
 
-Both accept `MINT_CONFIG` in place of `--config`. `check` loads the
-configuration, signing key, and client registry, then exits without opening a
-socket.
+Verify the retained chain with the same configuration and audit key:
+
+```bash
+mint verify-audit --config /etc/mint/mint.yaml
+```
+
+All three operator commands accept `MINT_CONFIG` in place of `--config`.
+`check` loads the configuration, signing key, audit chain, and client registry,
+then exits without opening a socket.
 
 Mint serves plain HTTP and expects to sit behind TLS termination it does not
 manage.

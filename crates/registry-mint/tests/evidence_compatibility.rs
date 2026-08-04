@@ -63,20 +63,21 @@ struct Deployment {
 
 /// Write a complete Mint deployment to disk and load it exactly as the binary
 /// would, including the owner-only permission requirement on the signing key.
-fn deployment() -> Deployment {
-    deployment_with_transport(None, ISSUER, 0, ASSERTION_AUDIENCE)
+async fn deployment() -> Deployment {
+    deployment_with_transport(None, ISSUER, 0, ASSERTION_AUDIENCE).await
 }
 
-fn supervised_local_development_deployment() -> Deployment {
+async fn supervised_local_development_deployment() -> Deployment {
     deployment_with_transport(
         Some("supervised-local-development"),
         LOCAL_ISSUER,
         18081,
         LOCAL_ASSERTION_AUDIENCE,
     )
+    .await
 }
 
-fn deployment_with_transport(
+async fn deployment_with_transport(
     validation_mode: Option<&str>,
     issuer: &str,
     listener_port: u16,
@@ -92,6 +93,10 @@ fn deployment_with_transport(
     fs::write(&signing_path, signing_document.to_string()).expect("write signing key");
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
         .expect("restrict signing key");
+    let audit_key_path = root.join("secrets/audit-hmac-key");
+    fs::write(&audit_key_path, "0123456789abcdef0123456789abcdef").expect("write audit key");
+    fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
+        .expect("restrict audit key");
 
     let (_, health_public, _) = key_pair(1);
     write_client(
@@ -118,6 +123,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: key-9
   activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [{EVIDENCE_AUDIENCE}]
   lifetimeSeconds: 300
@@ -138,7 +147,11 @@ clients:
     .expect("write config");
 
     let config = MintConfig::load(&config_path).expect("the deployment configuration is valid");
-    let service = Arc::new(MintService::load(config).expect("the deployment loads"));
+    let service = Arc::new(
+        MintService::load(config)
+            .await
+            .expect("the deployment loads"),
+    );
     Deployment {
         _directory: directory,
         service,
@@ -232,7 +245,7 @@ fn evidence_authenticator_for_issuer(jwks: &Value, issuer: &str) -> Authenticato
 
 #[tokio::test]
 async fn a_client_signing_with_its_own_key_receives_a_token_evidence_accepts() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let jwks = http.get("/.well-known/jwks.json").await;
@@ -273,7 +286,7 @@ async fn a_client_signing_with_its_own_key_receives_a_token_evidence_accepts() {
 
 #[tokio::test]
 async fn supervised_local_development_tokens_remain_evidence_compatible() {
-    let deployment = supervised_local_development_deployment();
+    let deployment = supervised_local_development_deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let published = http.get("/.well-known/jwks.json").await.json::<Value>();
 
@@ -317,7 +330,8 @@ async fn evidence_fetches_keys_from_a_real_supervised_local_mint() {
         &issuer,
         port,
         &token_endpoint,
-    );
+    )
+    .await;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let service = Arc::clone(&deployment.service);
@@ -430,7 +444,7 @@ async fn evidence_fetches_keys_from_a_real_supervised_local_mint() {
 
 #[tokio::test]
 async fn a_registered_client_cannot_borrow_another_clients_authority() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     // The health ministry's own key, but claiming to be the statistics office.
@@ -457,7 +471,7 @@ async fn a_registered_client_cannot_borrow_another_clients_authority() {
 
 #[tokio::test]
 async fn an_assertion_cannot_be_presented_twice() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let (private, _, _) = key_pair(2);
@@ -473,7 +487,7 @@ async fn an_assertion_cannot_be_presented_twice() {
 
 #[tokio::test]
 async fn a_client_without_a_registered_grant_receives_no_grant_claims() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
     let published = http.get("/.well-known/jwks.json").await.json::<Value>();
 
@@ -497,7 +511,7 @@ async fn a_client_without_a_registered_grant_receives_no_grant_claims() {
 
 #[tokio::test]
 async fn the_published_metadata_points_at_the_endpoints_that_exist() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let metadata = http.get("/.well-known/oauth-authorization-server").await;
@@ -522,7 +536,7 @@ async fn the_published_metadata_points_at_the_endpoints_that_exist() {
 
 #[tokio::test]
 async fn the_token_endpoint_refuses_anything_but_the_supported_grant() {
-    let deployment = deployment();
+    let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
     let (private, _, _) = key_pair(1);

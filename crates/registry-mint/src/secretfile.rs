@@ -1,15 +1,15 @@
 //! Bounded, owner-only reads of private key material.
 //!
-//! Mint holds exactly one secret: its access-token signing key. Client
+//! Mint holds an access-token signing key and an audit HMAC key. Client
 //! registrations carry public keys only, so this module is deliberately small
-//! and is the single place private material enters the process.
+//! and is the single file-read boundary for private material.
 
 use std::{fs, os::unix::fs::MetadataExt, path::Path};
 
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// Upper bound on a signing key file, generous for any supported JWK.
+/// Upper bound on a Mint secret file, generous for any supported JWK or HMAC key.
 pub const MAX_SECRET_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Error, Eq, PartialEq)]

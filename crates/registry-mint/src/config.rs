@@ -1,7 +1,7 @@
 //! Startup-only Mint configuration.
 //!
 //! Everything in this file is fixed for the lifetime of the serving process:
-//! issuer identity, signing keys, listener, and token policy. The one part of
+//! issuer identity, signing and audit keys, listener, and token policy. The one part of
 //! Mint's state that is intentionally reloadable is the client registry, which
 //! lives in [`crate::clients`].
 
@@ -112,6 +112,18 @@ pub struct SigningConfig {
     pub retired_public_jwk_files: Vec<PathBuf>,
     #[serde(default = "default_jwks_path")]
     pub jwks_path: String,
+}
+
+/// Required, fail-closed audit storage for token decisions.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditConfig {
+    /// Append-only keyed JSONL chain, resolved relative to the configuration.
+    pub path: PathBuf,
+    /// Owner-only master HMAC key, resolved relative to the configuration.
+    pub hash_key_file: PathBuf,
+    /// Version label written into privacy-preserving audit handles.
+    pub hash_key_version: u32,
 }
 
 /// Names of the claims Mint writes into minted access tokens.
@@ -232,6 +244,7 @@ pub struct MintConfig {
     pub issuer: String,
     pub listener: ListenerConfig,
     pub signing: SigningConfig,
+    pub audit: AuditConfig,
     pub access_tokens: AccessTokenConfig,
     pub client_assertion: ClientAssertionConfig,
     pub clients: ClientsConfig,
@@ -267,6 +280,8 @@ impl MintConfig {
             .iter()
             .map(|path| resolve(path))
             .collect();
+        self.audit.path = resolve(&self.audit.path);
+        self.audit.hash_key_file = resolve(&self.audit.hash_key_file);
         self.clients.directory = resolve(&self.clients.directory);
     }
 
@@ -289,6 +304,22 @@ impl MintConfig {
         }
         if !self.signing.jwks_path.starts_with('/') {
             return Err(ConfigError::Invalid("jwks path must be absolute"));
+        }
+        if self.audit.path.as_os_str().is_empty()
+            || self.audit.hash_key_file.as_os_str().is_empty()
+            || self.audit.hash_key_version == 0
+        {
+            return Err(ConfigError::Invalid(
+                "audit path, hash key file, and non-zero hash key version are required",
+            ));
+        }
+        if self.audit.path == self.audit.hash_key_file
+            || self.audit.path == self.signing.active_key_file
+            || self.audit.hash_key_file == self.signing.active_key_file
+        {
+            return Err(ConfigError::Invalid(
+                "audit storage and secret paths must be distinct from signing material",
+            ));
         }
 
         if self.access_tokens.audiences.is_empty() || self.access_tokens.audiences.len() > 16 {
@@ -436,6 +467,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: mint-2026-01
   activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
   lifetimeSeconds: 300
@@ -483,8 +518,38 @@ clients:
             directory.path().join("secrets/signing.jwk")
         );
         assert_eq!(config.clients.directory, directory.path().join("clients"));
+        assert_eq!(config.audit.path, directory.path().join("audit/mint.jsonl"));
+        assert_eq!(
+            config.audit.hash_key_file,
+            directory.path().join("secrets/audit-hmac-key")
+        );
+        assert_eq!(config.audit.hash_key_version, 1);
         assert_eq!(config.signing.jwks_path, "/.well-known/jwks.json");
         assert_eq!(config.client_assertion.maximum_lifetime_seconds, 300);
+    }
+
+    #[test]
+    fn audit_configuration_is_required_bounded_and_separate_from_secrets() {
+        assert!(load_from(&VALID.replace(
+            "audit:\n  path: audit/mint.jsonl\n  hashKeyFile: secrets/audit-hmac-key\n  hashKeyVersion: 1\n",
+            ""
+        ))
+        .is_err());
+        assert_eq!(
+            load_error(&VALID.replace("hashKeyVersion: 1", "hashKeyVersion: 0")),
+            ConfigError::Invalid(
+                "audit path, hash key file, and non-zero hash key version are required"
+            )
+        );
+        assert_eq!(
+            load_error(&VALID.replace(
+                "hashKeyFile: secrets/audit-hmac-key",
+                "hashKeyFile: secrets/signing.jwk"
+            )),
+            ConfigError::Invalid(
+                "audit storage and secret paths must be distinct from signing material"
+            )
+        );
     }
 
     #[test]

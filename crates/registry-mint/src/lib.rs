@@ -19,7 +19,7 @@
 //!
 //! # Trust split
 //!
-//! - Issuer identity, signing keys, listener, and token policy are startup-only
+//! - Issuer identity, signing and audit keys, listener, and token policy are startup-only
 //!   and immutable for the process lifetime.
 //! - The client registry is reloadable, so onboarding, offboarding, and key
 //!   rotation for callers never require restarting a resource server.
@@ -34,10 +34,11 @@
 
 #[cfg(not(unix))]
 compile_error!(
-    "registry-mint requires a Unix target for the owner-only signing key file guarantees"
+    "registry-mint requires a Unix target for owner-only signing and audit file guarantees"
 );
 
 pub mod assertion;
+pub mod audit;
 pub mod caller;
 pub mod clients;
 pub mod config;

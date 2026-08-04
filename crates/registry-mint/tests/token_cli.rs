@@ -42,6 +42,7 @@ struct Server {
     child: Child,
     port: u16,
     root: PathBuf,
+    config: PathBuf,
 }
 
 impl Drop for Server {
@@ -77,6 +78,10 @@ fn server() -> Server {
     write_owner_only(
         &root.join("secrets/signing.jwk"),
         &signing_private.to_string(),
+    );
+    write_owner_only(
+        &root.join("secrets/audit-hmac-key"),
+        "0123456789abcdef0123456789abcdef",
     );
 
     // `listener.port: 0` would leave the test unable to find the port, so an
@@ -133,6 +138,10 @@ signing:
   algorithm: EdDSA
   activeKeyId: key-9
   activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/mint.jsonl
+  hashKeyFile: secrets/audit-hmac-key
+  hashKeyVersion: 1
 accessTokens:
   audiences: [evidence.example.org]
   lifetimeSeconds: 300
@@ -167,6 +176,7 @@ clients:
         child,
         port,
         root,
+        config,
     };
     wait_for_listener(port);
     server
@@ -244,6 +254,15 @@ fn the_subcommand_obtains_a_token_the_endpoint_agreed_to_issue() {
     );
     // The authority came from the registry, not from anything the caller sent.
     assert!(claims.get("evidence_actor").is_none());
+
+    let verification = Command::new(env!("CARGO_BIN_EXE_mint"))
+        .arg("verify-audit")
+        .arg("--config")
+        .arg(&server.config)
+        .output()
+        .expect("the verifier runs");
+    assert!(verification.status.success());
+    assert!(String::from_utf8_lossy(&verification.stdout).contains("records=1"));
 }
 
 #[test]
