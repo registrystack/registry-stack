@@ -24,7 +24,7 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         .expect("request help");
     assert_success(&request);
     let request = String::from_utf8_lossy(&request.stdout);
-    for visible in ["<QUESTION>", "--purpose", "--subject", "--name"] {
+    for visible in ["<QUESTION>", "--purpose", "--subject", "--name", "--format"] {
         assert!(request.contains(visible), "missing {visible}: {request}");
     }
     for hidden in ["--project", "--evidence-bin", "--mint-bin"] {
@@ -127,6 +127,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     assert_eq!(evidence_args[2], "prepare-local-verification-context");
     assert_eq!(evidence_args[3], "--request");
     assert!(evidence_args[4].ends_with("/request.json"));
+    assert_eq!(&evidence_args[5..], ["--response-format", "signed-jws"]);
     assert!(!evidence_args.join(" ").contains(TOKEN));
     assert_eq!(
         fs::read_to_string(fixture.evidence.with_extension("prepare.stdin")).unwrap(),
@@ -155,6 +156,26 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     )
     .unwrap();
     assert_ne!(request["requestNonce"], second["requestNonce"]);
+
+    let sd_jwt = fixture.prepare_with(
+        &[
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+            "--format",
+            "sd-jwt-vc",
+        ],
+        "sd-jwt-assertion",
+    );
+    assert_success(&sd_jwt);
+    let evidence_args = fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
+        .expect("Evidence SD-JWT prepare argv");
+    assert_eq!(
+        &evidence_args.lines().collect::<Vec<_>>()[5..],
+        ["--response-format", "sd-jwt-vc"]
+    );
 
     let age = fixture.prepare_with(
         &[

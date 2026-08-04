@@ -29,6 +29,7 @@ const QUESTIONS_DIRECTORY: &str = "questions";
 const SOURCES_DIRECTORY: &str = "sources";
 const SELECTORS_DIRECTORY: &str = "selectors";
 const DERIVATIONS_DIRECTORY: &str = "derivations";
+const SCHEMAS_DIRECTORY: &str = "schemas";
 const SECRETS_DIRECTORY: &str = "secrets";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
@@ -49,6 +50,7 @@ pub(crate) enum CompiledConceptForm {
     Boolean,
     ControlledCategory,
     BoundedInteger,
+    Structured,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -228,6 +230,11 @@ struct QuestionAnswer {
     values: Vec<String>,
     minimum: Option<i64>,
     maximum: Option<i64>,
+    schema: Option<String>,
+    #[serde(rename = "maximumSerializedBytes")]
+    maximum_serialized_bytes: Option<u64>,
+    #[serde(rename = "sdJwtVc")]
+    sd_jwt_vc: Option<QuestionSdJwtVc>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -236,6 +243,20 @@ enum AnswerType {
     Boolean,
     ControlledCategory,
     BoundedInteger,
+    ReviewedStructuredValue,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QuestionSdJwtVc {
+    claim: String,
+    disclosure: QuestionSdJwtVcDisclosure,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum QuestionSdJwtVcDisclosure {
+    TopLevel,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,6 +269,7 @@ struct Inputs {
     openapi: Value,
     selectors: BTreeMap<String, Value>,
     sources: BTreeMap<String, Value>,
+    schemas: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
 }
 
@@ -296,6 +318,8 @@ struct ConceptPlan {
     concept_form: CompiledConceptForm,
     constraints: Value,
     codelist: Option<(String, Value)>,
+    schema: Option<(String, Value)>,
+    sd_jwt_vc: Option<Value>,
 }
 
 struct CompiledFacts {
@@ -375,6 +399,7 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
 
     let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
     let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
+    let schemas = read_named_objects(project_root, SCHEMAS_DIRECTORY, "schema")?;
     let mut questions = Vec::new();
     let mut question_ids = BTreeSet::new();
     let mut derivation_paths = BTreeSet::new();
@@ -423,6 +448,7 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         openapi,
         selectors,
         sources,
+        schemas,
         questions,
     })
 }
@@ -615,6 +641,7 @@ fn validate_question(question: &Question) -> Result<()> {
         bail!("answers must contain 1..={MAX_CONCEPTS} governed concepts");
     }
     let mut concepts = BTreeSet::new();
+    let mut sd_jwt_claims = BTreeSet::new();
     for answer in &question.answers {
         if !valid_local_identifier(&answer.concept) {
             bail!("answer concept must be a lowercase local identifier");
@@ -623,6 +650,11 @@ fn validate_question(question: &Question) -> Result<()> {
             bail!("answer concepts must be unique");
         }
         validate_answer(answer)?;
+        if let Some(projection) = &answer.sd_jwt_vc {
+            if !sd_jwt_claims.insert(projection.claim.as_str()) {
+                bail!("sdJwtVc.claim names must be unique within a question");
+            }
+        }
     }
     match (&question.source.source_ref, &question.source.operation) {
         (Some(source_ref), None) => {
@@ -712,12 +744,23 @@ fn question_subjects(question: &Question) -> Result<Vec<&QuestionSubject>> {
 fn validate_answer(answer: &QuestionAnswer) -> Result<()> {
     match answer.answer_type {
         AnswerType::Boolean => {
-            if !answer.values.is_empty() || answer.minimum.is_some() || answer.maximum.is_some() {
+            if !answer.values.is_empty()
+                || answer.minimum.is_some()
+                || answer.maximum.is_some()
+                || answer.schema.is_some()
+                || answer.maximum_serialized_bytes.is_some()
+                || answer.sd_jwt_vc.is_some()
+            {
                 bail!("a boolean answer must not declare values or numeric bounds");
             }
         }
         AnswerType::ControlledCategory => {
-            if answer.minimum.is_some() || answer.maximum.is_some() {
+            if answer.minimum.is_some()
+                || answer.maximum.is_some()
+                || answer.schema.is_some()
+                || answer.maximum_serialized_bytes.is_some()
+                || answer.sd_jwt_vc.is_some()
+            {
                 bail!("a controlled-category answer must not declare numeric bounds");
             }
             if !(2..=MAX_CATEGORIES).contains(&answer.values.len())
@@ -734,7 +777,11 @@ fn validate_answer(answer: &QuestionAnswer) -> Result<()> {
             }
         }
         AnswerType::BoundedInteger => {
-            if !answer.values.is_empty() {
+            if !answer.values.is_empty()
+                || answer.schema.is_some()
+                || answer.maximum_serialized_bytes.is_some()
+                || answer.sd_jwt_vc.is_some()
+            {
                 bail!("a bounded-integer answer must not declare category values");
             }
             let (Some(minimum), Some(maximum)) = (answer.minimum, answer.maximum) else {
@@ -748,6 +795,76 @@ fn validate_answer(answer: &QuestionAnswer) -> Result<()> {
                 bail!("a bounded-integer answer needs consistent JSON-safe bounds");
             }
         }
+        AnswerType::ReviewedStructuredValue => {
+            if !answer.values.is_empty() || answer.minimum.is_some() || answer.maximum.is_some() {
+                bail!("a reviewed structured answer must not declare scalar constraints");
+            }
+            let schema = answer
+                .schema
+                .as_deref()
+                .ok_or_else(|| anyhow!("a reviewed structured answer requires schema"))?;
+            validate_answer_schema_path(schema)?;
+            if !matches!(answer.maximum_serialized_bytes, Some(1..=65_536)) {
+                bail!("a reviewed structured answer requires maximumSerializedBytes in 1..=65536");
+            }
+            if let Some(projection) = &answer.sd_jwt_vc {
+                validate_sd_jwt_claim_name(&projection.claim)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_answer_schema_path(value: &str) -> Result<()> {
+    let path = Path::new(value);
+    let components = path.components().collect::<Vec<_>>();
+    if components.len() != 2
+        || components.first() != Some(&Component::Normal(SCHEMAS_DIRECTORY.as_ref()))
+        || !matches!(components.get(1), Some(Component::Normal(_)))
+        || path.extension().and_then(|extension| extension.to_str()) != Some("yaml")
+    {
+        bail!("answer schema must be one schemas/<name>.yaml file");
+    }
+    Ok(())
+}
+
+fn validate_sd_jwt_claim_name(value: &str) -> Result<()> {
+    const RESERVED: [&str; 24] = [
+        "iss",
+        "sub",
+        "aud",
+        "iat",
+        "nbf",
+        "exp",
+        "vct",
+        "id",
+        "jti",
+        "_sd",
+        "_sd_alg",
+        "cnf",
+        "status",
+        "issuedBy",
+        "providedBy",
+        "supportsRequirement",
+        "purpose",
+        "audience",
+        "assuranceProfile",
+        "observedAt",
+        "configurationRevision",
+        "requestNonce",
+        "subjects",
+        "structuredValues",
+    ];
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > 64
+        || !matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z'))
+        || !bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        || RESERVED.contains(&value)
+    {
+        bail!("sdJwtVc.claim must be a bounded JSON claim name");
     }
     Ok(())
 }
@@ -811,6 +928,7 @@ fn compile_plan(inputs: Inputs, ports: LocalServicePorts) -> Result<CompilePlan>
             base_url.as_deref(),
             &inputs.selectors,
             &inputs.sources,
+            &inputs.schemas,
             authored,
         )?);
     }
@@ -824,11 +942,12 @@ fn compile_question_plan(
     base_url: Option<&str>,
     selectors: &BTreeMap<String, Value>,
     sources: &BTreeMap<String, Value>,
+    schemas: &BTreeMap<String, Value>,
     authored: AuthoredQuestion,
 ) -> Result<QuestionPlan> {
     let question = &authored.question;
     if question.source.source_ref.is_some() {
-        return compile_referenced_question(selectors, sources, authored);
+        return compile_referenced_question(selectors, sources, schemas, authored);
     }
     let authored_subjects = question_subjects(question)?;
     if authored_subjects
@@ -880,8 +999,8 @@ fn compile_question_plan(
     let concepts = question
         .answers
         .iter()
-        .map(|answer| compile_concept(&question.id, answer))
-        .collect::<Vec<_>>();
+        .map(|answer| compile_concept(&question.id, answer, schemas))
+        .collect::<Result<Vec<_>>>()?;
     let requirement_kind =
         if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
             "criterion"
@@ -968,6 +1087,7 @@ fn compile_question_plan(
 fn compile_referenced_question(
     selectors: &BTreeMap<String, Value>,
     sources: &BTreeMap<String, Value>,
+    schemas: &BTreeMap<String, Value>,
     authored: AuthoredQuestion,
 ) -> Result<QuestionPlan> {
     let question = &authored.question;
@@ -988,8 +1108,8 @@ fn compile_referenced_question(
     let concepts = question
         .answers
         .iter()
-        .map(|answer| compile_concept(&question.id, answer))
-        .collect::<Vec<_>>();
+        .map(|answer| compile_concept(&question.id, answer, schemas))
+        .collect::<Result<Vec<_>>>()?;
     let requirement_kind =
         if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
             "criterion"
@@ -1198,15 +1318,21 @@ fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn compile_concept(question_id: &str, answer: &QuestionAnswer) -> ConceptPlan {
+fn compile_concept(
+    question_id: &str,
+    answer: &QuestionAnswer,
+    schemas: &BTreeMap<String, Value>,
+) -> Result<ConceptPlan> {
     let concept_uri = local_uri(&format!("concept:{question_id}:{}", answer.concept));
-    match answer.answer_type {
+    Ok(match answer.answer_type {
         AnswerType::Boolean => ConceptPlan {
             concept_alias: answer.concept.clone(),
             concept_uri,
             concept_form: CompiledConceptForm::Boolean,
             constraints: json!({}),
             codelist: None,
+            schema: None,
+            sd_jwt_vc: None,
         },
         AnswerType::ControlledCategory => {
             let scheme = local_uri(&format!("category-scheme:{question_id}:{}", answer.concept));
@@ -1235,6 +1361,8 @@ fn compile_concept(question_id: &str, answer: &QuestionAnswer) -> ConceptPlan {
                         "codes": answer.values,
                     }),
                 )),
+                schema: None,
+                sd_jwt_vc: None,
             }
         }
         AnswerType::BoundedInteger => ConceptPlan {
@@ -1246,8 +1374,51 @@ fn compile_concept(question_id: &str, answer: &QuestionAnswer) -> ConceptPlan {
                 "maximum": answer.maximum.expect("bounded integer was validated"),
             }),
             codelist: None,
+            schema: None,
+            sd_jwt_vc: None,
         },
-    }
+        AnswerType::ReviewedStructuredValue => {
+            let path = answer
+                .schema
+                .as_deref()
+                .expect("structured answer was validated");
+            let key = Path::new(path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| anyhow!("answer schema filename is not valid UTF-8"))?;
+            let schema = schemas
+                .get(key)
+                .cloned()
+                .ok_or_else(|| anyhow!("answer schema `{path}` does not exist"))?;
+            let schema_id = schema
+                .get("$id")
+                .and_then(Value::as_str)
+                .filter(|value| url::Url::parse(value).is_ok())
+                .ok_or_else(|| anyhow!("answer schema `{path}` requires an absolute `$id`"))?
+                .to_owned();
+            ConceptPlan {
+                concept_alias: answer.concept.clone(),
+                concept_uri,
+                concept_form: CompiledConceptForm::Structured,
+                constraints: json!({
+                    "schema": schema_id,
+                    "maximumSerializedBytes": answer
+                        .maximum_serialized_bytes
+                        .expect("structured answer was validated"),
+                }),
+                codelist: None,
+                schema: Some((path.to_owned(), schema)),
+                sd_jwt_vc: answer.sd_jwt_vc.as_ref().map(|projection| {
+                    json!({
+                        "claim": projection.claim,
+                        "disclosure": match projection.disclosure {
+                            QuestionSdJwtVcDisclosure::TopLevel => "top-level",
+                        },
+                    })
+                }),
+            }
+        }
+    })
 }
 
 fn exact_loopback_server(document: &Value) -> Result<String> {
@@ -1988,27 +2159,41 @@ fn render_governance_parts(
             })
         })
         .collect::<Vec<_>>();
+    let response_formats = if requirement
+        .concepts
+        .iter()
+        .any(|concept| concept.sd_jwt_vc.is_some())
+    {
+        json!(["signed-jws", "sd-jwt-vc"])
+    } else {
+        json!(["signed-jws"])
+    };
     let grant = json!({
         "requirement": requirement.requirement_uri,
         "purpose": question.purpose,
         "audienceFrom": "authenticated-requester",
-        "responseFormats": ["signed-jws"],
+        "responseFormats": response_formats,
         "subjects": grant_subjects,
     });
     let concepts = requirement
         .concepts
         .iter()
         .map(|concept| {
-            json!({
+            let mut rendered = json!({
                 "id": concept.concept_uri,
                 "form": match concept.concept_form {
                     CompiledConceptForm::Boolean => "boolean",
                     CompiledConceptForm::ControlledCategory => "controlled-category",
                     CompiledConceptForm::BoundedInteger => "bounded-integer",
+                    CompiledConceptForm::Structured => "reviewed-structured-value",
                 },
                 "required": true,
                 "constraints": concept.constraints,
-            })
+            });
+            if let Some(projection) = &concept.sd_jwt_vc {
+                rendered["sdJwtVc"] = projection.clone();
+            }
+            rendered
         })
         .collect::<Vec<_>>();
     let subject_roles = subjects
@@ -2083,6 +2268,15 @@ fn render_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value 
         .iter()
         .map(|question| question.requirement.clone())
         .collect::<Vec<_>>();
+    let response_formats = if questions
+        .iter()
+        .flat_map(|question| &question.concepts)
+        .any(|concept| concept.sd_jwt_vc.is_some())
+    {
+        json!(["signed-jws", "sd-jwt-vc"])
+    } else {
+        json!(["signed-jws"])
+    };
     json!({
         "version": 1,
         "assuranceProfile": "local",
@@ -2129,7 +2323,7 @@ fn render_bundle(questions: &[QuestionPlan], ports: LocalServicePorts) -> Value 
             "maximumAssertionValiditySeconds": 300,
             "verifierClockSkewSeconds": 30,
         },
-        "responseFormats": ["signed-jws"],
+        "responseFormats": response_formats,
         "selectorProfiles": selector_profiles,
         "sources": sources,
         "authorityProfiles": {
@@ -2166,6 +2360,7 @@ fn write_plan(
 
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
     let mut written_sources = BTreeSet::new();
+    let mut written_answer_schemas = BTreeSet::new();
     for question in &plan.questions {
         if written_sources.insert(question.source_artifact_id.clone()) {
             if let Some(artifacts) = &question.authored_source_artifacts {
@@ -2225,6 +2420,15 @@ fn write_plan(
             .filter_map(|concept| concept.codelist.as_ref())
         {
             write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
+        }
+        for (path, schema) in question
+            .concepts
+            .iter()
+            .filter_map(|concept| concept.schema.as_ref())
+        {
+            if written_answer_schemas.insert(path.clone()) && !bundle.join(path).exists() {
+                write_private_file(&bundle.join(path), &yaml_bytes(schema)?)?;
+            }
         }
     }
 
@@ -2651,6 +2855,57 @@ disclosure:
   ]
 }"#;
 
+    const BIRTH_CERTIFICATE_QUESTION: &str = r#"id: birth-certificate
+question: What birth details are recorded for this person?
+purpose: birth-record-review
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: name
+      path: /name
+      combine: exactly-one
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: birth_certificate
+    type: reviewed-structured-value
+    schema: schemas/birth-certificate.yaml
+    maximumSerializedBytes: 2048
+    sdJwtVc:
+      claim: birthCertificate
+      disclosure: top-level
+derivation: derivations/birth-certificate.rhai
+disclosure:
+  allow: [birth_certificate]
+"#;
+
+    const BIRTH_CERTIFICATE_ANSWER: &str = r#"fn answer(facts, selectors, context) {
+    #{birth_certificate: #{
+        form: "reviewed-structured-value",
+        schema: "urn:example:schema:birth-certificate:v1",
+        fields: #{
+            givenName: required(facts.name, "name_missing"),
+            dateOfBirth: required(facts.date_of_birth, "date_of_birth_missing")
+        }
+    }}
+}
+"#;
+
+    const BIRTH_CERTIFICATE_SCHEMA: &str = r#"$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:example:schema:birth-certificate:v1
+type: object
+additionalProperties: false
+required: [givenName, dateOfBirth]
+properties:
+  givenName: {type: string, minLength: 1, maxLength: 200}
+  dateOfBirth: {type: string, format: date}
+"#;
+
     #[test]
     fn compiles_only_the_canonical_private_local_generation() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
@@ -2745,6 +3000,63 @@ disclosure:
             .contains("let governed_answers = answer(facts, selectors, evaluation_context)"));
         assert!(derivation.contains("value: governed_answers[\"is_adult\"]"));
         assert!(!derivation.contains("concept_id: \"is_adult\""));
+    }
+
+    #[test]
+    fn compiles_a_structured_value_into_independent_sd_jwt_vc_fields() {
+        let openapi = OPENAPI.replace(
+            "                  name: {type: string}",
+            "                  name: {type: string, minLength: 1, maxLength: 200}",
+        );
+        let fixture = Fixture::new(
+            &openapi,
+            BIRTH_CERTIFICATE_QUESTION,
+            BIRTH_CERTIFICATE_ANSWER,
+            true,
+        );
+        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
+        fs::write(
+            fixture.project.join("schemas/birth-certificate.yaml"),
+            BIRTH_CERTIFICATE_SCHEMA,
+        )
+        .expect("birth certificate schema");
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("structured value compiles");
+
+        assert_eq!(
+            compiled.questions[0].concepts[0].concept_form,
+            CompiledConceptForm::Structured
+        );
+        assert!(fixture
+            .staging
+            .join("bundle/schemas/birth-certificate.yaml")
+            .is_file());
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(
+            bundle["responseFormats"],
+            json!(["signed-jws", "sd-jwt-vc"])
+        );
+        assert_eq!(
+            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["responseFormats"],
+            json!(["signed-jws", "sd-jwt-vc"])
+        );
+        let concept = &bundle["requirements"][0]["concepts"][0];
+        assert_eq!(concept["form"], "reviewed-structured-value");
+        assert_eq!(
+            concept["constraints"],
+            json!({
+                "schema": "urn:example:schema:birth-certificate:v1",
+                "maximumSerializedBytes": 2048,
+            })
+        );
+        assert_eq!(
+            concept["sdJwtVc"],
+            json!({"claim": "birthCertificate", "disclosure": "top-level"})
+        );
     }
 
     #[test]

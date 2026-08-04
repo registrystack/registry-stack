@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use registry_platform_crypto::canonicalize_json;
 use serde_json::{json, Map, Value};
 use zeroize::{Zeroize as _, Zeroizing};
@@ -51,6 +51,10 @@ pub struct PrepareArgs {
     #[arg(long)]
     name: String,
 
+    /// Response format to request and verify.
+    #[arg(long, value_enum, default_value_t = PreparedResponseFormat::SignedJws)]
+    format: PreparedResponseFormat,
+
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
@@ -60,6 +64,21 @@ pub struct PrepareArgs {
 
     #[arg(long, hide = true)]
     mint_bin: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PreparedResponseFormat {
+    SignedJws,
+    SdJwtVc,
+}
+
+impl PreparedResponseFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedJws => "signed-jws",
+            Self::SdJwtVc => "sd-jwt-vc",
+        }
+    }
 }
 
 pub fn run(command: RequestCommand) -> Result<ExitCode> {
@@ -100,6 +119,7 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
         &request_path,
         &context_path,
         &token,
+        args.format,
     )?;
     let authorization_path = staging.path().join("authorization.curl");
     write_authorization(&authorization_path, &token)?;
@@ -291,6 +311,7 @@ fn prepare_context(
     request: &Path,
     context: &Path,
     token: &str,
+    response_format: PreparedResponseFormat,
 ) -> Result<()> {
     let context_file = create_private_file(context)?;
     let mut child = Command::new(evidence)
@@ -299,6 +320,8 @@ fn prepare_context(
         .arg("prepare-local-verification-context")
         .arg("--request")
         .arg(request)
+        .arg("--response-format")
+        .arg(response_format.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::from(context_file.try_clone()?))
         .stderr(Stdio::null())

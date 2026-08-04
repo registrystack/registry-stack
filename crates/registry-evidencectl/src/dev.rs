@@ -1160,6 +1160,7 @@ impl From<&CompiledQuestion> for QuestionState {
                         CompiledConceptForm::Boolean => "boolean".to_owned(),
                         CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
                         CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
+                        CompiledConceptForm::Structured => "structured".to_owned(),
                     },
                 })
                 .collect(),
