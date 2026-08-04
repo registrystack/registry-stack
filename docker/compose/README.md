@@ -26,10 +26,10 @@ before the first start. Do not widen the Evidence process to root to compensate 
 volume.
 
 ```sh
-EVIDENCE_CANDIDATE_DIR=<candidate> \
-EVIDENCE_RUNTIME_FILE=<runtime.docker.yaml> \
-EVIDENCE_SECRET_ROOT=<secret-root> \
-EVIDENCE_IMAGE=<reviewed-evidence-image-by-digest> \
+export EVIDENCE_CANDIDATE_DIR='<candidate>'
+export EVIDENCE_RUNTIME_FILE='<runtime.docker.yaml>'
+export EVIDENCE_SECRET_ROOT='<secret-root>'
+export EVIDENCE_IMAGE='<reviewed-evidence-image-by-digest>'
 docker compose -f docker-compose.yaml config
 ```
 
