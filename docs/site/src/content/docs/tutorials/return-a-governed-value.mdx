@@ -81,7 +81,11 @@ subject:
   selector: person_id
 source:
   operation: getPerson
-  facts: [date_of_birth]
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
 answers:
   - concept: age_bracket
     type: controlled-category
