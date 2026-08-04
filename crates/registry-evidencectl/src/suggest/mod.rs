@@ -22,7 +22,7 @@ use std::{collections::BTreeMap, path::Path, process::ExitCode};
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
 
-use emit::{CheckClassification, EmitInputs};
+use emit::EmitInputs;
 use openapi::Spec;
 use types::{
     BoundKind, BoundNeed, BoundValues, CandidateLeaf, Decisions, DraftArtifacts, Observations,
@@ -37,10 +37,10 @@ pub enum SourceCommand {
 
 #[derive(Debug, Args)]
 pub struct SuggestArgs {
-    /// OpenAPI 3.0 or 3.1 document (YAML or JSON): a local file path, or an
-    /// https URL to fetch it from.
+    /// OpenAPI 3.0 or 3.1 document for a print-only draft. With --project,
+    /// the retained source.openapi.yaml is used instead.
     #[arg(long)]
-    pub openapi: String,
+    pub openapi: Option<String>,
 
     /// Operation as "METHOD /path/template"; interactive selection if absent.
     #[arg(long)]
@@ -71,13 +71,6 @@ pub struct SuggestArgs {
     /// Deployment project to write the draft into; print-only if absent.
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
-
-    /// Verify a written draft by running `evidence check` with this binary.
-    /// Verification is opt-in: a project being drafted into is normally
-    /// neither frozen nor provisioned yet, and `check` reports that state
-    /// rather than anything about the draft.
-    #[arg(long)]
-    pub evidence_bin: Option<std::path::PathBuf>,
 }
 
 pub fn run(command: SourceCommand) -> Result<ExitCode> {
@@ -114,7 +107,7 @@ pub(crate) struct PreparedSuggestion {
 /// `source suggest` and `new --openapi` differ only in how they deliver this
 /// prepared draft.
 pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
-    let source = fetch::spec_source(&args.openapi)?;
+    let source = suggestion_openapi(args)?;
     let spec = Spec::open(&source)?;
     let operations = spec.operations();
     if operations.is_empty() {
@@ -268,17 +261,42 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
     })
 }
 
+fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
+    match (&args.project, &args.openapi) {
+        (Some(project), None) => {
+            if !project.is_dir() {
+                bail!(
+                    "authoring project directory {} not found; create it with `evidencectl new` first",
+                    project.display()
+                );
+            }
+            let retained = project.join("source.openapi.yaml");
+            if !retained.is_file() {
+                bail!(
+                    "authoring project {} has no retained source.openapi.yaml",
+                    project.display()
+                );
+            }
+            fetch::spec_source(
+                retained
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("retained OpenAPI path is not valid UTF-8"))?,
+            )
+        }
+        (Some(_), Some(_)) => bail!(
+            "--project uses its retained source.openapi.yaml; omit --openapi to avoid drafting from a different contract"
+        ),
+        (None, Some(openapi)) => fetch::spec_source(openapi),
+        (None, None) => bail!("pass --openapi <path-or-https-url>, or pass --project <authoring-project>"),
+    }
+}
+
 fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     let prepared = prepare(&args)?;
     let artifacts = prepared.artifacts;
 
     let code = match &args.project {
-        Some(project) => deliver_into_project(
-            project,
-            &artifacts,
-            args.evidence_bin.as_deref(),
-            prepared.flag_driven,
-        )?,
+        Some(project) => deliver_into_project(project, &artifacts, prepared.flag_driven)?,
         None => {
             print_draft(&artifacts);
             ExitCode::SUCCESS
@@ -291,7 +309,7 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
     Ok(code)
 }
 
-/// Write the draft into a deployment project, then report what happened.
+/// Write the draft into an OpenAPI authoring project, then report what happened.
 ///
 /// The write refuses to replace anything that already exists, so a repeated
 /// run never silently discards an edited draft. Verification runs only when
@@ -299,12 +317,11 @@ fn suggest(args: SuggestArgs) -> Result<ExitCode> {
 fn deliver_into_project(
     project: &Path,
     artifacts: &DraftArtifacts,
-    evidence_bin: Option<&Path>,
     flag_driven: bool,
 ) -> Result<ExitCode> {
     if !project.is_dir() {
         bail!(
-            "deployment project directory {} not found; scaffold one with `evidencectl new` first",
+            "authoring project directory {} not found; create one with `evidencectl new` first",
             project.display()
         );
     }
@@ -316,43 +333,23 @@ fn deliver_into_project(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let written = emit::write_into_project(project, &artifacts.files)?;
+    let written = emit::write_into_authoring_project(project, artifacts)?;
     for path in &written {
         println!("wrote {}", path.display());
     }
-    print_block(
-        "the block to paste under `sources:` in bundle/evidence.yaml",
-        &artifacts.source_block,
+    println!(
+        "source draft: {}",
+        project
+            .join("sources")
+            .join(format!("{}.yaml", artifacts.source_id))
+            .display()
     );
 
-    let Some(evidence_bin) = evidence_bin else {
-        println!(
-            "not verified: pass --evidence-bin to run `evidence check` once the project is \
-             frozen and provisioned."
-        );
-        return Ok(ExitCode::SUCCESS);
-    };
-    match emit::verify(project, Some(evidence_bin))? {
-        CheckClassification::BundleAccepted => {
-            println!("evidence check: bundle accepted");
-            Ok(ExitCode::SUCCESS)
-        }
-        CheckClassification::SecretsUnprovisioned => {
-            println!(
-                "evidence check: bundle accepted; deployment secrets not provisioned yet \
-                 (expected before keygen)"
-            );
-            Ok(ExitCode::SUCCESS)
-        }
-        CheckClassification::BundleRejected { stderr } => {
-            eprintln!("evidence check: bundle rejected");
-            eprint!("{stderr}");
-            if !stderr.ends_with('\n') {
-                eprintln!();
-            }
-            Ok(ExitCode::FAILURE)
-        }
-    }
+    println!(
+        "not verified: complete a question and run `evidencectl dev`; the local compiler \
+         delegates validation to Evidence."
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Print every drafted file, and the pasteable source block, to stdout.

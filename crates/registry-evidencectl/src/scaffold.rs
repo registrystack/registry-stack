@@ -27,7 +27,7 @@ pub enum AuthoringProfile {
 
 #[derive(Debug, Args)]
 pub struct NewArgs {
-    /// New directory to create for the incomplete authoring project.
+    /// New directory to create for the editable authoring project.
     pub directory: PathBuf,
 
     /// OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL.
@@ -68,7 +68,14 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         document.as_bytes(),
         0o644,
     )?;
-    for directory in ["questions", "derivations"] {
+    for directory in [
+        "selectors",
+        "sources",
+        "adapters",
+        "schemas",
+        "questions",
+        "derivations",
+    ] {
         fs::create_dir(staged_root.join(directory))
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
@@ -83,13 +90,18 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
     publish(staging, &args.directory)?;
 
     println!(
-        "Created an incomplete OpenAPI authoring project in {}",
+        "Created an editable OpenAPI authoring project in {}",
         args.directory.display()
     );
     println!(
         "  OpenAPI: {} (retained exactly for question authoring)",
         args.directory.join(RETAINED_OPENAPI_FILE).display()
     );
+    println!(
+        "  selectors: {}",
+        args.directory.join("selectors").display()
+    );
+    println!("  sources: {}", args.directory.join("sources").display());
     println!(
         "  questions: {}",
         args.directory.join("questions").display()
@@ -104,7 +116,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
             args.directory.join("secrets").display()
         );
     }
-    println!("No question, source policy, runtime, fixture, or deployment bundle was generated.");
+    println!(
+        "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
+        args.directory.display()
+    );
+    println!("No question, runtime, fixture, or deployment bundle was generated.");
     Ok(ExitCode::SUCCESS)
 }
 

@@ -65,7 +65,8 @@ fn local_openapi_is_retained_byte_for_byte_without_premature_artifacts() {
     );
     assert_minimal_project(&project, false);
     assert!(stdout(&output).contains("retained exactly"));
-    assert!(stdout(&output).contains("No question, source policy, runtime, fixture"));
+    assert!(stdout(&output).contains("No question, runtime, fixture"));
+    assert!(stdout(&output).contains("evidencectl source suggest --project"));
 }
 
 #[test]
@@ -233,22 +234,34 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
     let expected = if with_keys {
         vec![
             ".gitignore",
+            "adapters",
             "derivations",
             "questions",
+            "schemas",
             "secrets",
+            "selectors",
             "source.openapi.yaml",
+            "sources",
         ]
     } else {
         vec![
             ".gitignore",
+            "adapters",
             "derivations",
             "questions",
+            "schemas",
+            "selectors",
             "source.openapi.yaml",
+            "sources",
         ]
     };
     assert_eq!(entries(project), expected);
     assert!(entries(&project.join("questions")).is_empty());
     assert!(entries(&project.join("derivations")).is_empty());
+    assert!(entries(&project.join("selectors")).is_empty());
+    assert!(entries(&project.join("sources")).is_empty());
+    assert!(entries(&project.join("adapters")).is_empty());
+    assert!(entries(&project.join("schemas")).is_empty());
     assert_eq!(
         fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
         "secrets/\n"
@@ -257,8 +270,6 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
         "bundle",
         "runtime.yaml",
         "fixtures",
-        "adapters",
-        "schemas",
         "evidence.yaml",
         "README.md",
     ] {

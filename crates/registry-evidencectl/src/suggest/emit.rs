@@ -71,6 +71,7 @@ pub struct EmitInputs {
 /// "runtime ... initialization failed" — which means the bundle itself was
 /// already accepted, only local secret material is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum CheckClassification {
     /// `evidence check` passed outright.
     BundleAccepted,
@@ -152,6 +153,14 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
 
     let files = vec![
         DraftFile {
+            bundle_relative_path: format!("adapters/{}-prepare.rhai", inputs.source_id),
+            contents: render_prepare_script(),
+        },
+        DraftFile {
+            bundle_relative_path: format!("schemas/{}-parameters.schema.yaml", inputs.source_id),
+            contents: render_parameters_schema(),
+        },
+        DraftFile {
             bundle_relative_path: format!("schemas/{}-response.schema.yaml", inputs.source_id),
             contents: render_response_schema(inputs),
         },
@@ -166,11 +175,31 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     ];
 
     Ok(DraftArtifacts {
+        source_id: inputs.source_id.clone(),
         files,
+        authoring_source: render_authoring_source(inputs),
         source_block: render_source_block(inputs, method),
         report: render_report(inputs),
         equivalent_command: render_equivalent_command(inputs),
     })
+}
+
+fn render_prepare_script() -> String {
+    r#"fn prepare(selectors, parameters) {
+    // TODO(evidencectl): bind only reviewed selector fields and fixed parameters.
+    #{query: [], body: ()}
+}
+"#
+    .to_owned()
+}
+
+fn render_parameters_schema() -> String {
+    r#"type: object
+additionalProperties: false
+required: []
+properties: {}
+"#
+    .to_owned()
 }
 
 /// Checks the operation's method against the runtime's fixed-request method
@@ -204,6 +233,7 @@ fn request_path(inputs: &EmitInputs) -> String {
 /// directories as needed. Refuses to overwrite any existing file: if any
 /// target already exists, nothing is written and the error lists every
 /// collision so the caller can resolve them all at once.
+#[allow(dead_code)]
 pub fn write_into_project(project: &Path, files: &[DraftFile]) -> Result<Vec<PathBuf>> {
     let bundle_directory = project.join("bundle");
     let targets: Vec<PathBuf> = files
@@ -234,10 +264,83 @@ pub fn write_into_project(project: &Path, files: &[DraftFile]) -> Result<Vec<Pat
     Ok(targets)
 }
 
+/// Write one complete editable source draft into an authoring project.
+///
+/// The authoring project owns this layout. The deployment-shaped print-only
+/// draft remains available without `--project`, but local `dev` consumes this
+/// source directory directly after its explicit review fields are completed.
+pub fn write_into_authoring_project(
+    project: &Path,
+    artifacts: &DraftArtifacts,
+) -> Result<Vec<PathBuf>> {
+    for directory in ["sources", "adapters", "schemas"] {
+        let path = project.join(directory);
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("inspecting authoring directory {}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!(
+                "authoring directory {} must be a plain directory created by `evidencectl new`",
+                path.display()
+            );
+        }
+    }
+    let source_path = project
+        .join("sources")
+        .join(format!("{}.yaml", artifacts.source_id));
+    let mut targets = vec![source_path];
+    targets.extend(
+        artifacts
+            .files
+            .iter()
+            .map(|file| project.join(&file.bundle_relative_path)),
+    );
+
+    let collisions = targets
+        .iter()
+        .filter(|path| path.exists())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if !collisions.is_empty() {
+        bail!(
+            "refusing to overwrite existing file(s): {}",
+            collisions.join(", ")
+        );
+    }
+    let mut contents = vec![artifacts.authoring_source.as_bytes()];
+    contents.extend(artifacts.files.iter().map(|file| file.contents.as_bytes()));
+    let mut written = Vec::new();
+    for (target, contents) in targets.iter().zip(contents) {
+        if let Err(error) = write_new_authoring_file(target, contents) {
+            for path in &written {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        written.push(target.clone());
+    }
+    Ok(targets)
+}
+
+fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _};
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("persisting {}", path.display()))
+}
+
 /// Run `evidence --runtime <project>/runtime.yaml check` and classify the
 /// result. `evidence_bin` resolves the same way as the other `evidencectl`
 /// subcommands that shell out to the runtime binary: an explicit path, else
 /// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
+#[allow(dead_code)]
 pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassification> {
     let evidence_bin = crate::fixtures::resolve_evidence_binary(evidence_bin)
         .context("resolving the evidence binary")?;
@@ -269,6 +372,7 @@ pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassi
 /// because the runtime reports bundle, source and rate-limit failures through
 /// the same shape. Matching the shape would report a draft the runtime refused
 /// as a success.
+#[allow(dead_code)]
 const SECRET_STAGE_MESSAGES: [&str; 3] = [
     "evidence: runtime secret initialization failed",
     "evidence: runtime audit initialization failed",
@@ -279,6 +383,7 @@ const SECRET_STAGE_MESSAGES: [&str; 3] = [
 ///
 /// The comparison is a prefix so a stage message that grows a trailing reason
 /// still classifies; the stage name itself is still matched in full.
+#[allow(dead_code)]
 fn is_secrets_unprovisioned(stderr: &str) -> bool {
     let trimmed = stderr.trim();
     SECRET_STAGE_MESSAGES
@@ -1061,6 +1166,68 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     out
 }
 
+/// Render the existing V1 source object without a surrounding `sources` map.
+/// This keeps the authoring artifact identical to the runtime contract.
+fn render_authoring_source(inputs: &EmitInputs) -> String {
+    let mechanical = render_source_block(
+        inputs,
+        request_method(&inputs.operation.method).expect("validated method"),
+    );
+    let mut out = String::new();
+    for line in mechanical
+        .lines()
+        .skip(2)
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+    {
+        if line == "request:" {
+            push_line(
+                &mut out,
+                0,
+                "# Replace review-required with source-derived, field-projected, or record-transformed.",
+            );
+            push_line(&mut out, 0, "posture: review-required");
+            push_line(
+                &mut out,
+                0,
+                "# Choose an authentication kind and logical secret:file references.",
+            );
+            push_line(&mut out, 0, "authentication: {kind: review-required}");
+        }
+        push_line(&mut out, 0, line);
+        if line.starts_with("  projection:") {
+            push_line(
+                &mut out,
+                1,
+                "# Declare selectorInputs and any complete-segment pathBindings before running dev.",
+            );
+            push_line(&mut out, 1, "selectorInputs: []");
+            push_line(
+                &mut out,
+                1,
+                &format!("prepareScript: adapters/{}-prepare.rhai", inputs.source_id),
+            );
+            push_line(&mut out, 1, "adapterParameters: {}");
+            push_line(
+                &mut out,
+                1,
+                &format!(
+                    "adapterParametersSchema: schemas/{}-parameters.schema.yaml",
+                    inputs.source_id
+                ),
+            );
+            push_line(&mut out, 1, "preparationLimits:");
+            push_line(&mut out, 2, "query: allowed");
+            push_line(&mut out, 2, "jsonBody: forbidden");
+            push_line(&mut out, 2, "maximumNormalizedBytes: 4096");
+            push_line(&mut out, 1, "redirects: deny");
+            push_line(&mut out, 1, "timeoutMilliseconds: 3000");
+            push_line(&mut out, 1, "maximumResponseBytes: 65536");
+            push_line(&mut out, 1, "concurrencyLimit: 8");
+        }
+    }
+    out
+}
+
 fn render_report(inputs: &EmitInputs) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -1179,8 +1346,10 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
         "suggest".to_owned(),
     ];
 
-    parts.push("--openapi".to_owned());
-    parts.push(shell_quote(&inputs.openapi.display()));
+    if inputs.project.is_none() {
+        parts.push("--openapi".to_owned());
+        parts.push(shell_quote(&inputs.openapi.display()));
+    }
     parts.push("--operation".to_owned());
     parts.push(shell_quote(&format!(
         "{} {}",

@@ -37,7 +37,7 @@ enum Command {
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
     Jwks(jwks::JwksArgs),
-    /// Start an incomplete Evidence authoring project from OpenAPI.
+    /// Start an editable Evidence authoring project from OpenAPI.
     New(scaffold::NewArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]

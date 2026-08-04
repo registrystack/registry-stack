@@ -83,15 +83,12 @@ const SAMPLE_RESPONSE: &str = r#"{
 #[test]
 fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     let workspace = tempfile::tempdir().expect("tempdir");
-    let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
     let sample = write(workspace.path(), "records.sample.json", SAMPLE_RESPONSE);
-    let project = scaffold(workspace.path());
+    let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
 
     let arguments = vec![
         "source".to_owned(),
         "suggest".to_owned(),
-        "--openapi".to_owned(),
-        path_argument(&openapi),
         "--operation".to_owned(),
         "GET /records".to_owned(),
         "--select".to_owned(),
@@ -112,13 +109,34 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         stderr_of(&output)
     );
 
-    let bundle = project.join("bundle");
-    let schema_path = bundle.join("schemas/source-b-response.schema.yaml");
-    let script_path = bundle.join("adapters/source-b-extract.rhai");
-    let facts_path = bundle.join("schemas/source-b-facts.schema.yaml");
-    for path in [&schema_path, &script_path, &facts_path] {
+    let schema_path = project.join("schemas/source-b-response.schema.yaml");
+    let script_path = project.join("adapters/source-b-extract.rhai");
+    let facts_path = project.join("schemas/source-b-facts.schema.yaml");
+    let source_path = project.join("sources/source-b.yaml");
+    let prepare_path = project.join("adapters/source-b-prepare.rhai");
+    let parameters_path = project.join("schemas/source-b-parameters.schema.yaml");
+    for path in [
+        &schema_path,
+        &script_path,
+        &facts_path,
+        &prepare_path,
+        &parameters_path,
+    ] {
         assert!(path.is_file(), "expected {} to be written", path.display());
     }
+    assert!(
+        source_path.is_file(),
+        "the V1 source object must be editable in place"
+    );
+    let source: Value =
+        serde_norway::from_str(&std::fs::read_to_string(&source_path).expect("read source object"))
+            .expect("source object parses");
+    assert_eq!(source["transport"], "http-json");
+    assert!(
+        source.get("sources").is_none(),
+        "source file has no wrapper"
+    );
+    assert_eq!(source["authentication"]["kind"], "review-required");
 
     // The response schema parses as YAML and carries the sample-derived
     // bounds, widened by the narrowing policy rather than copied.
@@ -154,8 +172,10 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "the report belongs on stdout: {stdout}"
     );
     assert!(
-        stdout.contains("evidencectl source suggest --openapi"),
-        "the equivalent command belongs on stdout: {stdout}"
+        stdout.contains("evidencectl source suggest --operation")
+            && stdout.contains("--project")
+            && !stdout.contains("--openapi"),
+        "a project reproduction uses its retained OpenAPI: {stdout}"
     );
     // The reproduce line is pasted into a shell, so a pointer carrying `*` is
     // quoted rather than left for the shell to expand.
@@ -198,10 +218,32 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
 }
 
 #[test]
+fn a_project_always_uses_its_retained_openapi() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
+    let other = write(workspace.path(), "other.openapi.yaml", OPENAPI_DOCUMENT);
+    let output = evidencectl(&[
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--project".to_owned(),
+        path_argument(&project),
+        "--openapi".to_owned(),
+        path_argument(&other),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--select".to_owned(),
+        "/total".to_owned(),
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr_of(&output).contains("retained source.openapi.yaml"));
+    assert!(bundle_entries(&project).is_empty());
+}
+
+#[test]
 fn prints_the_draft_without_a_project_and_writes_nothing() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
-    let project = scaffold(workspace.path());
+    let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
     let bundle_before = bundle_entries(&project);
 
     let output = evidencectl(&[
@@ -400,53 +442,6 @@ fn a_non_interactive_run_names_the_flags_it_needs() {
 /// runtime is represented here by a stub printing one of its fixed messages,
 /// so the assertion is about `evidencectl`'s reporting and not about a
 /// deployment project that is not frozen or provisioned yet.
-#[cfg(unix)]
-#[test]
-fn reports_the_check_classification_when_a_runtime_binary_is_supplied() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let workspace = tempfile::tempdir().expect("tempdir");
-    let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
-    let project = scaffold(workspace.path());
-
-    let stub = workspace.path().join("evidence");
-    std::fs::write(
-        &stub,
-        "#!/bin/sh\nprintf 'evidence: runtime signing initialization failed\\n' >&2\nexit 1\n",
-    )
-    .expect("write stub runtime");
-    let mut permissions = std::fs::metadata(&stub).expect("stat stub").permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&stub, permissions).expect("chmod stub");
-
-    let output = evidencectl(&[
-        "source".to_owned(),
-        "suggest".to_owned(),
-        "--openapi".to_owned(),
-        path_argument(&openapi),
-        "--operation".to_owned(),
-        "GET /records".to_owned(),
-        "--select".to_owned(),
-        "/records/*/status".to_owned(),
-        "--source-id".to_owned(),
-        "source-d".to_owned(),
-        "--project".to_owned(),
-        path_argument(&project),
-        "--evidence-bin".to_owned(),
-        path_argument(&stub),
-    ]);
-    assert!(
-        output.status.success(),
-        "an accepted bundle must not fail the draft: {}",
-        stderr_of(&output)
-    );
-    let stdout = stdout_of(&output);
-    assert!(
-        stdout.contains("bundle accepted; deployment secrets not provisioned yet"),
-        "unexpected check report: {stdout}"
-    );
-}
-
 fn evidencectl(arguments: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(arguments)
@@ -457,9 +452,13 @@ fn evidencectl(arguments: &[String]) -> Output {
 /// Create the only precondition `source suggest --project` requires: an
 /// existing project directory. `new` is tested separately and now owns the
 /// OpenAPI path itself.
-fn scaffold(root: &Path) -> PathBuf {
+fn scaffold(root: &Path, openapi: &str) -> PathBuf {
     let project = root.join("project");
     std::fs::create_dir(&project).expect("project directory");
+    for directory in ["sources", "adapters", "schemas"] {
+        std::fs::create_dir(project.join(directory)).expect("authoring directory");
+    }
+    std::fs::write(project.join("source.openapi.yaml"), openapi).expect("retained OpenAPI");
     project
 }
 

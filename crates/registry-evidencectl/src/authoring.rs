@@ -26,6 +26,8 @@ use crate::suggest::{
 
 const OPENAPI_FILE: &str = "source.openapi.yaml";
 const QUESTIONS_DIRECTORY: &str = "questions";
+const SOURCES_DIRECTORY: &str = "sources";
+const SELECTORS_DIRECTORY: &str = "selectors";
 const DERIVATIONS_DIRECTORY: &str = "derivations";
 const SECRETS_DIRECTORY: &str = "secrets";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
@@ -38,6 +40,7 @@ const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:c
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_QUESTION_BYTES: u64 = 64 * 1024;
 const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
+const MAX_SOURCE_ARTIFACT_BYTES: u64 = 1024 * 1024;
 const MAX_QUESTIONS: usize = 128;
 const MAX_CONCEPTS: usize = 16;
 const MAX_CATEGORIES: usize = 32;
@@ -133,9 +136,13 @@ struct QuestionSubject {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct QuestionSource {
-    operation: String,
+    #[serde(rename = "ref")]
+    source_ref: Option<String>,
+    #[serde(default)]
+    operation: Option<String>,
+    #[serde(default)]
     facts: Vec<QuestionFact>,
-    #[serde(rename = "collectionBounds")]
+    #[serde(rename = "collectionBounds", default)]
     collection_bounds: BTreeMap<String, u64>,
 }
 
@@ -182,6 +189,8 @@ struct QuestionDisclosure {
 
 struct Inputs {
     openapi: Value,
+    selectors: BTreeMap<String, Value>,
+    sources: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
 }
 
@@ -197,6 +206,8 @@ struct CompilePlan {
 
 struct QuestionPlan {
     question_id: String,
+    source_artifact_id: String,
+    authored_source_artifacts: Option<Vec<String>>,
     derivation_artifact: String,
     purpose: String,
     subject_role: String,
@@ -300,6 +311,8 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         .context("parsing retained OpenAPI document as YAML or JSON")?;
     validate_openapi_version(&openapi)?;
 
+    let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
+    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
     let mut questions = Vec::new();
     let mut question_ids = BTreeSet::new();
     let mut derivation_paths = BTreeSet::new();
@@ -344,7 +357,59 @@ fn read_inputs(project_root: &Path) -> Result<Inputs> {
         bail!("local secret directory must be a plain owner-only directory (mode 0700)");
     }
 
-    Ok(Inputs { openapi, questions })
+    Ok(Inputs {
+        openapi,
+        selectors,
+        sources,
+        questions,
+    })
+}
+
+fn read_named_objects(
+    project_root: &Path,
+    directory_name: &str,
+    description: &str,
+) -> Result<BTreeMap<String, Value>> {
+    let directory = project_root.join(directory_name);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("inspecting {description} directory {}", directory.display())
+            })
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("{directory_name} must be held in a plain directory");
+    }
+    let mut paths = fs::read_dir(&directory)
+        .with_context(|| format!("reading {description} directory {}", directory.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+
+    let mut objects = BTreeMap::new();
+    for path in paths {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            bail!("{directory_name} may contain only <id>.yaml files");
+        }
+        let bytes = read_regular_file(&path, MAX_SOURCE_ARTIFACT_BYTES, description)?;
+        let value: Value = serde_norway::from_slice(&bytes)
+            .with_context(|| format!("parsing {description} {}", path.display()))?;
+        if !value.is_object() {
+            bail!("{description} must be a YAML object");
+        }
+        let id = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| anyhow!("{description} file name is not valid UTF-8"))?;
+        if !valid_local_identifier(id) {
+            bail!("{description} file name must be a lowercase local identifier");
+        }
+        objects.insert(id.to_owned(), value);
+    }
+    Ok(objects)
 }
 
 /// Parse the authored program as Rhai and reserve `derive` exclusively for
@@ -483,52 +548,69 @@ fn validate_question(question: &Question) -> Result<()> {
         }
         validate_answer(answer)?;
     }
-    if question.source.facts.is_empty() || question.source.facts.len() > 16 {
-        bail!("source.facts must contain 1..=16 authored fact selections");
-    }
-    let mut names = BTreeSet::new();
-    let mut paths = BTreeSet::new();
-    for fact in &question.source.facts {
-        if !valid_field_name(&fact.name) || !names.insert(fact.name.as_str()) {
-            bail!("source fact names must be unique lowercase local identifiers");
-        }
-        if fact.path.is_empty()
-            || fact.path.len() > 256
-            || !fact.path.starts_with('/')
-            || fact.path.chars().any(char::is_control)
-            || !paths.insert(fact.path.as_str())
-        {
-            bail!("source fact paths must be unique bounded extended JSON Pointers");
-        }
-        let repeated = fact.path.split('/').any(|segment| segment == "*");
-        match (repeated, fact.combine) {
-            (false, FactCombination::ExactlyOne) | (true, FactCombination::Collect) => {}
-            (false, FactCombination::Collect) => {
-                bail!(
-                    "source fact `{}` uses `collect` but its path visits no collection",
-                    fact.name
-                )
+    match (&question.source.source_ref, &question.source.operation) {
+        (Some(source_ref), None) => {
+            if !valid_local_identifier(source_ref)
+                || !question.source.facts.is_empty()
+                || !question.source.collection_bounds.is_empty()
+            {
+                bail!("a source reference must contain only one valid ref");
             }
-            (true, FactCombination::ExactlyOne) => bail!(
-                "source fact `{}` visits a collection and must explicitly use `combine: collect`",
-                fact.name
-            ),
         }
-    }
-    if question.source.collection_bounds.len() > 16
-        || question
-            .source
-            .collection_bounds
-            .iter()
-            .any(|(pointer, maximum)| {
-                pointer.is_empty()
-                    || pointer.len() > 256
-                    || !pointer.starts_with('/')
-                    || pointer.chars().any(char::is_control)
-                    || !(1..=256).contains(maximum)
-            })
-    {
-        bail!("source.collectionBounds must contain bounded array pointers with values in 1..=256");
+        (None, Some(operation)) => {
+            if question.source.facts.is_empty() || question.source.facts.len() > 16 {
+                bail!("source.facts must contain 1..=16 authored fact selections");
+            }
+            let mut names = BTreeSet::new();
+            let mut paths = BTreeSet::new();
+            for fact in &question.source.facts {
+                if !valid_field_name(&fact.name) || !names.insert(fact.name.as_str()) {
+                    bail!("source fact names must be unique lowercase local identifiers");
+                }
+                if fact.path.is_empty()
+                    || fact.path.len() > 256
+                    || !fact.path.starts_with('/')
+                    || fact.path.chars().any(char::is_control)
+                    || !paths.insert(fact.path.as_str())
+                {
+                    bail!("source fact paths must be unique bounded extended JSON Pointers");
+                }
+                let repeated = fact.path.split('/').any(|segment| segment == "*");
+                match (repeated, fact.combine) {
+                    (false, FactCombination::ExactlyOne) | (true, FactCombination::Collect) => {}
+                    (false, FactCombination::Collect) => bail!(
+                        "source fact `{}` uses `collect` but its path visits no collection",
+                        fact.name
+                    ),
+                    (true, FactCombination::ExactlyOne) => bail!(
+                        "source fact `{}` visits a collection and must explicitly use `combine: collect`",
+                        fact.name
+                    ),
+                }
+            }
+            if question.source.collection_bounds.len() > 16
+                || question
+                    .source
+                    .collection_bounds
+                    .iter()
+                    .any(|(pointer, maximum)| {
+                        pointer.is_empty()
+                            || pointer.len() > 256
+                            || !pointer.starts_with('/')
+                            || pointer.chars().any(char::is_control)
+                            || !(1..=256).contains(maximum)
+                    })
+            {
+                bail!("source.collectionBounds must contain bounded array pointers with values in 1..=256");
+            }
+            if operation.is_empty()
+                || operation.len() > 256
+                || operation.chars().any(char::is_control)
+            {
+                bail!("source.operation must name one bounded OpenAPI operationId");
+            }
+        }
+        _ => bail!("source must declare either ref or operation with facts"),
     }
     let allowed = question
         .disclosure
@@ -538,12 +620,6 @@ fn validate_question(question: &Question) -> Result<()> {
         .collect::<BTreeSet<_>>();
     if allowed != concepts || allowed.len() != question.disclosure.allow.len() {
         bail!("disclosure.allow must contain exactly the declared answer concepts");
-    }
-    if question.source.operation.is_empty()
-        || question.source.operation.len() > 256
-        || question.source.operation.chars().any(char::is_control)
-    {
-        bail!("source.operation must name one bounded OpenAPI operationId");
     }
     Ok(())
 }
@@ -616,25 +692,40 @@ fn validate_openapi_version(document: &Value) -> Result<()> {
 }
 
 fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
-    reject_unsupported_keys(
-        inputs
-            .openapi
-            .as_object()
-            .ok_or_else(|| anyhow!("retained OpenAPI document must be an object"))?,
-        &["openapi", "info", "servers", "paths", "components"],
-        "OpenAPI document",
-    )?;
-    if inputs.openapi.get("security").is_some() {
-        bail!("the local tutorial source must omit top-level OpenAPI security");
-    }
-    let spec = Spec::from_value(inputs.openapi.clone(), "retained OpenAPI document")?;
-    let base_url = exact_loopback_server(&inputs.openapi)?;
+    let has_inline_source = inputs
+        .questions
+        .iter()
+        .any(|authored| authored.question.source.source_ref.is_none());
+    let (spec, base_url) = if has_inline_source {
+        reject_unsupported_keys(
+            inputs
+                .openapi
+                .as_object()
+                .ok_or_else(|| anyhow!("retained OpenAPI document must be an object"))?,
+            &["openapi", "info", "servers", "paths", "components"],
+            "OpenAPI document",
+        )?;
+        if inputs.openapi.get("security").is_some() {
+            bail!("the local tutorial source must omit top-level OpenAPI security");
+        }
+        (
+            Some(Spec::from_value(
+                inputs.openapi.clone(),
+                "retained OpenAPI document",
+            )?),
+            Some(exact_loopback_server(&inputs.openapi)?),
+        )
+    } else {
+        (None, None)
+    };
     let mut questions = Vec::with_capacity(inputs.questions.len());
     for authored in inputs.questions {
         questions.push(compile_question_plan(
             &inputs.openapi,
-            &spec,
-            &base_url,
+            spec.as_ref(),
+            base_url.as_deref(),
+            &inputs.selectors,
+            &inputs.sources,
             authored,
         )?);
     }
@@ -644,12 +735,22 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
 
 fn compile_question_plan(
     openapi: &Value,
-    spec: &Spec,
-    base_url: &str,
+    spec: Option<&Spec>,
+    base_url: Option<&str>,
+    selectors: &BTreeMap<String, Value>,
+    sources: &BTreeMap<String, Value>,
     authored: AuthoredQuestion,
 ) -> Result<QuestionPlan> {
     let question = &authored.question;
-    let operation = unique_operation(openapi, &question.source.operation)?;
+    if question.source.source_ref.is_some() {
+        return compile_referenced_question(selectors, sources, authored);
+    }
+    let operation_id = question
+        .source
+        .operation
+        .as_deref()
+        .expect("inline source was validated");
+    let operation = unique_operation(openapi, operation_id)?;
     if operation.operation.get("security").is_some() {
         bail!("the local tutorial operation must omit OpenAPI security");
     }
@@ -672,7 +773,11 @@ fn compile_question_plan(
     )?;
 
     exact_path_selector(&operation, &question.subject.selector)?;
-    let compiled_facts = compile_facts(spec, &operation, &question.source)?;
+    let compiled_facts = compile_facts(
+        spec.expect("inline source needs parsed OpenAPI"),
+        &operation,
+        &question.source,
+    )?;
     let requirement_uri = local_uri(&format!("requirement:{}", question.id));
     let concepts = question
         .answers
@@ -693,7 +798,7 @@ fn compile_question_plan(
         "additionalProperties": false,
         "required": ["operationId"],
         "properties": {
-            "operationId": {"type": "string", "const": question.source.operation}
+            "operationId": {"type": "string", "const": operation_id}
         }
     });
 
@@ -705,7 +810,7 @@ fn compile_question_plan(
     let source_id = local_source_id(&question.id);
     let (selector_profile_value, source_value, grant, requirement) = render_question_bundle_parts(
         question,
-        base_url,
+        base_url.expect("inline source needs local base URL"),
         operation.path,
         &question.subject.selector,
         &selector_profile,
@@ -719,6 +824,8 @@ fn compile_question_plan(
 
     Ok(QuestionPlan {
         question_id: question.id.clone(),
+        source_artifact_id: question.id.clone(),
+        authored_source_artifacts: None,
         derivation_artifact: question.derivation.clone(),
         purpose: question.purpose.clone(),
         subject_role: question.subject.role.clone(),
@@ -738,6 +845,168 @@ fn compile_question_plan(
         extract_script,
         derivation_script,
     })
+}
+
+fn compile_referenced_question(
+    selectors: &BTreeMap<String, Value>,
+    sources: &BTreeMap<String, Value>,
+    authored: AuthoredQuestion,
+) -> Result<QuestionPlan> {
+    let question = &authored.question;
+    let source_id = question
+        .source
+        .source_ref
+        .as_deref()
+        .expect("referenced source was validated");
+    let source_value = sources
+        .get(source_id)
+        .ok_or_else(|| {
+            anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
+        })?
+        .clone();
+    let selector_profile = referenced_selector_profile(
+        &source_value,
+        &question.subject.role,
+        &question.subject.selector,
+    )?;
+    let selector_profile_value = selectors
+        .get(&selector_profile)
+        .ok_or_else(|| {
+            anyhow!("source `{source_id}` references missing selectors/{selector_profile}.yaml")
+        })?
+        .clone();
+    let selector_fields = selector_profile_value
+        .get("fields")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("selector profile `{selector_profile}` has no fields object"))?;
+    if !selector_fields.contains_key(&question.subject.selector) {
+        bail!(
+            "selector profile `{selector_profile}` does not declare question selector `{}`",
+            question.subject.selector
+        );
+    }
+
+    let requirement_uri = local_uri(&format!("requirement:{}", question.id));
+    let concepts = question
+        .answers
+        .iter()
+        .map(|answer| compile_concept(&question.id, answer))
+        .collect::<Vec<_>>();
+    let requirement_kind =
+        if concepts.len() == 1 && concepts[0].concept_form == CompiledConceptForm::Boolean {
+            "criterion"
+        } else {
+            "information-requirement"
+        };
+    let (grant, requirement) = render_governance_parts(
+        question,
+        &selector_profile,
+        source_id,
+        &BundleRequirement {
+            requirement_uri: requirement_uri.clone(),
+            kind: requirement_kind,
+            concepts: &concepts,
+        },
+    );
+    let derivation_script = render_derivation(&authored.derivation, &concepts);
+
+    Ok(QuestionPlan {
+        question_id: question.id.clone(),
+        source_artifact_id: source_id.to_owned(),
+        authored_source_artifacts: Some(referenced_source_artifacts(&source_value)?),
+        derivation_artifact: question.derivation.clone(),
+        purpose: question.purpose.clone(),
+        subject_role: question.subject.role.clone(),
+        selector_field: question.subject.selector.clone(),
+        requirement_uri,
+        concepts,
+        selector_profile,
+        source_id: source_id.to_owned(),
+        selector_profile_value,
+        source_value,
+        grant,
+        requirement,
+        response_schema: Value::Null,
+        fact_schema: Value::Null,
+        adapter_parameters_schema: Value::Null,
+        prepare_script: String::new(),
+        extract_script: String::new(),
+        derivation_script,
+    })
+}
+
+fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Result<String> {
+    let inputs = source
+        .pointer("/request/selectorInputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("referenced source request must declare selectorInputs"))?;
+    let mut matches = Vec::new();
+    for input in inputs {
+        if input.get("role").and_then(Value::as_str) != Some(role) {
+            continue;
+        }
+        let alternatives = input
+            .get("alternatives")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("source selector alternatives must be an array"))?;
+        for alternative in alternatives {
+            let fields = alternative
+                .get("fields")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("source selector fields must be an array"))?;
+            if fields.iter().any(|value| value.as_str() == Some(field)) {
+                matches.push(
+                    alternative
+                        .get("profile")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("source selector alternative has no profile"))?
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    if matches.len() != 1 {
+        bail!("question subject must match exactly one referenced source selector alternative");
+    }
+    Ok(matches.pop().expect("one selector profile"))
+}
+
+fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
+    [
+        "/request/prepareScript",
+        "/request/adapterParametersSchema",
+        "/responseSchema",
+        "/extractScript",
+        "/factSchema",
+    ]
+    .iter()
+    .map(|pointer| {
+        let path = source
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("referenced source is missing `{pointer}`"))?;
+        validate_bundle_relative_artifact(path)?;
+        Ok(path.to_owned())
+    })
+    .collect()
+}
+
+fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().count() != 2
+        || !matches!(
+            path.components().next(),
+            Some(Component::Normal(directory))
+                if directory == "adapters" || directory == "schemas"
+        )
+    {
+        bail!("referenced source artifacts must be adapters/<file> or schemas/<file>");
+    }
+    Ok(())
 }
 
 fn compile_concept(question_id: &str, answer: &QuestionAnswer) -> ConceptPlan {
@@ -1432,9 +1701,6 @@ fn render_question_bundle_parts(
     source_id: &str,
     requirement: &BundleRequirement,
 ) -> (Value, Value, Value, Value) {
-    let framework_id = local_uri(&format!("framework:{}", question.id));
-    let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
-    let disclosure_family = local_uri(&format!("disclosure-family:{}", question.id));
     let path_bindings = Value::Object(Map::from_iter([(
         selector.to_owned(),
         json!({
@@ -1476,7 +1742,7 @@ fn render_question_bundle_parts(
                 }],
             }],
             "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
-            "adapterParameters": {"operationId": question.source.operation},
+            "adapterParameters": {"operationId": question.source.operation.as_deref().expect("inline source")},
             "adapterParametersSchema": format!(
                 "schemas/{}-source-adapter-parameters.schema.yaml",
                 question.id
@@ -1496,6 +1762,25 @@ fn render_question_bundle_parts(
         "extractScript": format!("adapters/{}-source-extract.rhai", question.id),
         "factSchema": format!("schemas/{}-source-facts.schema.yaml", question.id),
     });
+    let (grant, requirement_value) =
+        render_governance_parts(question, selector_profile, source_id, requirement);
+    (
+        selector_profile_value,
+        source_value,
+        grant,
+        requirement_value,
+    )
+}
+
+fn render_governance_parts(
+    question: &Question,
+    selector_profile: &str,
+    source_id: &str,
+    requirement: &BundleRequirement<'_>,
+) -> (Value, Value) {
+    let framework_id = local_uri(&format!("framework:{}", question.id));
+    let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
+    let disclosure_family = local_uri(&format!("disclosure-family:{}", question.id));
     let grant = json!({
         "requirement": requirement.requirement_uri,
         "purpose": question.purpose,
@@ -1545,12 +1830,7 @@ fn render_question_bundle_parts(
             "disclosureGuard": {"families": [disclosure_family]},
             "existenceDisclosure": "collapse-unresolved",
     });
-    (
-        selector_profile_value,
-        source_value,
-        grant,
-        requirement_value,
-    )
+    (grant, requirement_value)
 }
 
 fn render_bundle(questions: &[QuestionPlan]) -> Value {
@@ -1656,21 +1936,56 @@ fn write_plan(
     create_private_directory(&staging_root.join("audit"))?;
 
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
+    let mut written_sources = BTreeSet::new();
     for question in &plan.questions {
-        write_private_file(
-            &bundle.join(format!(
-                "adapters/{}-source-prepare.rhai",
-                question.question_id
-            )),
-            question.prepare_script.as_bytes(),
-        )?;
-        write_private_file(
-            &bundle.join(format!(
-                "adapters/{}-source-extract.rhai",
-                question.question_id
-            )),
-            question.extract_script.as_bytes(),
-        )?;
+        if written_sources.insert(question.source_artifact_id.clone()) {
+            if let Some(artifacts) = &question.authored_source_artifacts {
+                for artifact in artifacts {
+                    let bytes = read_regular_file(
+                        &project_root.join(artifact),
+                        MAX_SOURCE_ARTIFACT_BYTES,
+                        "referenced source artifact",
+                    )?;
+                    write_private_file(&bundle.join(artifact), &bytes)?;
+                }
+            } else {
+                write_private_file(
+                    &bundle.join(format!(
+                        "adapters/{}-source-prepare.rhai",
+                        question.question_id
+                    )),
+                    question.prepare_script.as_bytes(),
+                )?;
+                write_private_file(
+                    &bundle.join(format!(
+                        "adapters/{}-source-extract.rhai",
+                        question.question_id
+                    )),
+                    question.extract_script.as_bytes(),
+                )?;
+                write_private_file(
+                    &bundle.join(format!(
+                        "schemas/{}-source-response.schema.yaml",
+                        question.question_id
+                    )),
+                    &yaml_bytes(&question.response_schema)?,
+                )?;
+                write_private_file(
+                    &bundle.join(format!(
+                        "schemas/{}-source-facts.schema.yaml",
+                        question.question_id
+                    )),
+                    &yaml_bytes(&question.fact_schema)?,
+                )?;
+                write_private_file(
+                    &bundle.join(format!(
+                        "schemas/{}-source-adapter-parameters.schema.yaml",
+                        question.question_id
+                    )),
+                    &yaml_bytes(&question.adapter_parameters_schema)?,
+                )?;
+            }
+        }
         write_private_file(
             &bundle.join(&question.derivation_artifact),
             question.derivation_script.as_bytes(),
@@ -1682,27 +1997,6 @@ fn write_plan(
         {
             write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
         }
-        write_private_file(
-            &bundle.join(format!(
-                "schemas/{}-source-response.schema.yaml",
-                question.question_id
-            )),
-            &yaml_bytes(&question.response_schema)?,
-        )?;
-        write_private_file(
-            &bundle.join(format!(
-                "schemas/{}-source-facts.schema.yaml",
-                question.question_id
-            )),
-            &yaml_bytes(&question.fact_schema)?,
-        )?;
-        write_private_file(
-            &bundle.join(format!(
-                "schemas/{}-source-adapter-parameters.schema.yaml",
-                question.question_id
-            )),
-            &yaml_bytes(&question.adapter_parameters_schema)?,
-        )?;
     }
 
     let canonical_staging = fs::canonicalize(staging_root)
@@ -2275,6 +2569,122 @@ disclosure:
         assert!(fixture
             .staging
             .join("bundle/derivations/age-bracket.rhai")
+            .is_file());
+    }
+
+    #[test]
+    fn referenced_v1_source_and_selector_are_reused_by_questions() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        for directory in ["sources", "selectors", "adapters", "schemas"] {
+            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
+        }
+        fs::write(
+            fixture.project.join("selectors/person-reference-v1.yaml"),
+            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
+        )
+        .expect("selector");
+        fs::write(
+            fixture.project.join("sources/people.yaml"),
+            r#"transport: http-json
+baseUrl: https://records.example.test
+posture: field-projected
+authentication:
+  kind: basic
+  usernameRef: secret:file/records-username
+  passwordRef: secret:file/records-password
+request:
+  method: GET
+  pathTemplate: /people/{person_id}
+  pathBindings:
+    person_id: {role: person, profile: person-reference-v1, field: person_id}
+  fixedHeaders: [{name: Accept, value: application/json}]
+  selectorInputs:
+    - role: person
+      alternatives:
+        - {profile: person-reference-v1, fields: [person_id]}
+  prepareScript: adapters/people-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/people-parameters.schema.yaml
+  preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+  projection: [/date_of_birth]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/people-response.schema.yaml
+extractScript: adapters/people-extract.rhai
+factSchema: schemas/people-facts.schema.yaml
+"#,
+        )
+        .expect("source");
+        for (path, contents) in [
+            (
+                "adapters/people-prepare.rhai",
+                "fn prepare(s, p) { #{query: [], body: ()} }\n",
+            ),
+            (
+                "adapters/people-extract.rhai",
+                "fn extract(r, p) { #{outcome: \"match\", facts: r} }\n",
+            ),
+            (
+                "schemas/people-parameters.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+            (
+                "schemas/people-response.schema.yaml",
+                "type: object\nadditionalProperties: false\nproperties: {}\n",
+            ),
+            (
+                "schemas/people-facts.schema.yaml",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+            ),
+        ] {
+            fs::write(fixture.project.join(path), contents).expect("source artifact");
+        }
+        let inline = r#"source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+"#;
+        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            &referenced,
+        )
+        .expect("referenced question");
+        let copied = referenced
+            .replace("id: adult-status", "id: adult-status-copy")
+            .replace(
+                "derivations/adult-status.rhai",
+                "derivations/adult-status-copy.rhai",
+            );
+        fixture.add_question(&copied, ANSWER);
+
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("referenced source compiles");
+        assert_eq!(compiled.questions.len(), 2);
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
+        )
+        .expect("bundle yaml");
+        assert_eq!(bundle["sources"].as_object().expect("sources").len(), 1);
+        assert_eq!(
+            bundle["selectorProfiles"]
+                .as_object()
+                .expect("selectors")
+                .len(),
+            1
+        );
+        assert_eq!(
+            bundle["sources"]["people"]["authentication"]["usernameRef"],
+            "secret:file/records-username"
+        );
+        assert!(fixture
+            .staging
+            .join("bundle/adapters/people-extract.rhai")
             .is_file());
     }
 

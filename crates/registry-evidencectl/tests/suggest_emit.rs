@@ -627,7 +627,7 @@ fn write_into_project_creates_directories_and_writes_every_file() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
 
     let written = emit::write_into_project(&project, &artifacts.files).expect("write");
-    assert_eq!(written.len(), 3);
+    assert_eq!(written.len(), 5);
 
     for file in &artifacts.files {
         let path = project.join("bundle").join(&file.bundle_relative_path);
@@ -784,7 +784,6 @@ fn equivalent_command_is_deterministic_with_the_documented_flag_order() {
     assert_eq!(first, second, "equivalent_command must be deterministic");
 
     let expected = "evidencectl source suggest \
---openapi tests/fixtures/openapi/example.yaml \
 --operation 'GET /v1/records' \
 --status 200 \
 --media-type application/json \

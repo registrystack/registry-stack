@@ -224,7 +224,10 @@ pub struct DraftFile {
 /// Everything the emit stage produces for one source.
 #[derive(Debug, Clone)]
 pub struct DraftArtifacts {
+    pub source_id: String,
     pub files: Vec<DraftFile>,
+    /// Editable local-authoring source document written by `--project`.
+    pub authoring_source: String,
     /// A deliberately incomplete `sources.<id>` YAML block containing only
     /// facts mechanically established by the OpenAPI selection.
     pub source_block: String,
