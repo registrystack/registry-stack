@@ -132,11 +132,12 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 (`just openapi-contract` from `crates/registry-relay`). cargo-deny needs v0.19+
 to parse this `deny.toml`; CI pins 0.19.8.
 
-Evidence-specific contracts and source neutrality:
+Evidence-specific contracts, source neutrality, and verifier portability:
 
 ```bash
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
 
 Release source checks:
