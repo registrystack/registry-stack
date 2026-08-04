@@ -23,11 +23,11 @@ chain mutex across that call so hash links cannot interleave.
 
 The result is two serialized disk barriers per successful request.
 
-This is Evidence-specific. The shared `JsonlFileSink` used by Notary, and
-Relay's file sink, both end their append at `write_all` plus `flush` and never
-call `sync_all`, so their records sit in the page cache and are lost on power
-failure. Evidence is the only one of the three that survives that failure, and
-the ceiling below is the price of it.
+This is Evidence-specific. The shared `JsonlFileSink` and Relay's file sink both
+end their append at `write_all` plus `flush` and never call `sync_all`, so their
+records sit in the page cache and are lost on power failure. Evidence is the
+only one of the three that survives that failure, and the ceiling below is the
+price of it.
 
 ## Measured baseline before group commit
 
@@ -123,5 +123,6 @@ Record the host alongside any figure taken from it.
 
 ## Not measured
 
-Notary's sink was read, not benchmarked. The claim that it is materially faster
-on this axis is inference from the absent `sync_all`, not a measurement.
+The shared `JsonlFileSink` was read, not benchmarked. The claim that it is
+materially faster on this axis is inference from the absent `sync_all`, not a
+measurement.

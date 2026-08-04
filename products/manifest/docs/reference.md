@@ -91,8 +91,7 @@ Source:
 | `data_services` | list of `DataServiceManifest` | No | DCAT data services referenced by services and evidence offerings. |
 | `forms` | list of `FormManifest` | No | Local form-profile records linked from public services and channels. |
 | `codelists` | list of `CodelistManifest` | No | Enumerated value schemes with concept URIs. |
-| `federation` | `FederationManifest` | No | Public Registry Notary federation metadata for delegated evaluation. |
-| `evaluation_profiles` | list of `EvaluationProfileManifest` | No | Public profile-to-ruleset bindings for Registry Notary delegated evaluation. |
+| `evaluation_profiles` | list of `EvaluationProfileManifest` | No | Public profile-to-ruleset bindings for delegated evaluation. |
 | `ecosystem_bindings` | list of `EcosystemBindingManifest` | No | Ecosystem-specific integration bindings, such as governed-evidence gateway metadata. See [Ecosystem binding keys](#ecosystem-binding-keys). |
 
 ### CatalogManifest keys
@@ -248,7 +247,7 @@ Source:
 
 The following keys must not appear in a portable manifest.
 Their presence causes `validate`, `publish`, and `validate-profiles` to fail.
-They belong in Registry Relay or Registry Notary runtime configuration, not in a metadata manifest.
+They belong in a service's runtime configuration, such as Registry Relay's, not in a metadata manifest.
 
 `admin_bind`, `admin_listener`, `audit`, `auth`, `bind`, `bindings`, `capabilities`,
 `column`, `config_trust`, `file_path`, `listener`, `listeners`, `peer_allowlist`,

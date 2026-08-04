@@ -7,7 +7,6 @@ Evidence is a greenfield, sector-neutral minimum-disclosure assertion service.
 Given authenticated authority, an authorized purpose, a predefined requirement,
 and the configured selector data needed by an authoritative provider, it returns
 the smallest sufficient JSON assertion in an authorized response format.
-Evidence is not a Registry Notary mode, rewrite, or reduced configuration.
 
 The approved Version 1 product boundary is one `registry-evidence` crate, one
 `evidence` binary, one serving process, and one operator-controlled trust domain.
@@ -65,7 +64,7 @@ nonce or replay storage beyond stateless request-nonce echo and comparison,
 server-issued challenges, OOTS execution, federation, delegated agents, MCP,
 workflow, public or federated catalogs, runtime policy, runtime bundle mutation,
 multi-source fulfillment, source planning, an application database, a message
-broker, or workers. It must not depend on `registry-notary*`.
+broker, or workers.
 
 DHIS2 and OpenCRVS are compatibility-shaped test profiles only. Their names and
 behavior may appear in tests, sanitized fixtures, test-only bundles, and local
@@ -82,9 +81,9 @@ and HMAC key material, assembles public JWKS documents, scaffolds a neutral
 deployment project that passes `evidence check` and `evidence evaluate`
 without edits after one keygen pass, and drives fixture runs. It shells out to
 the `evidence` binary for every Evidence semantic decision and never
-re-implements evaluation, signing, or verification. It must not depend on
-`registry-notary*`, and its source and scaffold templates are covered by the
-same source-product and domain neutrality checks as the runtime.
+re-implements evaluation, signing, or verification. Its source and scaffold
+templates are covered by the same source-product and domain neutrality checks
+as the runtime.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema
