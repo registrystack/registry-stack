@@ -1,6 +1,6 @@
 ---
-title: Evidence quickstart
-description: What Evidence answers, how to verify a first local assertion, and where to go next.
+title: Evidence overview
+description: Understand how Evidence returns a verified minimum answer and choose the path for your role.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,61 +11,84 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence answers one bounded question about one subject and signs the answer,
-without releasing the record the answer came from. A relying service asks
-whether a person meets a condition and receives a signed assertion carrying
-the answer, not the row that settled it.
+Evidence answers one predefined question about one or more subjects and returns a signed minimum
+answer. The caller receives the answer needed for an authorized purpose, not the authoritative
+record that settled the answer.
 
-The quickest way to see that boundary is the
-[first Evidence assertion tutorial](../../tutorials/first-evidence-assertion/). It starts with an
-OpenAPI description, adds one question and derivation, sends a real HTTP request, and verifies the
-signed response before showing its answer.
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant E as Evidence
+    participant A as Durable audit
+    participant R as Authoritative registry
 
-## Four questions, none of them privileged
+    C->>E: Request one predefined answer
+    E->>A: Record authorized access
+    E->>R: Make one fixed source request
+    R-->>E: Return the source record
+    Note over R: The authoritative record stays here
+    E->>E: Derive the minimum answer and sign it
+    E->>A: Record what was disclosed
+    E-->>C: Return the signed answer
+    C->>C: Verify before using the answer
+```
 
-Adult status, residence region, professional licence status, and legal-parent
-relationship are coequal acceptance definitions. None is a built-in type, a
-special route, or a first phase that the others follow. Whichever one your
-institution needs, you author it the same way.
+The authoritative registry remains the source of truth. Evidence makes the fixed request defined
+by the provider, derives only the reviewed answer, and does not return the source response to the
+caller. The caller verifies the signature and retained transaction expectations before using the
+answer.
 
-An acceptance definition is a reviewed artifact, not code you ship. Evidence
-compiles the definition at startup from an immutable bundle, and refuses to
-start if the definition does not compile.
+The audit trail records the authorized access and the released disclosure. The audit trail does
+not repeat the source record, prove that the source fact was true, or automatically provide a
+complete citizen-facing history of registry access.
 
-## The current path
+## See the boundary in one request
 
-- [Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
-  goes from OpenAPI to an authored adult-status question, a real `curl`, strict
-  verification, and a minimized audit view using synthetic local data.
-- [Evaluate Evidence](../evaluate-evidence/) explains the complete deployment
-  layout and its runtime dependencies.
-- [Configure Evidence](../../configure/evidence/) documents the governed
-  bundle, runtime file, authorization, source, signing, and audit contracts. It
-  also records exactly what `evidencectl new` does and does not generate.
-- [Move to production signing](../../tutorials/move-evidence-to-production-signing/)
-  applies after an operator already has a complete deployment project.
+[Get your first Evidence assertion](../../tutorials/first-evidence-assertion/) starts a small
+Python registry that you control. You use its OpenAPI description to author an adult-status
+question, send a real HTTP request with `curl`, and verify a signed boolean answer. The source
+response contains a name and date of birth; the verified assertion contains neither.
 
-The first tutorial is intentionally local. It demonstrates the complete assertion boundary without
-presenting its disposable keys, loopback source, or Registry Mint setup as a production deployment.
+The tutorial uses disposable local trust and synthetic data. The local profile keeps
+authentication, bounded source access, signing, verification, and audit active while the Evidence
+tooling handles development process orchestration.
 
-## If you are deciding rather than building
+## Choose your role
 
-- [When Registry Stack fits](../when-to-use/) settles which door you want:
-  Registry Relay to read specific data, Evidence to learn only a fact.
-- [Evaluate Evidence](../evaluate-evidence/) is the cost accounting: what
-  Evidence needs to start, what it does not depend on, how it deploys today,
-  and what operating it demands.
-- [Evidence security model](../../security/evidence/) traces the runtime rules
-  to the invariant matrix and the tests that hold them.
+### Provide Evidence
+
+Start with the first assertion, then adapt the same workflow to your institution's OpenAPI source.
+The provider decides the authorized purpose, subject mapping, derivation, and permitted answer.
+OpenAPI describes transport and data shapes but cannot make those governed decisions.
+
+### Consume Evidence
+
+Retain the request expectations and trusted issuer keys before the response arrives. Verify the
+stored response against that independent context, then expose the verified answer to application
+logic.
+
+### Operate Evidence
+
+Bind the provider-approved definition to production identity, source trust, signing keys, and
+durable audit storage. The operator owns readiness, key rotation, audit-chain verification,
+retention, backup, and recovery.
+
+## Keep the product boundary visible
+
+Evidence does not decide whether an institution has legal authority to use a source, whether a
+purpose is legitimate, or whether a source record is true. Those decisions and assurances come
+from governance, authorization, and the authoritative institution. A valid signature proves who
+signed the exact assertion bytes and whether the assertion matches the retained verification
+expectations.
+
+Evidence is separate from Registry Relay. Registry Relay exposes protected, selected records.
+Evidence can use a Relay API as one fixed source, but Evidence retains its own authorization,
+derivation, signing, verification, and audit boundaries. Registry Mint is optional supporting
+infrastructure that supplies short-lived caller tokens when a deployment has no identity provider.
 
 ## Next
 
 - [Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
-  is the runnable local starting point.
-- [Configure Evidence](../../configure/evidence/) is the configuration
-  reference for a complete deployment project.
-- [Registry Mint reference](../../reference/mint/) covers the short-lived
-  access tokens a caller needs when a deployment has no identity provider.
-- [First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) is
-  the one place the track meets Registry Relay: Evidence answers the adult
-  status question over a Relay-protected API instead of a local fixture.
+- [Decide when Registry Stack fits](../when-to-use/)
+- [Evaluate Evidence's operating requirements](../evaluate-evidence/)
+- [Review the Evidence security model](../../security/evidence/)

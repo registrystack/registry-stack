@@ -305,7 +305,7 @@ export default defineConfig({
         {
           label: 'Answer with Evidence',
           items: [
-            { label: 'Overview', slug: 'start/evaluate-evidence' },
+            { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },

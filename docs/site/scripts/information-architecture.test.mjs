@@ -68,7 +68,7 @@ test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
     ['Connect an existing registry', "slug: 'configure'"],
-    ['Answer with Evidence', "slug: 'start/evaluate-evidence'"],
+    ['Answer with Evidence', "slug: 'start/evidence-quickstart'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
@@ -116,10 +116,10 @@ test('starts with the spreadsheet registry and keeps HTTP under existing registr
 });
 
 test('gives Evidence a lane on both front doors without a retired Notary path', () => {
-  assert.match(homepageSource, /\]\(start\/evaluate-evidence\/\)/);
-  assert.match(quickstartSource, /\]\(\.\.\/evaluate-evidence\/\)/);
-  assert.doesNotMatch(homepageSource, /tutorials\/first-evidence-assertion/);
-  assert.doesNotMatch(quickstartSource, /tutorials\/first-evidence-assertion/);
+  assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
+  assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
+  assert.match(quickstartSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
   assert.doesNotMatch(quickstartSource, /Expose Notary|verify-claim-registry-api/);
 });
@@ -132,7 +132,8 @@ test('ends the onboarding spine on Evidence answering over a Relay-protected API
   assertOrdered(
     quickstartSource,
     [
-      'evaluate-evidence/',
+      'evidence-quickstart/',
+      'tutorials/first-evidence-assertion/',
       'tutorials/first-run-with-solmara-lab/',
     ],
     'quickstart lane',
