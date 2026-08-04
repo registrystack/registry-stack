@@ -81,8 +81,9 @@ Version 1 governs three response formats; signed flattened JWS is the mandatory 
   governed authority grant must explicitly permit. It is transport-authenticated convenience data,
   not later-verifiable evidence, and never a fallback from signing failure.
 - `application/dc+sd-jwt`: the same assertion serialized as an SD-JWT VC under the frozen profile
-  in `products/evidence/contracts/sd-jwt-vc-profile.yaml`, with one disclosure per supported
-  value. Enabling it adds a serialization, not a credential lifecycle.
+  in `products/evidence/contracts/sd-jwt-vc-profile.yaml`. Values use one root disclosure by
+  default. A governed structured value can instead disclose each direct field independently.
+  Enabling the format adds a serialization, not a credential lifecycle.
 
 ## What the specification does not cover
 

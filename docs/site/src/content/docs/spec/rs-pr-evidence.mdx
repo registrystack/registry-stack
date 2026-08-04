@@ -379,9 +379,12 @@ holder-scoped or cross-verifier subject identifiers, and reissuance, refresh, ba
 persistent credential identifiers.
 
 REQ-PR-EVIDENCE-039: The credential claim set MUST be closed.
-The always-disclosed claims, the one-disclosure-per-supported-value rule, the digest ordering, the
-fresh per-disclosure salt, and the prohibited claims are fixed by
+The always-disclosed claims, root-value disclosure rule, optional direct-field disclosure for a
+configured `reviewed-structured-value`, digest ordering, fresh per-disclosure salt, and prohibited
+claims are fixed by
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`.
+Nested field values remain atomic, and the complete structured value MUST pass its reviewed schema
+before serialization.
 The issuer MUST NOT append a key-binding JWT.
 
 REQ-PR-EVIDENCE-040: A holder confirmation claim MUST be present only when the caller supplied a

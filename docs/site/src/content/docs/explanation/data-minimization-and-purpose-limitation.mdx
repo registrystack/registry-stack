@@ -99,12 +99,13 @@ cannot be produced. A request that cannot be answered returns a problem document
 Minimization can continue past the response boundary when the operator enables the SD-JWT VC
 format. That format is a second encoding of the same assertion, never a credential lifecycle: the
 signed body carries a SHA-256 digest of each selectively disclosable value, so a holder can later
-present a subset. Two limits matter to a reviewer. The issuer appends every disclosure, so the
-response the caller receives reveals the same set as the signed JWS, and holder-side omission is
-outside this version. Evidence also performs no presentation-side verification, no key-binding JWT
-validation, and no wallet interaction, and the profile excludes OID4VCI in every part. A caller may
-supply a holder public key that Evidence echoes into the `cnf` claim for a relying party to check
-itself.
+present a subset. A value uses one disclosure by default. A governed structured value can instead
+place each direct field in a separate disclosure while keeping nested field values atomic. Two
+limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
+receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
+Evidence also performs no presentation-side verification, no key-binding JWT validation, and no
+wallet interaction, and the profile excludes OID4VCI in every part. A caller may supply a holder
+public key that Evidence echoes into the `cnf` claim for a relying party to check itself.
 
 A further minimization detail guards against a subtler leak.
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into

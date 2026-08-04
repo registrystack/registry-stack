@@ -182,8 +182,10 @@ mandatory in every bundle and is the default (`products/evidence/contracts/bundl
 
 These are integrity and encoding choices, not privacy choices. All three carry the same declared
 values.
-The SD-JWT VC serialization emits one disclosure per supported value and the issuer appends all of
-them, so the response the caller receives reveals the same set as the JWS. Holder-side omission at
+The SD-JWT VC serialization emits one root disclosure per supported value by default. A governed
+`reviewed-structured-value` can instead expose an always-visible object whose direct fields are
+independent disclosures. Nested field values remain atomic. The issuer appends every disclosure,
+so the response the caller receives reveals the same set as the JWS. Holder-side omission at
 presentation time is outside Version 1, which performs no presentation-side verification, no
 key-binding JWT validation, and no wallet interaction
 (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).

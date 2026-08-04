@@ -18,8 +18,23 @@ Evidence can serialize the same stateless assertion as signed JWS or SD-JWT VC. 
 source access, derivation, supported values, subject binding, purpose, audience, signing key, and
 audit boundaries remain the same.
 
-Use this path only with a complete governed deployment project. The local `evidencectl dev` helper
-used by the first tutorials intentionally supports signed JWS only.
+Use this path with a complete governed deployment project. For a local authoring project, an
+`sdJwtVc` declaration on a reviewed structured answer enables the format at both gates.
+
+```yaml
+answers:
+  - concept: birth_certificate
+    type: reviewed-structured-value
+    schema: schemas/birth-certificate.yaml
+    maximumSerializedBytes: 2048
+    sdJwtVc:
+      claim: birthCertificate
+      disclosure: top-level
+```
+
+`birthCertificate` is adopter configuration, not a built-in Evidence claim. The `top-level` mode
+makes each direct field independently disclosable. A nested value, such as `placeOfBirth`, remains
+one atomic disclosure.
 
 ## Permit the format at both gates
 
@@ -59,8 +74,17 @@ evidence check --runtime <evidence-project>/runtime.yaml
 
 ## Request the second serialization
 
-Prepare the same ordinary Evidence request and authorization your application uses for signed JWS.
-Only the response negotiation changes:
+For a local project, retain the expected format before sending the request:
+
+```sh
+evidencectl request prepare <question> \
+  --purpose <purpose> \
+  --subject <role>:<field>=<value> \
+  --format sd-jwt-vc \
+  --name <request-name>
+```
+
+Only response negotiation changes at the HTTP boundary:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -92,9 +116,9 @@ The verifier opens no network connection. `trusted-issuer-keys.json` is the comp
 set for the run, and `verification-policy.yaml` comes from the consumer's request and governance
 records, not from the credential.
 
-The complete issued credential contains one disclosure for each supported value. Evidence's
-current verifier checks that complete stored credential. It does not verify a selectively disclosed
-presentation from a wallet.
+An unprojected value has one root disclosure. A configured structured value has one disclosure for
+each direct field. Evidence's current verifier checks the complete stored credential. It does not
+verify a selectively disclosed presentation from a wallet.
 
 ## Keep the boundary explicit
 
