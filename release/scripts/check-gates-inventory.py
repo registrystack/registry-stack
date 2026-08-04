@@ -163,6 +163,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Evidence source neutrality",
         "run: products/evidence/scripts/check-source-neutrality.sh",
     ),
+    (
+        "Evidence verifier portability",
+        "run: products/evidence/scripts/check-verifier-portability.sh",
+    ),
     ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
