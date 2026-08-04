@@ -1089,7 +1089,24 @@ impl EvidenceRuntime {
             ResponseFormat::SdJwtVc => {
                 // The projection re-encodes the constructed payload and
                 // re-derives nothing.
-                let input = match sdjwt_vc::issuance_input(&evidence, request.holder_key.as_ref()) {
+                let structured_projections = self
+                    .kernel
+                    .requirement(&request.requirement)
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "sd-jwt-vc-mapping"))?
+                    .concepts
+                    .iter()
+                    .filter_map(|concept| {
+                        concept
+                            .sd_jwt_vc
+                            .as_ref()
+                            .map(|projection| (concept.id.clone(), projection.claim.clone()))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let input = match sdjwt_vc::issuance_input(
+                    &evidence,
+                    request.holder_key.as_ref(),
+                    &structured_projections,
+                ) {
                     Ok(input) => input,
                     Err(_) => {
                         self.append_failure(

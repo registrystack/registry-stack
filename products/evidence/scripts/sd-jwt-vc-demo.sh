@@ -207,7 +207,7 @@ harness_pid=
 grep '^PASS:' "$harness_log"
 printf '\n'
 
-printf '4. The credential: an issuer-signed JWT, one disclosure per supported value,\n'
+printf '4. The credential: an issuer-signed JWT, one root disclosure for this value,\n'
 printf '   and a trailing tilde where a key-binding JWT would go\n'
 credential=$(cat "$state_root/credential.txt")
 IFS='~' read -r -a segments <<<"$credential"

@@ -50,6 +50,7 @@ forms:
     wire: {form: reviewed-structured-value, schema: URI, fields: closed-object}
     declaration_requires: [schema, maximumSerializedBytes]
     rule: The schema URI resolves to exactly one closed JSON Schema artifact in the immutable bundle; that schema closes every property and nested value and prohibits arbitrary JSON.
+    sd_jwt_vc: An optional sdJwtVc declaration gives the value a non-reserved public claim name and makes each direct field independently disclosable. Nested field values remain atomic. Validation of the complete value precedes serialization.
 validation_order:
   - exact concept identifier set and duplicate rejection
   - exact declared form

@@ -10,7 +10,7 @@ summary: >-
 response:
   media_type: application/dc+sd-jwt
   serialization: sd-jwt-vc-compact
-  structure: issuer-signed JWT, then one tilde-separated disclosure per supported value, then a trailing tilde
+  structure: issuer-signed JWT, then the root-value and configured structured-field disclosures, then a trailing tilde
   key_binding_jwt: never appended by the issuer; the trailing tilde marks an absent key-binding JWT
   negotiation: Only the exact application/dc+sd-jwt media type selects this format, and only when the immutable bundle and the complete matched authority grant both permit it. Missing Accept and */* continue to select signed JWS. Duplicate, combined, parameterized, weighted, or unknown negotiation is not acceptable. Every response varies on Accept and remains no-store.
   permission_rule: Format selection creates no permission. Denial does not reveal which layer withheld it.
@@ -56,14 +56,30 @@ claims:
     configurationRevision: {source: configurationRevision}
     requestNonce: {source: requestNonce, rule: exact echo, never stored, never uniqueness-checked}
     subjects: {source: subjects, rule: complete role and binding pairs, unordered set semantics on comparison}
+    structuredValues:
+      source: configured reviewed-structured-value projections
+      rule: >-
+        Present only when at least one reviewed structured value opts into
+        field disclosure. It binds each configured public claim name to the
+        original concept identifier, reviewed structured form, closed schema
+        URI, and supported-value position. It contains no source value.
   selectively_disclosed:
     rule: >-
-      Exactly one disclosure per supported value. The disclosure claim name is
-      the concept identifier from providesValueFor and the disclosure value is
-      the identical public value the signed-JWS payload would carry. The value
-      forms, schemas, codelists, precision, cardinality, sizes, structured
-      fields, and uniqueness are closed by the selected concept declaration
-      before evidence construction, exactly as in the signed-JWS profile.
+      A supported value without an sdJwtVc projection produces exactly one
+      root disclosure. Its claim name is the concept identifier from
+      providesValueFor and its value is the identical public value the
+      signed-JWS payload carries. A projected reviewed structured value instead
+      produces one always-visible object under its configured claim name. The
+      object's _sd member commits independently to each direct field in the
+      structured value's closed fields object. Each direct field name and value
+      forms one disclosure; a nested field value remains atomic. The complete
+      structured value is validated against its reviewed schema before this
+      mapping, exactly as it is for signed JWS.
+    structured_configuration: >-
+      The immutable concept declaration may set sdJwtVc.claim and the fixed
+      disclosure mode top-level only for reviewed-structured-value. Configured
+      claim names are unique within the requirement and cannot collide with
+      profile-owned claims.
     digest_order: sorted lexicographically before insertion into _sd
     salt: fresh per disclosure from a cryptographically secure random source
   holder_binding:
@@ -133,7 +149,7 @@ verifier_rules:
   - Reject any protected member outside the exact allowlist and require the allowlisted algorithm.
   - Resolve kid only in the pinned provider key set.
   - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
-  - Recompute every disclosure digest and require an exact match against _sd; reject unmatched disclosures and unmatched digests alike.
+  - Recompute every root-value and structured-field disclosure digest and require an exact match against its owning _sd; reject unmatched disclosures and unmatched digests alike.
   - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
   - Require the exact independently expected assurance profile; a local assertion never satisfies a production or evidence-grade expectation.
   - Require the exact expected role-bound subject bindings as an unordered set, compared only after signature verification, from independent trusted state.

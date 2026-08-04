@@ -6,13 +6,12 @@ protected_header:
   base64url_padding: prohibited
   cty_member: prohibited
 serialization:
-  structure: issuer-signed JWT, then one tilde-separated disclosure per supported value, then a trailing tilde
+  structure: issuer-signed JWT, then every root-value and configured structured-field disclosure, then a trailing tilde
   key_binding_jwt: never appended by the issuer; the trailing tilde marks its absence
   claim_set: closed to the issuer-owned claims and the profile's always-disclosed claims; any other member fails verification
 disclosures:
-  count: exactly one per supported value
-  name: the concept identifier from providesValueFor
-  value: the identical public value the signed-JWS payload carries
+  unprojected_value: exactly one root disclosure named by providesValueFor and carrying the identical public value from signed JWS
+  projected_structured_value: one nested disclosure for each direct field, under the configured public claim; nested field values remain atomic
   encoding: base64url without padding of the exact JSON array of salt, claim name, and claim value
   digest: base64url without padding of the SHA-256 of the encoded disclosure ASCII bytes
   digest_algorithm: sha-256

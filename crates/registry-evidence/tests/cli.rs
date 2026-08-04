@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use std::{
+    collections::BTreeMap,
     fs,
     net::TcpStream,
     os::unix::fs::PermissionsExt as _,
@@ -862,7 +863,8 @@ impl StoredCredential {
                 let signer = EvidenceSigner::initialize(provider, VERIFY_KEY_ID)
                     .await
                     .expect("signer initializes");
-                let input = issuance_input(&evidence, None).expect("the fixture maps");
+                let input =
+                    issuance_input(&evidence, None, &BTreeMap::new()).expect("the fixture maps");
                 let credential = signer
                     .sign_sd_jwt_vc(input)
                     .await

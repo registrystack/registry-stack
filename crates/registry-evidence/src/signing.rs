@@ -203,6 +203,7 @@ mod tests {
     use super::*;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
     use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
 
     const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
     const FIXTURE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"fixture-key-2026-01"}"#;
@@ -305,8 +306,9 @@ mod tests {
 
     /// The SD-JWT VC fixture is the adopter-facing wire contract, so it must be
     /// reproduced by the production issuance path over every golden payload:
-    /// the exact protected header, one disclosure per supported value, sorted
-    /// unique digests over the encoded disclosure bytes, and a trailing tilde.
+    /// the exact protected header, one root disclosure per unprojected golden
+    /// value, sorted unique digests over the encoded disclosure bytes, and a
+    /// trailing tilde. Structured field projection has a focused verifier test.
     #[tokio::test]
     async fn sd_jwt_vc_fixture_serialization_and_protected_header_are_exact() {
         let fixture: serde_json::Value = serde_norway::from_slice(include_bytes!(
@@ -333,8 +335,8 @@ mod tests {
             let evidence: crate::model::Evidence =
                 serde_json::from_slice(&std::fs::read(path).expect("golden payload reads"))
                     .expect("golden payload is an Evidence document");
-            let input =
-                crate::sdjwt_vc::issuance_input(&evidence, None).expect("golden payload maps");
+            let input = crate::sdjwt_vc::issuance_input(&evidence, None, &BTreeMap::new())
+                .expect("golden payload maps");
             let serialized = signer
                 .sign_sd_jwt_vc(input)
                 .await
@@ -349,7 +351,7 @@ mod tests {
             assert_eq!(
                 disclosures.len(),
                 evidence.supported_values.len(),
-                "{} discloses one value per supported value",
+                "{} discloses one root value per unprojected supported value",
                 case["id"]
             );
 

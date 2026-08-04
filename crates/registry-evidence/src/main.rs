@@ -28,7 +28,8 @@ use registry_evidence::{
         ValueProjection,
     },
     local_verification::{
-        prepare_local_verification_context, verify_local_response, LocalVerificationContext,
+        prepare_local_verification_context_for_format, verify_local_response, LocalResponseFormat,
+        LocalVerificationContext,
     },
     model::{
         EvidenceRequest, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
@@ -131,6 +132,13 @@ enum Command {
         /// Owner-only JSON file containing the exact request to retain.
         #[arg(long)]
         request: PathBuf,
+        /// Exact response format the caller will request.
+        #[arg(
+            long,
+            default_value = "signed-jws",
+            value_parser = ["signed-jws", "sd-jwt-vc"]
+        )]
+        response_format: String,
     },
     /// Internal offline response-verification seam.
     #[command(hide = true)]
@@ -296,9 +304,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )?)
         }
         Command::VerifyAudit => run_verify_audit(&cli.runtime),
-        Command::PrepareLocalVerificationContext { request } => {
-            prepare_local_context_command(&cli.runtime, &request).await
-        }
+        Command::PrepareLocalVerificationContext {
+            request,
+            response_format,
+        } => prepare_local_context_command(&cli.runtime, &request, &response_format).await,
         Command::VerifyLocalResponse { context, response } => {
             verify_local_response_command(&context, &response)
         }
@@ -466,6 +475,7 @@ const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
 async fn prepare_local_context_command(
     runtime_path: &Path,
     request_path: &Path,
+    response_format: &str,
 ) -> Result<ExitCode, CommandError> {
     let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_CONTEXT_FAILED)?;
     let request_bytes =
@@ -474,9 +484,19 @@ async fn prepare_local_context_command(
     let request: EvidenceRequest =
         serde_json::from_value(request_value).map_err(|_| LOCAL_CONTEXT_FAILED)?;
     let bearer = read_local_bearer(std::io::stdin()).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let context = prepare_local_verification_context(&deployment, &request, &bearer)
-        .await
-        .map_err(|_| LOCAL_CONTEXT_FAILED)?;
+    let response_format = match response_format {
+        "signed-jws" => LocalResponseFormat::SignedJws,
+        "sd-jwt-vc" => LocalResponseFormat::SdJwtVc,
+        _ => return Err(LOCAL_CONTEXT_FAILED.into()),
+    };
+    let context = prepare_local_verification_context_for_format(
+        &deployment,
+        &request,
+        &bearer,
+        response_format,
+    )
+    .await
+    .map_err(|_| LOCAL_CONTEXT_FAILED)?;
     write_canonical_json_line(&context, LOCAL_CONTEXT_FAILED)?;
     Ok(ExitCode::SUCCESS)
 }

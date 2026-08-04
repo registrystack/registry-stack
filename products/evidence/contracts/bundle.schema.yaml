@@ -532,6 +532,7 @@ $defs:
             form: {enum: [boolean, controlled-code, controlled-category, bounded-integer, bounded-decimal, date-bucket, time-bucket, audience-scoped-entity-reference, controlled-code-list, entity-reference-list, reviewed-structured-value]}
             required: {type: boolean}
             constraints: {type: object}
+            sdJwtVc: {$ref: '#/$defs/sd-jwt-vc-concept-projection'}
           allOf:
             - oneOf:
                 - properties:
@@ -577,6 +578,10 @@ $defs:
                   properties:
                     form: {const: reviewed-structured-value}
                     constraints: {$ref: '#/$defs/reviewed-structured-value-constraints'}
+            - if: {required: [sdJwtVc]}
+              then:
+                properties:
+                  form: {const: reviewed-structured-value}
       fixtures: {$ref: '#/$defs/relative-path'}
       disclosureGuard:
         type: object
@@ -667,6 +672,15 @@ $defs:
     properties:
       schema: {$ref: '#/$defs/uri'}
       maximumSerializedBytes: {type: integer, minimum: 1, maximum: 65536}
+  sd-jwt-vc-concept-projection:
+    type: object
+    additionalProperties: false
+    required: [claim, disclosure]
+    properties:
+      claim:
+        type: string
+        pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
+      disclosure: {const: top-level}
   parameter-value:
     oneOf:
       - {type: string, maxLength: 1024}

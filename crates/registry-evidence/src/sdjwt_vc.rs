@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use registry_platform_crypto::PublicJwk;
-use registry_platform_sdjwt::{Disclosure, HolderConfirmation, SdJwtIssuanceInput};
+use registry_platform_sdjwt::{
+    Disclosure, HolderConfirmation, ObjectDisclosure, SdJwtIssuanceInput,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -43,6 +45,8 @@ const ALWAYS_DISCLOSED_CLAIMS: [&str; 10] = [
     "supportsRequirement",
 ];
 
+const STRUCTURED_VALUES_CLAIM: &str = "structuredValues";
+
 /// A constructed payload that cannot be projected onto the profile. Every
 /// variant is an internal invariant violation rather than caller input, except
 /// `HolderKey`, which the runtime rejects earlier and re-checks here so the
@@ -57,6 +61,8 @@ pub enum SdJwtVcMappingError {
     Claim,
     #[error("the holder public key is not an acceptable Ed25519 public JWK")]
     HolderKey,
+    #[error("the SD-JWT VC structured projection is inconsistent with the evidence value")]
+    StructuredProjection,
 }
 
 /// Map a constructed payload and an optional holder key onto the issuance
@@ -66,6 +72,7 @@ pub enum SdJwtVcMappingError {
 pub fn issuance_input(
     evidence: &Evidence,
     holder_key: Option<&HolderPublicKey>,
+    structured_projections: &BTreeMap<String, String>,
 ) -> Result<SdJwtIssuanceInput, SdJwtVcMappingError> {
     // Deterministic because the kernel canonicalizes subjects to requirement
     // declaration order. The complete set travels as a public claim; `sub` is
@@ -106,11 +113,49 @@ pub fn issuance_input(
     public_claims.insert("subjects".to_string(), claim_value(&evidence.subjects)?);
 
     let mut disclosures = Vec::with_capacity(evidence.supported_values.len());
-    for supported in &evidence.supported_values {
+    let mut object_disclosures = Vec::new();
+    let mut structured_values = Map::new();
+    for (position, supported) in evidence.supported_values.iter().enumerate() {
+        if let Some(claim) = structured_projections.get(&supported.provides_value_for) {
+            let crate::model::PublicValue::Structured(structured) = &supported.value else {
+                return Err(SdJwtVcMappingError::StructuredProjection);
+            };
+            let fields = structured
+                .fields
+                .iter()
+                .map(|(name, value)| Disclosure {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                return Err(SdJwtVcMappingError::StructuredProjection);
+            }
+            object_disclosures.push(ObjectDisclosure {
+                name: claim.clone(),
+                fields,
+            });
+            structured_values.insert(
+                claim.clone(),
+                serde_json::json!({
+                    "providesValueFor": supported.provides_value_for,
+                    "form": "reviewed-structured-value",
+                    "schema": structured.schema,
+                    "position": position,
+                }),
+            );
+            continue;
+        }
         disclosures.push(Disclosure {
             name: supported.provides_value_for.clone(),
             value: claim_value(&supported.value)?,
         });
+    }
+    if !structured_values.is_empty() {
+        public_claims.insert(
+            STRUCTURED_VALUES_CLAIM.to_string(),
+            Value::Object(structured_values),
+        );
     }
 
     Ok(SdJwtIssuanceInput {
@@ -129,6 +174,7 @@ pub fn issuance_input(
         public_claims,
         cnf: holder_key.map(confirmation).transpose()?,
         disclosures,
+        object_disclosures,
     })
 }
 
@@ -192,9 +238,12 @@ pub fn evidence_payload_from_claims(
     claims: &Map<String, Value>,
     disclosed: &[(String, Value)],
 ) -> Result<Value, SdJwtVcClaimError> {
+    let structured = structured_value_metadata(claims)?;
     for name in claims.keys() {
         if !ISSUER_OWNED_CLAIMS.contains(&name.as_str())
             && !ALWAYS_DISCLOSED_CLAIMS.contains(&name.as_str())
+            && name != STRUCTURED_VALUES_CLAIM
+            && !structured.contains_key(name)
         {
             return Err(SdJwtVcClaimError::UnexpectedClaim);
         }
@@ -222,11 +271,44 @@ pub fn evidence_payload_from_claims(
     }
 
     let mut supported_values = Vec::with_capacity(disclosed.len());
+    let mut concepts = std::collections::BTreeSet::<String>::new();
     for (concept, value) in disclosed {
+        if !concepts.insert(concept.clone()) {
+            return Err(SdJwtVcClaimError::ClaimShape);
+        }
         supported_values.push(serde_json::json!({
             "providesValueFor": concept,
             "value": value,
         }));
+    }
+    let mut projected = Vec::with_capacity(structured.len());
+    for (claim, metadata) in structured {
+        if !concepts.insert(metadata.concept.clone()) {
+            return Err(SdJwtVcClaimError::ClaimShape);
+        }
+        let fields = claims
+            .get(&claim)
+            .and_then(Value::as_object)
+            .filter(|fields| !fields.is_empty() && fields.len() <= 64)
+            .ok_or(SdJwtVcClaimError::ClaimShape)?;
+        projected.push((
+            metadata.position,
+            serde_json::json!({
+                "providesValueFor": metadata.concept,
+                "value": {
+                    "form": "reviewed-structured-value",
+                    "schema": metadata.schema,
+                    "fields": fields,
+                },
+            }),
+        ));
+    }
+    projected.sort_by_key(|(position, _)| *position);
+    for (position, value) in projected {
+        if position > supported_values.len() {
+            return Err(SdJwtVcClaimError::ClaimShape);
+        }
+        supported_values.insert(position, value);
     }
 
     Ok(serde_json::json!({
@@ -248,6 +330,73 @@ pub fn evidence_payload_from_claims(
         "subjects": subjects,
         "supportedValues": supported_values,
     }))
+}
+
+struct StructuredValueMetadata {
+    concept: String,
+    schema: String,
+    position: usize,
+}
+
+fn structured_value_metadata(
+    claims: &Map<String, Value>,
+) -> Result<BTreeMap<String, StructuredValueMetadata>, SdJwtVcClaimError> {
+    let Some(value) = claims.get(STRUCTURED_VALUES_CLAIM) else {
+        return Ok(BTreeMap::new());
+    };
+    let object = value.as_object().ok_or(SdJwtVcClaimError::ClaimShape)?;
+    if object.is_empty() || object.len() > 16 {
+        return Err(SdJwtVcClaimError::ClaimShape);
+    }
+    let mut result = BTreeMap::new();
+    let mut concepts = std::collections::BTreeSet::new();
+    let mut positions = std::collections::BTreeSet::new();
+    for (claim, metadata) in object {
+        let metadata = metadata
+            .as_object()
+            .filter(|metadata| {
+                metadata.len() == 4
+                    && metadata.contains_key("providesValueFor")
+                    && metadata.contains_key("form")
+                    && metadata.contains_key("schema")
+                    && metadata.contains_key("position")
+            })
+            .ok_or(SdJwtVcClaimError::ClaimShape)?;
+        if metadata.get("form").and_then(Value::as_str) != Some("reviewed-structured-value") {
+            return Err(SdJwtVcClaimError::ClaimShape);
+        }
+        let concept = metadata
+            .get("providesValueFor")
+            .and_then(Value::as_str)
+            .ok_or(SdJwtVcClaimError::ClaimShape)?
+            .to_owned();
+        let schema = metadata
+            .get("schema")
+            .and_then(Value::as_str)
+            .ok_or(SdJwtVcClaimError::ClaimShape)?
+            .to_owned();
+        let position = metadata
+            .get("position")
+            .and_then(Value::as_u64)
+            .and_then(|position| usize::try_from(position).ok())
+            .filter(|position| *position < 16)
+            .ok_or(SdJwtVcClaimError::ClaimShape)?;
+        if !concepts.insert(concept.clone())
+            || !positions.insert(position)
+            || !claims.get(claim).is_some_and(Value::is_object)
+        {
+            return Err(SdJwtVcClaimError::ClaimShape);
+        }
+        result.insert(
+            claim.clone(),
+            StructuredValueMetadata {
+                concept,
+                schema,
+                position,
+            },
+        );
+    }
+    Ok(result)
 }
 
 fn string_of<'a>(claims: &'a Map<String, Value>, name: &str) -> Result<&'a str, SdJwtVcClaimError> {
@@ -335,7 +484,7 @@ mod tests {
     #[test]
     fn projects_the_always_disclosed_claims() {
         let evidence = evidence();
-        let input = issuance_input(&evidence, None).expect("evidence maps");
+        let input = issuance_input(&evidence, None, &BTreeMap::new()).expect("evidence maps");
 
         assert_eq!(input.iss, "urn:example:provider:evidence-service");
         assert_eq!(input.sub_ref, "urn:evidence:subject:v1_aaaa");
@@ -385,7 +534,7 @@ mod tests {
     #[test]
     fn selectively_discloses_exactly_one_value_per_concept() {
         let evidence = evidence();
-        let input = issuance_input(&evidence, None).expect("evidence maps");
+        let input = issuance_input(&evidence, None, &BTreeMap::new()).expect("evidence maps");
 
         let disclosed: Vec<(&str, &Value)> = input
             .disclosures
@@ -407,7 +556,7 @@ mod tests {
     #[test]
     fn omits_the_prohibited_claims() {
         let evidence = evidence();
-        let input = issuance_input(&evidence, None).expect("evidence maps");
+        let input = issuance_input(&evidence, None, &BTreeMap::new()).expect("evidence maps");
 
         for prohibited in ["status", "nbf", "aud", "selector", "grant", "actor"] {
             assert!(
@@ -431,7 +580,7 @@ mod tests {
         key.kid = Some("holder-1".to_string());
         key.alg = Some("EdDSA".to_string());
 
-        let confirmation = issuance_input(&evidence, Some(&key))
+        let confirmation = issuance_input(&evidence, Some(&key), &BTreeMap::new())
             .expect("evidence maps")
             .cnf
             .expect("confirmation is present");
@@ -465,7 +614,7 @@ mod tests {
             padded_coordinate,
         ] {
             assert_eq!(
-                issuance_input(&evidence, Some(&key)).unwrap_err(),
+                issuance_input(&evidence, Some(&key), &BTreeMap::new()).unwrap_err(),
                 SdJwtVcMappingError::HolderKey
             );
         }
@@ -487,21 +636,21 @@ mod tests {
         let mut no_subjects = evidence();
         no_subjects.subjects.clear();
         assert_eq!(
-            issuance_input(&no_subjects, None).unwrap_err(),
+            issuance_input(&no_subjects, None, &BTreeMap::new()).unwrap_err(),
             SdJwtVcMappingError::Subjects
         );
 
         let mut bad_issued_at = evidence();
         bad_issued_at.issued_at = "2026-08-02 09:15:00".to_string();
         assert_eq!(
-            issuance_input(&bad_issued_at, None).unwrap_err(),
+            issuance_input(&bad_issued_at, None, &BTreeMap::new()).unwrap_err(),
             SdJwtVcMappingError::Timestamp
         );
 
         let mut bad_valid_until = evidence();
         bad_valid_until.valid_until = "never".to_string();
         assert_eq!(
-            issuance_input(&bad_valid_until, None).unwrap_err(),
+            issuance_input(&bad_valid_until, None, &BTreeMap::new()).unwrap_err(),
             SdJwtVcMappingError::Timestamp
         );
     }

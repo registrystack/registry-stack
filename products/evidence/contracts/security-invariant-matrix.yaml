@@ -253,7 +253,7 @@ cross_cutting:
     negative_test: sec-reserved-header-aliases-closed
   sd_jwt_vc_projection_integrity:
     threat: The SD-JWT VC serialization carries different content from the signed assertion, or a relying party accepts a modified disclosure, digest, payload, or protected header.
-    enforcement: The credential is a projection of the identical constructed evidence payload; the verifier rebuilds that payload from the token, requires an exact digest-to-disclosure match in both directions, and then applies the same output-contract and policy checks as the signed JWS. Each serialization is rejected by the other format's verifier.
+    enforcement: The credential is a projection of the identical constructed evidence payload. Unprojected supported values have one root disclosure. A configured reviewed structured value has one nested disclosure per direct field, after complete schema validation, plus signed metadata that binds its public claim name back to the original concept, schema, and position. The verifier rebuilds the exact payload, requires an exact digest-to-disclosure match in both directions, and then applies the same output-contract and policy checks as signed JWS. Each serialization is rejected by the other format's verifier.
     negative_test: sec-sd-jwt-projection-integrity
   sd_jwt_vc_format_authorization:
     threat: Requesting the credential media type grants a disclosure the requester is not authorized to receive.

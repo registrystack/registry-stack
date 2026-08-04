@@ -50,8 +50,9 @@ pub struct LocalVerificationContext {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum LocalResponseFormat {
+pub enum LocalResponseFormat {
     SignedJws,
+    SdJwtVc,
 }
 
 /// Authenticate and authorize one exact local request and close all response
@@ -61,14 +62,32 @@ pub async fn prepare_local_verification_context(
     request: &EvidenceRequest,
     bearer: &str,
 ) -> Result<LocalVerificationContext, LocalVerificationError> {
+    prepare_local_verification_context_for_format(
+        deployment,
+        request,
+        bearer,
+        LocalResponseFormat::SignedJws,
+    )
+    .await
+}
+
+/// Close the local verification expectations for one explicitly selected
+/// response format before any response or source access exists.
+pub async fn prepare_local_verification_context_for_format(
+    deployment: &DeploymentInputs,
+    request: &EvidenceRequest,
+    bearer: &str,
+    response_format: LocalResponseFormat,
+) -> Result<LocalVerificationContext, LocalVerificationError> {
     let bundle = &deployment.bundle;
+    let configured_format = match response_format {
+        LocalResponseFormat::SignedJws => ResponseFormat::SignedJws,
+        LocalResponseFormat::SdJwtVc => ResponseFormat::SdJwtVc,
+    };
     if bundle.config.assurance_profile != AssuranceProfile::Local
         || !request_nonce_is_canonical(&request.request_nonce)
         || request.holder_key.is_some()
-        || !bundle
-            .config
-            .response_formats
-            .contains(&ResponseFormat::SignedJws)
+        || !bundle.config.response_formats.contains(&configured_format)
     {
         return Err(LocalVerificationError);
     }
@@ -100,7 +119,7 @@ pub async fn prepare_local_verification_context(
         .map_err(|_| LocalVerificationError)?;
     let matched =
         match_entitlement(bundle, request, &authenticated).map_err(|_| LocalVerificationError)?;
-    if !matched.permits_response_format(ResponseFormat::SignedJws) {
+    if !matched.permits_response_format(configured_format) {
         return Err(LocalVerificationError);
     }
     let resolved = resolve_selectors(bundle, request, &authenticated, &matched)
@@ -140,7 +159,7 @@ pub async fn prepare_local_verification_context(
 
     Ok(LocalVerificationContext {
         schema: LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1.to_owned(),
-        response_format: LocalResponseFormat::SignedJws,
+        response_format,
         trusted_jwks: jwks,
         verification_policy: EvidenceVerificationPolicyDocument {
             expected_assurance_profile: AssuranceProfile::Local,
@@ -174,6 +193,7 @@ fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> 
     match form {
         ConceptForm::Boolean => Some(ExpectedScalarFormDocument::Boolean),
         ConceptForm::ControlledCategory => Some(ExpectedScalarFormDocument::String),
+        ConceptForm::ReviewedStructuredValue => Some(ExpectedScalarFormDocument::Structured),
         _ => None,
     }
 }
@@ -194,12 +214,17 @@ pub(crate) fn verify_local_response_at(
     response: &[u8],
     now: DateTime<Utc>,
 ) -> Result<Evidence, LocalVerificationError> {
-    if context.schema != LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1
-        || !matches!(context.response_format, LocalResponseFormat::SignedJws)
-    {
+    if context.schema != LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1 {
         return Err(LocalVerificationError);
     }
     let policy = context.verification_policy.into_policy(now);
-    verify_flattened_jws(response, &context.trusted_jwks, &policy)
-        .map_err(|_| LocalVerificationError)
+    match context.response_format {
+        LocalResponseFormat::SignedJws => {
+            verify_flattened_jws(response, &context.trusted_jwks, &policy)
+        }
+        LocalResponseFormat::SdJwtVc => {
+            crate::verifier::verify_sd_jwt_vc(response, &context.trusted_jwks, &policy)
+        }
+    }
+    .map_err(|_| LocalVerificationError)
 }

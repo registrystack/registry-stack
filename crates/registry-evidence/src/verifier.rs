@@ -529,7 +529,7 @@ pub fn verify_sd_jwt_vc_report(
     };
 
     let digests = signed_digests(&mut claims)?;
-    let disclosed = resolve_disclosures(&encoded_disclosures, &digests, &claims)?;
+    let disclosed = resolve_disclosures(&encoded_disclosures, &digests, &mut claims)?;
     if let Some(confirmation) = claims.remove("cnf") {
         validate_confirmation(&confirmation)?;
     }
@@ -582,21 +582,75 @@ fn signed_digests(claims: &mut Map<String, Value>) -> Result<Vec<String>, Verifi
 fn resolve_disclosures(
     encoded: &[&str],
     digests: &[String],
-    claims: &Map<String, Value>,
+    claims: &mut Map<String, Value>,
 ) -> Result<Vec<(String, Value)>, VerificationError> {
-    if encoded.len() != digests.len() {
+    #[derive(Clone)]
+    enum Location {
+        Root,
+        Object(String),
+    }
+
+    let mut locations = BTreeMap::<String, Location>::new();
+    for digest in digests {
+        if locations.insert(digest.clone(), Location::Root).is_some() {
+            return Err(VerificationError::Disclosure);
+        }
+    }
+    let structured_claims = match claims.get("structuredValues") {
+        None => Vec::new(),
+        Some(Value::Object(metadata)) => metadata.keys().cloned().collect::<Vec<_>>(),
+        Some(_) => return Err(VerificationError::Disclosure),
+    };
+    for claim in structured_claims {
+        let object = claims
+            .get_mut(&claim)
+            .and_then(Value::as_object_mut)
+            .ok_or(VerificationError::Disclosure)?;
+        if object.len() != 1 {
+            return Err(VerificationError::Disclosure);
+        }
+        let nested = object
+            .remove("_sd")
+            .and_then(|value| value.as_array().cloned())
+            .ok_or(VerificationError::Disclosure)?;
+        let nested = nested
+            .iter()
+            .map(|digest| digest.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(VerificationError::Disclosure)?;
+        if nested.is_empty()
+            || nested.len() > 64
+            || nested.windows(2).any(|pair| pair[0] >= pair[1])
+            || nested.iter().any(|digest| digest.len() != 43)
+        {
+            return Err(VerificationError::Disclosure);
+        }
+        for digest in nested {
+            if locations
+                .insert(digest, Location::Object(claim.clone()))
+                .is_some()
+            {
+                return Err(VerificationError::Disclosure);
+            }
+        }
+    }
+    if encoded.len() != locations.len() {
         return Err(VerificationError::Disclosure);
     }
-    let signed: BTreeSet<&str> = digests.iter().map(String::as_str).collect();
     let mut resolved = Vec::with_capacity(encoded.len());
     let mut seen_digests = BTreeSet::new();
-    let mut seen_names = BTreeSet::new();
+    let mut root_names = BTreeSet::new();
+    let mut object_names = BTreeMap::<String, BTreeSet<String>>::new();
     for disclosure in encoded {
         if disclosure.len() > MAX_DISCLOSURE_BYTES {
             return Err(VerificationError::Disclosure);
         }
         let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
-        if !signed.contains(digest.as_str()) || !seen_digests.insert(digest) {
+        let location = locations
+            .get(&digest)
+            .cloned()
+            .ok_or(VerificationError::Disclosure)?;
+        if !seen_digests.insert(digest) {
             return Err(VerificationError::Disclosure);
         }
         let decoded = decode_bounded(
@@ -619,10 +673,35 @@ fn resolve_disclosures(
             return Err(VerificationError::Disclosure);
         }
         let name = name.as_str().ok_or(VerificationError::Disclosure)?;
-        if claims.contains_key(name) || !seen_names.insert(name.to_owned()) {
-            return Err(VerificationError::Disclosure);
+        match location {
+            Location::Root => {
+                if claims.contains_key(name) || !root_names.insert(name.to_owned()) {
+                    return Err(VerificationError::Disclosure);
+                }
+                resolved.push((name.to_owned(), value.clone()));
+            }
+            Location::Object(claim) => {
+                if name.is_empty()
+                    || name.len() > 128
+                    || name == "_sd"
+                    || name == "..."
+                    || name.chars().any(char::is_control)
+                    || !object_names
+                        .entry(claim.clone())
+                        .or_default()
+                        .insert(name.to_owned())
+                {
+                    return Err(VerificationError::Disclosure);
+                }
+                let object = claims
+                    .get_mut(&claim)
+                    .and_then(Value::as_object_mut)
+                    .ok_or(VerificationError::Disclosure)?;
+                if object.insert(name.to_owned(), value.clone()).is_some() {
+                    return Err(VerificationError::Disclosure);
+                }
+            }
         }
-        resolved.push((name.to_owned(), value.clone()));
     }
     Ok(resolved)
 }
@@ -835,7 +914,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        model::{EvidenceObjectType, PublicValue, SubjectBinding, SupportedValue},
+        model::{
+            EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
+            SupportedValue,
+        },
         signing::{jwks_document, EvidenceSigner},
     };
 
@@ -975,7 +1057,8 @@ mod tests {
         );
 
         let signer = fixture_signer().await;
-        let input = crate::sdjwt_vc::issuance_input(&local, None).expect("local evidence maps");
+        let input = crate::sdjwt_vc::issuance_input(&local, None, &BTreeMap::new())
+            .expect("local evidence maps");
         let serialized = signer
             .sign_sd_jwt_vc(input)
             .await
@@ -1540,7 +1623,8 @@ mod tests {
     async fn issued_sd_jwt_vc() -> (String, JwksDocument, EvidenceVerificationPolicy) {
         let evidence = fixture_evidence();
         let signer = fixture_signer().await;
-        let input = crate::sdjwt_vc::issuance_input(&evidence, None).expect("evidence maps");
+        let input = crate::sdjwt_vc::issuance_input(&evidence, None, &BTreeMap::new())
+            .expect("evidence maps");
         let serialized = signer
             .sign_sd_jwt_vc(input)
             .await
@@ -1609,6 +1693,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn structured_value_round_trips_as_top_level_field_disclosures() {
+        let mut evidence = fixture_evidence();
+        evidence.supported_values = vec![SupportedValue {
+            provides_value_for: "urn:example:concept:birth-certificate".to_owned(),
+            value: PublicValue::Structured(StructuredValue {
+                form: StructuredValueForm::ReviewedStructuredValue,
+                schema: "urn:example:schema:birth-certificate:v1".to_owned(),
+                fields: BTreeMap::from([
+                    ("dateOfBirth".to_owned(), json!("2000-05-23")),
+                    ("familyName".to_owned(), json!("Smith")),
+                    ("givenName".to_owned(), json!("John")),
+                    (
+                        "placeOfBirth".to_owned(),
+                        json!({"city": "Dusseldorf", "country": "DE"}),
+                    ),
+                ]),
+            }),
+        }];
+        let projections = BTreeMap::from([(
+            "urn:example:concept:birth-certificate".to_owned(),
+            "birthCertificate".to_owned(),
+        )]);
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(&evidence, None, &projections)
+            .expect("structured evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let claims = sd_jwt_claims(&jwt);
+        assert_eq!(
+            claims["birthCertificate"]
+                .as_object()
+                .expect("container object")
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["_sd"]
+        );
+        assert_eq!(disclosures.len(), 4);
+
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = policy_for(
+            &evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+        let verified = verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy)
+            .expect("field-disclosed credential verifies");
+        assert_eq!(verified, evidence);
+    }
+
+    #[tokio::test]
     async fn sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material() {
         let evidence = fixture_evidence();
         let signer = fixture_signer().await;
@@ -1619,8 +1755,8 @@ mod tests {
             alg: Some("EdDSA".to_owned()),
             kid: Some("holder-1".to_owned()),
         };
-        let input =
-            crate::sdjwt_vc::issuance_input(&evidence, Some(&holder)).expect("evidence maps");
+        let input = crate::sdjwt_vc::issuance_input(&evidence, Some(&holder), &BTreeMap::new())
+            .expect("evidence maps");
         let serialized = signer
             .sign_sd_jwt_vc(input)
             .await
@@ -1804,8 +1940,8 @@ mod tests {
             ("nbf", json!(1_785_662_100_i64)),
             ("selector", json!({"profile": "national-identifier"})),
         ] {
-            let mut input =
-                crate::sdjwt_vc::issuance_input(&evidence, None).expect("evidence maps");
+            let mut input = crate::sdjwt_vc::issuance_input(&evidence, None, &BTreeMap::new())
+                .expect("evidence maps");
             if name == "status" {
                 input.status = Some(value.clone());
             } else {

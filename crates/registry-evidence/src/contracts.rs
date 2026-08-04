@@ -960,7 +960,7 @@ fn openapi_document(
         "SdJwtVcCredential".to_string(),
         json!({
             "type": "string",
-            "description": "Compact SD-JWT VC: the issuer-signed JWT, then one tilde-separated disclosure per supported value, then a trailing tilde marking an absent key-binding JWT. The issuer never appends a key-binding JWT.",
+            "description": "Compact SD-JWT VC: the issuer-signed JWT, then the root-value and configured structured-field disclosures, then a trailing tilde marking an absent key-binding JWT. The issuer never appends a key-binding JWT.",
             "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(~[A-Za-z0-9_-]+)*~$"
         }),
     );

@@ -2888,7 +2888,7 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
             .filter(|part| !part.is_empty())
             .count(),
         1 + accepted.supported_values.len(),
-        "the credential carries the issuer-signed JWT and one disclosure per supported value"
+        "the unprojected demo credential carries one root disclosure per supported value"
     );
     assert_eq!(verified.supported_values, accepted.supported_values);
     assert_eq!(verified.subjects, accepted.subjects);

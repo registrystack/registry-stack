@@ -11,9 +11,9 @@ live provider is contacted, and nothing is written outside
 
 What it proves: the same authorization, minimization, and audit path releases
 the same assertion as a signed flattened JWS and as an SD-JWT VC; the credential
-carries one disclosure per supported value and nothing else; and a relying party
-who kept the original request can verify the stored credential later with no
-network and no running server.
+carries one root disclosure for its unprojected supported value and nothing
+else; and a relying party who kept the original request can verify the stored
+credential later with no network and no running server.
 
 What it does not prove: wallet interoperability, presentation, key-binding, or
 any live provider deployment. Those are outside the Version 1 boundary in
@@ -77,7 +77,7 @@ Expected output, abbreviated:
 
 PASS: the same assertion was released as a signed JWS and as an SD-JWT VC, ...
 
-4. The credential: an issuer-signed JWT, one disclosure per supported value,
+4. The credential: an issuer-signed JWT, one root disclosure for this value,
    and a trailing tilde where a key-binding JWT would go
    1 disclosure(s), no key-binding JWT
    protected header: {"alg":"EdDSA","kid":"acceptance-evidence-key","typ":"dc+sd-jwt"}
@@ -196,9 +196,10 @@ contents into chat, a ticket, or a terminal that records input.
 
 ## Reading the credential
 
-The serialization is the issuer-signed JWT, then one disclosure per supported
-value, all tilde-separated, ending with a tilde where a key-binding JWT would
-go. No key-binding JWT is issued and none is expected.
+This demo's serialization is the issuer-signed JWT, then one root disclosure
+for its unprojected supported value, ending with a tilde where a key-binding
+JWT would go. A configured reviewed structured value instead has one nested
+disclosure per direct field. No key-binding JWT is issued and none is expected.
 
 ```text
 <issuer-signed JWT>~<disclosure>~

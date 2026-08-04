@@ -2086,10 +2086,16 @@ impl RequirementConfig {
         self.derivation.validate()?;
         validate_len(self.concepts.len(), 1, 16, "requirement concepts")?;
         let mut concepts = BTreeSet::new();
+        let mut sd_jwt_claims = BTreeSet::new();
         for concept in &self.concepts {
             concept.validate()?;
             if !concepts.insert(concept.id.as_str()) {
                 return invalid("requirement concepts must be unique");
+            }
+            if let Some(projection) = &concept.sd_jwt_vc {
+                if !sd_jwt_claims.insert(projection.claim.as_str()) {
+                    return invalid("requirement SD-JWT VC claim names must be unique");
+                }
             }
         }
         if let Some(fixtures) = &self.fixtures {
@@ -2236,14 +2242,45 @@ pub struct ConceptConfig {
     pub required: bool,
     #[serde(default)]
     pub constraints: OrderedMap<YamlValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sd_jwt_vc: Option<SdJwtVcConceptProjection>,
 }
 
 impl ConceptConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_uri(&self.id)?;
         validate_len(self.constraints.len(), 0, 32, "concept constraints")?;
-        validate_concept_constraints(self)
+        validate_concept_constraints(self)?;
+        if let Some(projection) = &self.sd_jwt_vc {
+            if self.form != ConceptForm::ReviewedStructuredValue {
+                return invalid("SD-JWT VC field projection requires a reviewed structured value");
+            }
+            projection.validate()?;
+        }
+        Ok(())
     }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SdJwtVcConceptProjection {
+    pub claim: String,
+    pub disclosure: SdJwtVcDisclosureMode,
+}
+
+impl SdJwtVcConceptProjection {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_sd_jwt_claim_name(&self.claim) {
+            return invalid("SD-JWT VC structured claim name is invalid");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SdJwtVcDisclosureMode {
+    TopLevel,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -3222,6 +3259,43 @@ fn valid_local_id(value: &str) -> bool {
         })
 }
 
+fn valid_sd_jwt_claim_name(value: &str) -> bool {
+    const RESERVED: [&str; 24] = [
+        "iss",
+        "sub",
+        "aud",
+        "iat",
+        "nbf",
+        "exp",
+        "vct",
+        "id",
+        "jti",
+        "_sd",
+        "_sd_alg",
+        "cnf",
+        "status",
+        "issuedBy",
+        "providedBy",
+        "supportsRequirement",
+        "purpose",
+        "audience",
+        "assuranceProfile",
+        "observedAt",
+        "configurationRevision",
+        "requestNonce",
+        "subjects",
+        "structuredValues",
+    ];
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z'))
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        && !RESERVED.contains(&value)
+}
+
 fn valid_field_name(value: &str) -> bool {
     value.len() <= 64 && valid_local_id(value)
 }
@@ -3799,6 +3873,76 @@ mod tests {
         unsupported["requirements"][0]["concepts"][0]["constraints"]["maximumBytes"] =
             serde_json::json!(32);
         assert!(!validator.is_valid(&unsupported));
+
+        let mut structured_projection = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        ));
+        structured_projection["requirements"][0]["concepts"][10]["sdJwtVc"] =
+            serde_json::json!({"claim": "birthCertificate", "disclosure": "top-level"});
+        assert!(validator.is_valid(&structured_projection));
+        structured_projection["requirements"][0]["concepts"][10]
+            .as_object_mut()
+            .expect("concept is an object")
+            .remove("sdJwtVc");
+        structured_projection["requirements"][0]["concepts"][0]["sdJwtVc"] =
+            serde_json::json!({"claim": "birthCertificate", "disclosure": "top-level"});
+        assert!(!validator.is_valid(&structured_projection));
+    }
+
+    #[test]
+    fn structured_sd_jwt_claim_projection_is_generic_unique_and_non_reserved() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        ))
+        .expect("supported values fixture validates");
+        let structured_index = config.requirements[0]
+            .concepts
+            .iter()
+            .position(|concept| concept.form == ConceptForm::ReviewedStructuredValue)
+            .expect("fixture has a structured concept");
+        config.requirements[0].concepts[structured_index].sd_jwt_vc =
+            Some(SdJwtVcConceptProjection {
+                claim: "anyReviewedRecord".to_owned(),
+                disclosure: SdJwtVcDisclosureMode::TopLevel,
+            });
+        config.validate().expect("generic claim name is accepted");
+
+        config.requirements[0].concepts[structured_index]
+            .sd_jwt_vc
+            .as_mut()
+            .expect("projection exists")
+            .claim = "iss".to_owned();
+        assert!(
+            config.validate().is_err(),
+            "profile claim names are reserved"
+        );
+
+        config.requirements[0].concepts[structured_index]
+            .sd_jwt_vc
+            .as_mut()
+            .expect("projection exists")
+            .claim = "duplicateClaim".to_owned();
+        let mut duplicate = config.requirements[0].concepts[structured_index].clone();
+        duplicate.id = "urn:example:fixture:concept:another-structured-value".to_owned();
+        config.requirements[0].concepts.push(duplicate);
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "requirement SD-JWT VC claim names must be unique"
+            ))
+        ));
+
+        config.requirements[0].concepts.pop();
+        let projection = config.requirements[0].concepts[structured_index]
+            .sd_jwt_vc
+            .take();
+        config.requirements[0].concepts[0].sd_jwt_vc = projection;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::Invalid(
+                "SD-JWT VC field projection requires a reviewed structured value"
+            ))
+        ));
     }
 
     #[test]
