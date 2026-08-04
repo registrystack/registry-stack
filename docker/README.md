@@ -1,4 +1,4 @@
-# Adopter and development images
+# Development images
 
 Distroless container images for the `mint` and `evidence` services, built
 entirely inside Docker from the repository root:
@@ -30,18 +30,18 @@ of the repository uses: `rust:1.95-trixie` and
 `gcr.io/distroless/cc-debian13:nonroot`. Both final images run as the
 distroless `nonroot` user (65532) with no shell or package tools.
 
-## Running mint
+## Running Mint locally
 
 The configuration is a startup-only artifact. Mount it read-only at
 `/etc/registry-mint` with the signing key and client registry beside it, at
 the paths the configuration names (relative paths resolve against the
 configuration file's directory). The listener address in the configuration
-must be an IP the container can bind, for example `0.0.0.0`:
+must be an IP the container can bind. Use a private network address for a
+Compose deployment:
 
 ```sh
 docker run --rm \
   -v "$PWD/deploy/mint:/etc/registry-mint:ro" \
-  -p 8081:8081 \
   registry-mint
 ```
 
@@ -51,7 +51,7 @@ docker run --rm \
 docker run --rm -v "$PWD/deploy/mint:/etc/registry-mint:ro" registry-mint check
 ```
 
-## Running evidence
+## Running Evidence locally
 
 The runtime file, governed bundle, and secret root are startup-only
 artifacts; mount them read-only under `/etc/registry-evidence`. The image
@@ -94,3 +94,7 @@ Neither image declares a Docker `HEALTHCHECK`: distroless has no shell or
 curl, and neither binary has a healthcheck subcommand (the released Notary
 and Relay binaries do). Both services serve `GET /health` on their listener;
 use HTTP probes from your orchestrator.
+
+For an approved Evidence candidate, use the operator-owned
+[Compose adapter](compose/README.md), select reviewed image provenance separately, and run
+`evidence check` inside the target container context.
