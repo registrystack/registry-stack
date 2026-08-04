@@ -26,14 +26,20 @@ use crate::{
 };
 
 /// Largest role set one request may carry, per the request contract.
+///
+/// The refusal message spells this bound in words, and a test asserts the two
+/// agree, so a changed constant cannot leave the message stating a rule the
+/// client does not apply. The same holds for the two bounds below it.
 pub const MAXIMUM_SUBJECTS: usize = 8;
 /// Largest selector value set one subject may carry, per the request contract.
 pub const MAXIMUM_SELECTOR_VALUES: usize = 16;
 /// Largest expected output set a policy may state. A Version 1 requirement
 /// cannot publish more concepts than this.
 pub const MAXIMUM_EXPECTED_OUTPUTS: usize = 16;
-const MAXIMUM_IDENTIFIER_BYTES: usize = 512;
-const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
+/// Longest identifier any expectation may carry.
+pub const MAXIMUM_IDENTIFIER_BYTES: usize = 512;
+/// Longest string a selector value may carry.
+pub const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
 /// Smallest selector integer the request contract accepts. The bound is the
 /// range a double represents exactly, so the value survives every JSON reader
 /// between here and the source.
@@ -299,18 +305,37 @@ fn validate(spec: &EvidenceRequestSpec) -> Result<(), EvidenceClientError> {
     // a JSON Schema `uri` implementation can disagree in either direction, and
     // either disagreement is a bug the adopter cannot work around. The
     // deployment's answer stands.
-    for identifier in [
-        &spec.requirement,
-        &spec.audience,
-        &spec.evidence_type,
-        &spec.issued_by,
-        &spec.provided_by,
-        &spec.configuration_revision,
+    //
+    // Each field carries its own reason, because the fix is a different edit to
+    // the relying procedure in each case.
+    for (identifier, reason) in [
+        (
+            &spec.requirement,
+            "the requirement identifier must be present and bounded",
+        ),
+        (
+            &spec.audience,
+            "the audience identifier must be present and bounded",
+        ),
+        (
+            &spec.evidence_type,
+            "the evidence type identifier must be present and bounded",
+        ),
+        (
+            &spec.issued_by,
+            "the issuer identifier must be present and bounded",
+        ),
+        (
+            &spec.provided_by,
+            "the provider identifier must be present and bounded",
+        ),
+        (
+            &spec.configuration_revision,
+            "the configuration revision identifier must be present and bounded",
+        ),
     ] {
         if identifier.is_empty() || identifier.len() > MAXIMUM_IDENTIFIER_BYTES {
-            return Err(EvidenceClientError::configuration(
-                "every requirement, audience, issuer, provider, type, and revision identifier must be present and bounded",
-            ));
+            return Err(EvidenceClientError::configuration(reason));
         }
     }
     if !is_purpose(&spec.purpose) {
@@ -739,6 +764,66 @@ mod tests {
                 "{description} was accepted"
             );
         }
+    }
+
+    /// Six identifiers share one rule, and a shared message would leave an
+    /// adopter to guess which of the six the request will not carry. Each names
+    /// itself.
+    #[test]
+    fn each_refused_identifier_names_itself() {
+        let cases: [Breakage; 6] = [
+            (
+                "the requirement identifier must be present and bounded",
+                Box::new(|spec| spec.requirement.clear()),
+            ),
+            (
+                "the audience identifier must be present and bounded",
+                Box::new(|spec| spec.audience.clear()),
+            ),
+            (
+                "the evidence type identifier must be present and bounded",
+                Box::new(|spec| spec.evidence_type.clear()),
+            ),
+            (
+                "the issuer identifier must be present and bounded",
+                Box::new(|spec| spec.issued_by.clear()),
+            ),
+            (
+                "the provider identifier must be present and bounded",
+                Box::new(|spec| spec.provided_by.clear()),
+            ),
+            (
+                "the configuration revision identifier must be present and bounded",
+                Box::new(|spec| spec.configuration_revision.clear()),
+            ),
+        ];
+        for (reason, break_it) in cases {
+            let mut spec = spec();
+            break_it(&mut spec);
+            assert_eq!(
+                PreparedEvidenceRequest::new(spec).expect_err(reason),
+                EvidenceClientError::configuration(reason)
+            );
+        }
+    }
+
+    /// The refusals spell their bounds in words, which is the readable form for
+    /// an adopter. A constant that moved without its message would leave the
+    /// client stating a rule it does not apply.
+    #[test]
+    fn the_bounds_the_refusals_spell_are_the_bounds_that_apply() {
+        assert_eq!(
+            MAXIMUM_SUBJECTS, 8,
+            "a refusal says \"between one and eight subject roles\""
+        );
+        assert_eq!(
+            MAXIMUM_EXPECTED_OUTPUTS, 16,
+            "a refusal says \"between one and sixteen outputs\""
+        );
+        assert_eq!(
+            MAXIMUM_SELECTOR_VALUES, 16,
+            "a refusal says \"between one and sixteen of them\""
+        );
     }
 
     /// The contract's integer bounds are the ones a double can represent

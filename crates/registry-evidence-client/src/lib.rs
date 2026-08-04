@@ -65,6 +65,15 @@
 //! source access and a second audit entry there for one relying-party decision.
 //! Verification is exempt: it is offline and idempotent, so a retained response
 //! may be re-verified as often as the relying party likes.
+//!
+//! # What the async surface requires
+//!
+//! Nothing in this crate names a runtime, and preparing and verifying are
+//! synchronous. The HTTP methods, however, are `reqwest` calls, and `reqwest`
+//! needs a tokio-compatible reactor to drive them, so an application that awaits
+//! [`EvidenceClient::send`], [`EvidenceClient::request_and_verify`],
+//! [`EvidenceClient::discover`], or [`EvidenceClient::fetch_jwks`] has to do so
+//! on one.
 
 pub mod client;
 pub mod config;
@@ -72,9 +81,12 @@ pub mod definitions;
 pub mod error;
 pub mod nonce;
 pub mod prepare;
-pub mod problem;
 pub mod request;
 pub mod token;
+
+/// The closed problem contract is an internal parsing detail. What a caller acts
+/// on is the mapped failure in [`error`], never a problem body.
+mod problem;
 
 #[cfg(test)]
 mod fixtures;
@@ -93,6 +105,9 @@ pub use error::{EvidenceClientError, TransportKind};
 pub use nonce::{NonceError, RequestNonce};
 pub use prepare::{
     EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations, SubjectRequest,
+    MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_IDENTIFIER_BYTES, MAXIMUM_SELECTOR_INTEGER,
+    MAXIMUM_SELECTOR_STRING_BYTES, MAXIMUM_SELECTOR_VALUES, MAXIMUM_SUBJECTS,
+    MINIMUM_SELECTOR_INTEGER,
 };
 pub use request::SelectorValue;
 pub use token::{BearerToken, StaticToken, TokenError, TokenProvider};

@@ -83,7 +83,7 @@ pub(crate) fn map_problem(
 /// caller reports as a protocol failure rather than as a refusal it can
 /// explain.
 fn parse_problem(media_type: Option<&str>, body: &[u8]) -> Option<ProblemBody> {
-    if media_type.map(essence) != Some(PROBLEM_MEDIA_TYPE.to_owned())
+    if !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(PROBLEM_MEDIA_TYPE))
         || body.is_empty()
         || body.len() > MAXIMUM_PROBLEM_BYTES
     {
@@ -96,14 +96,10 @@ fn parse_problem(media_type: Option<&str>, body: &[u8]) -> Option<ProblemBody> {
     Some(problem)
 }
 
-/// The lowercase media type without parameters.
-pub(crate) fn essence(value: &str) -> String {
-    value
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
+/// The media type without its parameters. Callers compare it case-insensitively,
+/// as the media type grammar requires.
+pub(crate) fn essence(value: &str) -> &str {
+    value.split(';').next().unwrap_or_default().trim()
 }
 
 /// The contract's codes are lowercase snake case. Anything else is refused
@@ -425,13 +421,23 @@ mod tests {
 
     #[test]
     fn the_media_type_is_compared_without_its_parameters() {
-        let mapped = map_problem(
-            403,
-            Some("application/problem+json; charset=utf-8"),
-            &problem_json(403, "not_authorized"),
-            None,
-            None,
-        );
-        assert!(matches!(mapped, EvidenceClientError::Denied { .. }));
+        // The grammar makes the type itself case-insensitive, and a parameter is
+        // not part of it, so both of these are the contract's media type.
+        for media_type in [
+            "application/problem+json; charset=utf-8",
+            "Application/Problem+JSON",
+        ] {
+            let mapped = map_problem(
+                403,
+                Some(media_type),
+                &problem_json(403, "not_authorized"),
+                None,
+                None,
+            );
+            assert!(
+                matches!(mapped, EvidenceClientError::Denied { .. }),
+                "{media_type}"
+            );
+        }
     }
 }

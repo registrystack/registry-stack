@@ -28,8 +28,12 @@ impl RequestNonce {
         Ok(Self(URL_SAFE_NO_PAD.encode(bytes)))
     }
 
-    /// Accept an externally retained nonce, such as one read back from a
-    /// relying party's own request record.
+    /// Check that a retained nonce string is still the canonical encoding, such
+    /// as one read back from a relying party's own request record.
+    ///
+    /// This does not supply a nonce to a request. Every prepared request draws
+    /// its own from [`RequestNonce::generate`], and there is no seam for
+    /// substituting an outside value.
     pub fn parse(value: &str) -> Result<Self, NonceError> {
         if is_canonical(value) {
             Ok(Self(value.to_owned()))
