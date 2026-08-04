@@ -269,7 +269,8 @@ channel; it does not get a parallel one.
 - [x] G3. All tutorials pass their CI gates.
 - [ ] G4. Frozen Evidence V1 contracts are byte-identical to the state at
       plan creation, or a re-approval is recorded here.
-- [ ] G5. Review notes exist for every security-sensitive change.
+- [x] G5. Review notes exist for every security-sensitive change. See
+      [Security review notes](#security-review-notes-g5).
 
 ## Dependency order
 
@@ -291,6 +292,244 @@ is parallel; B has no upstream dependencies and is the standing priority
   `REGISTRY_RELEASE_SOURCE_MODE=monorepo
   release/scripts/check-release-source-model.sh` and its unit tests.
 - Docs site (from `docs/site/`): `npm test` and `npm run check`.
+
+## Security review notes (G5)
+
+Scope: every change made under this plan that touches authentication,
+authorization, assertion evaluation or signing, audit integrity, release
+provenance, deployment defaults, or data minimization. Entries are keyed by
+what changed and where, not by revision, because session commits are squashed
+during review and a revision identifier written here would not survive.
+
+Fifteen changes carry their note in their own commit message. They are listed
+first so the set is complete in one place, then the changes whose note was
+owed and is recorded here in full.
+
+### Notes carried in the change's own commit message
+
+1. `registry-manifest-core` evidence offering access, retargeted from the
+   retired kind to `registry-evidence`: narrows what a deployment may
+   advertise, requires HTTPS on both URLs, touches no authorization path.
+2. `registryctl` approved baseline sets, schema 2.0 with a closed refusal of
+   pre-retirement documents (decision 10): the removed `interfaces` field
+   carried verified SHA-256 digests, so ignoring it would honor a signed
+   approval whose integrity claim is no longer enforced.
+3. The public documentation of that bump and the re-approval remedy.
+4. `registryctl` schema versions bumped across the retirement: the version is
+   the only wire signal separating a pre-retirement signed payload from a
+   current one, and the envelope refuses a stale lock before any signature
+   work.
+5. Deletion of the callerless Notary platform API (`registry_notary_from_env`,
+   `registry_notary_access_profile`, `typed_request_profile`): the first two
+   were exact aliases of maintained functions, the third went with its only
+   caller.
+6. Evidence access-token issuer unreachable, named and survived: no change to
+   what is accepted, a bounded stale-key allowance, and the same closed `401`
+   when it is exhausted.
+7. Evidence audit boundary startup refusal, given a cause: fixed `&'static
+   str` per fault class, no path, secret, or chain content, and every fault
+   stays fail-closed.
+8. `evidencectl doctor` artifact-mode reporting: advisory and read-only, opens
+   no secret or key, relaxes nothing.
+9. `evidencectl source suggest` from an OpenAPI document.
+10. `evidencectl source suggest --openapi` reading a URL, under the same rule
+    the runtime applies to source URLs it will itself call.
+11. Eight adopter frictions removed from the Evidence runtime.
+12. The Evidence toolset shipped through the release channel.
+13. The Evidence toolset built for the optional platforms.
+14. The `curl | bash` installer for the Evidence toolset.
+15. The Relay conformance smoke asserting a real source read.
+
+### Notes recorded here
+
+1. **Deletion of the Notary runtime** (`products/notary/`, `crates/registry-
+   notary*`, the workspace members and Relay's dependency on them).
+   Threat: deleting a service can take shared enforcement or shared coverage
+   with it, silently. Enforcement: the maintained runtimes keep their own
+   authentication, authorization, signing, and audit; the deletion removed no
+   code a maintained runtime calls, which the locked workspace build and the
+   full test suite prove by compiling and passing without it. Tests: the
+   deletion did cost two things, both found and repaired under this plan, and
+   both are entries below (the Relay maintained-example loader test and the
+   `registryctl dev` claim-results regression). Nothing else regressed.
+2. **Deletion of four platform primitive crates**: `registry-platform-cache`,
+   `-oid4vci`, `-replay`, and `-sts`, plus the `oid4vci_request_and_proof`
+   fuzz target and corpus and the federation fixtures in
+   `registry-platform-testing`.
+   Threat: `registry-platform-replay` held replay protection, and removing a
+   replay store from a workspace that still serves requests would be a real
+   loss. Enforcement: it had exactly one consumer, the retired product.
+   Evidence's frozen Version 1 boundary states it keeps no nonce or replay
+   storage beyond stateless request-nonce echo and comparison, so no
+   maintained runtime lost a defence. The same holds for the OID4VCI parser:
+   its fuzz target went with the parser it fuzzed, not ahead of it. Tests: the
+   workspace builds and tests green with all four gone; the surviving
+   `sdjwt_holder_proof` fuzz target and its corpus are untouched.
+3. **Removal of the Notary lane from `registryctl`** (tooling, project
+   starters, authoring schemas, language-server index).
+   Threat: adopter tooling that quietly keeps emitting a retired lane's
+   artifacts. Enforcement: the lane is refused by name rather than ignored, so
+   an existing project naming it fails loudly instead of compiling to
+   something else. Tests: the registryctl suite and the six reader journeys in
+   `check-registryctl-tutorials.sh` all pass on the maintained lanes.
+4. **Retirement of the Notary release surface** (`release/` scripts, manifests,
+   workflows, `READINESS.md`, `VERIFY.md`, `REPEATABLE-BUILDS.md`).
+   Threat: release provenance. Dropping a product from the release model can
+   leave an inventory that accepts an unbuilt or unchecksummed artifact.
+   Enforcement: `release/scripts/registry-release` still validates the full
+   artifact inventory, and `check-release-source-model.sh` still proves the
+   source model; both were updated with the surface rather than relaxed.
+   Tests: `test_registry_release.py`, `registry-release validate` against the
+   current manifest, and `check-release-source-model.sh` with its unit tests.
+5. **Retirement of the Notary release evidence, and repinning of its
+   permalinks**.
+   Threat: erasing a coverage record makes unproven paths look proven.
+   Enforcement: the negative-path coverage map is marked, not trimmed. Eight
+   rows whose every anchor is retired read "Retired evidence", six mixed rows
+   keep only their live anchors, and NP-20 and NP-21 drop from Covered to
+   Partial because the product-surface half of their evidence lived on the
+   removed credentials route. The Release Decision now refuses to count a
+   retired row as coverage, which is the stricter reading, not the convenient
+   one. Nine links to deleted documents are repinned at v0.16.3, where each
+   target is confirmed to exist. Tests: the release unit tests, which include
+   the coverage-map and error-registry checks.
+6. **Retirement of the Notary CI gates** (`ci.yml`, `nightly-security.yml`,
+   `nightly-rust-coverage.yml`, the deleted `notary-postgres-conformance.yml`,
+   and `check_advisory_checker_copies.py` with its tests).
+   Threat: removing a required gate reduces enforcement coverage, and the
+   advisory-checker byte-identity guard is the one that looks most like a
+   loss. Enforcement: that guard existed only because two copies of the
+   advisory checker had to stay identical. With one copy left there is nothing
+   to compare, and the surviving copy keeps its own required gate
+   (`crates/registry-relay/tests/advisory_baseline_check_test.py`). The same
+   change adds three Evidence gates to the required inventory (contract gate,
+   contract reproduction, source neutrality), so the inventory is net larger.
+   Tests: `check-gates-inventory.py` and `test_check_gates_inventory.py`,
+   which fail if a named required gate is missing from the workflows.
+7. **Removal of the external integration retirement guard**
+   (`test_integration_e2_runner.py` and its inventory entry).
+   Threat: dropping a check that carried the word "retirement" reads like
+   dropping the retirement's proof. Enforcement: the guard asserted that a
+   deleted runner and its evidence packet stay absent and that CI never names
+   either path, which is not a statement about behaviour, so a green run
+   reported coverage the release does not have. Worse, the absence assertions
+   would have failed CI for anyone restoring source-read conformance coverage
+   under the same names. The retirement is proven instead by the absence of
+   dangling references, which the surrounding checks already enforce. A
+   Relay-only successor with real behaviour is owed and tracked in this plan.
+8. **Narrowing of the secret-scan allowlist and the coverage flags**
+   (`.gitleaks.toml`, `codecov.yml`).
+   Threat: an allowlist entry that outlives its files is a permanent hole,
+   because the path or pattern it excuses can be reintroduced by anything.
+   Enforcement: four allowlist entries were dropped, covering the OID4VCI fuzz
+   corpus, the Notary OpenAPI example identifiers and JWT, three OID4VCI
+   configuration key patterns, and the SD-JWT holder-proof fixtures under
+   `products/notary/`. Nothing was added. The `notary-postgres` coverage flag
+   became `relay-postgres`. Tests: the nightly secret scan runs against the
+   narrowed configuration.
+9. **Restoration of real-loader coverage for the maintained Relay examples**.
+   Threat: the retirement deleted `live_consultation_journeys.rs`, and with it
+   the only test that staged each maintained operator example the way an
+   operator deploys it and then drove the real config loader over the result.
+   `config_schema.rs` validates the examples in place and `opencrvs_profile.rs`
+   loads one profile from the tree; neither proves the pinned artifact closure
+   still resolves after the example is copied into a deployment directory and
+   the private binding is renamed. Enforcement: the restored test verifies the
+   maintained baseline's own hash pins, not pins it computed itself, and
+   `replace_once` fails loudly if an example stops pinning the binding path
+   exactly once. Tests: the restored test itself, hermetic, no network, no
+   Docker, no PostgreSQL, no environment variables.
+10. **Removal of the claim-results commitment from `registryctl dev`**
+    (`request_json`, `minimized_claim_ids`, `expected_claim_results_sha256`,
+    and the commitment helper).
+    Threat: removing an integrity commitment from a development path.
+    Enforcement: the commitment was computed over an always-empty result set
+    after the retirement deleted the request materializer that filled it, so
+    the helper rejected it and `registryctl dev` failed on every project
+    before it reached Docker. The three fields had lost their last reader, and
+    their plan-side validation could no longer be satisfied by anything the
+    compiler emits. The smoke report keeps its `minimized_claim_ids` field and
+    its `minimized_claim_ids=none` output line, which is a live output
+    contract. Tests: the regression survived because the dev-runtime fixture
+    hand-built a scenario with the deleted fields populated; the new test
+    drives both `init` templates through the real authoring compiler.
+11. **Relaxation of the reference response schemas** (`response.schema.yaml`
+    across the reference deployment projects, plus the `response_shape` rule
+    in `products/evidence/contracts/source-contract.yaml`).
+    Threat: output validation. Requiring less of a response could let an
+    incomplete record reach evidence construction. Enforcement: the presence
+    checks a single matched record must pass moved into the extract scripts,
+    which is where they can be applied to the one record that matters. A
+    schema that required a projected leaf of every record turned an ordinary
+    ambiguous page into a source-protocol failure, because the page is refused
+    from the pager before any record is read, so a record on it need not be
+    complete. Projection guarantees intermediate containers and only drops
+    terminal leaves, so requiring an intermediate was redundant and guarding
+    one in script was unreachable; the source contract now states that rule.
+    No Evidence production code changed. Tests: fixture cases covering both
+    sides, run through the production ABI offline.
+12. **A protected-read reference deployment project**
+    (`relay-protected-read-evidence`).
+    Threat: a reference project is a deployment default by imitation, so a
+    weak one propagates. Enforcement: it reads a protected, scoped,
+    read-only API and signs residence region as a coarse controlled code
+    mapped from the register's own code, which is the minimum-disclosure
+    shape. Uniqueness is decided from the page and the further-pages flag
+    together, so a single record on a page claiming further pages is
+    ambiguous rather than a match. The bundle names no registry product and
+    depends on none, so source neutrality holds. No Evidence production code
+    changed; the only Rust edits extend three `#[cfg(test)]` project lists.
+    Tests: eighteen fixture cases through the production ABI offline, plus
+    `check-source-neutrality.sh`.
+13. **Bounds and quoting in what `evidencectl source suggest` emits**, and the
+    reading of real-world OpenAPI documents.
+    Threat: a draft that claims more than the evidence behind it supports, and
+    unbounded expansion. Page-size detection matched any parameter name
+    containing "page", "size", or "limit", so a `page` index and an unrelated
+    `fileSizeCeiling` both fed the array bound; it now compares against a
+    closed list of whole normalized names and, given several genuine size
+    parameters, takes the smallest, because only the smallest ceiling is one a
+    response can reach. A `$ref` cycle is cut with a marker that declares no
+    type, so the flattener skips it and a whole-subtree selection over it is
+    rejected by name. A bound clamped to the subset ceiling is credited to the
+    ceiling rather than to the document, so a specification writing
+    `maxItems: 2147483647` is not quoted as having made a promise. The
+    reproduce line shell-quotes any path outside a safe character set, the
+    extract script emits a real Rhai string literal for the pointer, and
+    drafted YAML quotes on any control character rather than newline alone.
+    `evidence check` classification now matches the runtime's fixed stage
+    messages at the start of stderr instead of a substring anywhere in it.
+    Enforcement: this is adopter tooling that emits a draft; `evidence check`
+    and startup remain the only authority on what a deployment may run with,
+    and every unresolvable bound is left as an explicit `TODO` that
+    `evidence check` refuses. Tests: every fix carries a test proved failing
+    first.
+14. **Zero bytes kept out of test-provisioned secrets**
+    (`crates/registry-evidencectl/tests/scaffold.rs`).
+    Threat: none to a deployment; this is test material only. Recorded because
+    it touches secret generation. The scaffold test wrote 32 raw random bytes
+    per secret file while the runtime rejects secret material containing a NUL
+    byte, so each file failed about 12% of the time and a full run about 40%.
+    Enforcement: the test regenerates until no byte is zero, exactly as
+    `keygen secret` already does. The runtime's rejection is unchanged, and it
+    is the reason the test was flaky.
+15. **The adopter image bound to the Debian 13 base-image contract**
+    (`docker/Dockerfile`, `check-debian13-images.py`,
+    `nightly-security.yml`).
+    Threat: deployment defaults and supply chain. `docker/Dockerfile` was
+    reviewed and committed but no check held it to the same base-image
+    contract as the release and per-product images, so its digest pins could
+    drift silently. Enforcement: it is checked under its own shape, since one
+    file builds two binaries as two targets and distroless has no shell for a
+    HEALTHCHECK: pinned frontend first, every upstream base digest-pinned, the
+    pinned Rust builder, a nonroot-owned runtime root, and no shell, package
+    manager, or fetch tooling in any distroless stage. Distroless stages are
+    found by their base rather than by a stage name, and an unpinned base
+    still counts as a stage, so an unpinned base is reported instead of
+    dropping out of the scan. The nightly security workflow retriggers on
+    `docker/` changes and scans the adopter image for baked-in key or
+    credential material beside the release images. Tests:
+    `test_registry_release.py` gained cases for the new contract.
 
 ## Status log
 
@@ -1167,3 +1406,28 @@ is parallel; B has no upstream dependencies and is the standing priority
   confirming this checkout. Anyone re-running these should do the same: 49 git
   worktrees are registered for this repo, and a backgrounded gate can inherit
   the wrong one.
+- 2026-08-04: G5 done. Audited all 100 commits between the plan's starting
+  revision and now. Forty-four touch a security-relevant path (Rust sources or
+  tests, `release/`, `.github/`, `docker/`, a contracts directory, an Evidence
+  script) and four more touch only root configuration; of those, thirty are
+  security-sensitive under the definition in `AGENTS.md`. Fifteen already
+  carried a review note in their own commit message. The other fifteen did not,
+  and their notes are now in the new Security review notes section above,
+  keyed by what changed rather than by revision, since these commits are
+  squashed on review.
+  Two of the fifteen are worth naming here because they are losses rather than
+  additions, and both are argued rather than waved through: the
+  advisory-checker byte-identity guard went because it compared two copies and
+  only one is left, with the surviving copy keeping its own required gate; and
+  the external integration retirement guard went because it asserted absence
+  rather than behaviour, reported coverage the release does not have, and would
+  have failed CI for anyone restoring source-read conformance coverage under
+  the same names. A Relay-only successor for the second is still owed.
+  The remaining fourteen are the retirement's removals with their compensating
+  enforcement named, plus the Evidence and evidencectl changes that touch
+  output validation, bounds, quoting, secret generation, and the adopter
+  image's base-image contract.
+  Nothing in this pass changed code. The three ticked global gates now stand at
+  G1, G2, G3, G5; G4 remains Jeremi's, and it is not a formality: three frozen
+  files have changed since the plan's starting revision, two of them
+  substantively, and one of those two rewrites JWKS retrieval and readiness.
