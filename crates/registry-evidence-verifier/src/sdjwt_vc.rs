@@ -432,16 +432,14 @@ fn rfc3339_of(claims: &Map<String, Value>, name: &str) -> Result<String, SdJwtVc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        EvidenceObjectType, PublicValue, SubjectBinding, SupportedValue,
-        OFFLINE_EVALUATION_REQUEST_NONCE,
-    };
+    use crate::fixtures::OFFLINE_EVALUATION_REQUEST_NONCE;
+    use crate::model::{EvidenceObjectType, PublicValue, SubjectBinding, SupportedValue};
     use crate::EVIDENCE_SCHEMA_V1;
 
     fn evidence() -> Evidence {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
-            assurance_profile: crate::config::AssuranceProfile::EvidenceGrade,
+            assurance_profile: crate::AssuranceProfile::EvidenceGrade,
             request_nonce: OFFLINE_EVALUATION_REQUEST_NONCE.to_string(),
             id: "urn:evidence:assertion:v1_2f0a".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,

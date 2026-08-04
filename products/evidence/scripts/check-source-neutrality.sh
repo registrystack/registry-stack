@@ -10,6 +10,7 @@ production_text="$temporary_root/production-rust.txt"
 for source_file in $(
   rg --files \
     "$repository_root/crates/registry-evidence/src" \
+    "$repository_root/crates/registry-evidence-verifier/src" \
     "$repository_root/crates/registry-evidencectl/src" \
     -g '*.rs' | sort
 ); do
@@ -133,6 +134,7 @@ done
 if rg -n -i 'dhis2|opencrvs' \
   "$production_text" \
   "$repository_root/crates/registry-evidence/Cargo.toml" \
+  "$repository_root/crates/registry-evidence-verifier/Cargo.toml" \
   "$repository_root/crates/registry-evidencectl/Cargo.toml" \
   "$repository_root/Cargo.toml"; then
   echo 'Evidence production code, adopter tooling, or Cargo metadata contains a prohibited source-product name.' >&2

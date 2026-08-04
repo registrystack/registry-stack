@@ -357,31 +357,10 @@ pub struct EvidenceConfig {
     pub requirements: Vec<RequirementConfig>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Deserialize,
-    Serialize,
-    schemars::JsonSchema,
-    utoipa::ToSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum AssuranceProfile {
-    Local,
-    Production,
-    EvidenceGrade,
-}
-
-impl AssuranceProfile {
-    /// Only the explicit local profile may be authored before fixture
-    /// coverage exists. Deployable profiles retain the complete fixture gate.
-    pub fn requires_fixtures(self) -> bool {
-        matches!(self, Self::Production | Self::EvidenceGrade)
-    }
-}
+/// The declared assurance boundary travels with every response, so the
+/// portable `registry-evidence-verifier` crate owns it and configuration serves
+/// it at the runtime's own path.
+pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
 
