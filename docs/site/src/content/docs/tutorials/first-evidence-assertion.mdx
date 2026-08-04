@@ -1,7 +1,8 @@
 ---
-title: Get a first Evidence assertion
-description: Install the Evidence toolset, scaffold a neutral deployment project, generate key material, and run the project's synthetic fixture cases offline.
-status: current
+title: Get your first Evidence assertion
+description: Run a local registry and verify a signed adult-status answer that withholds the source record.
+status: draft
+draft: true
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -15,186 +16,236 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Use the released Evidence toolset to take a scaffolded deployment project from nothing to passing
-assertion fixtures, entirely offline. The project you build here is the starting point for every
-later Evidence tutorial.
+Answer one bounded question, "Is this person an adult?", without returning the person's name or
+date of birth. You will connect Evidence to a small registry, make a real HTTP request, and verify
+the signed answer before reading it.
 
 <QuickstartMeta
-  outcome="A scaffolded Evidence deployment project whose project check and synthetic fixture cases pass offline."
-  time="About 15 minutes, including the toolset installation"
-  level="Local development with synthetic fixtures"
-  prerequisites={['A published release tag that ships the Evidence toolset', 'A shell with curl', 'Linux amd64, Linux arm64, or macOS arm64'] }
+  outcome="A verified assertion containing an adult-status answer, but not the source record."
+  time="About 15 minutes"
+  level="Local development with synthetic data"
+  prerequisites={['Python 3', 'A shell with curl', 'Linux or macOS']}
 />
 
-The scaffold and its fixture cases are synthetic.
-Do not add production endpoints, source credentials, or personal data to this project.
+This design draft uses proposed `new --openapi`, `dev`, `request prepare`, `verify`, and
+`audit show` interfaces. No released toolset supports this synthetic local workflow.
 
-## Before you start
+## Install Evidence
 
-Choose an exact published tag that ships the Evidence toolset from the
-[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
-download its installer:
+When a release includes this workflow, install its latest Evidence toolset:
 
 ```sh
-tag="v<major>.<minor>.<patch>"
-installer="evidencectl-${tag}-install.sh"
-curl --proto '=https' --tlsv1.2 --fail --location \
-  --output "$installer" \
-  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 ```
 
-Releases older than the Evidence toolset do not carry these assets; the installer refuses to run
-without a pinned tag and names the release page to check.
+## Start a small registry
+
+Create a working directory and save the server as `registry.py`:
 
 ```sh
-bash "$installer"
+mkdir first-evidence-assertion
+cd first-evidence-assertion
 ```
 
-The installer downloads the three toolset binaries (`evidence`, the runtime; `evidencectl`, the
-adopter tooling; `mint`, the token issuer), verifies every one against the release's
-`SHA256SUMS`, and installs them together or not at all. It checks integrity, not authenticity:
-for a higher-assurance installation, follow `release/VERIFY.md` from the same tag first, then
-rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at the verified directory.
+```python
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-Confirm the toolset is on `PATH`:
+PERSON = {
+    "person_id": "person-123",
+    "name": "Amina Example",
+    "date_of_birth": "2000-01-01",
+}
+OPENAPI = {
+    "openapi": "3.1.0",
+    "info": {"title": "Tutorial registry", "version": "1.0.0"},
+    "servers": [{"url": "http://127.0.0.1:8000"}],
+    "paths": {"/people/{person_id}": {"get": {
+        "operationId": "getPerson",
+        "parameters": [{"name": "person_id", "in": "path", "required": True,
+                        "schema": {"type": "string"}}],
+        "responses": {"200": {
+            "description": "A person record",
+            "content": {"application/json": {
+                "schema": {
+                    "type": "object",
+                    "required": list(PERSON),
+                    "properties": {key: {"type": "string"} for key in PERSON},
+                },
+            }},
+        }},
+    }}},
+}
+
+class Registry(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/openapi.json":
+            return self.send_json(OPENAPI)
+        if self.path == "/people/person-123":
+            return self.send_json(PERSON)
+        self.send_error(404)
+
+    def send_json(self, value):
+        body = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+print("Registry listening on http://127.0.0.1:8000", flush=True)
+ThreadingHTTPServer(("127.0.0.1", 8000), Registry).serve_forever()
+```
+
+In one terminal, start the registry and leave it running:
 
 ```sh
-evidencectl --version
-evidence --version
+python3 registry.py
 ```
 
-If your shell cannot find them, add the printed install directory (`~/.local/bin` unless you set
-`EVIDENCECTL_INSTALL_DIR`) to `PATH` before continuing.
-
-## Scaffold a deployment project
-
-Create a fresh project and enter it:
+In another terminal, return to `first-evidence-assertion` and inspect the source record:
 
 ```sh
-evidencectl new hello-evidence
-cd hello-evidence
+curl -s http://127.0.0.1:8000/people/person-123 | python3 -m json.tool
 ```
 
-The scaffold prints where everything went and the exact commands that come next. It creates
-`bundle/` (the governed deployment contract: `evidence.yaml` plus the adapters, derivations,
-schemas, and fixtures it references), `runtime.yaml` (process-local paths and the listener),
-`secrets/` (empty, owner-only), `audit/`, and a project `README.md`. The bundle's one acceptance
-definition is deliberately abstract: it answers whether a recorded event date is at least a
-reviewed number of years in the past, which is the shape of an adult-status question with the
-jurisdiction left out. `evidencectl new --help` also documents `--with-mint`, which pairs a
-Registry Mint configuration for the tutorial that serves assertions over HTTP.
+The registry returns an identifier, a name, and a date of birth. The assertion will contain none.
 
-## Generate key material
+## Create the Evidence project
 
-Generate the signing keypair and the two 32-byte secrets the runtime requires, exactly as the
-scaffold's next steps print them:
+Create a local project from the registry's OpenAPI description:
 
 ```sh
-evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1
-evidencectl keygen secret --out secrets/audit-hmac-key
-evidencectl keygen secret --out secrets/subject-binding-hmac-key
+evidencectl new adult-status \
+  --openapi http://127.0.0.1:8000/openapi.json \
+  --profile local \
+  --generate-keys
+cd adult-status
 ```
 
-Expected output:
+OpenAPI describes the source. You still decide the question and disclosure.
+
+Create `questions/adult-status.yaml`:
+
+```yaml
+id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts: [date_of_birth]
+answer:
+  concept: is_adult
+  type: boolean
+  derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+```
+
+Create `derivations/adult-status.rhai`:
+
+```rhai
+fn derive(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    let adult_on = add_calendar_years(born, 18);
+    [#{
+        concept_id: "is_adult",
+        value: compare_dates(context.legal_local_date, adult_on) >= 0
+    }]
+}
+```
+
+The definition uses one source fact and permits only the derived boolean. Start Evidence and Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+## Request an assertion
+
+Prepare the request, local access, and verification expectations:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --name first-assertion
+```
+
+Preparation does not contact Evidence. It writes the request, verification expectations, and an
+owner-only curl configuration containing only the Authorization header. Send the request yourself:
+
+```sh
+curl --config .evidence/requests/first-assertion/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/first-assertion/request.json \
+  --output assertion.jws.json
+```
+
+`curl` called Evidence, Evidence called the registry, and the HTTP response is a signed flattened
+JSON Web Signature (JWS). A successful HTTP response is not yet a trusted assertion.
+
+## Verify before reading
+
+Verify the response against the expectations recorded before the request:
+
+```sh
+evidencectl verify assertion.jws.json \
+  --context .evidence/requests/first-assertion/verification.json \
+  --output verified.json
+```
+
+Only after the command prints `VERIFIED`, inspect the verified payload:
+
+```sh
+python3 -m json.tool verified.json
+```
+
+```json
+{
+  "requirement": "adult-status",
+  "purpose": "age-check",
+  "values": {"is_adult": true}
+}
+```
+
+The verified payload does not include `person_id`, `name`, or `date_of_birth`. The assertion
+answers the reviewed question without becoming another copy of the registry record.
+
+## Inspect the audit entry
+
+Show the audit events associated with the assertion:
+
+```sh
+evidencectl audit show --evidence assertion.jws.json
+```
 
 ```text
-wrote secrets/signing-ed25519-private-jwk
-wrote secrets/signing-ed25519-public.jwk.json
-kid: scaffold-signing-key-1
-wrote secrets/audit-hmac-key
-wrote secrets/subject-binding-hmac-key
+ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
+DISCLOSURE RELEASED is_adult
 ```
 
-Every file is owner-only, and private bytes are never printed.
+The view identifies the question, purpose, requester pseudonym, authorization decision, and
+disclosed concept. It does not repeat the source record or access token.
 
-Three commands, three separate jobs. The bundle never names a path: it references each of these
-by a logical name that the runtime resolves under the secret root.
+## Clean up
 
-| What you generated | Referenced by | What it is for |
-| --- | --- | --- |
-| `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json` | `signing.activeKeyRef` | The Ed25519 keypair that signs every assertion the deployment issues. The private half stays in the process; the public half is what you publish at `signing.jwksPath`, so a consumer can verify an assertion without asking you anything. |
-| `audit-hmac-key` | `audit.hashSecretRef` | 32 random bytes that key the audit log. |
-| `subject-binding-hmac-key` | `subjectBinding.secretRef` | 32 random bytes that derive the reference standing in for a subject. |
-
-The `--kid scaffold-signing-key-1` you passed is the key's public name. It must match
-`signing.activeKeyId` in `bundle/evidence.yaml`, which is what the scaffold already wrote there,
-and it travels in each assertion's header so a verifier knows which published key to check
-against.
-
-The other two are symmetric secrets rather than keypairs, so there is nothing to publish and
-nothing for a verifier to fetch. The audit key does two things: each record's hash is computed
-under it and chains onto the previous record's, so nobody without the key can remove or rewrite a
-record and re-chain what follows, and it derives the `hmac-sha256:v1:` pseudonyms that stand in
-for identifying values in the log, so the trail stays linkable inside the deployment without
-carrying the values themselves. The subject-binding key derives its reference over the whole
-selector bundle together with the trust domain, audience, purpose, role, and profile, which means
-the same person yields a different reference for a different audience, and two audiences holding
-assertions about that person cannot correlate them by comparing what they hold.
-
-Both are versioned in the bundle (`hashKeyVersion` and `keyVersion`, `1` here) because the version
-goes into the derivation: replacing either key means everything derived under it changes, and the
-version is what says which key produced a given value.
-
-## Freeze the deployment input
-
-Evidence treats the bundle and runtime file as trusted, startup-only artifacts and refuses
-mutable deployment input, so make them read-only before anything runs:
+Stop Evidence and Mint in the second terminal:
 
 ```sh
-chmod -R a-w bundle && chmod 444 runtime.yaml
+evidencectl dev stop
 ```
 
-If you skip this step, the next command fails with `deployment input is not immutable:` followed
-by the input it refused, such as `the bundle directory has a writable entry`. That refusal is the
-runtime working as designed, not a broken install.
-
-Each refusal names one artifact, so a project-wide mistake surfaces one restart at a time.
-`evidencectl doctor --project .` reports every mode and owner the runtime would refuse in a single
-read-only pass instead. It also reports `secrets/source-bearer-token` as missing, which is correct
-and expected here: fixtures replay offline, and the source credential is only needed once you make
-a live request.
-
-## Run the fixtures
-
-Drive the `evidence` binary across the whole project:
-
-```sh
-evidencectl fixtures run --project .
-```
-
-Expected output:
-
-```text
-PASS: check
-PASS: fixtures/cases.yaml (12 cases)
-2 passed, 0 failed (12 cases evaluated)
-```
-
-Two things passed. `check` loaded, compiled, and validated the complete project: every selector,
-role, and source binding resolves, every script compiles, and the key material you generated
-parses. Then the bundle's twelve synthetic fixture cases replayed through the real evaluation
-pipeline: request preparation, extraction, and the derivation, with no source system and no
-network. That is your first passing Evidence assertion run.
-
-## Cleanup
-
-Keep the project if you are continuing to the next tutorial. To remove it:
-
-```sh
-cd ..
-chmod -R u+w hello-evidence
-rm -rf hello-evidence
-```
+Return to the first terminal and press `Ctrl+C` to stop the registry.
 
 ## Next
 
-- [Author an acceptance definition](../author-an-acceptance-definition/) is the next tutorial: it
-  replaces the scaffolded question with one you write yourself, still offline.
-- [Serve assertions over HTTP](../serve-assertions-over-http/) runs a project like this one as a
-  service and returns a signed assertion to a caller holding a real access token.
-- [Configure Evidence](../../configure/evidence/) explains every part of the project you built.
-- [Evaluate Evidence](../../start/evaluate-evidence/) covers what a real deployment costs to run.
-- [Registry Evidence API](../../reference/apis/registry-evidence/) documents the HTTP surface a
-  served deployment exposes.
-- [Evidence security model](../../security/evidence/) explains the invariants behind the
-  immutability refusal you saw.
+- Add boundary cases and failure cases before promoting the project beyond local development.
+- Change the answer from a boolean to a bounded age bracket.
+- Configure the same assertion as an SD-JWT VC response.
