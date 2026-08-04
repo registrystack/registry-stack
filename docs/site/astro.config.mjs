@@ -148,6 +148,7 @@ export default defineConfig({
     // that flow from the supported local beginner path. Solmara Lab keeps its
     // own route: it is where the two doors are shown working together.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
+    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     // Retired advanced tutorials land on current task, explanation, or
     // reference entry points.
@@ -308,13 +309,14 @@ export default defineConfig({
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Return an age bracket', slug: 'tutorials/return-a-governed-value' },
+            { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+            { label: 'Issue DHIS2 immunization evidence', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
             { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
             { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },
             { label: 'Prove a project', slug: 'tutorials/prove-an-evidence-project' },
             { label: 'Verify as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
             { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
             { label: 'Request SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
-            { label: 'Review a DHIS2-shaped source', slug: 'tutorials/review-a-dhis2-evidence-source' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
             { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },

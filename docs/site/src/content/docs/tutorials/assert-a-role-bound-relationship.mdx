@@ -1,0 +1,253 @@
+---
+title: Assert a role-bound relationship
+description: Bind a child and a candidate parent to one signed relationship assertion without disclosing either identifier.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Answer, "Is this candidate registered as a parent of this child?" This question differs from the
+first two tutorials because one assertion binds two people in distinct roles. Evidence must not
+let a caller omit a role, repeat one role, or swap its selector field.
+
+<QuickstartMeta
+  outcome="A verified relationship assertion bound to a child and a candidate parent."
+  time="About 15 minutes"
+  level="Local development with synthetic data"
+  prerequisites={['Evidence toolset', 'Python 3', 'A shell with curl', 'Linux or macOS']}
+/>
+
+## Start a relationship registry
+
+Create a working directory and save this server as `registry.py`:
+
+```sh
+mkdir role-bound-relationship
+cd role-bound-relationship
+```
+
+```python
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlsplit
+
+PEOPLE = {"child-123", "parent-456", "adult-789"}
+REGISTERED_PARENTS = {("child-123", "parent-456")}
+
+OPENAPI = {
+    "openapi": "3.1.0",
+    "info": {"title": "Tutorial relationship registry", "version": "1.0.0"},
+    "servers": [{"url": "http://127.0.0.1:8002"}],
+    "paths": {"/children/{child_id}/candidate-parents/{candidate_id}": {"get": {
+        "operationId": "getParentRelationship",
+        "parameters": [
+            {"name": "child_id", "in": "path", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "candidate_id", "in": "path", "required": True,
+             "schema": {"type": "string"}},
+        ],
+        "responses": {"200": {
+            "description": "A registered parent relationship decision",
+            "content": {"application/json": {"schema": {
+                "type": "object",
+                "required": ["relationship_confirmed"],
+                "properties": {"relationship_confirmed": {"type": "boolean"}},
+            }}},
+        }},
+    }}},
+}
+
+class Registry(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = unquote(urlsplit(self.path).path)
+        if path == "/openapi.json":
+            return self.send_json(OPENAPI)
+        parts = path.strip("/").split("/")
+        if (len(parts) == 4 and parts[0] == "children"
+                and parts[2] == "candidate-parents"):
+            child_id, candidate_id = parts[1], parts[3]
+            if child_id in PEOPLE and candidate_id in PEOPLE:
+                return self.send_json({
+                    "relationship_confirmed":
+                        (child_id, candidate_id) in REGISTERED_PARENTS,
+                })
+        self.send_error(404)
+
+    def send_json(self, value):
+        body = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+print("Registry listening on http://127.0.0.1:8002", flush=True)
+ThreadingHTTPServer(("127.0.0.1", 8002), Registry).serve_forever()
+```
+
+Start it in one terminal and leave it running:
+
+```sh
+python3 registry.py
+```
+
+The synthetic registry knows three people and one registered relationship. Its endpoint returns
+only the relationship decision for a known pair. A production source would need governance that
+defines what "registered parent" means and who can maintain that relationship.
+
+## Create the Evidence project
+
+In another terminal, create an editable project from the registry's OpenAPI description:
+
+```sh
+evidencectl new parent-relationship \
+  --openapi http://127.0.0.1:8002/openapi.json \
+  --profile local \
+  --generate-keys
+cd parent-relationship
+```
+
+### `questions/parent-relationship.yaml`
+
+Create the question definition:
+
+```yaml
+id: parent-relationship
+question: Is the candidate registered as a parent of the child?
+purpose: relationship-check
+subjects:
+  - role: child
+    selector: child_id
+  - role: candidate-parent
+    selector: candidate_id
+source:
+  operation: getParentRelationship
+  facts:
+    - name: relationship_confirmed
+      path: /relationship_confirmed
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: relationship_confirmed
+    type: boolean
+derivation: derivations/parent-relationship.rhai
+disclosure:
+  allow: [relationship_confirmed]
+```
+
+`subjects` declares the complete role set. Each role maps to one required OpenAPI path parameter.
+The child and candidate are therefore part of the governed question, not interchangeable string
+arguments. The source decision is the only fact that reaches the derivation.
+
+### `derivations/parent-relationship.rhai`
+
+Create the answer logic:
+
+```rhai
+fn answer(facts, selectors, context) {
+    #{
+        relationship_confirmed:
+            required(facts.relationship_confirmed, "relationship_missing")
+    }
+}
+```
+
+This source already owns the reviewed relationship decision, so the derivation maps that fact to
+the one governed answer. Evidence still validates the source response, answer form, disclosure,
+and both subject bindings before signing.
+
+## Start the project
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+## Bind both subjects to the request
+
+Prepare one request with both role-qualified subjects:
+
+```sh
+evidencectl request prepare parent-relationship \
+  --purpose relationship-check \
+  --subject child:child_id=child-123 \
+  --subject candidate-parent:candidate_id=parent-456 \
+  --name parent-relationship
+```
+
+For a multi-subject question, every `--subject` uses `role:field=value`. Preparation rejects a
+missing role, duplicate role, unknown role, or field that does not match that role's selector.
+
+Send the prepared request across the HTTP boundary:
+
+```sh
+curl --silent --show-error \
+  --config .evidence/requests/parent-relationship/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/parent-relationship/request.json \
+  --output parent-relationship.jws.json
+```
+
+Verify before reading:
+
+```sh
+evidencectl verify parent-relationship.jws.json \
+  --context .evidence/requests/parent-relationship/verification.json \
+  --output parent-relationship.verified.json
+```
+
+```text
+VERIFIED
+```
+
+```sh
+python3 -m json.tool parent-relationship.verified.json
+```
+
+The verified assertion has two pseudonymous subject bindings, one for `child` and one for
+`candidate-parent`, plus this supported value:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:parent-relationship:relationship_confirmed",
+  "value": true
+}
+```
+
+It does not disclose `child-123` or `parent-456`. The bindings let an authorized verifier relate
+the answer to the requested subjects without turning the assertion into a copy of either record.
+
+## Inspect the audit and clean up
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+evidencectl dev clean
+```
+
+The audit identifies the authorized question, purpose, requester pseudonym, and disclosed concept.
+It does not record either source identifier or the boolean value.
+
+Return to the registry terminal and press `Ctrl+C`.
+
+## Next
+
+- [Issue immunization evidence from DHIS2](../issue-immunization-evidence-from-dhis2/)
+- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Configure Evidence](../../configure/evidence/)

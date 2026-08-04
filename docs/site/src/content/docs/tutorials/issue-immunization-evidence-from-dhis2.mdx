@@ -1,0 +1,549 @@
+---
+title: Issue an immunization summary from DHIS2
+description: Author and verify a signed, multi-concept immunization summary from synthetic DHIS2 Tracker events.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Connect Evidence to the public DHIS2 Tracker demo, combine two immunization events into one
+governed answer, and verify the signed assertion returned across the Evidence HTTP boundary.
+
+{/* Target tutorial for evidencectl UX2, UX3, UX5, and UX10. Keep status draft until the
+    commands and authoring shapes on this page pass the tutorial gate. */}
+
+<QuickstartMeta
+  outcome="A verified assertion containing five governed immunization readings from DHIS2."
+  time="About 30 minutes"
+  level="Institution integration with synthetic data"
+  prerequisites={[
+    'The completed age-bracket tutorial',
+    'The Evidence toolset',
+    'Access to the public DHIS2 demo',
+    'curl and an editor',
+  ]}
+/>
+
+This tutorial uses synthetic data from the public DHIS2 demo.
+Do not substitute a real child record.
+The demo maintainers can reset its data, credentials, and synthetic subjects.
+
+## Define the answer before the integration
+
+The DHIS2 Child Programme records several immunization readings across its Birth and Baby
+Postnatal events.
+The assertion will return five governed concepts:
+
+| Concept | Form | Meaning |
+|---|---|---|
+| BCG recorded as administered | Boolean | The completed events explicitly record whether a BCG dose was administered. |
+| OPV dose count | Bounded integer | The recorded oral polio vaccine dose number, from 0 through 3. |
+| Pentavalent dose count | Bounded integer | The recorded pentavalent vaccine dose number, from 0 through 3. |
+| Measles recorded as administered | Boolean | The completed events explicitly record whether a measles dose was administered. |
+| Yellow fever recorded as administered | Boolean | The completed events explicitly record whether a yellow fever dose was administered. |
+
+This is a recorded immunization summary, not a conclusion that the child is fully vaccinated or
+up to date.
+Those conclusions require an approved immunization schedule, the child's age, a jurisdiction,
+and rules for exceptional or late doses.
+
+The integration also applies two conservative readings:
+
+- An absent source value does not become `false` or `0`.
+- Two different values for the same concept make the source record inconsistent.
+
+In either case, Evidence returns no assertion.
+
+## Choose a synthetic child
+
+Open the [public DHIS2 demo](https://play.im.dhis2.org/stable-2-43-1/) and sign in with its
+provider-published shared credentials:
+
+```text
+Username: admin
+Password: district
+```
+
+In Tracker Capture, select the `Child Programme` and the `Ngelehun CHC` organisation unit.
+Choose a synthetic child with completed `Birth` and `Baby Postnatal` events whose five
+immunization fields contain values.
+
+Create an untracked, owner-only subject file and place the tracked entity identifier in it:
+
+```sh
+umask 077
+mkdir -p .local
+touch .local/child.yaml
+chmod 600 .local/child.yaml
+```
+
+```yaml
+child:
+  tracked_entity_id: <synthetic-tracked-entity-id>
+```
+
+The identifier selects the source record.
+It will be used for the DHIS2 read and the Evidence request, but it will not appear in the signed
+assertion.
+
+## See the DHIS2 boundary
+
+Create an owner-only curl configuration at `.local/dhis2.curl`:
+
+```sh
+touch .local/dhis2.curl
+chmod 600 .local/dhis2.curl
+```
+
+Open the file and add the public demo credential:
+
+```text
+user = "admin:district"
+```
+
+Set the source and subject values in your terminal:
+
+```sh
+export DHIS2_BASE_URL='https://play.im.dhis2.org/stable-2-43-1'
+export DHIS2_PROGRAM_ID='IpHINAT79UW'
+export DHIS2_TRACKED_ENTITY_ID='<synthetic-tracked-entity-id>'
+```
+
+Read the same bounded fields that Evidence will use:
+
+```sh
+curl --silent --show-error --fail \
+  --config .local/dhis2.curl \
+  --get \
+  --url "$DHIS2_BASE_URL/api/tracker/trackedEntities/$DHIS2_TRACKED_ENTITY_ID" \
+  --data-urlencode "program=$DHIS2_PROGRAM_ID" \
+  --data-urlencode 'fields=trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]' \
+  --output .local/dhis2-response.json
+```
+
+The response contains the tracked entity, its programme enrollment, the two events, and their
+data values.
+Some event data values are unrelated to the five concepts.
+Evidence will receive the bounded response, discard unrelated values during extraction, and
+release only the five declared concepts.
+
+This distinction is deliberate.
+The source uses the `record-transformed` posture because DHIS2 cannot filter the `dataValues`
+array to individual data-element identifiers in this response shape.
+
+## Create the authoring project
+
+Download the Tracker OpenAPI document and create an editable local project:
+
+```sh
+curl --silent --show-error --fail \
+  --config .local/dhis2.curl \
+  --header 'Accept: application/x-yaml' \
+  --url "$DHIS2_BASE_URL/api/tracker/openapi.yaml" \
+  --output .local/dhis2-tracker.openapi.yaml
+
+evidencectl new dhis2-immunization \
+  --openapi .local/dhis2-tracker.openapi.yaml \
+  --profile local \
+  --generate-keys
+
+cd dhis2-immunization
+```
+
+`evidencectl new` retains the OpenAPI document and creates empty `sources/`, `questions/`, and
+`derivations/` directories.
+It also generates disposable local signing, audit, subject-binding, and Registry Mint key
+material.
+It does not invent the source policy or the answer.
+
+## Draft the DHIS2 source
+
+Ask `evidencectl` to draft the selected operation and response fields from the retained OpenAPI
+document:
+
+```sh
+evidencectl source suggest \
+  --project . \
+  --source-id child-tracker \
+  --operation 'GET /api/tracker/trackedEntities/{uid}' \
+  --select /trackedEntity \
+  --select /enrollments/*/program \
+  --select /enrollments/*/events/*/programStage \
+  --select /enrollments/*/events/*/status \
+  --select /enrollments/*/events/*/dataValues/*/dataElement \
+  --select /enrollments/*/events/*/dataValues/*/value
+```
+
+The command creates one editable source:
+
+```text
+sources/child-tracker/
+├── source.yaml
+├── response.schema.yaml
+├── extract.rhai
+└── facts.schema.yaml
+```
+
+Open `sources/child-tracker/source.yaml`.
+Keep the generated projection and artifact paths, then resolve the source decisions:
+
+```yaml
+id: child-tracker
+operation: getTrackedEntity
+baseUrl: https://play.im.dhis2.org/stable-2-43-1
+posture: record-transformed
+authentication:
+  kind: basic
+  usernameRef: secret:file/dhis2-username
+  passwordRef: secret:file/dhis2-password
+request:
+  pathBindings:
+    uid:
+      role: child
+      field: tracked_entity_id
+  query:
+    fixed:
+      program: IpHINAT79UW
+      fields: trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]
+    selectorBindings: {}
+collectionBounds:
+  /enrollments: 4
+  /enrollments/*/events: 32
+  /enrollments/*/events/*/dataValues: 64
+```
+
+The path binding accepts only the authorized `child.tracked_entity_id` selector.
+The caller cannot replace the DHIS2 origin, programme, field selection, event bounds, or source
+credential.
+
+Add the source credential as owner-only files:
+
+```sh
+touch secrets/dhis2-username secrets/dhis2-password
+chmod 600 secrets/dhis2-username secrets/dhis2-password
+```
+
+Open `secrets/dhis2-username` and enter `admin`.
+Open `secrets/dhis2-password` and enter `district`.
+Do not add quotes or a trailing newline.
+The values stay under the project's ignored `secrets/` directory and are never copied into the
+source definition.
+
+## Normalize the two events
+
+The OpenAPI document describes the nested response shape, but it cannot decide how repeated event
+values become one answer.
+Open `sources/child-tracker/extract.rhai` and replace its draft body with this reviewed rule:
+
+```rhai
+fn source_boolean(value) {
+    if value == "true" { return true; }
+    if value == "false" { return false; }
+    throw("source_protocol_error");
+}
+
+fn dose_count(value) {
+    let count = parse_integer(value);
+    if count < 0 || count > 3 { throw("source_protocol_error"); }
+    count
+}
+
+fn merge_reading(current, next) {
+    if is_missing(current) { return next; }
+    if current != next { throw("source_protocol_error"); }
+    current
+}
+
+fn extract(source_response, parameters) {
+    let bcg = ();
+    let opv = ();
+    let penta = ();
+    let measles = ();
+    let yellow_fever = ();
+
+    let enrollments = get_path(source_response, "/enrollments");
+    if is_missing(enrollments) { return #{outcome: "no_match"}; }
+
+    for enrollment in enrollments {
+        if enrollment["program"] == "IpHINAT79UW" {
+            let events = get_path(enrollment, "/events");
+            if !is_missing(events) {
+                for event in events {
+                    let stage = event["programStage"];
+                    let accepted_stage =
+                        stage == "A03MvHHogjR" || stage == "ZzYYXq4fJie";
+                    if accepted_stage && event["status"] == "COMPLETED" {
+                        for reading in event["dataValues"] {
+                            let element = reading["dataElement"];
+                            let value = reading["value"];
+                            if element == "bx6fsa0t90x" {
+                                bcg = merge_reading(bcg, source_boolean(value));
+                            } else if element == "ebaJjqltK5N" {
+                                opv = merge_reading(opv, dose_count(value));
+                            } else if element == "vTUhAUZFoys" {
+                                penta = merge_reading(penta, dose_count(value));
+                            } else if element == "FqlgKAG8HOu" {
+                                measles = merge_reading(measles, source_boolean(value));
+                            } else if element == "rxBfISxXS2U" {
+                                yellow_fever = merge_reading(
+                                    yellow_fever,
+                                    source_boolean(value)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let facts = #{record_reference: source_response["trackedEntity"]};
+    if !is_missing(bcg) { facts["bcg_recorded"] = bcg; }
+    if !is_missing(opv) { facts["opv_dose_count"] = opv; }
+    if !is_missing(penta) { facts["penta_dose_count"] = penta; }
+    if !is_missing(measles) { facts["measles_recorded"] = measles; }
+    if !is_missing(yellow_fever) {
+        facts["yellow_fever_recorded"] = yellow_fever;
+    }
+    #{outcome: "match", facts: facts}
+}
+```
+
+The extractor reads every bounded event and data value.
+It accepts only completed Birth and Baby Postnatal events, converts DHIS2 strings into typed
+facts, and refuses conflicting readings.
+Unrelated data elements are never added to `facts`.
+
+Replace `sources/child-tracker/facts.schema.yaml` with the closed extraction result:
+
+```yaml
+type: object
+additionalProperties: false
+required:
+  - record_reference
+  - bcg_recorded
+  - opv_dose_count
+  - penta_dose_count
+  - measles_recorded
+  - yellow_fever_recorded
+properties:
+  record_reference: {type: string, minLength: 11, maxLength: 64}
+  bcg_recorded: {type: boolean}
+  opv_dose_count: {type: integer, minimum: 0, maximum: 3}
+  penta_dose_count: {type: integer, minimum: 0, maximum: 3}
+  measles_recorded: {type: boolean}
+  yellow_fever_recorded: {type: boolean}
+```
+
+A missing immunization reading now fails the fact contract.
+Evidence does not convert absence into a negative answer.
+
+## Author the multi-concept question
+
+Create `questions/immunization-summary.yaml`:
+
+```yaml
+id: immunization-summary
+question: Which immunizations are recorded for this child?
+purpose: care-continuity
+subject:
+  role: child
+  selector: tracked_entity_id
+source:
+  id: child-tracker
+  facts:
+    - record_reference
+    - bcg_recorded
+    - opv_dose_count
+    - penta_dose_count
+    - measles_recorded
+    - yellow_fever_recorded
+answers:
+  - concept: bcg_recorded_as_administered
+    type: boolean
+  - concept: opv_dose_count_recorded
+    type: bounded-integer
+    minimum: 0
+    maximum: 3
+  - concept: penta_dose_count_recorded
+    type: bounded-integer
+    minimum: 0
+    maximum: 3
+  - concept: measles_recorded_as_administered
+    type: boolean
+  - concept: yellow_fever_recorded_as_administered
+    type: boolean
+derivation: derivations/immunization-summary.rhai
+disclosure:
+  allow:
+    - bcg_recorded_as_administered
+    - opv_dose_count_recorded
+    - penta_dose_count_recorded
+    - measles_recorded_as_administered
+    - yellow_fever_recorded_as_administered
+```
+
+The `answers` list declares the exact concepts and their forms.
+The `disclosure.allow` list must match those concepts in order.
+Adding another answer or changing an integer bound is a reviewed project change.
+
+Create `derivations/immunization-summary.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    if facts["record_reference"] !=
+       selectors["child"]["values"]["tracked_entity_id"] {
+        throw("derivation_input_error");
+    }
+    #{
+        bcg_recorded_as_administered: facts["bcg_recorded"],
+        opv_dose_count_recorded: facts["opv_dose_count"],
+        penta_dose_count_recorded: facts["penta_dose_count"],
+        measles_recorded_as_administered: facts["measles_recorded"],
+        yellow_fever_recorded_as_administered: facts["yellow_fever_recorded"]
+    }
+}
+```
+
+The first comparison prevents a response for another tracked entity from being evaluated.
+The returned map must contain exactly the aliases declared under `answers`.
+Evidence validates every value against its declared form before signing.
+
+## Start the project
+
+Compile the editable source and question into one immutable local generation, then start Registry
+Mint and Evidence:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Compiled 1 source and 1 question
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+This command validates the source schema, collection bounds, extractor, fact schema, question,
+answer forms, derivation, disclosure list, and secret bindings before either service becomes
+ready.
+Local assurance keeps the project editable and does not require production fixtures.
+
+## Request the real assertion
+
+Prepare a closed request and its independent verification expectations from the owner-only
+subject file:
+
+```sh
+evidencectl request prepare immunization-summary \
+  --purpose care-continuity \
+  --subjects ../.local/child.yaml \
+  --name immunization-summary
+```
+
+Send that request across the Evidence HTTP boundary:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/immunization-summary/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/immunization-summary/request.json \
+  --output immunization-summary.jws.json
+```
+
+The caller contacts Evidence.
+Evidence authenticates and authorizes the caller, performs one bounded authenticated DHIS2 read,
+derives the five concepts, audits the disclosure, and returns a signed flattened JSON Web
+Signature (JWS).
+
+## Verify before reading
+
+Verify the response against the retained request and trust expectations:
+
+```sh
+evidencectl verify immunization-summary.jws.json \
+  --context .evidence/requests/immunization-summary/verification.json \
+  --output immunization-summary.verified.json
+```
+
+```text
+VERIFIED
+```
+
+Inspect the verified payload:
+
+```sh
+python3 -m json.tool immunization-summary.verified.json
+```
+
+The selected demo record determines the boolean and dose-count values.
+The supported values have this shape:
+
+```json
+[
+  {
+    "providesValueFor": "urn:registrystack:evidence:local:concept:immunization-summary:bcg_recorded_as_administered",
+    "value": false
+  },
+  {
+    "providesValueFor": "urn:registrystack:evidence:local:concept:immunization-summary:opv_dose_count_recorded",
+    "value": 1
+  },
+  {
+    "providesValueFor": "urn:registrystack:evidence:local:concept:immunization-summary:penta_dose_count_recorded",
+    "value": 1
+  },
+  {
+    "providesValueFor": "urn:registrystack:evidence:local:concept:immunization-summary:measles_recorded_as_administered",
+    "value": true
+  },
+  {
+    "providesValueFor": "urn:registrystack:evidence:local:concept:immunization-summary:yellow_fever_recorded_as_administered",
+    "value": true
+  }
+]
+```
+
+The verified assertion contains no tracked entity identifier, event identifier, event date,
+programme enrollment, unrelated health reading, or source credential.
+
+## Inspect the audit and clean up
+
+Stop the local services:
+
+```sh
+evidencectl dev stop
+```
+
+Inspect the last operation:
+
+```sh
+evidencectl audit show --last-operation
+```
+
+The audit records the authorized access and the five disclosed concept identifiers.
+It does not record their values or the DHIS2 response.
+
+Delete `.local/dhis2-response.json` and `.local/dhis2.curl` if they were created only for this
+tutorial.
+Keep the project editable while evaluating the integration.
+Before deployment, add project-specific fixtures, replace the demo account with a least-privilege
+service account, review the source acquisition posture, and promote the governed bundle.
+
+## Next
+
+- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Prove and promote an Evidence project](../prove-an-evidence-project/)
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

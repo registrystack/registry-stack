@@ -16,19 +16,16 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 An application must not trust an Evidence payload because it arrived over HTTPS or because it can
-be decoded. It acts only after signature, issuer, provider, purpose, audience, request nonce,
-subject binding, configuration revision, value shape, and time checks all pass.
-
-This tutorial reuses the authorized response from the safe-refusal tutorial and shows the three
-independent inputs a consumer retains.
+be decoded. This tutorial reuses your first assertion to show how independently retained trust and
+request expectations support later offline review.
 
 <QuickstartMeta
   outcome="An Evidence response re-verified offline at the recorded decision time."
   time="About 10 minutes"
   level="Local verification with synthetic data"
   prerequisites={[
-    'The adult-status project after completing the safe-refusal tutorial',
-    'The authorized-response.jws.json and retained refusal-check context',
+    'The completed first Evidence assertion tutorial',
+    'The retained assertion.jws.json, verified.json, and first-assertion request artifacts',
     'Python 3 and the evidence binary',
   ]}
 />
@@ -42,7 +39,8 @@ cd adult-status
 ```
 
 The prior preparation retained trust and expectations before the response existed. Split that
-local tutorial context into the same two inputs a production consumer governs independently:
+local tutorial context into the same two verification inputs a production consumer governs
+independently:
 
 ```sh
 umask 077
@@ -51,7 +49,7 @@ import json
 from pathlib import Path
 
 context = json.loads(
-    Path(".evidence/requests/refusal-check/verification.json").read_text()
+    Path(".evidence/requests/first-assertion/verification.json").read_text()
 )
 Path("trusted-issuer-keys.json").write_text(
     json.dumps(context["trustedJwks"], indent=2) + "\n"
@@ -64,7 +62,7 @@ PY
 
 You now have:
 
-- `authorized-response.jws.json`, the exact untrusted response bytes you stored;
+- `assertion.jws.json`, the exact untrusted response bytes you stored;
 - `trusted-issuer-keys.json`, the public keys your relying service trusts;
 - `verification-policy.json`, expectations retained from your own request and governance.
 
@@ -79,9 +77,9 @@ Use the time from the already verified transaction record as the historical deci
 
 ```sh
 verified_at="$(python3 -c \
-  'import json; print(json.load(open("authorized-response.verified.json"))["issuedAt"])')"
+  'import json; print(json.load(open("verified.json"))["issuedAt"])')"
 evidence verify \
-  --jws authorized-response.jws.json \
+  --jws assertion.jws.json \
   --jwks trusted-issuer-keys.json \
   --policy verification-policy.json \
   --at "$verified_at"
@@ -126,14 +124,21 @@ decision by accident.
 Retain enough to repeat the decision without asking the provider to recreate it:
 
 - the exact signed response bytes and their response format;
+- the original request or application transaction record that maps the internal person or case to
+  the request;
 - the request nonce and expected subjects, concepts, purpose, audience, provider, issuer, and
   configuration revision;
 - the trusted JWKS revision used at the decision;
 - the verification instant and maximum accepted lifetime;
 - the resulting verified payload or a governed digest, according to your data-retention policy.
 
-This does not require retaining the source record. The opaque subject binding is meaningful only
-inside the audience and purpose for which the provider produced it.
+This does not require retaining the source record. The application transaction record says that
+the request concerned `person-123`; the verification policy holds the expected opaque binding and
+nonce; and successful verification proves the signed response matches both. The assertion alone
+cannot reveal `person-123`.
+
+The opaque binding is meaningful only inside the audience and purpose for which the provider
+produced it. The same subject produces an unrelated binding for another audience or purpose.
 
 ## Next
 

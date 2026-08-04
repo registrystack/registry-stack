@@ -57,8 +57,9 @@ and start the same source again:
 python3 registry.py
 ```
 
-Leave the registry running. The source still returns the synthetic person's identifier, name, and
-date of birth. Evidence will use it to answer both questions.
+Leave the registry running. The source still returns each synthetic person's identifier, name, and
+date of birth. This tutorial will use the child record, `person-456`, to exercise a different
+registry lookup from the first tutorial.
 
 ## Add the age-bracket question
 
@@ -145,7 +146,7 @@ Prepare a request for the updated question:
 ```sh
 evidencectl request prepare age-bracket \
   --purpose service-path-selection \
-  --subject person_id=person-123 \
+  --subject person_id=person-456 \
   --name age-bracket
 ```
 
@@ -185,11 +186,11 @@ The relevant supported value has this shape:
 ```json
 {
   "providesValueFor": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-  "value": "25-to-64"
+  "value": "under-18"
 }
 ```
 
-The source value `2000-01-01` is currently in the `25-to-64` category. The verified assertion
+The source value `2012-05-20` is currently in the `under-18` category. The verified assertion
 does not include the date of birth, exact age, name, or `person_id`.
 
 Minimum disclosure is relative to the authorized purpose. A boolean was enough for the first
@@ -217,10 +218,17 @@ DISCLOSURE RELEASED age_bracket
 
 The audit names the disclosed concept, not the category value or source fact.
 
+Remove the stopped generated runtime while preserving the editable project and request artifacts:
+
+```sh
+evidencectl dev clean
+```
+
 Return to the registry terminal and press `Ctrl+C`.
 
 ## Next
 
 - [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
 - [Configure Evidence](../../configure/evidence/)
 - [Review the Evidence security model](../../security/evidence/)

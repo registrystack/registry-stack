@@ -50,6 +50,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	return-a-governed-value
+	assert-a-role-bound-relationship
 	refuse-unsafe-evidence-requests
 	verify-an-assertion-as-a-consumer
 )
@@ -62,7 +63,7 @@ load_spec() {
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=12
+		SPEC_FENCES=14
 		SPEC_STEPS=(
 			"run:2"
 			"save:Start a small registry|python|1|registry.py"
@@ -71,7 +72,7 @@ load_spec() {
 			"run:4-5"
 			"save:Create the Evidence project|yaml|1|questions/adult-status.yaml"
 			"save:Create the Evidence project|rhai|1|derivations/adult-status.rhai"
-			"run:6-12"
+			"run:6-13"
 		)
 		SPEC_LITERALS=(
 			"releases/latest/download/evidencectl-install.sh | bash"
@@ -80,26 +81,28 @@ load_spec() {
 			"--config .evidence/requests/first-assertion/authorization.curl"
 			"evidencectl verify assertion.jws.json"
 			"evidencectl audit show --last-operation"
+			"evidencectl dev clean"
 		)
 		SPEC_OUTPUTS=(
-			"Created an incomplete OpenAPI authoring project in adult-status"
+			"Created an editable OpenAPI authoring project in adult-status"
 			"Evidence ready at http://127.0.0.1:8080"
 			"Prepared request: .evidence/requests/first-assertion/request.json"
 			"VERIFIED"
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED adult-status age-check requester="
 			"DISCLOSURE RELEASED is_adult"
+			"Removed stopped local Evidence state"
 		)
 		;;
 	return-a-governed-value)
-		SPEC_FENCES=9
+		SPEC_FENCES=10
 		SPEC_STEPS=(
 			"background:1"
 			"wait-http:http://127.0.0.1:8000/openapi.json"
 			"run:2"
 			"save:Add the age-bracket question|yaml|1|questions/age-bracket.yaml"
 			"save:Add the age-bracket question|rhai|1|derivations/age-bracket.rhai"
-			"run:3-9"
+			"run:3-10"
 		)
 		SPEC_LITERALS=(
 			"type: controlled-category"
@@ -108,6 +111,7 @@ load_spec() {
 			"--config .evidence/requests/age-bracket/authorization.curl"
 			"evidencectl verify age-bracket.jws.json"
 			"evidencectl audit show --last-operation"
+			"evidencectl dev clean"
 		)
 		SPEC_OUTPUTS=(
 			"Evidence ready at http://127.0.0.1:8080"
@@ -116,6 +120,38 @@ load_spec() {
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED age-bracket service-path-selection requester="
 			"DISCLOSURE RELEASED age_bracket"
+			"Removed stopped local Evidence state"
+		)
+		;;
+	assert-a-role-bound-relationship)
+		SPEC_FENCES=9
+		SPEC_STEPS=(
+			"run:1"
+			"save:Start a relationship registry|python|1|registry.py"
+			"background:2"
+			"wait-http:http://127.0.0.1:8002/openapi.json"
+			"run:3"
+			"save:Create the Evidence project|yaml|1|questions/parent-relationship.yaml"
+			"save:Create the Evidence project|rhai|1|derivations/parent-relationship.rhai"
+			"run:4-9"
+		)
+		SPEC_LITERALS=(
+			"subjects:"
+			"--subject child:child_id=child-123"
+			"--subject candidate-parent:candidate_id=parent-456"
+			"--config .evidence/requests/parent-relationship/authorization.curl"
+			"evidencectl verify parent-relationship.jws.json"
+			"evidencectl dev clean"
+		)
+		SPEC_OUTPUTS=(
+			"Created an editable OpenAPI authoring project in parent-relationship"
+			"Evidence ready at http://127.0.0.1:8080"
+			"Prepared request: .evidence/requests/parent-relationship/request.json"
+			"VERIFIED"
+			"Local Evidence stopped"
+			"ACCESS AUTHORIZED parent-relationship relationship-check requester="
+			"DISCLOSURE RELEASED relationship_confirmed"
+			"Removed stopped local Evidence state"
 		)
 		;;
 	refuse-unsafe-evidence-requests)
@@ -148,7 +184,8 @@ load_spec() {
 		SPEC_LITERALS=(
 			'context["trustedJwks"]'
 			'context["verificationPolicy"]'
-			"--jws authorized-response.jws.json"
+			".evidence/requests/first-assertion/verification.json"
+			"--jws assertion.jws.json"
 			"--jwks trusted-issuer-keys.json"
 			"--policy verification-policy.json"
 			'--at "$verified_at"'
@@ -156,7 +193,7 @@ load_spec() {
 		SPEC_OUTPUTS=(
 			"authentic: yes"
 			"currently-valid: yes"
-			'"value": "25-to-64"'
+			'"value": true'
 		)
 		;;
 	*)

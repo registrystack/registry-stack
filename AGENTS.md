@@ -83,6 +83,11 @@ tests. Public demo checks are opt-in, ignored, read-only local tests after the
 mock suite passes. Credentials, tokens, live responses, demo-subject
 identifiers, and human login or two-factor details must not be committed,
 logged, placed in snapshots, or passed on command lines.
+The provider-published shared credentials for the public DHIS2 demo at
+`https://play.im.dhis2.org/stable-2-43-1/` are the sole exception: public
+tutorials may state them and place them in ignored, owner-only local files.
+The exception does not cover tokens, live responses, demo-subject identifiers,
+other credentials, logs, snapshots, or command-line arguments.
 
 DHIS2 and OpenCRVS names and behavior are test-only. Evidence production code,
 dependencies, Cargo features, public configuration schemas, routes, and CLI
