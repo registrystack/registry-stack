@@ -1212,11 +1212,21 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
 #[tokio::test]
 async fn local_runtime_without_fixture_references_keeps_the_real_security_path() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let local_issuer = prepared.server.uri();
+    let auth_private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
+    Mock::given(method("GET"))
+        .and(path("/.well-known/jwks.json"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"keys": [auth_private.public()]})),
+        )
+        .expect(1)
+        .mount(&prepared.server)
+        .await;
     make_writable(&prepared.bundle_root);
     let configuration_path = prepared.bundle_root.join("evidence.yaml");
     let strict =
         fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
-    let local = strict
+    let mut local = strict
         .replace(
             "assuranceProfile: evidence-grade",
             "assuranceProfile: local",
@@ -1225,6 +1235,18 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
         .filter(|line| !line.trim_start().starts_with("fixtures:"))
         .collect::<Vec<_>>()
         .join("\n");
+    replace_exact(
+        &mut local,
+        "issuer: https://identity.invalid",
+        &format!("issuer: {local_issuer}"),
+        1,
+    );
+    replace_exact(
+        &mut local,
+        "jwksUri: https://identity.invalid/.well-known/jwks.json",
+        &format!("jwksUri: {local_issuer}/.well-known/jwks.json"),
+        1,
+    );
     fs::write(&configuration_path, local).expect("local configuration is written");
     let fixture_directory = prepared.bundle_root.join("fixtures");
     for entry in fs::read_dir(&fixture_directory).expect("fixture directory reads") {
@@ -1234,9 +1256,9 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     make_read_only(&prepared.bundle_root);
 
     let runtime = Arc::new(
-        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+        EvidenceRuntime::initialize(&prepared.runtime_path)
             .await
-            .expect("local runtime initializes without fixture references"),
+            .expect("local runtime initializes without an authenticator override"),
     );
     assert_eq!(
         runtime.bundle().config.assurance_profile,
@@ -1245,7 +1267,7 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert!(runtime.bundle().fixtures.is_empty());
 
     let http = TestServer::new(build_app(Arc::clone(&runtime)));
-    let token = access_token(None);
+    let token = access_token_for_issuer(&local_issuer, "requester-principal-canary", None);
     let definitions_response = http
         .get("/v1/evidence-definitions")
         .add_header("authorization", format!("Bearer {token}"))
@@ -4066,9 +4088,13 @@ fn access_token(extra: Option<Value>) -> String {
 }
 
 fn access_token_for(principal: &str, extra: Option<Value>) -> String {
+    access_token_for_issuer(TOKEN_ISSUER, principal, extra)
+}
+
+fn access_token_for_issuer(issuer: &str, principal: &str, extra: Option<Value>) -> String {
     let now = Utc::now().timestamp();
     let mut claims = json!({
-        "iss": TOKEN_ISSUER,
+        "iss": issuer,
         "aud": TOKEN_AUDIENCE,
         "sub": principal,
         "iat": now - 1,

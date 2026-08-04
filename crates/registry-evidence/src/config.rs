@@ -1004,6 +1004,12 @@ impl AuthenticationConfig {
         }
         Ok(())
     }
+
+    pub(crate) fn uses_local_mint_http(&self, assurance_profile: AssuranceProfile) -> bool {
+        assurance_profile == AssuranceProfile::Local
+            && validate_local_mint_origin(&self.issuer).is_ok()
+            && self.jwks_uri == format!("{}{}", self.issuer, LOCAL_MINT_JWKS_PATH)
+    }
 }
 
 const LOCAL_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";

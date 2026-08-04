@@ -386,8 +386,12 @@ impl EvidenceRuntime {
             kernel,
             runtime_config,
             runtime_revision,
-            authenticator: authenticator_override
-                .unwrap_or_else(|| Authenticator::from_config(&bundle.config.authentication)),
+            authenticator: authenticator_override.unwrap_or_else(|| {
+                Authenticator::from_config(
+                    &bundle.config.authentication,
+                    bundle.config.assurance_profile,
+                )
+            }),
             sources,
             audit: Arc::new(audit),
             signer: material.signer,

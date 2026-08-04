@@ -4,6 +4,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
       - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_the_exact_loopback_mint_identity}
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_exact_local_mint}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_without_fixture_references_keeps_the_real_security_path}

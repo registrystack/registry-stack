@@ -14,7 +14,9 @@ use registry_platform_oidc::{
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::config::{AccessTokenAlgorithm, AccessTokenType, AuthenticationConfig};
+use crate::config::{
+    AccessTokenAlgorithm, AccessTokenType, AssuranceProfile, AuthenticationConfig,
+};
 
 const MAX_TOKEN_BYTES: usize = 128 * 1024;
 const MAX_HEADER_BYTES: usize = 8 * 1024;
@@ -214,7 +216,7 @@ const CONFIRMATION_CLAIM: &str = "cnf";
 
 impl Authenticator {
     /// Build the one strict resource-server profile from the loaded bundle.
-    pub fn from_config(config: &AuthenticationConfig) -> Self {
+    pub fn from_config(config: &AuthenticationConfig, assurance_profile: AssuranceProfile) -> Self {
         let algorithms = config
             .algorithms
             .iter()
@@ -241,13 +243,7 @@ impl Authenticator {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy {
-                allowed_schemes: vec!["https".to_owned()],
-                allow_localhost: true,
-                allow_http_private_network: false,
-                deny_private_ranges: false,
-                deny_cloud_metadata: true,
-            },
+            jwks_fetch_policy(config, assurance_profile),
         ));
         let verifier = Arc::new(TokenVerifier::new(verifier_config, fetcher));
         let claims = AuthenticationClaimsConfig {
@@ -478,6 +474,28 @@ impl Authenticator {
     }
 }
 
+fn jwks_fetch_policy(
+    config: &AuthenticationConfig,
+    assurance_profile: AssuranceProfile,
+) -> FetchUrlPolicy {
+    if config.uses_local_mint_http(assurance_profile) {
+        return FetchUrlPolicy {
+            allowed_schemes: vec!["http".to_owned()],
+            allow_localhost: true,
+            allow_http_private_network: false,
+            deny_private_ranges: true,
+            deny_cloud_metadata: true,
+        };
+    }
+    FetchUrlPolicy {
+        allowed_schemes: vec!["https".to_owned()],
+        allow_localhost: true,
+        allow_http_private_network: false,
+        deny_private_ranges: false,
+        deny_cloud_metadata: true,
+    }
+}
+
 /// Whether a verification failure was this deployment's key source rather than
 /// the caller's token.
 ///
@@ -657,6 +675,63 @@ fn valid_claim_path_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authentication_config() -> AuthenticationConfig {
+        crate::config::EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("acceptance configuration parses")
+        .authentication
+    }
+
+    #[test]
+    fn jwks_fetch_policy_opens_http_only_for_exact_local_mint() {
+        let mut exact = authentication_config();
+        exact.issuer = "http://127.0.0.1:8081".to_owned();
+        exact.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        let local = jwks_fetch_policy(&exact, AssuranceProfile::Local);
+        assert_eq!(local.allowed_schemes, ["http"]);
+        assert!(local.allow_localhost);
+        assert!(local.deny_private_ranges);
+
+        for (profile, issuer, jwks_uri) in [
+            (
+                AssuranceProfile::Production,
+                "http://127.0.0.1:8081",
+                "http://127.0.0.1:8081/.well-known/jwks.json",
+            ),
+            (
+                AssuranceProfile::EvidenceGrade,
+                "http://127.0.0.1:8081",
+                "http://127.0.0.1:8081/.well-known/jwks.json",
+            ),
+            (
+                AssuranceProfile::Local,
+                "http://localhost:8081",
+                "http://localhost:8081/.well-known/jwks.json",
+            ),
+            (
+                AssuranceProfile::Local,
+                "http://127.0.0.2:8081",
+                "http://127.0.0.2:8081/.well-known/jwks.json",
+            ),
+            (
+                AssuranceProfile::Local,
+                "http://127.0.0.1:8081",
+                "http://127.0.0.1:8082/.well-known/jwks.json",
+            ),
+        ] {
+            let mut candidate = authentication_config();
+            candidate.issuer = issuer.to_owned();
+            candidate.jwks_uri = jwks_uri.to_owned();
+            let policy = jwks_fetch_policy(&candidate, profile);
+            assert_eq!(
+                policy.allowed_schemes,
+                ["https"],
+                "{profile:?} opened HTTP for {jwks_uri}"
+            );
+        }
+    }
 
     fn segment(input: &str) -> String {
         URL_SAFE_NO_PAD.encode(input)
