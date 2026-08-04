@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod audit_view;
 mod authoring;
 mod dev;
 mod doctor;
@@ -53,6 +54,9 @@ enum Command {
     Request(request::RequestCommand),
     /// Verify one retained Evidence response offline.
     Verify(verify::VerifyArgs),
+    /// Inspect stopped local audit history.
+    #[command(subcommand)]
+    Audit(audit_view::AuditCommand),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
 }
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
         Command::Dev(args) => dev::run(args),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
+        Command::Audit(command) => audit_view::run(command),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {

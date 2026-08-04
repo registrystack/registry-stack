@@ -10,8 +10,8 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 8] = [
-    "keygen", "jwks", "new", "fixtures", "source", "dev", "request", "verify",
+const TOP_LEVEL_COMMANDS: [&str; 9] = [
+    "keygen", "jwks", "new", "fixtures", "source", "dev", "request", "verify", "audit",
 ];
 
 #[test]
