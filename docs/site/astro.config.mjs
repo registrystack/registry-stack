@@ -308,6 +308,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'Return an age bracket', slug: 'tutorials/return-a-governed-value' },
+            { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
             { label: 'Configure Evidence', slug: 'configure/evidence' },
             { label: 'Configure Registry Mint', slug: 'configure/mint' },
             { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },

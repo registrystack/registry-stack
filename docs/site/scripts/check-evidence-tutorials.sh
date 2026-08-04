@@ -47,7 +47,11 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # Registered tutorials
 # ---------------------------------------------------------------------------
 
-EVIDENCE_TUTORIALS=(first-evidence-assertion return-a-governed-value)
+EVIDENCE_TUTORIALS=(
+	first-evidence-assertion
+	return-a-governed-value
+	refuse-unsafe-evidence-requests
+)
 
 load_spec() {
 	SPEC_FENCES=0
@@ -111,6 +115,30 @@ load_spec() {
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED age-bracket service-path-selection requester="
 			"DISCLOSURE RELEASED age_bracket"
+		)
+		;;
+	refuse-unsafe-evidence-requests)
+		SPEC_FENCES=11
+		SPEC_STEPS=(
+			"background:1"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:2-11"
+		)
+		SPEC_LITERALS=(
+			'request["purpose"] = "age-check"'
+			"--data-binary @unauthorized-request.json"
+			"--write-out 'HTTP %{http_code}\\n'"
+			"--data-binary @.evidence/requests/refusal-check/request.json"
+			"evidencectl verify tampered-response.jws.json"
+			"test ! -e tampered-response.verified.json"
+		)
+		SPEC_OUTPUTS=(
+			"Evidence ready at http://127.0.0.1:8080"
+			"Prepared request: .evidence/requests/refusal-check/request.json"
+			"HTTP 403"
+			"VERIFIED"
+			"TAMPER REFUSED"
+			"Local Evidence stopped"
 		)
 		;;
 	*)
@@ -424,6 +452,9 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		reader_dir="$WORK_ROOT/reader/evidence-start"
 		;;
 	return-a-governed-value)
+		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
+		;;
+	refuse-unsafe-evidence-requests)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
 	*) reader_dir="$WORK_ROOT/reader/$slug" ;;
