@@ -84,10 +84,17 @@ mock suite passes. Credentials, tokens, live responses, demo-subject
 identifiers, and human login or two-factor details must not be committed,
 logged, placed in snapshots, or passed on command lines.
 The provider-published shared credentials for the public DHIS2 demo at
-`https://play.im.dhis2.org/stable-2-43-1/` are the sole exception: public
-tutorials may state them and place them in ignored, owner-only local files.
-The exception does not cover tokens, live responses, demo-subject identifiers,
-other credentials, logs, snapshots, or command-line arguments.
+`https://play.im.dhis2.org/stable-2-43-1/` are a documentation-only exception:
+public tutorials may state them and place them in ignored, owner-only local
+files.
+The provider-published human login credentials and synthetic Josh Hoeger record
+identifiers for the public OpenCRVS Farajaland integration demo are a second
+documentation-only exception. Public tutorials may state them so readers can
+inspect the same synthetic record, use its stated selectors in tutorial
+commands, and create their own Record Search client.
+The exceptions do not cover OAuth client credentials created by a reader,
+tokens, live responses, real identifiers, other demo-subject identifiers in
+tracked files, logs, or snapshots.
 
 DHIS2 and OpenCRVS names and behavior are test-only. Evidence production code,
 dependencies, Cargo features, public configuration schemas, routes, and CLI
