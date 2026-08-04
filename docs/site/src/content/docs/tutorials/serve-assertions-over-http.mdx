@@ -15,8 +15,8 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-The first tutorial ended offline: fixture cases replayed the whole evaluation pipeline with no
-source, no credential, and no network. Here the same kind of project becomes a service. You start
+An offline fixture run replays the whole evaluation pipeline with no source, credential, or
+network. Here the same kind of project becomes a service. You start
 Evidence, start the Registry Mint deployment that issues the access tokens it verifies, present a
 real token over HTTP, and read the signed assertion that comes back.
 
@@ -24,15 +24,12 @@ real token over HTTP, and read the signed assertion that comes back.
   outcome="A running Evidence deployment that returns a signed assertion over HTTP to a caller holding a real Mint-issued access token."
   time="About 30 minutes"
   level="Local development against a stand-in source, behind a development certificate"
-  prerequisites={['The Evidence toolset on PATH (evidence, evidencectl and mint)', 'Comfort with the scaffolded project layout from the first tutorial', 'python3, openssl and curl']}
+  prerequisites={['The Evidence toolset on PATH (evidence, evidencectl and mint)', 'Familiarity with the scaffolded Evidence project layout', 'python3, openssl and curl']}
 />
 
 Everything here is synthetic: a stand-in source with one invented record, a certificate authority
 that exists for half an hour on your machine, and the scaffold's abstract acceptance definition. Do
 not point this project at production endpoints or real data.
-
-[Get a first Evidence assertion](../first-evidence-assertion/) installs the toolset and explains
-what the scaffold creates; this tutorial assumes both.
 
 ## What has to be running
 
@@ -62,7 +59,7 @@ evidencectl new serve-evidence --with-mint
 cd serve-evidence
 ```
 
-`--with-mint` adds two directories to the layout the first tutorial built. `mint/` holds a Registry
+`--with-mint` adds two directories to the base project layout. `mint/` holds a Registry
 Mint configuration whose issuer, audience, algorithm, and claim names were written from the same
 source as the matching values in `bundle/evidence.yaml`, so the two documents agree by
 construction. `caller/` holds the key material of the client that will ask for a token. Splitting
@@ -106,7 +103,7 @@ The Evidence signing key signs assertions. The Mint signing key signs access tok
 signing key signs the short client assertion the caller presents to Mint to prove which registered
 client it is. Every private file is owner-only, and no private byte is ever printed.
 
-`keygen token` is the odd one out, and the first tutorial did not need it. It generates the bearer
+`keygen token` is the odd one out, and the base project does not need it. It generates the bearer
 token this deployment presents to its source. It is not `keygen secret`, because that produces raw
 HMAC key material whose bytes an HTTP header value rejects. Against a real institution you do not
 generate this at all: the institution issues it, and you write it to the same path with mode 0600.

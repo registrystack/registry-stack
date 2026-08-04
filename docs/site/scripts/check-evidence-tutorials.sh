@@ -48,7 +48,6 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 # ---------------------------------------------------------------------------
 
 EVIDENCE_TUTORIALS=(
-	first-evidence-assertion
 	author-an-acceptance-definition
 	connect-an-institution-source
 	serve-assertions-over-http
@@ -62,31 +61,10 @@ load_spec() {
 	SPEC_OUTPUTS=()
 
 	case "$1" in
-	first-evidence-assertion)
-		SPEC_FENCES=8
-		# Fences 1 and 2 download a published release; this gate substitutes the
-		# binaries under test, so the on-machine journey starts at fence 3. The
-		# released-binary form of that download arrives with plan item F3.
-		SPEC_STEPS=('run:3-8')
-		# shellcheck disable=SC2016  # the first entry is literal tutorial text
-		SPEC_LITERALS=(
-			'evidencectl-${tag}-install.sh'
-			'evidencectl new hello-evidence'
-			'evidencectl keygen signing --out-dir secrets --kid scaffold-signing-key-1'
-			'chmod -R a-w bundle && chmod 444 runtime.yaml'
-			'evidencectl fixtures run --project .'
-			'2 passed, 0 failed (12 cases evaluated)'
-		)
-		SPEC_OUTPUTS=(
-			'PASS: check'
-			'PASS: fixtures/cases.yaml (12 cases)'
-			'2 passed, 0 failed (12 cases evaluated)'
-		)
-		;;
 	author-an-acceptance-definition)
 		SPEC_FENCES=13
-		# The reader already has the toolset from the first tutorial, so the
-		# whole page is executable. Each edit applies a documented before/after
+		# The reader already has the toolset, so the whole page is executable.
+		# Each edit applies a documented before/after
 		# yaml pair under one heading: occurrence 1 is found, 2 replaces it.
 		SPEC_STEPS=(
 			'run:1-3'

@@ -25,7 +25,7 @@ offline against sanitized fixtures. No request leaves your machine at any point.
   outcome="A scaffolded Evidence project whose placeholder source has been replaced by a reviewed adapter for an institution API, proven offline against twelve sanitized fixture cases."
   time="About 30 minutes"
   level="Local development with synthetic fixtures"
-  prerequisites={['The Evidence toolset on PATH (evidence and evidencectl)', 'Comfort with the scaffolded project layout from the first tutorial', 'An OpenAPI document for the API you intend to read']}
+  prerequisites={['The Evidence toolset on PATH (evidence and evidencectl)', 'Familiarity with the scaffolded Evidence project layout', 'An OpenAPI document for the API you intend to read']}
 />
 
 Everything in this tutorial is synthetic: a fictional institution, a fictional API on a hostname
@@ -83,9 +83,7 @@ wrote secrets/audit-hmac-key
 wrote secrets/subject-binding-hmac-key
 ```
 
-[Get a first Evidence assertion](../first-evidence-assertion/) explains what the scaffold created
-and what each secret is for. Leave the bundle writable for now: the freeze comes at the end, once
-the adapter is finished.
+Leave the bundle writable for now: the freeze comes at the end, once the adapter is finished.
 
 ## Save the institution's API document
 

@@ -1,6 +1,6 @@
 ---
 title: Evidence quickstart
-description: What Evidence answers, the six tutorials that run from a first offline project to production signing, and where the track stops.
+description: What Evidence answers, the published advanced tutorials, and where the current track stops.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,10 +16,12 @@ without releasing the record the answer came from. A relying service asks
 whether a person meets a condition and receives a signed assertion carrying
 the answer, not the row that settled it.
 
-This page maps the six tutorials that take a deployment from nothing to
-production signing. The page runs nothing itself: every command lives in one
-of the six. The five that run offline or locally are executed on every
-documentation change, so their commands and their printed output stay true.
+This page maps the five published advanced tutorials that take an existing
+deployment project through authoring, source integration, serving,
+verification, and production signing. The page runs nothing itself: every
+command lives in one of the five. The four that run offline or locally are
+executed on every documentation change, so their commands and printed output
+stay true.
 The production signing tutorial is reviewed rather than executed, because its
 commands stand in for real key material and secret paths that no gate may
 hold.
@@ -30,8 +32,8 @@ Adult status, residence region, professional licence status, and legal-parent
 relationship are coequal acceptance definitions. None is a built-in type, a
 special route, or a first phase that the others follow. Whichever one your
 institution needs, you author it the same way. The tutorials switch between
-them deliberately: the first answers adult status, the source tutorial answers
-a legal-parent relationship, and the authoring tutorial covers all four.
+them deliberately: the source tutorial answers a legal-parent relationship,
+and the authoring tutorial covers all four.
 
 An acceptance definition is a reviewed artifact, not code you ship. Evidence
 compiles the definition at startup from an immutable bundle, and refuses to
@@ -39,37 +41,36 @@ start if the definition does not compile.
 
 ## The track
 
-Six tutorials, about two and a half hours end to end. Each one leaves you
-somewhere you could stop, and each but the last links on to the next.
+Five advanced tutorials, about two hours end to end. Each one leaves you
+somewhere you could stop, and each but the last links on to the next. These
+guides assume the Evidence toolset is already installed and do not replace an
+introductory first-assertion workflow.
 
-1. [Get a first assertion](../../tutorials/first-evidence-assertion/), about 15
-   minutes including installing the toolset. Take a scaffolded deployment
-   project from nothing to passing assertion fixtures, entirely offline.
-2. [Author an acceptance definition](../../tutorials/author-an-acceptance-definition/),
+1. [Author an acceptance definition](../../tutorials/author-an-acceptance-definition/),
    about 30 minutes. Replace the scaffolded question with one you write, and
    end with two coequal definitions and 23 fixture cases passing.
-3. [Connect an institution source](../../tutorials/connect-an-institution-source/),
+2. [Connect an institution source](../../tutorials/connect-an-institution-source/),
    about 30 minutes. Swap the placeholder source for a reviewed adapter
    against a real institution API shape, proven offline against twelve
    sanitized fixture cases.
-4. [Serve assertions over HTTP](../../tutorials/serve-assertions-over-http/),
+3. [Serve assertions over HTTP](../../tutorials/serve-assertions-over-http/),
    about 30 minutes. Stop running offline: answer a caller holding a real
    access token, behind a development certificate.
-5. [Verify an assertion as a consumer](../../tutorials/verify-an-assertion-as-a-consumer/),
+4. [Verify an assertion as a consumer](../../tutorials/verify-an-assertion-as-a-consumer/),
    about 20 minutes. Change seats. Re-verify one stored response offline
    against a pinned key set, with five refusals that prove the checks are
    real.
-6. [Move to production signing](../../tutorials/move-evidence-to-production-signing/),
+5. [Move to production signing](../../tutorials/move-evidence-to-production-signing/),
    about 20 minutes. Replace scaffold key material with keys an operator will
    sign with, publish the JWKS, and rehearse the rotation.
 
-The first three stay offline against synthetic fixtures, so you learn the
+The first two stay offline against synthetic fixtures, so you learn the
 shape of a definition and a source before any network is involved. None of the
-three needs a production endpoint, a source credential, or personal data.
+two needs a production endpoint, a source credential, or personal data.
 
 ## Where the track stops
 
-Finishing all six leaves you with a deployment that signs with production key
+Finishing all five leaves you with a deployment that signs with production key
 material and a rehearsed rotation. Finishing does not give you production
 approval. Governance still establishes the provider's authority to act for the
 named legal issuer, and a valid signature proves only that the key holder
@@ -88,8 +89,8 @@ credential was issued to a holder.
 
 ## Next
 
-- [Get a first Evidence assertion](../../tutorials/first-evidence-assertion/)
-  is the tutorial to run next.
+- [Author an acceptance definition](../../tutorials/author-an-acceptance-definition/)
+  is the first published advanced tutorial.
 - [Configure Evidence](../../configure/evidence/) is the configuration
   reference behind every scaffolded project.
 - [Registry Mint reference](../../reference/mint/) covers the short-lived
