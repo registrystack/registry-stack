@@ -1674,26 +1674,27 @@ Only CRS84 is accepted. `wkt` and `wkb` parse as reserved geometry kinds but are
 
 ### Evidence verification
 
-Evidence offerings expose Registry Notary discovery metadata:
+Evidence offerings expose discovery metadata for the service that answers them:
 
 ```http
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
 ```
 
-Relay's evidence-offering routes do not verify claims or evidence.
-`registry-notary` is the verifier for those offerings. The portable metadata
-manifest declares public offerings with `access.kind: registry-notary`,
-`endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the
-Notary service that owns verification. This handoff is independent of Relay's
-native, profile-bound source consultation API.
+Relay's evidence-offering routes do not answer evidence requests. The portable
+metadata manifest declares public offerings with
+`access.kind: registry-evidence`, `endpoint_url`, `discovery_url`, and `ruleset`
+so clients can discover the Evidence deployment that owns the assertion. Runtime
+binding accepts only that access kind, so a Relay deployment cannot advertise an
+offering it cannot hand off. This handoff is independent of Relay's native,
+profile-bound source consultation API.
 
 ```yaml
 access:
   evidence_verification_scope: social_registry:evidence_verification
 ```
 
-`evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local verification endpoint.
+`evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local assertion endpoint.
 
 ## Aggregates
 
@@ -1772,7 +1773,7 @@ aggregates:
 
 Relay no longer accepts `provenance` or entity `publicschema` config. Remove those blocks, Relay signer environment variables, and probes for `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}` before upgrading.
 
-Use Registry Notary for credential issuance and verification. Relay metadata can advertise Notary evidence offerings with `access.kind: registry-notary`; see [provenance.md](provenance.md) for the migration note.
+Use Registry Evidence when a workflow needs a signed answer. Relay metadata can advertise Evidence offerings with `access.kind: registry-evidence`; see [provenance.md](provenance.md) for the migration note.
 
 ## Production checklist
 

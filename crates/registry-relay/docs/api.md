@@ -388,7 +388,7 @@ GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/individual_name_evidence
 ```
 
-Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Relay publishes discovery records only; Registry Notary executes verification. Evidence offerings carry `access.kind: registry-notary` metadata with the advertised Notary endpoint or discovery URL; clients submit claims and evidence to Registry Notary, not Relay. For the complete client handoff sequence, see [client-integration.md](client-integration.md).
+Metadata reads require the caller's `metadata` scope for the owning dataset. They do not execute a check or disclose row data. Relay publishes discovery records only; the service named by the offering answers the evidence request. Evidence offerings carry `access.kind: registry-evidence` metadata with the advertised endpoint and discovery URLs; clients request assertions from that Evidence deployment, not from Relay. For the complete client handoff sequence, see [client-integration.md](client-integration.md).
 
 The list endpoint accepts metadata-only filters:
 

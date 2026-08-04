@@ -15,13 +15,6 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
-federation:
-  node_id: did:web:education.demo.example.gov
-  issuer: https://education.demo.example.gov
-  jwks_uri: https://education.demo.example.gov/.well-known/jwks.json
-  federation_api: https://education.demo.example.gov/federation
-  supported_protocol_versions:
-  - registry-notary-federation/v0.1
 evaluation_profiles:
 - id: education-student-v1
   ruleset: education-student-v1
@@ -69,10 +62,10 @@ datasets:
     lookup_keys:
     - id
     access:
-      kind: registry-notary
-      conforms_to: registry-notary-federation/v0.1
-      endpoint_url: https://education-notary.demo.example.gov
-      discovery_url: https://education-notary.demo.example.gov/.well-known/evidence-service
+      kind: registry-evidence
+      conforms_to: registry.assertion-evidence/v1
+      endpoint_url: https://education-evidence.demo.example.gov
+      discovery_url: https://education-evidence.demo.example.gov/.well-known/evidence/jwks.json
       ruleset: education-student-v1
     policy:
       purpose:

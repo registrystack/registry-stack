@@ -2236,7 +2236,6 @@
             "additionalProperties": true,
             "properties": {
               "conforms_to": {
-                "format": "uri",
                 "type": [
                   "string",
                   "null"
@@ -2261,7 +2260,7 @@
               },
               "kind": {
                 "enum": [
-                  "registry-notary"
+                  "registry-evidence"
                 ],
                 "type": "string"
               },
@@ -4548,14 +4547,14 @@
                       "evidence_offerings": [
                         {
                           "access": {
-                            "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1",
-                            "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
-                            "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
-                            "kind": "registry-notary",
+                            "conforms_to": "registry.assertion-evidence/v1",
+                            "discovery_url": "https://benefits-evidence.demo.example.gov/.well-known/evidence/jwks.json",
+                            "endpoint_url": "https://benefits-evidence.demo.example.gov",
+                            "kind": "registry-evidence",
                             "ruleset": "benefits-person-v1"
                           },
                           "dataset_id": "benefits_casework",
-                          "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
+                          "description": "Evidence assertion for submitted benefits person eligibility status and role facts.",
                           "entity": "person",
                           "evidence_type": {
                             "id": "benefits_person_record_evidence",
@@ -4664,14 +4663,14 @@
                     "summary": "Evidence offering discovery record.",
                     "value": {
                       "access": {
-                        "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1",
-                        "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
-                        "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
-                        "kind": "registry-notary",
+                        "conforms_to": "registry.assertion-evidence/v1",
+                        "discovery_url": "https://benefits-evidence.demo.example.gov/.well-known/evidence/jwks.json",
+                        "endpoint_url": "https://benefits-evidence.demo.example.gov",
+                        "kind": "registry-evidence",
                         "ruleset": "benefits-person-v1"
                       },
                       "dataset_id": "benefits_casework",
-                      "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
+                      "description": "Evidence assertion for submitted benefits person eligibility status and role facts.",
                       "entity": "person",
                       "evidence_type": {
                         "id": "benefits_person_record_evidence",
@@ -6315,7 +6314,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; certifying a purpose value is left to the layer that hands off an offering. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -6627,7 +6626,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; certifying a purpose value is left to the layer that hands off an offering. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -7151,7 +7150,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; certifying a purpose value is left to the layer that hands off an offering. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -7376,7 +7375,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; certifying a purpose value is left to the layer that hands off an offering. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",
@@ -7615,7 +7614,7 @@
             }
           },
           {
-            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; Registry Notary remains the purpose-certification layer for an offering handoff. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "description": "Purpose-of-use IRI or controlled string. When `require_purpose_header` is set on this entity, the header must be present; a missing value returns `400 auth.purpose_required`. On ordinary entity and feature routes, the value is recorded verbatim in the audit trail but is not compared to a value allowlist; certifying a purpose value is left to the layer that hands off an offering. Native `/v1/consultations/.../execute` is separate and validates `Data-Purpose` against the selected consultation profile contract. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
             "example": "https://demo.example.gov/purpose/demo-review",
             "in": "header",
             "name": "Data-Purpose",

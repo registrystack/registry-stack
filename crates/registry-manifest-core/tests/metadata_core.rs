@@ -2095,7 +2095,7 @@ datasets:
     );
 }
 
-fn federated_evaluation_manifest() -> MetadataManifest {
+fn evidence_offering_manifest() -> MetadataManifest {
     serde_yaml_ng::from_str(
         r#"
 schema_version: registry-manifest/v1
@@ -2105,13 +2105,6 @@ catalog:
   title: Federated Evaluation
   publisher:
     name: Example Registry
-federation:
-  node_id: did:web:registry.example.test
-  issuer: https://registry.example.test
-  jwks_uri: https://registry.example.test/.well-known/jwks.json
-  federation_api: https://registry.example.test/federation
-  supported_protocol_versions:
-    - registry-notary-federation/v0.1
 evaluation_profiles:
   - id: age_eligibility_profile
     ruleset: age-eligibility-v1
@@ -2129,8 +2122,8 @@ datasets:
   - id: residents
     title: Residents
     evidence_offerings:
-      - id: age_notary
-        title: Age notary
+      - id: age_evidence_offering
+        title: Age evidence service
         evidence_type: age_evidence
         issuing_authority:
           id: civil_registry
@@ -2138,10 +2131,10 @@ datasets:
         entity: resident
         lookup_keys: [national_id]
         access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://notary.example.test/evaluate
-          discovery_url: https://notary.example.test/.well-known/registry-notary
+          kind: registry-evidence
+          conforms_to: registry.assertion-evidence/v1
+          endpoint_url: https://evidence.example.test/v1/assertions
+          discovery_url: https://evidence.example.test/.well-known/evidence/jwks.json
           ruleset: age-eligibility-v1
     entities:
       - name: resident
@@ -2150,20 +2143,20 @@ datasets:
             type: string
 "#,
     )
-    .expect("federated evaluation manifest parses")
+    .expect("evidence offering manifest parses")
 }
 
 #[test]
-fn federated_evaluation_manifest_validates_and_renders_catalog_fields() {
-    let manifest = federated_evaluation_manifest();
+fn evidence_offering_manifest_validates_and_renders_catalog_fields() {
+    let manifest = evidence_offering_manifest();
 
-    validate_manifest(&manifest).expect("federated manifest validates");
-    let compiled = compile_manifest(&manifest).expect("federated manifest compiles");
+    validate_manifest(&manifest).expect("evidence offering manifest validates");
+    let compiled = compile_manifest(&manifest).expect("evidence offering manifest compiles");
     let catalog = render_catalog(&compiled);
 
-    assert_eq!(
-        catalog["federation"]["supported_protocol_versions"][0],
-        json!("registry-notary-federation/v0.1")
+    assert!(
+        catalog.get("federation").is_none(),
+        "catalog must not republish a federation block: {catalog}"
     );
     assert_eq!(
         catalog["evaluation_profiles"][0]["id"],
@@ -3321,8 +3314,8 @@ codelists: []
 }
 
 #[test]
-fn validation_rejects_registry_notary_unresolved_ruleset() {
-    let mut manifest = federated_evaluation_manifest();
+fn validation_rejects_registry_evidence_unresolved_ruleset() {
+    let mut manifest = evidence_offering_manifest();
     manifest.datasets[0].evidence_offerings[0].access.ruleset = "missing_profile".to_string();
 
     let error = validate_manifest(&manifest).expect_err("unresolved ruleset rejected");
@@ -3338,25 +3331,25 @@ fn validation_rejects_registry_notary_unresolved_ruleset() {
 }
 
 #[test]
-fn validation_rejects_registry_notary_bad_conforms_to() {
-    let mut manifest = federated_evaluation_manifest();
+fn validation_rejects_blank_registry_evidence_conforms_to() {
+    let mut manifest = evidence_offering_manifest();
     manifest.datasets[0].evidence_offerings[0]
         .access
-        .conforms_to = Some("registry_relay:evidence-server-v1".to_string());
+        .conforms_to = Some("   ".to_string());
 
-    let error = validate_manifest(&manifest).expect_err("bad protocol rejected");
+    let error = validate_manifest(&manifest).expect_err("blank conformance target rejected");
     let MetadataError::Validation { errors } = error else {
         panic!("unexpected error: {error:?}");
     };
     assert!(errors.iter().any(|error| {
         error.path == "datasets[0].evidence_offerings[0].access.conforms_to"
-            && error.message.contains("registry-notary-federation/v0.1")
+            && error.message.contains("registry-evidence access")
     }));
 }
 
 #[test]
 fn validation_rejects_duplicate_evaluation_profile_ids() {
-    let mut manifest = federated_evaluation_manifest();
+    let mut manifest = evidence_offering_manifest();
     manifest
         .evaluation_profiles
         .push(manifest.evaluation_profiles[0].clone());
@@ -3374,187 +3367,93 @@ fn validation_rejects_duplicate_evaluation_profile_ids() {
 }
 
 #[test]
-fn validation_rejects_invalid_federation_urls_and_did_web_binding() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "http://registry.example.test".to_string();
-    federation.jwks_uri = "http://registry.example.test/.well-known/jwks.json".to_string();
-    federation.federation_api = "http://registry.example.test/federation".to_string();
-    federation.node_id = "did:web:other.example.test".to_string();
+fn manifest_rejects_a_retired_federation_block() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: retired-federation
+  base_url: https://registry.example.test
+  title: Retired Federation
+  publisher:
+    name: Example Registry
+federation:
+  node_id: did:web:registry.example.test
+  issuer: https://registry.example.test
+  jwks_uri: https://registry.example.test/.well-known/jwks.json
+  federation_api: https://registry.example.test/federation
+  supported_protocol_versions:
+    - registry-notary-federation/v0.1
+"#;
 
-    let error = validate_manifest(&manifest).expect_err("bad federation rejected");
-    let MetadataError::Validation { errors } = error else {
-        panic!("unexpected error: {error:?}");
-    };
-    assert!(errors.iter().any(|error| error.path == "federation.issuer"));
-    assert!(errors
-        .iter()
-        .any(|error| error.path == "federation.jwks_uri"));
-    assert!(errors
-        .iter()
-        .any(|error| error.path == "federation.federation_api"));
-    assert!(errors.iter().any(|error| {
-        error.path == "federation.node_id"
-            && error
-                .message
-                .contains("must bind to federation issuer host")
-    }));
-}
+    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+        .expect_err("retired federation block rejected");
 
-#[test]
-fn validation_accepts_federation_endpoints_on_issuer_host() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "https://registry.example.test/issuer".to_string();
-    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://registry.example.test/federation".to_string();
-
-    validate_manifest(&manifest).expect("federation endpoints bind to issuer host");
-}
-
-#[test]
-fn validation_rejects_federation_endpoints_on_cross_hosts() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.jwks_uri = "https://keys.example.test/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://api.example.test/federation".to_string();
-
-    let error = validate_manifest(&manifest).expect_err("cross-host federation endpoints rejected");
-    let MetadataError::Validation { errors } = error else {
-        panic!("unexpected error: {error:?}");
-    };
     assert!(
-        errors.iter().any(|error| {
-            error.path == "federation.jwks_uri"
-                && error
-                    .message
-                    .contains("must bind to federation issuer host")
-        }),
-        "expected JWKS host binding error, got: {errors:?}"
-    );
-    assert!(
-        errors.iter().any(|error| {
-            error.path == "federation.federation_api"
-                && error
-                    .message
-                    .contains("must bind to federation issuer host")
-        }),
-        "expected federation API host binding error, got: {errors:?}"
+        error.to_string().contains("federation"),
+        "expected the unknown-field error to name federation, got: {error}"
     );
 }
 
 #[test]
-fn validation_rejects_did_web_port_mismatch_against_issuer() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "https://registry.example.test:9090".to_string();
-    federation.jwks_uri = "https://registry.example.test:9090/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://registry.example.test:9090/federation".to_string();
-    federation.node_id = "did:web:registry.example.test%3A8080".to_string();
+fn validation_requires_https_endpoints_for_registry_evidence_access() {
+    let mut manifest = evidence_offering_manifest();
+    let access = &mut manifest.datasets[0].evidence_offerings[0].access;
+    access.endpoint_url = Some("http://evidence.example.test/v1/assertions".to_string());
+    access.discovery_url = Some("http://evidence.example.test/.well-known/jwks.json".to_string());
 
-    let error = validate_manifest(&manifest).expect_err("port mismatch rejected");
+    let error = validate_manifest(&manifest).expect_err("insecure evidence endpoints rejected");
     let MetadataError::Validation { errors } = error else {
         panic!("unexpected error: {error:?}");
     };
     assert!(
-        errors.iter().any(|error| {
-            error.path == "federation.node_id"
-                && error
-                    .message
-                    .contains("must bind to federation issuer host")
-        }),
-        "expected DID:web port mismatch to be reported, got: {errors:?}"
+        errors
+            .iter()
+            .any(|error| error.path
+                == "datasets[0].evidence_offerings[0].access.endpoint_url"),
+        "expected an endpoint_url error, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.path
+                == "datasets[0].evidence_offerings[0].access.discovery_url"),
+        "expected a discovery_url error, got: {errors:?}"
     );
 }
 
 #[test]
-fn validation_rejects_did_web_with_port_against_default_port_issuer() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "https://registry.example.test".to_string();
-    federation.jwks_uri = "https://registry.example.test/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://registry.example.test/federation".to_string();
-    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
+fn validation_requires_declared_endpoints_for_registry_evidence_access() {
+    let mut manifest = evidence_offering_manifest();
+    let access = &mut manifest.datasets[0].evidence_offerings[0].access;
+    access.endpoint_url = None;
+    access.discovery_url = None;
+    access.conforms_to = None;
 
-    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
+    let error = validate_manifest(&manifest).expect_err("undeclared evidence access rejected");
     let MetadataError::Validation { errors } = error else {
         panic!("unexpected error: {error:?}");
     };
-    assert!(
-        errors.iter().any(|error| {
-            error.path == "federation.node_id"
-                && error
-                    .message
-                    .contains("must bind to federation issuer host")
-        }),
-        "expected DID:web port-vs-default-port asymmetry to be reported, got: {errors:?}"
-    );
-}
-
-#[test]
-fn validation_rejects_default_port_did_web_against_issuer_with_port() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "https://registry.example.test:8443".to_string();
-    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
-    federation.node_id = "did:web:registry.example.test".to_string();
-
-    let error = validate_manifest(&manifest).expect_err("asymmetric port rejected");
-    let MetadataError::Validation { errors } = error else {
-        panic!("unexpected error: {error:?}");
-    };
-    assert!(
-        errors.iter().any(|error| {
-            error.path == "federation.node_id"
-                && error
-                    .message
-                    .contains("must bind to federation issuer host")
-        }),
-        "expected DID:web default-vs-explicit-port asymmetry to be reported, got: {errors:?}"
-    );
-}
-
-#[test]
-fn validation_accepts_did_web_port_match_against_issuer() {
-    let mut manifest = federated_evaluation_manifest();
-    let federation = manifest.federation.as_mut().expect("federation");
-    federation.issuer = "https://registry.example.test:8443".to_string();
-    federation.jwks_uri = "https://registry.example.test:8443/.well-known/jwks.json".to_string();
-    federation.federation_api = "https://registry.example.test:8443/federation".to_string();
-    federation.node_id = "did:web:registry.example.test%3A8443".to_string();
-
-    validate_manifest(&manifest).expect("matching port binds");
-}
-
-#[test]
-fn validation_reports_missing_federation_block_once_across_offerings() {
-    let mut manifest = federated_evaluation_manifest();
-    manifest.federation = None;
-    let template = manifest.datasets[0].evidence_offerings[0].clone();
-    for index in 1..3 {
-        let mut copy = template.clone();
-        copy.id = format!("age_notary_{index}");
-        manifest.datasets[0].evidence_offerings.push(copy);
+    for field in ["endpoint_url", "discovery_url", "conforms_to"] {
+        let path = format!("datasets[0].evidence_offerings[0].access.{field}");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == path
+                    && error.message.contains("registry-evidence access")),
+            "expected a registry-evidence error for {field}, got: {errors:?}"
+        );
     }
+}
 
-    let error = validate_manifest(&manifest).expect_err("missing federation rejected");
-    let MetadataError::Validation { errors } = error else {
-        panic!("unexpected error: {error:?}");
-    };
-    let federation_errors = errors
-        .iter()
-        .filter(|error| {
-            error.path == "federation"
-                && error
-                    .message
-                    .contains("registry-notary access requires a top-level federation block")
-        })
-        .count();
-    assert_eq!(
-        federation_errors, 1,
-        "expected exactly one federation-missing error, got {federation_errors}: {errors:?}"
-    );
+#[test]
+fn validation_leaves_an_unrecognized_access_kind_to_the_consuming_runtime() {
+    let mut manifest = evidence_offering_manifest();
+    let access = &mut manifest.datasets[0].evidence_offerings[0].access;
+    access.kind = "registry-notary".to_string();
+    access.conforms_to = Some("https://example.test/protocols/some-other-service".to_string());
+
+    validate_manifest(&manifest)
+        .expect("the portable layer does not enumerate product access kinds");
 }
 
 #[test]

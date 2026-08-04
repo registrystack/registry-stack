@@ -15,13 +15,6 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
-federation:
-  node_id: did:web:spdci-registry-gateway.demo.example.gov
-  issuer: https://spdci-registry-gateway.demo.example.gov
-  jwks_uri: https://spdci-registry-gateway.demo.example.gov/.well-known/jwks.json
-  federation_api: https://spdci-registry-gateway.demo.example.gov/federation
-  supported_protocol_versions:
-  - registry-notary-federation/v0.1
 evaluation_profiles:
 - id: disability-status-v1
   ruleset: disability-status-v1
@@ -132,10 +125,10 @@ datasets:
     lookup_keys:
     - member_identifier
     access:
-      kind: registry-notary
-      conforms_to: registry-notary-federation/v0.1
-      endpoint_url: https://disability-notary.demo.example.gov
-      discovery_url: https://disability-notary.demo.example.gov/.well-known/evidence-service
+      kind: registry-evidence
+      conforms_to: registry.assertion-evidence/v1
+      endpoint_url: https://disability-evidence.demo.example.gov
+      discovery_url: https://disability-evidence.demo.example.gov/.well-known/evidence/jwks.json
       ruleset: disability-status-v1
     policy:
       purpose:
@@ -280,10 +273,10 @@ datasets:
     lookup_keys:
     - group_id
     access:
-      kind: registry-notary
-      conforms_to: registry-notary-federation/v0.1
-      endpoint_url: https://social-registry-notary.demo.example.gov
-      discovery_url: https://social-registry-notary.demo.example.gov/.well-known/evidence-service
+      kind: registry-evidence
+      conforms_to: registry.assertion-evidence/v1
+      endpoint_url: https://social-registry-evidence.demo.example.gov
+      discovery_url: https://social-registry-evidence.demo.example.gov/.well-known/evidence/jwks.json
       ruleset: social-group-v1
     policy:
       purpose:
@@ -397,10 +390,10 @@ datasets:
     lookup_keys:
     - national_id
     access:
-      kind: registry-notary
-      conforms_to: registry-notary-federation/v0.1
-      endpoint_url: https://farmer-notary.demo.example.gov
-      discovery_url: https://farmer-notary.demo.example.gov/.well-known/evidence-service
+      kind: registry-evidence
+      conforms_to: registry.assertion-evidence/v1
+      endpoint_url: https://farmer-evidence.demo.example.gov
+      discovery_url: https://farmer-evidence.demo.example.gov/.well-known/evidence/jwks.json
       ruleset: farmer-status-v1
     policy:
       purpose:
