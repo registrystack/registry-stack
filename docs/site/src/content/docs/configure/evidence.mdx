@@ -148,34 +148,32 @@ after output validation.
 
 ## Key material
 
-`evidencectl keygen` writes deployment key material as owner-only files and never prints private
-bytes (`crates/registry-evidencectl/src/keygen.rs`):
+Generate each secret independently and keep the private files inside the configured secret root.
+`evidencectl keygen` writes private material as owner-only files and never prints its contents
+(`crates/registry-evidencectl/src/keygen.rs`):
 
 ```sh
 evidencectl keygen signing --out-dir "<secrets-dir>" --kid "<active-signing-key-id>"
 evidencectl keygen secret --out "<secrets-dir>/audit-hmac-key"
 evidencectl keygen secret --out "<secrets-dir>/subject-binding-hmac-key"
-evidencectl keygen holder --out-dir "<secrets-dir>" --kid "<holder-key-id>"
 ```
 
-`keygen signing` writes an Ed25519 private JWK (mode `0600`) and its public counterpart (mode
-`0644`). The `--kid` you pass must equal `signing.activeKeyId` in `bundle/evidence.yaml`, or you
-copy the printed thumbprint-derived kid back into that field. `keygen secret` writes one 32-byte
-raw secret for the audit hash key or the subject-binding HMAC key; either backs a
-`secret:file/<name>` reference in the bundle. `keygen holder` writes an Ed25519 holder keypair
-used only for the SD-JWT VC confirmation binding. Every private file lands at mode `0600`, and
-its containing directory is created or normalized to mode `0700`.
+### `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json`
 
-`evidencectl jwks --out <path> <public-jwk-file>...` assembles a public JWKS document from a set
-of public JWK files: it validates each as public-only, so any file carrying a private member is
-rejected outright, rejects conflicting keys that share a `kid`, and merges duplicates that are
-byte-identical (`crates/registry-evidencectl/src/jwks.rs`). Use it to build the pinned JWKS
-document `evidence verify --jwks <file>` checks a stored response against, separate from the
-JWKS Evidence itself serves live at `/.well-known/evidence/jwks.json`.
+Evidence signs assertions with the private Ed25519 JSON Web Key (JWK). Verifiers use the public
+JWK to check the signature without receiving the private key. The key identifier must match
+`signing.activeKeyId` in `bundle/evidence.yaml`.
 
-Source credentials are not part of key material. You obtain them from the source system itself
-and write them into the secret root as owner-only files, resolved through the bundle's
-`secret:file/<name>` references at readiness rather than at `check`.
+### `audit-hmac-key`
+
+Evidence uses this random secret to authenticate the audit chain. A changed, removed, or
+reordered audit entry then fails chain verification.
+
+### `subject-binding-hmac-key`
+
+Evidence uses this random secret to derive audience-scoped subject references from authorized
+selector values. The references let an assertion identify its subject without disclosing the
+selector values or creating one identifier that every audience can reuse.
 
 ## Immutability
 
