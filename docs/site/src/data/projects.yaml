@@ -86,7 +86,7 @@
       url: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/README.md
     - label: Operator contract
       url: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/OPERATOR-CONTRACT.md
-  rename_status: Developed in the Registry Stack monorepo as one `registry-evidence` crate; no separate repository.
+  rename_status: Developed in the Registry Stack monorepo as one `registry-evidence` crate beside the portable `registry-evidence-verifier` verification library; no separate repository.
 - id: registry-mint
   name: Registry Mint
   repo_path: ../registry-stack

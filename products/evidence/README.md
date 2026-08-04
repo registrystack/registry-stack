@@ -10,11 +10,15 @@ the smallest sufficient JSON assertion in an authorized response format.
 
 The approved Version 1 product boundary is one `registry-evidence` crate, one
 `evidence` binary, one serving process, and one operator-controlled trust domain.
-A process may host multiple evidence definitions only when they share that trust
-domain. Governed configuration, Rhai scripts, schemas, codelists, and fixtures
-are one trusted, immutable, startup-only evidence bundle. A separate closed
-runtime file owns only process-local listener, filesystem, audit-storage,
-secret-mount, and TLS-trust bindings and cannot override governed semantics.
+The runtime depends on one portable library beside it,
+`registry-evidence-verifier`, which owns the response formats, the Evidence
+payload contract, and relying-party verification, so client tooling can verify a
+signed response without the runtime. A process may host multiple evidence
+definitions only when they share that trust domain. Governed configuration, Rhai
+scripts, schemas, codelists, and fixtures are one trusted, immutable,
+startup-only evidence bundle. A separate closed runtime file owns only
+process-local listener, filesystem, audit-storage, secret-mount, and TLS-trust
+bindings and cannot override governed semantics.
 
 The following contracts define and verify the implemented Version 1 boundary:
 

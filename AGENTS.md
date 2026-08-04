@@ -28,6 +28,7 @@ Evidence's authenticator; Evidence does not depend on Mint.
 |---|---|
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
+| `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
@@ -51,6 +52,13 @@ The runtime implementation is one `registry-evidence` crate and one `evidence`
 binary. It may reuse narrowly applicable `registry-platform-*`
 primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
 and testing.
+
+`registry-evidence-verifier` is the portable response-verification library the
+runtime depends on. It owns the response wire formats, the Evidence payload
+contract, and relying-party verification, so client tooling can verify a signed
+Evidence response without the runtime. It is a library, not a second runtime and
+not a pattern of its own, and it carries no server, source access, or
+platform-specific dependency.
 
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
