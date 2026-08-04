@@ -33,6 +33,7 @@ SHARDS = {
     "relay": ("registry-relay",),
     "evidence": (
         "registry-evidence",
+        "registry-evidence-client",
         "registry-evidence-verifier",
         "registry-evidencectl",
     ),

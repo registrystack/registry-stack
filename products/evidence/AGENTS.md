@@ -31,6 +31,13 @@ verification so client tooling can verify a signed response without the runtime.
 The verifier library sits beside the runtime and is not a second runtime; its
 source is covered by the same source-product and domain neutrality checks.
 
+`registry-evidence-client` is adopter tooling beside the runtime, like
+`registry-evidencectl`. It requests assertions over the public HTTP contract and
+links `registry-evidence-verifier` for every verification decision, so it
+re-implements no part of evaluation, signing, or verification. It sits outside
+the frozen Version 1 runtime contract, and its source is covered by the same
+source-product and domain neutrality checks.
+
 Selected `registry-platform-*` primitives may be reused only when their existing
 contracts fit Evidence directly. The approved candidates are audit, crypto,
 OIDC, HTTP security, testing, and the `registry-platform-sdjwt` serialization
