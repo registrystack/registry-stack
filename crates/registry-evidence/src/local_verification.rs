@@ -178,8 +178,7 @@ pub fn verify_local_response(
 
 /// Deterministic clock entry point used by the expiry test. Production callers
 /// use [`verify_local_response`] and cannot choose the verification instant.
-#[doc(hidden)]
-pub fn verify_local_response_at(
+pub(crate) fn verify_local_response_at(
     context: LocalVerificationContext,
     response: &[u8],
     now: DateTime<Utc>,
