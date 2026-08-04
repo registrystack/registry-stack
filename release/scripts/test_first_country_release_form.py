@@ -1029,7 +1029,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 return "up"
             if "ps" in command:
                 return "ps"
-            self.fail(f"unexpected governed-start command: {command}")
+            raise AssertionError(f"unexpected governed-start command: {command}")
 
         self.assertEqual(
             [operation(command) for command in commands],

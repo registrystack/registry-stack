@@ -291,6 +291,15 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "pinned Debian 13 release builder",
         failures,
     )
+    # The workflow passes the builder in, and the recipe refuses anything but
+    # its own default, so both ends have to carry the same pin.
+    require(
+        binary_recipe,
+        f'default_builder_image="{RUST_BUILDER}"',
+        Path("release/scripts/build-release-binaries.sh"),
+        "pinned Debian 13 release builder",
+        failures,
+    )
     for forbidden in (
         "RELEASE_BUILDER_IMAGE:",
         "release/scripts/build-release-binaries.sh",

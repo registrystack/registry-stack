@@ -2321,9 +2321,9 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual("0.17.0", data["stack"]["version"])
         self.assertNotIn("registry-notary", data["artifacts"])
         self.assertNotIn("registry-notary-cel-worker", data["artifacts"])
-        self.assertTrue(
-            {"registry-relay", "evidence", "evidencectl", "mint"}
-            <= set(data["artifacts"])
+        self.assertLessEqual(
+            {"registry-relay", "evidence", "evidencectl", "mint"},
+            set(data["artifacts"]),
         )
 
     def test_validate_still_rejects_unknown_artifacts_beside_the_evidence_toolset(
