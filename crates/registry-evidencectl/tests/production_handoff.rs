@@ -1557,6 +1557,37 @@ authorityProfiles:
                 .expect("Mint signing keygen starts"),
             "independent Mint signing key generation",
         );
+        let audit = mint.join("audit");
+        fs::create_dir(&audit).expect("Mint audit directory");
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o700))
+            .expect("Mint audit directory mode");
+        let audit_key = mint.join("secrets/mint-audit-hmac-key");
+        let mut audit_key_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&audit_key)
+            .expect("Mint audit key");
+        audit_key_file
+            .write_all(b"production-handoff-mint-audit-key")
+            .expect("Mint audit key contents");
+        audit_key_file.sync_all().expect("sync Mint audit key");
+        assert_eq!(
+            fs::metadata(&audit)
+                .expect("Mint audit metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+        );
+        assert_eq!(
+            fs::metadata(&audit_key)
+                .expect("Mint audit key metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+        );
         let caller_public = mint.join("caller-public.jwk.json");
         let caller_directory = mint.join("caller");
         assert_success(
@@ -1600,7 +1631,7 @@ authorityProfiles:
         fs::write(
             &config,
             format!(
-                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: EdDSA\n  activeKeyId: mint-signing-key-1\n  activeKeyFile: secrets/signing-ed25519-private-jwk\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [EdDSA]\nclients:\n  directory: clients\n",
+                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: EdDSA\n  activeKeyId: mint-signing-key-1\n  activeKeyFile: secrets/signing-ed25519-private-jwk\naudit:\n  path: audit/mint.jsonl\n  hashKeyFile: secrets/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [EdDSA]\nclients:\n  directory: clients\n",
                 port = self.mint_port,
             ),
         )
