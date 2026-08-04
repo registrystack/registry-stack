@@ -1392,6 +1392,9 @@ owed and is recorded here in full.
   `first-evidence-assertion`, `author-an-acceptance-definition`,
   `connect-an-institution-source`, `serve-assertions-over-http`, and
   `verify-an-assertion-as-a-consumer`.
+  Verification caveat, closed on 2026-08-04 by the entries below: both gates
+  were replayed on the host, and the Evidence gate then failed in CI's clean
+  container, which the host run could not have caught.
   Coverage caveat, recorded rather than closed: the executing gates cover 11 of
   the tutorial surface's journeys, and six Evidence tutorial pages have no
   executing gate in this worktree
@@ -1431,3 +1434,15 @@ owed and is recorded here in full.
   G1, G2, G3, G5; G4 remains Jeremi's, and it is not a formality: three frozen
   files have changed since the plan's starting revision, two of them
   substantively, and one of those two rewrites JWKS retrieval and readiness.
+- 2026-08-04: the retirement branch was pushed and opened as a draft pull
+  request so the full workflow set could run against it. Six distinct checks
+  came back red. The first is closed here: the repository secret scan reported
+  one leak, a false positive on a test fixture in
+  `crates/registry-evidence/src/kernel.rs` whose local was named `secret` and
+  whose value carried enough entropy to match the generic-api-key rule. The
+  fixture is a canary string the test asserts never reaches a rejection
+  message, so the local is now named `canary`, which is what it is. No value,
+  behaviour or assertion changed. Reproduced against a clean export of the tree
+  rather than the working directory, because `target/` and `scratch/` swamp the
+  scan with 141 unrelated hits; the export reproduced CI's single finding
+  exactly, and reports none after the rename.

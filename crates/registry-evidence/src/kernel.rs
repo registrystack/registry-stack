@@ -1348,8 +1348,8 @@ mod tests {
             .expect("the response schema is a bundle artifact");
         let compiled = compile_schema(schema).expect("the response schema compiles");
 
-        let secret = "0451-mrs-hunt-was-born-in-caracas";
-        let response = json!({"total": 1, "date_of_birth": secret});
+        let canary = "0451-mrs-hunt-was-born-in-caracas";
+        let response = json!({"total": 1, "date_of_birth": canary});
         let errors = compiled
             .validate(&response)
             .expect_err("a malformed date violates the shape");
@@ -1365,7 +1365,7 @@ mod tests {
         assert!(
             !violations
                 .iter()
-                .any(|violation| violation.contains(secret)),
+                .any(|violation| violation.contains(canary)),
             "no response value reaches the log: {violations:?}"
         );
 
