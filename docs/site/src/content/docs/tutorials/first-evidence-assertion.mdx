@@ -28,25 +28,24 @@ person's name or date of birth.
 
 ## Understand the flow
 
-Three local processes take part:
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
+sequenceDiagram
+    participant C as Tutorial caller
+    participant E as Evidence
+    participant R as Tutorial registry
 
-| Component | Role |
-|---|---|
-| Tutorial registry | Holds the synthetic source records. |
-| Evidence | Reads one record, derives the governed answer, and signs the assertion. |
-| Registry Mint | Gives the tutorial caller short-lived local authorization. |
-
-The source record becomes progressively smaller as it crosses each boundary:
-
-```text
-Registry response                   {person_id, name, date_of_birth}
-Fact available to the derivation    {date_of_birth}
-Governed answer                     {is_adult: true}
-Signed assertion                    is_adult: true, without the source values
+    C->>E: Authorized request<br/>adult-status, person_id=person-123
+    E->>R: GET /people/person-123
+    R-->>E: person_id, name, date_of_birth
+    E->>E: Extract date_of_birth<br/>Derive and sign is_adult: true
+    E-->>C: Signed assertion with is_adult: true<br/>and an opaque subject binding
+    Note over C,E: The assertion contains no person_id,<br/>name, or date_of_birth
 ```
 
-Evidence processes the identifier and date of birth to answer the question. Minimum disclosure
-means those source values do not become part of the released assertion.
+Before the request, Registry Mint gives the tutorial caller short-lived local authorization.
+Evidence and the registry process the identifier and date of birth to answer the question, but the
+released assertion contains only the governed answer and an opaque subject binding.
 
 ## Install Evidence
 
