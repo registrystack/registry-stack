@@ -79,13 +79,13 @@ pub async fn prepare_local_verification_context(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .ok_or(LocalVerificationError)?;
-    // This first adopter slice is intentionally exact: every value in the
-    // response must be a required Boolean declared by this requirement.
+    // The local adopter path remains deliberately narrow: every value must be
+    // required and use one of the two forms taught by the shared start.
     if requirement.concepts.is_empty()
         || requirement
             .concepts
             .iter()
-            .any(|concept| !concept.required || concept.form != ConceptForm::Boolean)
+            .any(|concept| !concept.required || local_expected_form(concept.form).is_none())
     {
         return Err(LocalVerificationError);
     }
@@ -158,13 +158,24 @@ pub async fn prepare_local_verification_context(
                 .iter()
                 .map(|concept| ExpectedOutputDocument {
                     concept: concept.id.clone(),
-                    form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
+                    form: ExpectedFormDocument::Scalar(
+                        local_expected_form(concept.form)
+                            .expect("the local concept forms were validated"),
+                    ),
                 })
                 .collect(),
             maximum_assertion_lifetime_seconds: requirement.validity_seconds,
             clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds,
         },
     })
+}
+
+fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> {
+    match form {
+        ConceptForm::Boolean => Some(ExpectedScalarFormDocument::Boolean),
+        ConceptForm::ControlledCategory => Some(ExpectedScalarFormDocument::String),
+        _ => None,
+    }
 }
 
 /// Strictly verify one flattened JWS against a context retained before the

@@ -36,10 +36,13 @@ const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:c
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_QUESTION_BYTES: u64 = 64 * 1024;
 const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
+const MAX_CATEGORIES: usize = 32;
+const MAX_CATEGORY_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
     Boolean,
+    ControlledCategory,
 }
 
 /// Closed metadata consumed later by `dev` and request preparation. It stays
@@ -125,13 +128,16 @@ struct QuestionAnswer {
     concept: String,
     #[serde(rename = "type")]
     answer_type: AnswerType,
+    #[serde(default)]
+    values: Vec<String>,
     derivation: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 enum AnswerType {
     Boolean,
+    ControlledCategory,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,6 +161,8 @@ struct CompilePlan {
     concept_alias: String,
     requirement_uri: String,
     concept_uri: String,
+    concept_form: CompiledConceptForm,
+    codelist: Option<(String, Value)>,
     bundle: Value,
     response_schema: Value,
     fact_schema: Value,
@@ -162,6 +170,14 @@ struct CompilePlan {
     prepare_script: String,
     extract_script: String,
     derivation_script: String,
+}
+
+struct BundleRequirement {
+    requirement_uri: String,
+    concept_uri: String,
+    kind: &'static str,
+    concept_form: CompiledConceptForm,
+    concept_constraints: Value,
 }
 
 struct Operation<'a> {
@@ -381,7 +397,27 @@ fn validate_question(question: &Question) -> Result<()> {
     {
         bail!("question text must be a non-empty bounded line of text");
     }
-    let _answer_type = question.answer.answer_type;
+    match question.answer.answer_type {
+        AnswerType::Boolean if !question.answer.values.is_empty() => {
+            bail!("a boolean answer must not declare values");
+        }
+        AnswerType::Boolean => {}
+        AnswerType::ControlledCategory => {
+            let values = &question.answer.values;
+            if !(2..=MAX_CATEGORIES).contains(&values.len())
+                || values.iter().collect::<BTreeSet<_>>().len() != values.len()
+                || values.iter().any(|value| {
+                    value.is_empty()
+                        || value.len() > MAX_CATEGORY_BYTES
+                        || value.chars().any(char::is_control)
+                })
+            {
+                bail!(
+                    "a controlled-category answer needs 2..={MAX_CATEGORIES} unique bounded values"
+                );
+            }
+        }
+    }
     if question.source.facts.is_empty()
         || question.source.facts.len() > 16
         || question
@@ -473,6 +509,42 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         "concept:{}:{}",
         question.id, question.answer.concept
     ));
+    let (concept_form, requirement_kind, concept_constraints, codelist) =
+        match question.answer.answer_type {
+            AnswerType::Boolean => (CompiledConceptForm::Boolean, "criterion", json!({}), None),
+            AnswerType::ControlledCategory => {
+                let scheme = local_uri(&format!(
+                    "category-scheme:{}:{}",
+                    question.id, question.answer.concept
+                ));
+                let path = format!("codelists/{}-{}.yaml", question.id, question.answer.concept);
+                let maximum_bytes = question
+                    .answer
+                    .values
+                    .iter()
+                    .map(String::len)
+                    .max()
+                    .expect("controlled categories were validated");
+                (
+                    CompiledConceptForm::ControlledCategory,
+                    "information-requirement",
+                    json!({
+                        "categoryScheme": scheme,
+                        "schemeVersion": "1",
+                        "maximumBytes": maximum_bytes,
+                        "codelist": path,
+                    }),
+                    Some((
+                        path,
+                        json!({
+                            "id": scheme,
+                            "version": "1",
+                            "codes": question.answer.values,
+                        }),
+                    )),
+                )
+            }
+        };
 
     let response_schema = closed_object_schema(&question.source.facts, &fact_properties);
     let fact_schema = response_schema.clone();
@@ -488,14 +560,19 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
     let prepare_script =
         "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
     let extract_script = render_extract_script(&question.source.facts);
-    let derivation_script = render_derivation(&inputs.derivation, &concept_uri);
+    let derivation_script = render_derivation(&inputs.derivation, &concept_uri, concept_form);
     let bundle = render_bundle(
         question,
         &base_url,
         operation.path,
         &question.subject.selector,
-        &requirement_uri,
-        &concept_uri,
+        &BundleRequirement {
+            requirement_uri: requirement_uri.clone(),
+            concept_uri: concept_uri.clone(),
+            kind: requirement_kind,
+            concept_form,
+            concept_constraints,
+        },
     );
 
     Ok(CompilePlan {
@@ -507,6 +584,8 @@ fn compile_plan(inputs: Inputs) -> Result<CompilePlan> {
         concept_alias: question.answer.concept.clone(),
         requirement_uri,
         concept_uri,
+        concept_form,
+        codelist,
         bundle,
         response_schema,
         fact_schema,
@@ -854,7 +933,11 @@ fn render_extract_script(facts: &[String]) -> String {
     )
 }
 
-fn render_derivation(authored: &str, concept_uri: &str) -> String {
+fn render_derivation(
+    authored: &str,
+    concept_uri: &str,
+    concept_form: CompiledConceptForm,
+) -> String {
     let mut rendered = authored.trim_end().to_owned();
     rendered.push_str("\n\n");
     rendered.push_str("fn derive(facts, selectors, evaluation_context) {\n");
@@ -863,10 +946,16 @@ fn render_derivation(authored: &str, concept_uri: &str) -> String {
         "        concept_id: {},\n",
         json_string(concept_uri)
     ));
-    // The equality is also the closed boolean gate: the runtime exposes only
-    // bool-to-bool equality here, so any other authored return shape fails
-    // derivation instead of becoming a disclosed value.
-    rendered.push_str("        value: answer(facts, selectors, evaluation_context) == true\n");
+    match concept_form {
+        // The equality is also the closed boolean gate: the runtime exposes
+        // only bool-to-bool equality here, so another return shape fails.
+        CompiledConceptForm::Boolean => rendered
+            .push_str("        value: answer(facts, selectors, evaluation_context) == true\n"),
+        // The generated codelist remains the authority for category values.
+        CompiledConceptForm::ControlledCategory => {
+            rendered.push_str("        value: answer(facts, selectors, evaluation_context)\n")
+        }
+    }
     rendered.push_str("    }]\n}\n");
     rendered
 }
@@ -876,8 +965,7 @@ fn render_bundle(
     base_url: &str,
     path_template: &str,
     selector: &str,
-    requirement_uri: &str,
-    concept_uri: &str,
+    requirement: &BundleRequirement,
 ) -> Value {
     let framework_id = local_uri(&format!("framework:{}", question.id));
     let evidence_type = local_uri(&format!("evidence-type:{}", question.id));
@@ -996,7 +1084,7 @@ fn render_bundle(
                 "kind": "explicit-request",
                 "requesterTags": [AUTHORITY_PROFILE_ID],
                 "grants": [{
-                    "requirement": requirement_uri,
+                    "requirement": requirement.requirement_uri,
                     "purpose": question.purpose,
                     "audienceFrom": "authenticated-requester",
                     "responseFormats": ["signed-jws"],
@@ -1009,8 +1097,8 @@ fn render_bundle(
             }
         },
         "requirements": [{
-            "id": requirement_uri,
-            "kind": "criterion",
+            "id": requirement.requirement_uri,
+            "kind": requirement.kind,
             "source": SOURCE_ID,
             "purposes": [question.purpose],
             "subjectRoles": [{
@@ -1027,10 +1115,13 @@ fn render_bundle(
                 "parameters": {},
             },
             "concepts": [{
-                "id": concept_uri,
-                "form": "boolean",
+                "id": requirement.concept_uri,
+                "form": match requirement.concept_form {
+                    CompiledConceptForm::Boolean => "boolean",
+                    CompiledConceptForm::ControlledCategory => "controlled-category",
+                },
                 "required": true,
-                "constraints": {},
+                "constraints": requirement.concept_constraints,
             }],
             "disclosureGuard": {"families": [disclosure_family]},
             "existenceDisclosure": "collapse-unresolved",
@@ -1048,6 +1139,9 @@ fn write_plan(
     for directory in ["adapters", "derivations", "schemas"] {
         create_private_directory(&bundle.join(directory))?;
     }
+    if plan.codelist.is_some() {
+        create_private_directory(&bundle.join("codelists"))?;
+    }
     create_private_directory(&staging_root.join("audit"))?;
 
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
@@ -1063,6 +1157,9 @@ fn write_plan(
         &bundle.join(&plan.derivation_artifact),
         plan.derivation_script.as_bytes(),
     )?;
+    if let Some((path, codelist)) = &plan.codelist {
+        write_private_file(&bundle.join(path), &yaml_bytes(codelist)?)?;
+    }
     write_private_file(
         &bundle.join("schemas/local-source-response.schema.yaml"),
         &yaml_bytes(&plan.response_schema)?,
@@ -1117,7 +1214,7 @@ fn write_plan(
         selector_field: plan.selector_field.clone(),
         concept_alias: plan.concept_alias.clone(),
         concept_uri: plan.concept_uri.clone(),
-        concept_form: CompiledConceptForm::Boolean,
+        concept_form: plan.concept_form,
         local_audience: LOCAL_AUDIENCE.to_owned(),
         requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
         caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
@@ -1258,6 +1355,36 @@ disclosure:
 }
 "#;
 
+    const AGE_BRACKET_QUESTION: &str = r#"id: age-bracket
+question: Which reviewed age bracket contains the person?
+purpose: service-path-selection
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts: [date_of_birth]
+answer:
+  concept: age_bracket
+  type: controlled-category
+  values: [under-18, 18-to-24, 25-or-older]
+  derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [age_bracket]
+"#;
+
+    const AGE_BRACKET_ANSWER: &str = r#"fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
+        "under-18"
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
+        "18-to-24"
+    } else {
+        "25-or-older"
+    }
+}
+"#;
+
     #[test]
     fn compiles_only_the_canonical_private_local_generation() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
@@ -1340,6 +1467,40 @@ disclosure:
         ));
         assert!(derivation.contains("value: answer(facts, selectors, evaluation_context) == true"));
         assert!(!derivation.contains("concept_id: \"is_adult\""));
+    }
+
+    #[test]
+    fn compiles_one_closed_controlled_category() {
+        let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("controlled category compiles");
+
+        assert_eq!(
+            compiled.concept_form,
+            CompiledConceptForm::ControlledCategory
+        );
+        let codelist: Value = serde_norway::from_slice(
+            &fs::read(
+                fixture
+                    .staging
+                    .join("bundle/codelists/age-bracket-age_bracket.yaml"),
+            )
+            .expect("codelist reads"),
+        )
+        .expect("codelist parses");
+        assert_eq!(
+            codelist["codes"],
+            json!(["under-18", "18-to-24", "25-or-older"])
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(bundle["requirements"][0]["kind"], "information-requirement");
+        assert_eq!(
+            bundle["requirements"][0]["concepts"][0]["form"],
+            "controlled-category"
+        );
     }
 
     #[test]
@@ -1524,6 +1685,15 @@ disclosure:
         .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts generated inputs");
+
+        let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
+        crate::keygen::generate_scaffold_key_material(
+            &fixture.project.join("secrets"),
+            SIGNING_KEY_ID,
+        )
+        .expect("generate local keys");
+        compile_local_project(&fixture.project, &fixture.staging, &evidence)
+            .expect("real Evidence loader accepts the controlled category");
 
         let (openapi, question, answer) = punctuated_inputs();
         let fixture = Fixture::new(&openapi, &question, &answer, true);

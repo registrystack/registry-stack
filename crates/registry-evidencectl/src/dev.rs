@@ -380,7 +380,10 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
         || question.requirement_uri != requirement_uri
         || question.selector_profile != LOCAL_SELECTOR_PROFILE
         || question.concept_uri != concept_uri
-        || question.concept_form != "boolean"
+        || !matches!(
+            question.concept_form.as_str(),
+            "boolean" | "controlled-category"
+        )
     {
         bail!("the local development state contains values outside the closed lifecycle profile");
     }
@@ -422,9 +425,7 @@ fn start_detached(
     match fs::symlink_metadata(&dev_root) {
         Ok(metadata) => {
             validate_private_directory_metadata(&dev_root, &metadata)?;
-            bail!(
-                "local development state already exists; refuse to replace an active, stopped, or stale session"
-            );
+            remove_completed_dev_root(&project, &dev_root)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("failed to inspect local development state"),
@@ -447,6 +448,22 @@ fn start_detached(
         return Err(error);
     }
     result
+}
+
+fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
+    let state = read_state(&dev_root.join("state.json"))?;
+    if state.status != DevStatus::Stopped || state.caller.is_some() || state.failure.is_some() {
+        bail!("local development state already exists and is not a completed stopped session");
+    }
+    validate_closed_state(&state, project, dev_root)?;
+    require_owned_regular_file(&state.runtime_path, 0o400)?;
+    match fs::symlink_metadata(dev_root.join(CONTROL_SOCKET_NAME)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("stopped local state still has a control path"),
+        Err(error) => return Err(error.into()),
+    }
+    make_tree_removable(dev_root)?;
+    fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
 
 fn prepare_and_start(
@@ -1017,6 +1034,7 @@ impl From<&CompiledQuestion> for QuestionState {
             concept_uri: compiled.concept_uri.clone(),
             concept_form: match compiled.concept_form {
                 CompiledConceptForm::Boolean => "boolean".to_owned(),
+                CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
             },
         }
     }
@@ -1476,6 +1494,9 @@ mod tests {
         let stopped = load_stopped_state(&project).expect("stopped handoff");
         assert_eq!(stopped.runtime_path, runtime);
         assert_eq!(stopped.question.concept_alias, "is_adult");
+
+        remove_completed_dev_root(&project, &dev).expect("replaceable stopped session");
+        assert!(!dev.exists());
     }
 
     #[test]

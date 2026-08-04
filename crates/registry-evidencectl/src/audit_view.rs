@@ -109,7 +109,10 @@ fn render(view: &CoreAuditOperation, question: &dev::ReadyQuestionState) -> Resu
         || !valid_alias(&question.alias)
         || !valid_alias(&question.concept_alias)
         || !valid_purpose(&question.purpose)
-        || question.concept_form != "boolean"
+        || !matches!(
+            question.concept_form.as_str(),
+            "boolean" | "controlled-category"
+        )
         || !(1..=2).contains(&view.events.len())
     {
         return Err(failed());
