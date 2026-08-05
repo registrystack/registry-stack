@@ -1,6 +1,6 @@
 ---
 title: "RS-PR-EVIDENCE: Evidence protocol"
-description: "The normative HTTP protocol contract for Evidence: discovery, authentication, the closed request contract, acceptance definitions, minimum disclosure, the signed JWS and SD-JWT VC response formats, problem reporting, audit gates, and immutable deployment input."
+description: "The normative HTTP protocol contract for Evidence: discovery, authentication, assurance profiles, the closed request contract, acceptance definitions, minimum disclosure, response formats, problem reporting, audit gates, and immutable deployment input."
 status: draft
 owner: registry-docs
 source_repos:
@@ -59,6 +59,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-08-03 | draft | Initial profile derived from the frozen V1 contracts. |
 | 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Evidence in the architecture. |
+| 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
 
 ## 1. Scope and references
 
@@ -66,11 +67,13 @@ This specification covers Evidence's externally observable protocol behavior:
 
 - The service surface, the generated OpenAPI document, and requester-scoped definition discovery.
 - Authentication of callers and the single authorization decision that gates a request.
+- The governed assurance profile and its local-only authoring exceptions.
 - The closed request contract and the request nonce.
 - Evaluation, the four coequal acceptance definitions, and the output gate.
 - Disclosure minimization, subject binding, and the combined-bundle disclosure surface.
-- The two response encodings: the signed JSON Web Signature (JWS) assertion and the SD-JWT VC
-  (SD-JWT-based Verifiable Credentials) serialization of that same assertion.
+- The three response formats: the signed JSON Web Signature (JWS) assertion, the separately typed
+  unsigned envelope, and the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
+  same assertion.
 - The problem contract, including existence collapse.
 - The audit obligation and its two durable gates.
 - The immutability of deployment input.
@@ -219,17 +222,19 @@ flowchart LR
     request["Closed request<br/>requirement, purpose, subjects, nonce"]
     authz["One authorization decision<br/>complete entitlement match"]
     access["Access audit<br/>durably accepted"]
+    prepare["Bounded preparation<br/>validate fixed request parts"]
     source["One fixed source request<br/>core-owned transport"]
-    derive["Bounded derivation<br/>prepare, extract, derive"]
+    derive["Bounded extraction and derivation<br/>extract, then derive on match"]
     gate["Output gate<br/>exact concept set and forms"]
     sign["Construct and sign<br/>core-owned payload"]
     release["Release audit, then exact bytes"]
-    request --> authz --> access --> source --> derive --> gate --> sign --> release
+    request --> authz --> access --> prepare --> source --> derive --> gate --> sign --> release
 ```
 
-The diagram restates the ordering the contracts fix: authorization precedes audit, access audit
-precedes credential acquisition and source access, the output gate precedes evidence construction,
-and the disclosure-release audit precedes release of the exact serialized bytes.
+The diagram restates the ordering the contracts fix: authorization precedes audit, access audit and
+validated preparation precede credential acquisition and source access, extraction precedes
+derivation, the output gate precedes evidence construction, and the disclosure-release audit
+precedes release of the exact serialized bytes.
 
 REQ-PR-EVIDENCE-017: Rust MUST own authentication, authorization, minimized script inputs, fixed
 source execution, response projection, output validation, evidence construction, response protection,
@@ -455,10 +460,18 @@ a privacy-safe authority and complete selector bundle exist, so Evidence MUST NO
 event from that untrusted or protected request material
 (`products/evidence/contracts/audit-event.schema.yaml`).
 
-REQ-PR-EVIDENCE-051: The audit chain MUST be keyed and verified at startup and after restart.
-Any external replacement or modification MUST fail readiness and close future appends until a restart
-completes full keyed-chain verification
-(`products/evidence/contracts/audit-event.schema.yaml`).
+REQ-PR-EVIDENCE-051: At startup and after restart, Evidence MUST recover the prior chain head from
+the newest sealed segment, when one exists, and MUST verify the complete active segment from that
+head before serving.
+Startup and readiness MUST NOT rescan sealed history.
+External replacement or modification of the active segment or lock file MUST fail readiness and
+close future appends for the process lifetime.
+The operator MUST run `evidence verify-audit` to verify complete retained history across every
+available sealed segment and, when the writer is stopped, the active segment.
+Mutation within older sealed history is detected by that complete out-of-band verification, not by
+serving-process startup or readiness
+(`products/evidence/contracts/audit-event.schema.yaml`,
+`products/evidence/OPERATOR-CONTRACT.md`).
 
 ## 10. Immutability of deployment input
 
@@ -487,7 +500,39 @@ fixed by `products/evidence/contracts/evidence.schema.yaml` and
 `products/evidence/contracts/audit-event.schema.yaml`
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
-## 11. Limitations
+## 11. Assurance profiles
+
+The immutable bundle carries exactly one governed `assuranceProfile`: `local`, `production`, or
+`evidence-grade`.
+The profile describes the bundle's reviewed assurance boundary; it does not replace authentication,
+authorization, source, signing, audit, or disclosure controls.
+
+REQ-PR-EVIDENCE-057: Every definition-discovery response, assertion encoding, and native audit event
+MUST carry the governed assurance profile.
+Verification of either protected assertion format MUST compare that value with an independently
+configured expected assurance profile and MUST use the generic policy failure for a mismatch
+(`products/evidence/contracts/definitions.schema.yaml`,
+`products/evidence/contracts/evidence.schema.yaml`,
+`products/evidence/contracts/audit-event.schema.yaml`,
+`products/evidence/contracts/verification-policy.schema.yaml`, invariant `V1-I35`).
+
+REQ-PR-EVIDENCE-058: Only the `local` assurance profile MAY omit requirement fixture references
+during authoring.
+`production` and `evidence-grade` bundles MUST provide complete referenced fixtures and MUST fail
+bundle loading when that fixture contract is absent or incomplete.
+The `local` exception MUST NOT weaken any serving-path authentication, authorization, immutability,
+source, signing, audit, or disclosure control (invariant `V1-I34`,
+`products/evidence/contracts/bundle.schema.yaml`).
+
+REQ-PR-EVIDENCE-059: Credential-free source access MUST be accepted only under the `local` assurance
+profile, for one canonical numeric-loopback HTTP origin with an explicit non-zero port and no TLS
+trust profile.
+It MUST send no authentication header.
+`production` and `evidence-grade` bundles MUST reject credential-free source authentication
+(invariant `V1-I36`, `products/evidence/contracts/source-contract.yaml`,
+`products/evidence/contracts/bundle.schema.yaml`).
+
+## 12. Limitations
 
 These constraints are stated so a reader does not infer a capability from the route list or the
 credential format that the frozen Version 1 contracts do not provide.
@@ -514,6 +559,12 @@ credential format that the frozen Version 1 contracts do not provide.
 - Disclosure-family review: The declared disclosure families are a trusted bundle-review attestation,
   not a semantic classifier. Combined-surface review is an operator duty
   (`products/evidence/OPERATOR-CONTRACT.md`, REQ-PR-EVIDENCE-025).
+- Assurance profile: `local` identifies authoring assurance, not deployable assurance. A verifier
+  expecting `production` or `evidence-grade` rejects an authentic `local` assertion
+  (REQ-PR-EVIDENCE-057, REQ-PR-EVIDENCE-058).
+- Credential-free sources: The exception exists only for `local` authoring against an exact numeric
+  loopback origin. It is not available to `production` or `evidence-grade` bundles
+  (REQ-PR-EVIDENCE-059).
 - Telemetry: Metrics are off by default and, when enabled, are served on a separate operator-private
   listener that the public evidence contract does not describe
   (`products/evidence/contracts/runtime.schema.yaml`, invariant `V1-I33`).
@@ -575,7 +626,11 @@ An Evidence deployment conforms to this specification when it:
 - treats deployment input as immutable, restricts the runtime file to process-local bindings, fails
   readiness on an untrusted bundle, serves one trust domain, and carries the bundle revision in every
   assertion and audit event (REQ-PR-EVIDENCE-052, REQ-PR-EVIDENCE-053, REQ-PR-EVIDENCE-054,
-  REQ-PR-EVIDENCE-055, REQ-PR-EVIDENCE-056).
+  REQ-PR-EVIDENCE-055, REQ-PR-EVIDENCE-056);
+- carries the governed assurance profile through discovery, assertions, audit, and verification,
+  confines fixture omission and credential-free loopback sources to `local`, and refuses those
+  exceptions under `production` and `evidence-grade` (REQ-PR-EVIDENCE-057,
+  REQ-PR-EVIDENCE-058, REQ-PR-EVIDENCE-059).
 
 Conformance to this specification does not imply conformance to any external standard cited in the
 `standards_referenced` frontmatter field.
@@ -584,15 +639,13 @@ Each standard's adoption mode and scope are documented in the
 
 ## Evidence
 
-This specification is `verified`: every requirement restates a frozen contract file a reader can
-open, and those contracts are held to the implementation by a continuous-integration gate, per
-RS-DOC REQ-DOC-014.
-The two open items are marked with author comments in the source of this page: RS-ARC-G does not yet
-define an Evidence component, and the standards register does not yet list `registry-evidence` under
-the entries this page references.
+This specification is `verified`: its requirements cite inspectable frozen contracts, generated
+artifacts, implementation tests, or operator material, per RS-DOC REQ-DOC-014.
+The standards register does not yet list `registry-evidence` under the entries this page references;
+that evidence gap remains marked with an author comment in the source of this page.
 
 - The frozen source contracts live in `products/evidence/contracts/`, indexed by
-  `products/evidence/contracts/README.md`. Each requirement in Sections 2 through 10 names the file
+  `products/evidence/contracts/README.md`. Each requirement in Sections 2 through 11 names the file
   it restates.
 - The route and schema surface is `products/evidence/generated/registry-evidence.openapi.json`, and
   the running service publishes that same document.
@@ -601,6 +654,9 @@ the entries this page references.
   `products/evidence/generated/` from the `registry-evidence` crate into a temporary directory and
   fails on any byte difference from the committed set. The same job runs
   `products/evidence/scripts/check-source-neutrality.sh`.
+- Narrative contracts and requirements that are not generated remain review-owned. Their cited tests
+  and traceability entries are inspectable evidence, not a claim that CI mechanically proves every
+  sentence in those documents.
 - Every trust and privacy invariant cited by identifier in this document is a row in
   `products/evidence/contracts/security-invariant-matrix.yaml`, carrying its threat, Rust enforcement
   point, and required negative test.
@@ -610,7 +666,7 @@ the entries this page references.
   stale reference.
 - Product framing, the Version 1 boundary, and the four coequal acceptance definitions are stated in
   `products/evidence/README.md` and `products/evidence/CONCEPT.md`.
-- Operational duties referenced by Sections 3, 6, and 11 are stated in
+- Operational duties cited throughout this specification are stated in
   `products/evidence/OPERATOR-CONTRACT.md`.
 
 ## Next
