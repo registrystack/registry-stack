@@ -686,6 +686,10 @@ pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
     mapped.operation = error.operation().map(str::to_owned);
 
     match error {
+        // Deliberately no `nonce_kind` field: `NonceError::NotCanonical` is
+        // constructed only inside `RequestNonce::parse`'s own unit tests, so
+        // this crate's production path can only ever fail here with
+        // `NonceError::Entropy`, which carries nothing further to report.
         EvidenceClientError::Configuration { .. } | EvidenceClientError::Nonce(_) => {}
         EvidenceClientError::Token(token_error) => insert_token_fields(&mut mapped, token_error),
         EvidenceClientError::Transport { kind } => {
@@ -1220,21 +1224,119 @@ mod tests {
         assert_eq!(mapped.operation, Some(operation));
     }
 
+    /// Mirrors the wrapped crate's own redaction tests and the Node binding's
+    /// `mapped_errors_never_carry_a_credential_key_selector_value_or_subject_binding`:
+    /// plant a canary value in every place a credential, key, selector value,
+    /// or subject binding legitimately reaches this crate's own conversion
+    /// and error-mapping layer, and confirm the mapped failure this crate
+    /// hands to `to_py_err` never repeats it. A response body never reaches
+    /// this module at all (`map_client_error` never touches
+    /// `RawEvidenceResponse`), so it has no case here; the wrapped crate's own
+    /// test already covers it.
+    ///
+    /// Each arrangement first asserts on the specific error it produces, not
+    /// only on the canary's absence: if a step refused for an unrelated
+    /// reason instead of carrying the canary to the intended place, that
+    /// assertion catches it before the canary check could pass vacuously.
     #[test]
-    fn map_client_error_never_carries_response_bytes_or_a_selector_value() {
-        // `Verification(Payload)` is the closest a mapped failure comes to a
-        // response-shaped cause; its message must still be the fixed,
-        // uninformative sentence the verifier defines, not a report about the
-        // payload's own content.
-        let mapped = map_client_error(&EvidenceClientError::Verification(
-            VerificationError::Payload,
+    fn mapped_errors_never_carry_a_credential_key_selector_value_or_subject_binding() {
+        const CANARY: &str = "secret-canary-value";
+
+        fn assert_canary_absent(mapped: &MappedError) {
+            assert!(
+                !mapped.message.contains(CANARY),
+                "leaked in message: {}",
+                mapped.message
+            );
+            if let Some(code) = &mapped.code {
+                assert!(!code.contains(CANARY), "leaked in code: {code}");
+            }
+            if let Some(operation) = &mapped.operation {
+                assert!(
+                    !operation.contains(CANARY),
+                    "leaked in operation: {operation}"
+                );
+            }
+        }
+
+        // A bearer credential shaped exactly as a caller might submit one by
+        // mistake (here, carrying a trailing newline `BearerToken` refuses):
+        // the fixed refusal reason must not repeat the credential itself.
+        // Carried by `TokenError::Invalid`, reached through
+        // `config_from_parts` -> `token_provider_from_json` ->
+        // `StaticToken::new`.
+        let error = config_from_parts(
+            "https://evidence.example/",
+            &serde_json::json!({ "keys": [] }),
+            &Value::String(format!("{CANARY}\n")),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("a newline is refused");
+        assert!(matches!(
+            error,
+            ConfigError::Client(EvidenceClientError::Token(TokenError::Invalid { .. }))
         ));
-        assert_eq!(
-            mapped.message,
-            "the Evidence response failed verification: Evidence payload is malformed"
-        );
-        assert!(!mapped.message.contains("subject"));
-        assert!(!mapped.message.contains("selector"));
+        assert_canary_absent(&map_config_error(&error));
+
+        // A signing key whose private component is the canary: well-shaped
+        // JSON, but not a valid Ed25519 scalar, so `PrivateJwk::parse`
+        // refuses it. The refusal must describe the field (`d`), never echo
+        // it. Carried by that parse failure, reached through
+        // `config_from_parts` -> `private_key_jwt_provider_from_json`.
+        let token = serde_json::json!({
+            "private_key_jwt": {
+                "token_endpoint": "https://issuer.example/token",
+                "client_id": "test-client",
+                "client_key": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "d": CANARY,
+                },
+            }
+        });
+        let error = config_from_parts(
+            "https://evidence.example/",
+            &serde_json::json!({ "keys": [] }),
+            &token,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("the malformed key is refused");
+        assert!(matches!(error, ConfigError::Shape(_)));
+        assert_canary_absent(&map_config_error(&error));
+
+        // A selector value carrying the canary, in a specification refused
+        // for an unrelated reason (a missing `purpose`): the canary is parsed
+        // and held in memory (subjects are parsed before `purpose` is
+        // checked) before the refusal, but the refusal itself must not
+        // mention it. Carried by the missing-`purpose` `ConversionError` from
+        // `spec_from_json`.
+        let mut spec = valid_spec_json();
+        spec["subjects"][0]["selector_values"] = serde_json::json!({ "record_reference": CANARY });
+        spec.as_object_mut().unwrap().remove("purpose");
+        let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
+        assert_eq!(error, ConversionError::new("`purpose` must be a string"));
+        assert_canary_absent(&map_conversion_error(&error));
+
+        // A pinned subject binding carrying the canary, in a specification
+        // refused for the same unrelated reason: `subject_expectations` is
+        // likewise parsed before `purpose` is checked.
+        let mut spec = valid_spec_json();
+        spec["subject_expectations"] = serde_json::json!([
+            { "role": "subject", "binding": CANARY }
+        ]);
+        spec.as_object_mut().unwrap().remove("purpose");
+        let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
+        assert_eq!(error, ConversionError::new("`purpose` must be a string"));
+        assert_canary_absent(&map_conversion_error(&error));
     }
 
     #[test]
