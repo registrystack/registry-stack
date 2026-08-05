@@ -77,9 +77,19 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
     }
 )
 
+# Binding crates (the Node relying-party SDK today; more may join it) stay in
+# EVIDENCE_PACKAGES and the `evidence` shard, because their own source is
+# covered by check-source-neutrality.sh, and that is what makes
+# `evidence_contracts` run the neutrality check against them. A binding-only
+# change does not, on its own, replay the docs Evidence tutorials: it touches
+# none of a tutorial's shell commands or fixtures, so it is excluded here.
+EVIDENCE_BINDING_PACKAGES = frozenset({"registry-evidence-client-node"})
+
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
-EVIDENCE_TUTORIAL_PACKAGES = EVIDENCE_PACKAGES | frozenset(SHARDS["mint"])
+EVIDENCE_TUTORIAL_PACKAGES = (EVIDENCE_PACKAGES - EVIDENCE_BINDING_PACKAGES) | frozenset(
+    SHARDS["mint"]
+)
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
