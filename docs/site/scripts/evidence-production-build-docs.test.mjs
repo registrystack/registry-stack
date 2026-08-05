@@ -24,7 +24,7 @@ test('production Evidence tutorials keep the build, optional Mint, and Compose b
   assert.match(build, /install -m 600 \/dev\/null "<owner-only-curl-config>"/u);
   assert.match(build, /Authorization: Bearer <access-token>/u);
   assert.match(build, /<QuickstartMeta/u);
-  assert.match(mint, /Evidence does not require Mint/u);
+  assert.match(mint, /Evidence Gateway does not require Mint/u);
   assert.match(mint, /--mint-config "<mint-directory>\/mint\.yaml"/u);
   assert.match(mint, /memory-only/u);
   assert.match(mint, /umask 077\nmint token/u);

@@ -144,10 +144,11 @@ export default defineConfig({
     // Retired first-call and source-review routes enter the supported local path.
     '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
-    // The retired hosted lab tutorial lands on a chooser that distinguishes
-    // that flow from the supported local beginner path. Solmara Lab keeps its
-    // own route: it is where the two doors are shown working together.
+    // Retired lab tutorials land on the current chooser or Evidence Gateway
+    // overview. The historical Solmara workflow used an obsolete Relay source
+    // path and is no longer published as current guidance.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
+    '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/evidence-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     // Retired advanced tutorials land on current task, explanation, or
@@ -208,7 +209,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: Registry Relay and Evidence, the runtime services that publish protected registry data and answer bounded questions with signed, minimum-disclosure assertions.',
+      description: 'Documentation for Registry Stack: Registry Relay and Evidence Gateway, the runtime services that publish protected registry data and answer bounded questions with signed, minimum-disclosure assertions.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -223,7 +224,7 @@ export default defineConfig({
         // Released archives carry their machine-readable corpus into the
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
-          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Evidence.',
+          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Evidence Gateway.',
           details: DISCOVERY_HEADER,
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
@@ -245,7 +246,7 @@ export default defineConfig({
           {
             base: 'reference/apis/evidence',
             schema: './openapi/registry-evidence.openapi.json',
-            sidebar: { label: 'Evidence API operations', collapsed: true },
+            sidebar: { label: 'Evidence Gateway API operations', collapsed: true },
           },
         ]),
       ],
@@ -285,35 +286,70 @@ export default defineConfig({
           items: [
             { label: 'Overview', link: '/' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
-            { label: 'Evaluate Evidence', slug: 'start/evaluate-evidence' },
+            { label: 'Evaluate Evidence Gateway', slug: 'start/evaluate-evidence' },
           ],
         },
         {
-          label: 'Answer with Evidence',
+          label: 'Answer with Evidence Gateway',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
-            { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
-            { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
-            { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
-            { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
-            { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
-            { label: 'Request a birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
-            { label: 'Issue DHIS2 immunization evidence', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
-            { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
-            { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },
-            { label: 'Prove a project', slug: 'tutorials/prove-an-evidence-project' },
-            { label: 'Build and deploy a project', slug: 'tutorials/build-and-deploy-evidence-project' },
-            { label: 'Issue access tokens with Mint', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
-            { label: 'Integrate a candidate with Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
-            { label: 'Verify as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
-            { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
-            { label: 'Request SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
-            { label: 'Configure Evidence', slug: 'configure/evidence' },
-            { label: 'Configure Registry Mint', slug: 'configure/mint' },
-            { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },
-            { label: 'Rotate signing keys', slug: 'tutorials/move-evidence-to-production-signing' },
-            { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
-            { label: 'See it over a Relay API', slug: 'tutorials/first-run-with-solmara-lab' },
+            {
+              label: 'Learn locally',
+              collapsed: true,
+              items: [
+                { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
+                { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
+                { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
+                { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
+                { label: 'Model a two-subject relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+              ],
+            },
+            {
+              label: 'Connect a source',
+              collapsed: true,
+              items: [
+                { label: 'Create a source from OpenAPI', slug: 'tutorials/connect-an-institution-source' },
+                { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
+                { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
+                { label: 'DHIS2: immunization summary (under review)', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+              ],
+            },
+            {
+              label: 'Prepare and deploy',
+              collapsed: true,
+              items: [
+                { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
+                { label: 'Configure Evidence Gateway', slug: 'configure/evidence' },
+                { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
+                { label: 'Deploy with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+              ],
+            },
+            {
+              label: 'Authenticate callers',
+              collapsed: true,
+              items: [
+                { label: 'Add Mint to Evidence Gateway', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
+                { label: 'Configure Registry Mint', slug: 'configure/mint' },
+                { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
+              ],
+            },
+            {
+              label: 'Verify and trust',
+              collapsed: true,
+              items: [
+                { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Enable SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
+                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+              ],
+            },
+            {
+              label: 'Operate Evidence Gateway',
+              collapsed: true,
+              items: [
+                { label: 'Rotate signing keys', slug: 'tutorials/move-evidence-to-production-signing' },
+                { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
+              ],
+            },
           ],
         },
         {
@@ -350,7 +386,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'security' },
-            { label: 'Evidence security model', slug: 'security/evidence' },
+            { label: 'Evidence Gateway security model', slug: 'security/evidence' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
             { label: 'Release trust', slug: 'security/openssf-evidence' },
@@ -372,13 +408,13 @@ export default defineConfig({
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
                 { label: 'Relay (narrative)', slug: 'reference/apis/registry-relay' },
-                { label: 'Evidence (narrative)', slug: 'reference/apis/registry-evidence' },
+                { label: 'Evidence Gateway (narrative)', slug: 'reference/apis/registry-evidence' },
                 // Generated operation pages for each schema (theme-aware, searchable).
                 ...openAPISidebarGroups,
               ],
             },
             { label: 'Errors and status codes', slug: 'reference/errors' },
-            { label: 'Evidence problems', slug: 'reference/evidence-problems' },
+            { label: 'Evidence Gateway problems', slug: 'reference/evidence-problems' },
             { label: 'Registry Mint', slug: 'reference/mint' },
             {
               label: 'Diagnostic catalogs',
@@ -404,17 +440,17 @@ export default defineConfig({
                   collapsed: true,
                   items: generatedProduct('Manifest').items,
                 },
-                // Evidence entered the product docset after every archived
+                // Evidence Gateway entered the product docset after every archived
                 // docset was sealed, so its group is optional: absent when an
-                // archived docset's generated sidebar has no Evidence product.
+                // archived docset's generated sidebar has no Evidence Gateway product.
                 // generate-sidebar.test.mjs pins its presence for the current
                 // docset, keeping the loud-failure property there.
-                ...(optionalGeneratedProduct('Evidence')
+                ...(optionalGeneratedProduct('Evidence Gateway')
                   ? [
                       {
-                        label: 'Registry Evidence',
+                        label: 'Evidence Gateway',
                         collapsed: true,
-                        items: generatedProduct('Evidence').items,
+                        items: generatedProduct('Evidence Gateway').items,
                       },
                     ]
                   : []),
@@ -449,7 +485,7 @@ export default defineConfig({
                 { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
                 { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
                 { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'RS-PR-EVIDENCE · Evidence protocol', slug: 'spec/rs-pr-evidence' },
+                { label: 'RS-PR-EVIDENCE · Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
                 { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
                 { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
                 { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },

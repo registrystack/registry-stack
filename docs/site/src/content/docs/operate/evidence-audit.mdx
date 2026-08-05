@@ -1,6 +1,6 @@
 ---
-title: Verify and interpret the Evidence audit chain
-description: Prove the integrity of retained Evidence audit history, understand what each phase establishes, and keep the subject-correlation boundary explicit.
+title: Verify and interpret the Evidence Gateway audit chain
+description: Prove the integrity of retained Evidence Gateway audit history, understand what each phase establishes, and keep the subject-correlation boundary explicit.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence writes a keyed, append-only audit chain. The chain is useful for proving which governed
+Evidence Gateway writes a keyed, append-only audit chain. The chain is useful for proving which governed
 operation was admitted, what concept was released, and whether retained records were modified. It
 does not repeat source values or automatically provide a citizen-facing access history.
 
@@ -40,7 +40,7 @@ The runtime file supplies the audit directory and hash-key reference. The comman
 on the command line, which prevents an operator from accidentally verifying a different chain or
 key than the deployment uses.
 
-If Evidence is still running, the writer keeps the active segment locked. Verification proves the
+If Evidence Gateway is still running, the writer keeps the active segment locked. Verification proves the
 sealed history and reports:
 
 ```text
@@ -62,7 +62,7 @@ For an admitted request, the native chain uses closed phases:
 | `disclosure-release` with `released` | The named concepts were serialized and durably recorded before the exact response bytes were released. | The source fact was true or the caller used the answer correctly. |
 | `denial` or `transient-failure` | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
 
-Failures that happen before Evidence has enough privacy-safe context, such as authentication
+Failures that happen before Evidence Gateway has enough privacy-safe context, such as authentication
 failure or an invalid selector, do not fabricate a native subject event. Do not expect every HTTP
 request to produce two audit records.
 
@@ -113,13 +113,13 @@ governed operator process.
 
 ## Protect the chain
 
-- Allow one Evidence writer per audit path.
+- Allow one Evidence Gateway writer per audit path.
 - Put the path on durable storage and monitor capacity before a fail-closed write stops release.
 - Back up every sealed segment and the active segment as one history.
 - Retain the matching audit hash key for as long as the history must remain verifiable.
 - Restrict event access separately from ordinary service operations.
 - Record retention, deletion, recovery, and requester-identity mapping responsibilities outside the
-  Evidence bundle.
+  Evidence Gateway bundle.
 
 Continue with [Retention and persistent state](../retention-and-persistent-state/) and
 [Backup and restore](../backup-and-restore/) for the surrounding operator procedures.

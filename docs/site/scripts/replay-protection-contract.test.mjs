@@ -31,8 +31,8 @@ test('RS-SEC-G keeps the exact product replay matrix', () => {
 
 // Evidence has no replay subsystem, and the page must not imply that the echoed
 // request nonce is one.
-test('RS-SEC-G states that Evidence holds no replay state', () => {
-  assert.match(replaySection, /Evidence holds no replay state at all/);
+test('RS-SEC-G states that Evidence Gateway holds no replay state', () => {
+  assert.match(replaySection, /Evidence Gateway holds no replay state at all/);
   assert.match(replaySection, /never stored, uniqueness-checked, or exposed/);
 });
 

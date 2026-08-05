@@ -2,14 +2,14 @@
   name: Registry Platform
   repo_path: ../registry-platform
   target_repo_path: ../registry-platform
-  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
+  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence Gateway, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
   owns:
     - Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
-    - Cross-service crate APIs that must behave consistently in Relay, Evidence, and other registry services.
+    - Cross-service crate APIs that must behave consistently in Relay, Evidence Gateway, and other registry services.
     - Shared Rust hygiene templates and supported integration-test fixtures.
   does_not_own:
     - Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.
-    - Evidence requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
+    - Evidence Gateway requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
     - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
   source_docs:
     - label: README
@@ -30,7 +30,7 @@
     - Registry Relay runtime data access.
     - Auth, audit, observability, DataFusion, Postgres, Axum, or secret handling.
     - Production source configuration.
-    - Evidence deployment configuration. An Evidence process loads one immutable governed bundle and one closed runtime file mounted read-only at startup, and reads no portable manifest.
+    - Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and one closed runtime file mounted read-only at startup, and reads no portable manifest.
   source_docs:
     - label: README
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/products/manifest/README.md
@@ -51,7 +51,7 @@
   does_not_own:
     - Source-registry provisioning, write-back, or domain-data mutation paths in v1.
     - Portable metadata schema ownership.
-    - Assertion evaluation, disclosure policy, and signing owned by Evidence, which reads a Relay API as one ordinary fixed HTTP source.
+    - Assertion evaluation, disclosure policy, and signing owned by Evidence Gateway.
     - Shared security and operational primitives owned by Registry Platform.
     - Storage table ids or arbitrary SQL in public APIs.
   source_docs:
@@ -63,7 +63,7 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-relay/docs/metadata.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
 - id: registry-evidence
-  name: Evidence
+  name: Evidence Gateway
   repo_path: ../registry-stack
   target_repo_path: ../registry-stack
   role: Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, it answers one bounded question about one subject and returns the smallest sufficient signed assertion, composing shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.
@@ -74,7 +74,7 @@
     - Assertion construction, signing, response format selection, and redacted audit events.
     - The `evidence` binary, one serving process, and one operator-controlled trust domain.
   does_not_own:
-    - General source access, protocol adaptation, or Registry Relay runtime internals. A Relay API is one ordinary fixed HTTP source.
+    - General source access, protocol adaptation, or Registry Relay runtime internals.
     - Record lookup or identity resolution beyond a provider outcome of match, no match, or ambiguous.
     - Portable metadata renderers owned by Registry Manifest.
     - Shared security and operational primitives owned by Registry Platform.
@@ -91,7 +91,7 @@
   name: Registry Mint
   repo_path: ../registry-stack
   target_repo_path: ../registry-stack
-  role: Supporting service rather than a product line. Issues short-lived, audience-bound access tokens to registered machine clients, so a resource server such as Evidence can require signed expiring tokens without the deployment first standing up a general purpose identity provider.
+  role: Supporting service rather than a product line. Issues short-lived, audience-bound access tokens to registered machine clients, so a resource server such as Evidence Gateway can require signed expiring tokens without the deployment first standing up a general purpose identity provider.
   owns:
     - The client registry that binds a client id to that client's own public keys and to the authority Mint asserts for it.
     - The `client_credentials` grant with `private_key_jwt` client authentication, verifying an assertion against the keys of the client it claims to be, selected before signature verification.
@@ -99,7 +99,7 @@
   does_not_own:
     - End-user authentication, identity proofing, or consent.
     - Caller-declared authority. Authority is written from the client registry, never from the assertion payload.
-    - Evidence requirement definitions, authorization grants, or disclosure decisions.
+    - Evidence Gateway requirement definitions, authorization grants, or disclosure decisions.
   source_docs:
     - label: README
       url: https://github.com/registrystack/registry-stack/blob/HEAD/crates/registry-mint/README.md
@@ -108,14 +108,15 @@
   name: Solmara Lab
   repo_path: ../solmara-lab
   target_repo_path: ../solmara-lab
-  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs a whole country's worth of registry services over generated synthetic data, with purpose-limited Relay APIs per authority, short-lived access tokens from Registry Mint, Evidence answering over a Relay-protected API, a citizen portal, and a public Visitor's Center.
+  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs a whole country's worth of registry services over generated synthetic data, with purpose-limited Relay APIs per authority, a citizen portal, and a public Visitor's Center.
   owns:
-    - End-to-end local and hosted demo topologies for Relay, Evidence, Mint, workload identity agents, Postgres, static metadata, scenario services, the citizen portal, and the Visitor's Center.
+    - End-to-end local and hosted demo topologies for Relay, workload identity agents, Postgres, static metadata, scenario services, the citizen portal, and the Visitor's Center.
     - Deterministic synthetic data, authority-owned demo configuration, purpose catalogues, and fictional country stories.
     - Demo orchestration, smoke checks, browser journeys, hosted deployment wrappers, and release-pin checks.
   does_not_own:
     - Production deployment guidance.
     - Normative API or metadata contracts.
+    - Evidence Gateway deployment or integration.
     - Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
   source_docs:
     - label: README

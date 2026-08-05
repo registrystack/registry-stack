@@ -2,10 +2,9 @@
 #
 # check-tutorial.sh
 #
-# Verify that src/content/docs/tutorials/first-run-with-solmara-lab.mdx still
-# matches reality by extracting its shell commands from the "## Steps" and
-# "## Verify" sections and executing them, in order, against a Solmara Lab
-# checkout.
+# Historical checker for the unpublished Solmara Lab tutorial. The tutorial
+# documents the former Evidence Gateway-over-Relay topology. Keep the executable
+# path for archaeology against its pinned lab source.
 #
 # Also applies the cheap drift pre-gate to the registryctl tutorials by
 # extracting every `sh` fence and asserting the command-line count. The
@@ -18,8 +17,8 @@
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
 #
 # CI policy:
-#   npm run check calls check:tutorial:dry-run, which guarantees extraction and
-#   drift detection only. check:tutorial executes the Solmara tutorial manually.
+#   npm run check runs only this checker's dry-run extraction and drift checks.
+#   check:tutorial executes the archived Solmara workflow manually when asked.
 #   The registryctl-tutorials CI job executes the registryctl tutorials through
 #   check-registryctl-tutorials.sh after this cheaper command-count pre-gate.
 #

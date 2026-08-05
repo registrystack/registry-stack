@@ -1,6 +1,6 @@
 ---
 title: Registry Stack documentation
-description: Answer a bounded question with Evidence, start a registry from a spreadsheet, or connect an existing registry.
+description: Answer a bounded question with Evidence Gateway, start a registry from a spreadsheet, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,24 +13,24 @@ standards_referenced: []
 ---
 
 Registry Stack helps an institution answer questions about data it already
-holds without giving callers direct access to the source. Two doors: Evidence
+holds without giving callers direct access to the source. Two doors: Evidence Gateway
 signs the answer to one bounded question, and Registry Relay exposes selected
 records through a protected read-only API.
 
-## Answer a bounded question with Evidence
+## Answer a bounded question with Evidence Gateway
 
-Use Evidence when the caller needs to learn only a fact, not to read a record.
+Use Evidence Gateway when the caller needs to learn only a fact, not to read a record.
 It answers one bounded question about one subject and signs the answer,
 releasing the answer rather than the row behind it. Adult status, residence
 region, professional licence status, and legal-parent relationship are coequal
 acceptance definitions; you author whichever one your institution needs, the
 same way.
 
-[Evidence overview](start/evidence-quickstart/) explains the source, assertion,
+[Evidence Gateway overview](start/evidence-quickstart/) explains the source, assertion,
 verification, and audit boundaries. Continue with
-[your first Evidence assertion](tutorials/first-evidence-assertion/) to see the
+[your first Evidence Gateway assertion](tutorials/first-evidence-assertion/) to see the
 boundary in one verified request. When local authoring is complete,
-[build and deploy an Evidence project](tutorials/build-and-deploy-evidence-project/) creates a
+[build and deploy an Evidence Gateway project](tutorials/build-and-deploy-evidence-project/) creates a
 reviewed candidate without promoting local development state. Registry Mint remains an optional
 token issuer for deployments without a suitable identity provider.
 
@@ -62,17 +62,17 @@ the source requires authentication or response normalization.
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.
-Evidence owns bounded question answering, signing, and minimum disclosure, and
-runs independently of Relay; it can read a Relay API as one fixed HTTP source.
+Evidence Gateway owns bounded question answering, signing, and minimum disclosure, and
+runs independently of Relay against its own configured authoritative HTTP sources.
 The caller receives only the output authorized for that service.
 
 Both registryctl paths, spreadsheet and HTTP, use the same authoring, offline
 test, disposable development, and build commands. The 1.0 project-local
 workbook path stops there. A governed deployment starts after an
 operator-managed HTTP source is bound, then continues through independent
-approval and package generation. Evidence is not one of those paths: Evidence
+approval and package generation. Evidence Gateway is not one of those paths: Evidence Gateway
 has its own toolset and deployment project shape, covered by the
-[Evidence overview](start/evidence-quickstart/).
+[Evidence Gateway overview](start/evidence-quickstart/).
 
 ## Move beyond the first run
 

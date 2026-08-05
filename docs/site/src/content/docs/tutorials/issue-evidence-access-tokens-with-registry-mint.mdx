@@ -1,6 +1,6 @@
 ---
-title: Issue Evidence access tokens with Registry Mint
-description: Configure Registry Mint as an optional OIDC issuer for a completed Evidence candidate when the deployment has no suitable identity provider.
+title: Issue Evidence Gateway access tokens with Registry Mint
+description: Configure Registry Mint as an optional OIDC issuer for a completed Evidence Gateway candidate when the deployment has no suitable identity provider.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,31 +17,31 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Start with the completed candidate from
-[Build and deploy an Evidence project](../build-and-deploy-evidence-project/). Use Registry Mint
-when that deployment has no suitable OpenID Connect (OIDC) issuer for Evidence. Mint is a separate
-supporting service. Evidence does not require Mint, and an external HTTPS OIDC issuer follows the
-same Evidence authentication contract.
+[Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/). Use Registry Mint
+when that deployment has no suitable OpenID Connect (OIDC) issuer for Evidence Gateway. Mint is a separate
+supporting service. Evidence Gateway does not require Mint, and an external HTTPS OIDC issuer follows the
+same Evidence Gateway authentication contract.
 
 <QuickstartMeta
-  outcome="A separately checked Mint issuer and one registered-client token accepted by the completed Evidence candidate."
-  time="About 30 minutes after the Evidence candidate and client registration are reviewed"
+  outcome="A separately checked Mint issuer and one registered-client token accepted by the completed Evidence Gateway candidate."
+  time="About 30 minutes after the Evidence Gateway candidate and client registration are reviewed"
   level="Production token issuance with a synthetic deployment client"
-  prerequisites={['Released mint and evidencectl binaries', 'A completed Evidence candidate', 'A registered machine client and owner-only private JWK', 'Operator-controlled HTTPS routing']}
+  prerequisites={['Released mint and evidencectl binaries', 'A completed Evidence Gateway candidate', 'A registered machine client and owner-only private JWK', 'Operator-controlled HTTPS routing']}
 />
 
 ## Before you start
 
-You need a completed Evidence candidate, a public HTTPS issuer name for Mint, a registered machine
+You need a completed Evidence Gateway candidate, a public HTTPS issuer name for Mint, a registered machine
 caller, and released `mint` and `evidencectl` binaries. Mint serves one active process in Version 1.
 Its client-assertion replay cache is memory-only and clears when the process restarts. Do not make a
 high-availability or durable replay-protection claim for this deployment shape.
 
-Generate Mint's signing key independently from Evidence's signing key. Keep it owner-only outside
-the Evidence candidate.
+Generate Mint's signing key independently from Evidence Gateway's signing key. Keep it owner-only outside
+the Evidence Gateway candidate.
 
 ## Author Mint separately
 
-Create a Mint directory beside, not inside, the Evidence candidate:
+Create a Mint directory beside, not inside, the Evidence Gateway candidate:
 
 ```text
 mint/
@@ -54,9 +54,9 @@ mint/
 
 Set Mint's `issuer` to its public HTTPS identity. Configure its listener on a private address and
 let operator-controlled routing or split DNS resolve the public HTTPS issuer inside the private
-network. Do not replace Evidence's issuer or JWKS URI with an internal plain-HTTP service name.
+network. Do not replace Evidence Gateway's issuer or JWKS URI with an internal plain-HTTP service name.
 
-Register each client with its public JWK, reviewed principal, requester tags, Evidence audience,
+Register each client with its public JWK, reviewed principal, requester tags, Evidence Gateway audience,
 and optional grant. Mint writes authority from this registration, never from the client's request.
 
 ## Check the two configurations
@@ -67,7 +67,7 @@ Validate Mint without opening a listener:
 mint check --config "<mint-directory>/mint.yaml"
 ```
 
-Then compare the completed Evidence candidate with Mint. This check is read-only and does not copy
+Then compare the completed Evidence Gateway candidate with Mint. This check is read-only and does not copy
 or modify either project:
 
 ```sh
@@ -77,7 +77,7 @@ evidencectl doctor \
 ```
 
 The paired check compares issuer, JWKS URI, audiences, admitted algorithm and token type, plus the
-principal, requester-tags, Evidence-audience, grant-id, grant-authority, and optional actor claim
+principal, requester-tags, Evidence Gateway audience, grant-id, grant-authority, and optional actor claim
 names. It does not decide whether a client has legal authority, create an authority profile, or
 register a client.
 
@@ -101,14 +101,14 @@ mint token \
   --key "<owner-only-client-private-jwk>" > "<owner-only-token-file>"
 ```
 
-Send the token to Evidence through its real HTTPS boundary using the owner-only Curl configuration
-described in [Build and deploy an Evidence project](../build-and-deploy-evidence-project/).
+Send the token to Evidence Gateway through its real HTTPS boundary using the owner-only Curl configuration
+described in [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/).
 That request proves the selected client-to-grant path. The paired doctor check does not.
 
 ## Expected result
 
-Mint accepts the reviewed client assertion and Evidence accepts the resulting `at+jwt` access token
-over its HTTPS boundary. Retain the Evidence response and audit verification result, not the token.
+Mint accepts the reviewed client assertion and Evidence Gateway accepts the resulting `at+jwt` access token
+over its HTTPS boundary. Retain the Evidence Gateway response and audit verification result, not the token.
 
 ## Clean up the token file
 
@@ -121,6 +121,6 @@ rm -f "<owner-only-token-file>"
 
 ## Next
 
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
 - [Configure Registry Mint](../../configure/mint/)
 - [Registry Mint reference](../../reference/mint/)

@@ -85,9 +85,9 @@ Do not add a source-free, self-attested, delegated-attestation, or caller-define
 If an answer has no reviewed source, keep it out of the service.
 
 A caller that needs a signed, minimum-disclosure assertion rather than a protected read calls
-[Evidence](../../products/registry-evidence/) directly.
-Evidence can consume this Relay-protected API through its ordinary fixed HTTP source contract; it
-does not inherit Relay's authorization or policy model.
+[Evidence Gateway](../../products/registry-evidence/) directly.
+Evidence Gateway does not consume this Relay-protected API. It uses its own configured authoritative
+HTTP source and does not inherit Relay's authorization or policy model.
 
 ## Prove the source contract offline
 

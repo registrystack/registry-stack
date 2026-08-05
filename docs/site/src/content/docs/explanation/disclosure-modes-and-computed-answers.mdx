@@ -1,6 +1,6 @@
 ---
 title: Disclosure modes and computed answers
-description: Why Evidence answers a question about a subject with a computed value whose shape is fixed in advance, instead of handing back the source record.
+description: Why Evidence Gateway answers a question about a subject with a computed value whose shape is fixed in advance, instead of handing back the source record.
 status: draft
 owner: registry-docs
 source_repos:
@@ -25,10 +25,10 @@ A requirement is deliberately narrow and reusable. A requirement that returned a
 over-collect, and a requirement that embedded one consumer's eligibility or action rules could not
 be reused as neutral evidence.
 
-## Evidence has no caller-selectable disclosure modes
+## Evidence Gateway has no caller-selectable disclosure modes
 
 The most important difference is a subtraction.
-An Evidence request carries four required members: a per-request nonce, the requirement identifier,
+An Evidence Gateway request carries four required members: a per-request nonce, the requirement identifier,
 the purpose, and one selector per declared subject role. The only optional member is a holder
 public key, which is echoed into the SD-JWT VC `cnf` claim and never reaches authorization,
 selectors, scripts, source requests, or audit. The request schema is closed and rejects anything
@@ -36,7 +36,7 @@ else (`products/evidence/contracts/request.schema.yaml`).
 There is no disclosure mode, no redaction field list, no allowed set, and no downgrade policy,
 because there is nothing for a caller to choose.
 
-Evidence answers a predefined requirement and returns that requirement's answer.
+Evidence Gateway answers a predefined requirement and returns that requirement's answer.
 It does not run a disclosure policy engine over an arbitrary record, and it has no notion of "the
 same answer, revealed at three levels of detail."
 How much a requirement reveals is fixed when the requirement is authored and reviewed, and it is
@@ -78,7 +78,7 @@ serialized value budget of 65536 bytes.
 
 ## Four questions, four answer shapes
 
-Four acceptance definitions carry equal weight in the Evidence contract. None is privileged, none
+Four acceptance definitions carry equal weight in the Evidence Gateway contract. None is privileged, none
 is a built-in type, and none has a special route (`AGENTS.md`, `products/evidence/CONCEPT.md`).
 They are worth reading together because they show the same mechanism producing four differently
 shaped answers.
@@ -99,10 +99,10 @@ shaped answers.
 
 The fixtures for all four are in `products/evidence/fixtures/acceptance/`.
 
-## Evidence is not a consumer decision
+## Evidence Gateway is not a consumer decision
 
 Registry Relay source-access and adaptation policy controls how an authoritative source is read
-and normalized. Evidence authorization and requirement policy control which requirement is
+and normalized. Evidence Gateway authorization and requirement policy control which requirement is
 evaluated, who can request it, for what purpose, and exactly which values leave the service. The
 evidence consumer determines how the evidence is used, while the decision owner remains accountable
 for requirements, decisions, and actions.
@@ -116,16 +116,16 @@ is required.
 
 ## There is no redacted answer
 
-Evidence cannot return an answer that carries neither a value nor a satisfaction outcome, and this
+Evidence Gateway cannot return an answer that carries neither a value nor a satisfaction outcome, and this
 is structural rather than an omission: an assertion must carry at least one
 supported value, so an assertion with nothing in it cannot be produced
 (`products/evidence/contracts/evidence.schema.yaml`).
 
-An Evidence request that cannot be answered does not return an empty assertion. It returns an
+An Evidence Gateway request that cannot be answered does not return an empty assertion. It returns an
 `application/problem+json` document with a closed member set, and no assertion is produced at all
 (`products/evidence/contracts/problem-contract.yaml`).
 
-What used to be modelled as a redacted answer is modelled in Evidence as a different requirement,
+What used to be modelled as a redacted answer is modelled in Evidence Gateway as a different requirement,
 or as a coarser value form on the same requirement, and is reviewed as such.
 
 ## A refusal is not an existence oracle
@@ -176,7 +176,7 @@ can match on.
 
 ## Response formats are not disclosure levels
 
-Evidence can serialize the same assertion in up to three formats: a signed flattened JWS, an
+Evidence Gateway can serialize the same assertion in up to three formats: a signed flattened JWS, an
 SD-JWT VC under a frozen local profile, and a separately typed unsigned envelope. `signed-jws` is
 mandatory in every bundle and is the default (`products/evidence/contracts/bundle.schema.yaml`).
 
@@ -220,7 +220,7 @@ A few boundaries matter when you evaluate this design:
   every purpose authorized to invoke it. Purpose gates whether a caller may ask; a purpose that
   justifies a coarser answer needs its own requirement.
 - The caller cannot inject a value, but matching strictness is configured: the computed answer rests
-  on Evidence deriving it from one reviewed source consultation. A lookup resolves to exactly one
+  on Evidence Gateway deriving it from one reviewed source consultation. A lookup resolves to exactly one
   match, no match, or ambiguity, and matching is only as strict as that reviewed source contract.
 - This is not zero-knowledge: a boolean answer is computed inside the service from data the service
   read, and SD-JWT selective disclosure is digest omission. Neither is a zero-knowledge proof.
@@ -236,7 +236,7 @@ the full inventory.
 ## Related
 
 - [Security overview](../../security/): the full posture this fits into
-- [Evidence security model](../../security/evidence/): the invariants named on this page
+- [Evidence Gateway security model](../../security/evidence/): the invariants named on this page
 - [Known limitations and non-guarantees](../known-limitations/): where the edges are
 - [Records stay home](../records-stay-home/): what stays inside the institution and what crosses out
 - How a requirement and its disclosure are defined:

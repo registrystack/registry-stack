@@ -1,6 +1,6 @@
 ---
 title: Run the generated single-node Compose package
-description: Generate, verify, initialize, and run the governed Relay package, then include Evidence and Registry Mint under explicit operator ownership when needed.
+description: Generate, verify, initialize, and run the governed Relay package, then include Evidence Gateway and Registry Mint under explicit operator ownership when needed.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,7 +15,7 @@ standards_referenced: []
 ---
 
 Use this guide to hand independently approved Registry Relay bundles to a single-node Docker
-Compose deployment, then include Evidence and Registry Mint in that same application under
+Compose deployment, then include Evidence Gateway and Registry Mint in that same application under
 explicit operator ownership when the deployment needs them.
 The generated package remains portable after handoff and can run with Docker Compose without
 Registryctl.
@@ -29,9 +29,9 @@ Use the generated package when:
 - Docker Compose 2.35.0 or later is available
 - Each Relay lane has an independently signed bundle and trust anchor
 
-Registryctl generates a package for the Relay lanes only. Evidence and Registry Mint are not
+Registryctl generates a package for the Relay lanes only. Evidence Gateway and Registry Mint are not
 registryctl-generated products: an operator adds them as ordinary services in the same
-application, following [Add Evidence and Registry Mint to the application](#add-evidence-and-registry-mint-to-the-application).
+application, following [Add Evidence Gateway and Registry Mint to the application](#add-evidence-gateway-and-registry-mint-to-the-application).
 
 The package does not provide high availability, Kubernetes, an external database, or direct
 non-loopback host publishing.
@@ -46,7 +46,7 @@ You need:
 - The released Registryctl installation whose signed release lock authorizes the images
 - Operator-owned environment, signing, workload-credential, and PostgreSQL TLS files
 - Durable storage for PostgreSQL and each product's anti-rollback state
-- An operator-owned `runtime.yaml` (and referenced secret files) for each Evidence deployment the
+- An operator-owned `runtime.yaml` (and referenced secret files) for each Evidence Gateway deployment the
   application will include, and an operator-owned `mint.yaml` for Registry Mint when the
   deployment has no identity provider
 
@@ -263,31 +263,31 @@ Security (TLS), hostnames, edge request admission, network access, and compatibi
 generated package.
 The package verification result does not extend to the application model.
 
-## Add Evidence and Registry Mint to the application
+## Add Evidence Gateway and Registry Mint to the application
 
-Evidence and Registry Mint are not lanes Registryctl generates, verifies, or initializes. An
+Evidence Gateway and Registry Mint are not lanes Registryctl generates, verifies, or initializes. An
 operator runs each as an ordinary service in the same application `compose.yaml` that includes
 the generated Relay package, alongside it rather than inside it.
 
 Each service needs its own operator-owned, startup-only configuration document mounted read-only:
-a `runtime.yaml` for every Evidence deployment (naming its immutable bundle directory, listener,
+a `runtime.yaml` for every Evidence Gateway deployment (naming its immutable bundle directory, listener,
 secret root, and audit path) and, when the deployment has no identity provider to issue access
 tokens, a `mint.yaml` for Registry Mint (naming its signing key and client registry directory).
-[Configure Evidence](../../configure/evidence/) and
+[Configure Evidence Gateway](../../configure/evidence/) and
 [Configure Registry Mint](../../configure/mint/) cover both documents field by field.
-For an approved Evidence candidate, use
-[Integrate an Evidence candidate with Docker Compose](../../tutorials/integrate-evidence-candidate-with-docker-compose/).
+For an approved Evidence Gateway candidate, use
+[Integrate an Evidence Gateway candidate with Docker Compose](../../tutorials/integrate-evidence-candidate-with-docker-compose/).
 That guide keeps the candidate bundle, container runtime, secret root, and audit storage separate.
 
-Every listener either binary opens, including Evidence's optional `metricsListener`, must bind to
+Every listener either binary opens, including Evidence Gateway's optional `metricsListener`, must bind to
 a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local address; a wildcard or public bind is
 refused at startup. Binding to the container's own loopback address makes a service reachable only
 from inside that same container, so a reverse proxy or gateway container that needs to reach
-Evidence or Registry Mint over the Compose network binds them to a private address on that network
+Evidence Gateway or Registry Mint over the Compose network binds them to a private address on that network
 instead, never to `0.0.0.0`. TLS termination stays an operator concern here exactly as it does for
-the generated Relay package: Evidence's `listener.tlsTermination` is fixed to
+the generated Relay package: Evidence Gateway's `listener.tlsTermination` is fixed to
 `operator-controlled-upstream`, so the same reverse proxy that terminates TLS for Relay can sit in
-front of Evidence and Registry Mint.
+front of Evidence Gateway and Registry Mint.
 
 Validate each configuration before opening a socket, then start the service:
 
@@ -300,10 +300,9 @@ mint serve --config /etc/mint/mint.yaml
 
 Use `GET /health` and `GET /ready` on each service's own listener for a Compose health check, the
 same way the generated Relay package uses `up --wait` for its own health conditions.
-[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) walks through Registry
-Mint, Relay, and Evidence composed behind one TLS-terminating gateway end to end; that tutorial is
-a lab environment, not a production posture, but the shape of the composition, one gateway in
-front of independently configured services with no host port of their own, carries over.
+Registry Relay, Evidence Gateway, and Registry Mint can share an operator-managed TLS termination
+layer, but they remain independently configured services. Sharing ingress does not create a source
+or authorization path between Relay and Evidence Gateway.
 
 ## Customize the generated package
 
@@ -338,4 +337,4 @@ invalid, not an adaptation.
 | Verification reports `invalid` | A hard product, secret, state, network, or privilege invariant failed. | Restore the generated boundary. Do not downgrade the failure to an override. |
 | Ordinary startup reports missing state | The one-time initialization was not completed or durable state was lost. | Complete first installation, or restore the exact recovery consistency group. Do not reinitialize an existing identity. |
 | An including application cannot reach a public service | The operator-owned include graph or network wiring is incomplete. | Correct the application model and rerun the application's Compose validation. |
-| Evidence or Registry Mint refuses to start with a listener bind error | `listener.bindHost` (or `metricsListener.bindHost`) is a wildcard, public, or unspecified address. | Bind to loopback for same-container access, or to a private address on the Compose network for the proxy to reach. |
+| Evidence Gateway or Registry Mint refuses to start with a listener bind error | `listener.bindHost` (or `metricsListener.bindHost`) is a wildcard, public, or unspecified address. | Bind to loopback for same-container access, or to a private address on the Compose network for the proxy to reach. |

@@ -80,7 +80,7 @@ For setup steps, scope strings, and credential configuration, see
 - **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
   `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
   Runtime binding accepts only `access.kind: registry-evidence`, so an offering points at a
-  Registry Evidence deployment: its `endpoint_url` is where the assertion is requested and its
+   Evidence Gateway deployment: its `endpoint_url` is where the assertion is requested and its
   `discovery_url` resolves the issuer keys a relying party needs to verify the response. Relay
   never answers the evidence request behind an offering; an offering is a pointer somewhere
   else.

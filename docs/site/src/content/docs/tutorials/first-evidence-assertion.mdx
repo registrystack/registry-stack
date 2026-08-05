@@ -1,5 +1,5 @@
 ---
-title: Get your first Evidence assertion
+title: Get your first Evidence Gateway assertion
 description: Run a local registry and verify a signed adult-status answer without copying the source record.
 status: current
 owner: registry-docs
@@ -15,7 +15,7 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Evidence reads an authorized source record, answers a preconfigured question, and signs only the
+Evidence Gateway reads an authorized source record, answers a preconfigured question, and signs only the
 governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
 person's name or date of birth.
 
@@ -32,7 +32,7 @@ person's name or date of birth.
 %%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
     participant C as Tutorial caller
-    participant E as Evidence
+    participant E as Evidence Gateway
     participant R as Tutorial registry
 
     C->>E: Authorized request<br/>adult-status, person_id=person-123
@@ -44,19 +44,19 @@ sequenceDiagram
 ```
 
 Before the request, Registry Mint gives the tutorial caller short-lived local authorization.
-Evidence and the registry process the identifier and date of birth to answer the question, but the
+Evidence Gateway and the registry process the identifier and date of birth to answer the question, but the
 released assertion contains only the governed answer and an opaque subject binding.
 
-## Install Evidence
+## Install Evidence Gateway
 
-Install the latest Evidence toolset:
+Install the latest Evidence Gateway toolset:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 evidencectl --version
 ```
 
-The installer provides `evidencectl` and the local Evidence and Registry Mint runtimes used later
+The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
 in the tutorial.
 
 ## Start a small registry
@@ -144,11 +144,11 @@ print("Registry listening on http://127.0.0.1:8000", flush=True)
 ThreadingHTTPServer(("127.0.0.1", 8000), Registry).serve_forever()
 ```
 
-You do not need to understand every line of the server. Three details connect it to Evidence:
+You do not need to understand every line of the server. Three details connect it to Evidence Gateway:
 
 - `/people/{person_id}` returns a complete person record.
 - `/openapi.json` describes that endpoint and its response.
-- `getPerson` is the OpenAPI operation that the Evidence question will select.
+- `getPerson` is the OpenAPI operation that the Evidence Gateway question will select.
 
 In one terminal, start the registry and leave it running:
 
@@ -178,7 +178,7 @@ curl -s http://127.0.0.1:8000/people/person-123 | python3 -m json.tool
 The registry returns an identifier, a name, and a date of birth. The verified assertion will contain
 none of those source values.
 
-## Create the Evidence project
+## Create the Evidence Gateway project
 
 Create a local project from the registry's OpenAPI description:
 
@@ -254,7 +254,7 @@ matching the purpose declared here.
 ### `derivations/adult-status.rhai`
 
 Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
-scripting language Evidence uses for requirement-specific derivations:
+scripting language Evidence Gateway uses for requirement-specific derivations:
 
 ```rhai
 fn answer(facts, selectors, context) {
@@ -268,24 +268,24 @@ The derivation performs four operations:
 
 1. Require and parse the selected date of birth.
 2. Calculate the eighteenth birthday using calendar arithmetic.
-3. Compare it with `context.legal_local_date`, which Evidence derives from the observation instant
+3. Compare it with `context.legal_local_date`, which Evidence Gateway derives from the observation instant
    in the configured timezone.
 4. Return a map containing exactly the declared `is_adult` answer.
 
-Evidence validates the returned name and boolean form before signing.
+Evidence Gateway validates the returned name and boolean form before signing.
 
-Start Evidence and Registry Mint:
+Start Evidence Gateway and Registry Mint:
 
 ```sh
 evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-This command starts Evidence and Mint only. The Python registry remains the process you started in
+This command starts Evidence Gateway and Mint only. The Python registry remains the process you started in
 the first terminal.
 
 ## Request an assertion
@@ -300,7 +300,7 @@ evidencectl request prepare adult-status \
 ```
 
 Preparation asks the local Mint for short-lived authorization and records the verification
-expectations before a response exists. It does not send the request to Evidence or contact the
+expectations before a response exists. It does not send the request to Evidence Gateway or contact the
 registry. It creates exactly these owner-only artifacts:
 
 ```text
@@ -333,7 +333,7 @@ curl --silent --show-error --fail-with-body \
 HTTP 200
 ```
 
-`curl` called Evidence, Evidence called the registry, and the HTTP response is a signed flattened
+`curl` called Evidence Gateway, Evidence Gateway called the registry, and the HTTP response is a signed flattened
 JSON Web Signature (JWS). A successful HTTP response is not yet a trusted assertion.
 
 ## Verify before reading
@@ -389,20 +389,20 @@ answers the authored question without becoming another copy of the registry reco
 
 The owner-only `request.json` still records that this transaction concerned `person-123`, while
 `verification.json` records the expected opaque subject binding and request nonce. Retain those
-files with the signed response when you need to [verify Evidence later as a
+files with the signed response when you need to [verify Evidence Gateway later as a
 consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
 assertion alone.
 
 ## Stop the local services
 
-Stop Evidence and Mint before reading the completed audit chain:
+Stop Evidence Gateway and Mint before reading the completed audit chain:
 
 ```sh
 evidencectl dev stop
 ```
 
 ```text
-Local Evidence stopped
+Local Evidence Gateway stopped
 ```
 
 ## Inspect the audit entry
@@ -424,14 +424,14 @@ record or access token.
 
 ## Clean up
 
-Remove the stopped local generation, including the sealed bundle that Evidence used:
+Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
 
 ```sh
 evidencectl dev clean
 ```
 
 ```text
-Removed stopped local Evidence state
+Removed stopped local Evidence Gateway state
 ```
 
 This preserves your editable questions, derivations, keys, and request artifacts. It removes
@@ -452,8 +452,8 @@ Choose two different unused ports when you start the local services:
 evidencectl dev --detach --evidence-port 8180 --mint-port 8181
 ```
 
-Evidence uses the selected ports consistently in its runtime, Mint authorization, readiness
-checks, and generated request artifacts. Send the assertion request to the selected Evidence port,
+Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
+checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
 such as `http://127.0.0.1:8180/v1/evidence`.
 
 The development profile binds both services to loopback in the environment where the command
@@ -465,5 +465,5 @@ loopback.
 
 - [Return a governed value](../return-a-governed-value/)
 - [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
-- [Review the Evidence overview](../../start/evidence-quickstart/)
-- [Evaluate Evidence's operating requirements](../../start/evaluate-evidence/)
+- [Review the Evidence Gateway overview](../../start/evidence-quickstart/)
+- [Evaluate Evidence Gateway's operating requirements](../../start/evaluate-evidence/)

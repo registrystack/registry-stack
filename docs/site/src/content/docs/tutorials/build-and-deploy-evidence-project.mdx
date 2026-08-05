@@ -1,6 +1,6 @@
 ---
-title: Build and deploy an Evidence project
-description: Compile one editable Evidence project into a reviewed candidate and hand it to an operator without copying local development state.
+title: Build and deploy an Evidence Gateway project
+description: Compile one editable Evidence Gateway project into a reviewed candidate and hand it to an operator without copying local development state.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,25 +16,25 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Prove an Evidence project](../prove-an-evidence-project/) and its review before starting
+Complete [Prove an Evidence Gateway project](../prove-an-evidence-project/) and its review before starting
 this tutorial. You will turn that editable project into one reviewed production candidate, then
 bind its secrets and runtime paths on the target host. This tutorial uses released `evidence` and
 `evidencectl` binaries. It does not copy `.evidence/dev`, generate a key, register a caller, or
 deploy a service for you.
 
 <QuickstartMeta
-  outcome="A reviewed Evidence candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
+  outcome="A reviewed Evidence Gateway candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
   time="About 45 minutes after the authoring project is reviewed"
   level="Production handoff with synthetic deployment data"
-  prerequisites={['A released Evidence toolset', 'A reviewed editable Evidence project', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
+  prerequisites={['A released Evidence Gateway toolset', 'A reviewed editable Evidence Gateway project', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
 />
 
 ## Before you start
 
-You need a released Evidence toolset on `PATH`, an editable project that runs locally, and an
+You need a released Evidence Gateway toolset on `PATH`, an editable project that runs locally, and an
 operator who can provision owner-only secrets and a private listener on the target host.
 Use Registry Mint only when no suitable OpenID Connect (OIDC) issuer exists. An existing OIDC
-issuer and Mint are equivalent choices from Evidence's perspective.
+issuer and Mint are equivalent choices from Evidence Gateway's perspective.
 
 Confirm the released binaries before changing the project:
 
@@ -91,7 +91,7 @@ institution-evidence/
 limits, signing, optional response formats, and authority profiles. Secret references use
 `secret:file/<name>` only. Do not place secret values or absolute secret paths in this file.
 
-`runtime.yaml` is the ordinary Evidence runtime document. It binds the final absolute candidate
+`runtime.yaml` is the ordinary Evidence Gateway runtime document. It binds the final absolute candidate
 bundle path, private listener, secret root, audit path, and optional private certificate authority
 files. The build copies its bytes unchanged, so the target host remains the authority for path,
 ownership, permission, secret, and trust validation.
@@ -130,9 +130,9 @@ source endpoint. Record the printed bundle revision with the approved candidate 
 
 ## Provision the target host
 
-Transfer the exact candidate. The operator independently provisions the Evidence signing key,
+Transfer the exact candidate. The operator independently provisions the Evidence Gateway signing key,
 audit HMAC key, subject-binding HMAC key, and source credentials beneath the runtime secret root.
-Make the candidate runtime and bundle non-writable to the Evidence service identity.
+Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity.
 
 Run the grouped offline ceremony once after the candidate, runtime bindings, trust files, and
 secrets are in place:
@@ -142,7 +142,7 @@ evidencectl doctor --project "<candidate>"
 evidencectl fixtures run --project "<candidate>"
 ```
 
-Start Evidence only after both commands pass:
+Start Evidence Gateway only after both commands pass:
 
 ```sh
 evidence --runtime "<candidate>/runtime.yaml" serve
@@ -211,6 +211,6 @@ rm -f "<owner-only-curl-config>"
 
 ## Next
 
-- [Issue Evidence access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
-- [Integrate an Evidence candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
-- [Manage Evidence verifier trust](../manage-evidence-verifier-trust/)
+- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
+- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

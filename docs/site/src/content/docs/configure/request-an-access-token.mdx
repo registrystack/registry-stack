@@ -17,7 +17,7 @@ than the `mint token` command.
 ## When to use this
 
 Use this page when you are integrating a registered client into an application and need an access
-token to present to a resource server such as Evidence. If you only need a token at a terminal,
+token to present to a resource server such as Evidence Gateway. If you only need a token at a terminal,
 `mint token` already does all of this; see
 [Obtain a token](../mint/#obtain-a-token).
 
@@ -242,10 +242,10 @@ those five things went wrong, so check them in order locally.
 | `401 invalid_client` after a working period | The assertion's `exp` exceeds `clientAssertion.maximumLifetimeSeconds`, or the client clock has drifted beyond the tolerated skew. |
 | `400 invalid_request` | A required form field is missing or duplicated, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` lands here too. |
 | `400 unsupported_grant_type` | `grant_type` is present but is not exactly `client_credentials`. |
-| The resource server rejects a token Registry Mint issued | The two deployments name different claims for the same authority field. See [How Evidence verifies these tokens](../../reference/mint/#how-evidence-verifies-these-tokens). |
+| The resource server rejects a token Registry Mint issued | The two deployments name different claims for the same authority field. See [How Evidence Gateway verifies these tokens](../../reference/mint/#how-evidence-gateway-verifies-these-tokens). |
 
 ## Next
 
-- [How a client, Registry Mint, and Evidence interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-interact)
+- [How a client, Registry Mint, and Evidence Gateway interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-gateway-interact)
 - [Configure Registry Mint](../mint/)
 - [Registry Mint reference](../../reference/mint/)

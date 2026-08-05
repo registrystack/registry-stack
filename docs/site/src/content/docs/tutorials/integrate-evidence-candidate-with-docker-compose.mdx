@@ -1,6 +1,6 @@
 ---
-title: Integrate an Evidence candidate with Docker Compose
-description: Mount an approved Evidence candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
+title: Integrate an Evidence Gateway candidate with Docker Compose
+description: Mount an approved Evidence Gateway candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,16 +16,16 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Start with the approved candidate created in
-[Build and deploy an Evidence project](../build-and-deploy-evidence-project/). This guide runs that
+[Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/). This guide runs that
 candidate in an existing Docker Compose application. Compose is an operator-owned deployment
 adapter, not output from `evidencectl build`. The candidate bundle stays unchanged across host and
 container deployments.
 
 <QuickstartMeta
-  outcome="An approved Evidence candidate mounted unchanged with a separate runtime, secret root, and persistent audit volume."
+  outcome="An approved Evidence Gateway candidate mounted unchanged with a separate runtime, secret root, and persistent audit volume."
   time="About 20 minutes after the image and candidate are approved"
   level="Operator-owned Docker Compose deployment"
-  prerequisites={['Docker Compose', 'An approved Evidence candidate', 'A reviewed Evidence image', 'Persistent storage prepared for UID and GID 65532']}
+  prerequisites={['Docker Compose', 'An approved Evidence Gateway candidate', 'A reviewed Evidence Gateway image', 'Persistent storage prepared for UID and GID 65532']}
 />
 
 ## Before you start
@@ -44,16 +44,16 @@ The Compose service mounts four independently owned paths:
 ```text
 candidate/bundle       -> /etc/registry-evidence/bundle       read-only
 runtime.docker.yaml    -> /etc/registry-evidence/runtime.yaml read-only
-Evidence secret root   -> /run/secrets/registry-evidence      read-only
-Evidence audit volume  -> /var/lib/registry-evidence          writable
+Evidence Gateway secret root   -> /run/secrets/registry-evidence      read-only
+Evidence Gateway audit volume  -> /var/lib/registry-evidence          writable
 ```
 
 Keep the bundle and runtime read-only. A read-only mount establishes their immutability, but does
-not waive secret ownership or mode validation. The maintained Evidence image runs as UID and GID
+not waive secret ownership or mode validation. The maintained Evidence Gateway image runs as UID and GID
 `65532`; pin that identity in the Compose file and make every secret file acceptable to it with the
 required owner-only permissions. A different reviewed image requires an explicitly reviewed UID
 and matching ownership.
-Prepare the persistent audit volume for that same identity before startup. Do not run Evidence as
+Prepare the persistent audit volume for that same identity before startup. Do not run Evidence Gateway as
 root to compensate for an audit volume with the wrong owner.
 
 ```yaml
@@ -69,7 +69,7 @@ services:
       - evidence-audit:/var/lib/registry-evidence
 ```
 
-Bind Evidence to a private Compose-network address. Put TLS termination and public routing in an
+Bind Evidence Gateway to a private Compose-network address. Put TLS termination and public routing in an
 operator-controlled service ahead of that listener.
 
 ## Validate in the container context
@@ -100,7 +100,7 @@ audit contents.
 ## Add optional Mint
 
 When the same application uses Mint, run Mint as a separate private service. Mint retains its public
-HTTPS issuer and JWKS URI, while internal routing or split DNS resolves that identity. Evidence must
+HTTPS issuer and JWKS URI, while internal routing or split DNS resolves that identity. Evidence Gateway must
 continue to use the public HTTPS issuer and JWKS URI, not an internal plain-HTTP service name.
 
 ## Stop without deleting the audit history
@@ -114,6 +114,6 @@ docker compose down
 
 ## Next
 
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
-- [Issue Evidence access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
-- [Configure Evidence](../../configure/evidence/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Configure Evidence Gateway](../../configure/evidence/)

@@ -2,7 +2,7 @@
 title: Request a birth certificate SD-JWT VC from OpenCRVS
 description: >-
   Map a synthetic OpenCRVS birth into a governed structured value, request it as SD-JWT VC, and
-  verify the credential across the Evidence HTTP boundary.
+  verify the credential across the Evidence Gateway HTTP boundary.
 status: current
 owner: registry-docs
 source_repos:
@@ -30,7 +30,7 @@ Credential (SD-JWT VC). The credential exposes `givenName`, `familyName`, `dateO
   prerequisites={[
     'The completed OpenCRVS registered-parent tutorial project',
     'A Record Search client for the public OpenCRVS demo',
-    'The Evidence toolset',
+    'The Evidence Gateway toolset',
     'curl and an editor',
   ]}
 />
@@ -44,7 +44,7 @@ accounts, and integrations.
 The example is informed by the European Union Once-Only Technical System
 [birth-evidence sample](https://code.europa.eu/oots/tdd/tdd_chapters/-/raw/master/OOTS-EDM/xml/Request-Response%20Samples/4.5.4%20-%20OOTS-EDM%20XML%20Examples%20of%20the%20Evidence%20Exchange/2%20Example%20for%20requesting%20a%20Birth%20Certificate%20-%20natural%20person/Evidence%20Samples/BirthEvidence.xml?ref_type=heads),
 but this tutorial does not implement that exchange protocol.
-Evidence produces a governed extract from a registered birth:
+Evidence Gateway produces a governed extract from a registered birth:
 
 ```json
 {
@@ -60,7 +60,7 @@ Evidence produces a governed extract from a registered birth:
 ```
 
 The deployment's law and governance determine whether that extract is accepted as a birth
-certificate. Evidence proves which provider signed the configured assertion. It does not grant
+certificate. Evidence Gateway proves which provider signed the configured assertion. It does not grant
 legal status to the document.
 
 Each direct child of `birthCertificate` has its own SD-JWT disclosure. `placeOfBirth` is one atomic
@@ -360,7 +360,7 @@ disclosure:
   allow: [birth_certificate]
 ```
 
-`birthCertificate` is a configured JSON claim name. Evidence has no built-in birth-certificate
+`birthCertificate` is a configured JSON claim name. Evidence Gateway has no built-in birth-certificate
 type. The same mechanism can project any reviewed structured value under another non-reserved
 claim name.
 
@@ -387,7 +387,7 @@ fn answer(facts, selectors, context) {
 }
 ```
 
-Evidence validates the complete value against the schema before mapping any field to an SD-JWT
+Evidence Gateway validates the complete value against the schema before mapping any field to an SD-JWT
 disclosure. A derivation cannot add undeclared certificate fields.
 
 ## Start and prepare the SD-JWT request
@@ -415,7 +415,7 @@ OpenCRVS.
 
 ## Request the credential over HTTP
 
-Send the retained request across the real Evidence boundary:
+Send the retained request across the real Evidence Gateway boundary:
 
 ```sh
 curl -fsS \
@@ -428,7 +428,7 @@ curl -fsS \
   --output opencrvs-birth-certificate.sd-jwt
 ```
 
-Evidence authenticates the caller, authorizes the exact question and purpose, obtains an OpenCRVS
+Evidence Gateway authenticates the caller, authorizes the exact question and purpose, obtains an OpenCRVS
 token, performs the fixed birth search, validates and derives the value, signs the SD-JWT VC, and
 durably records the disclosure release before returning the bytes.
 
@@ -446,13 +446,13 @@ evidencectl verify opencrvs-birth-certificate.sd-jwt \
 VERIFIED
 ```
 
-Inspect the verified Evidence payload:
+Inspect the verified Evidence Gateway payload:
 
 ```sh
 python3 -m json.tool opencrvs-birth-certificate.verified.json
 ```
 
-The supported value retains the governed Evidence form:
+The supported value retains the governed evidence form:
 
 ```json
 {
@@ -483,7 +483,7 @@ awk -F '~' '{print "disclosures:", NF - 2}' opencrvs-birth-certificate.sd-jwt
 disclosures: 4
 ```
 
-Evidence's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
+Evidence Gateway's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
 selected disclosures, and key-binding JWT validation remain outside this profile.
 
 ## Inspect the audit and clean up
@@ -505,6 +505,6 @@ you no longer need the project.
 
 ## Next
 
-- [Request another Evidence assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
-- [Prove an Evidence project](../prove-an-evidence-project/)
+- [Request another Evidence Gateway assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
+- [Prove an Evidence Gateway project](../prove-an-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
