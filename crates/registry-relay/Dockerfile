@@ -3,7 +3,7 @@
 ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS builder
+FROM rust:1.96-trixie@sha256:1f0dbad1df66647807e6952d1db85d0b2bda7606cb2139d82517e4f009967376 AS builder
 ARG REGISTRY_RELAY_FEATURES
 WORKDIR /workspace/registry_relay
 
