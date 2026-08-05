@@ -6,10 +6,10 @@ preparation, sending, and verification) is the wrapped Rust crate's own; this
 crate is a thin `#[pymodule]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-Distributed as `registry-evidence-client` on PyPI (matching the crate's own
-`[lib] name`), imported as `registry_evidence_client`. Publishing to PyPI is
-out of scope for this crate; it currently exists to be built and tested
-locally and in CI.
+Distributed as `registry-evidence-client` on PyPI, imported as
+`registry_evidence_client` (matching the crate's own `[lib] name`). Publishing
+to PyPI is out of scope for this crate; it currently exists to be built and
+tested locally and in CI.
 
 ## Python surface
 
@@ -45,10 +45,10 @@ from the package root, with one subclass per stable kind:
 `ConfigurationError`, `NonceError`, `TokenError`, `TransportError`,
 `DeniedError`, `NotAvailableError`, `ProtocolError`, `VerificationError`. Every
 instance carries `kind`; `status`, `code`, `operation`,
-`retry_after_seconds`, `transport_kind` (only on a `TransportError`), and
-`token_kind` (only on a `TokenError`) are set as attributes only when the
-underlying failure carries them. `str(error)` is human prose, not JSON: read
-it, do not parse it.
+`retry_after_seconds`, `transport_kind` (on a `TransportError`, and on a
+`TokenError` whose `token_kind` is `"transport"`), and `token_kind` (only on a
+`TokenError`) are set as attributes only when the underlying failure carries
+them. `str(error)` is human prose, not JSON: read it, do not parse it.
 
 The `denied`/`protocol` split is a hazard worth calling out explicitly: HTTP
 401, 403, and 429 all map to `denied` regardless of the response body's own
@@ -76,14 +76,15 @@ PyO3's own `PanicException`, before this crate adds anything of its own. See
 `pyo3-0.29.1/src/impl_/trampoline.rs` (the `trampoline` function) in the
 vendored source for the exact mechanism. The client's own request nonce is
 generated through `getrandom::fill`, which reports entropy failure as an
-ordinary error and cannot panic. The one latent panic path is upstream and
-left unguarded on purpose: the private-key-JWT token provider's `jti` claim,
-generated with `Ulid::new()`, reaches `rand::rng()` and panics if OS entropy
-is unavailable. It is reachable only in a deployment configured for
-private-key-JWT; a static-bearer deployment has no reachable panic at all.
-This crate adds no guard of its own for it: the trampoline above already
-turns any such panic into an ordinary Python exception rather than a process
-abort.
+ordinary error and cannot panic. Aside from `to_py_err`'s `set_attr!` calls,
+which can only panic under allocation failure, the one latent panic path is
+upstream and left unguarded on purpose: the private-key-JWT token provider's
+`jti` claim, generated with `Ulid::new()`, reaches `rand::rng()` and panics if
+OS entropy is unavailable. It is reachable only in a deployment configured for
+private-key-JWT; short of that same allocation-failure-only path, a
+static-bearer deployment has no reachable panic at all. This crate adds no
+guard of its own for it: the trampoline above already turns any such panic
+into an ordinary Python exception rather than a process abort.
 
 ### The `unsafe_code` lint
 
@@ -143,7 +144,7 @@ For `cargo test` on macOS, the `auto-initialize` dev-dependency feature (see
 linker needs it on its search path, for example:
 
 ```bash
-DYLD_LIBRARY_PATH=/Users/jeremi/.local/share/mise/installs/python/3.13.13/lib cargo test -p registry-evidence-client-py
+DYLD_LIBRARY_PATH=/path/to/python/lib cargo test -p registry-evidence-client-py
 ```
 
 adjusted to the actual interpreter `cargo test` resolves at build time. This

@@ -36,8 +36,9 @@ use convert::{
 // this crate does not freeze.
 //
 // Where the failure has them, an instance also carries `status`, `code`,
-// `operation`, `retry_after_seconds`, `transport_kind` (set only for a
-// "transport" failure), and `token_kind` (set only for a "token" failure).
+// `operation`, `retry_after_seconds`, `transport_kind` (set for a "transport"
+// failure, and for a "token" failure whose `token_kind` is "transport"), and
+// `token_kind` (set only for a "token" failure).
 // A "protocol" failure with `status` 401, 403, or 429 is reachable: it means
 // the deployment answered outside its own contract (an uncoded refusal, or a
 // response this client could not parse) rather than with a contract-coded
@@ -515,18 +516,19 @@ mod tests {
     /// `pyo3-0.29.1/src/panic.rs` (`PanicException` itself, at
     /// `pyo3::panic::PanicException`, not re-exported at the crate root).
     ///
-    /// This crate has exactly one latent panic to worry about, and it is not
-    /// the client's own request nonce: that one is generated through
-    /// `getrandom::fill`, which reports entropy failure as an ordinary error
-    /// rather than panicking. The unguarded path is the private-key-JWT token
-    /// provider's own `jti` claim, generated with `Ulid::new()`, which reaches
-    /// `rand::rng()` and panics when OS entropy is unavailable, a case that
-    /// provider deliberately leaves unguarded. It is reachable only in a
-    /// deployment configured for private-key-JWT: a static-bearer deployment
-    /// never calls that provider, so it has no reachable panic at all. No
-    /// extra guard is added here for it: this test proves the boundary
-    /// already turns any such panic into an ordinary Python exception instead
-    /// of a process abort.
+    /// Aside from `to_py_err`'s `set_attr!` calls, which can only panic under
+    /// allocation failure, this crate has exactly one latent panic to worry
+    /// about, and it is not the client's own request nonce: that one is
+    /// generated through `getrandom::fill`, which reports entropy failure as
+    /// an ordinary error rather than panicking. The unguarded path is the
+    /// private-key-JWT token provider's own `jti` claim, generated with
+    /// `Ulid::new()`, which reaches `rand::rng()` and panics when OS entropy
+    /// is unavailable, a case that provider deliberately leaves unguarded. It
+    /// is reachable only in a deployment configured for private-key-JWT: a
+    /// static-bearer deployment never calls that provider, so short of that
+    /// same allocation-failure-only path it has no reachable panic at all. No extra guard is added here for it: this test
+    /// proves the boundary already turns any such panic into an ordinary
+    /// Python exception instead of a process abort.
     ///
     /// The catch must be exercised from Python code, not from a Rust `call0`:
     /// `PyErr::take` (which every pyo3 call-from-Rust helper uses to read the
@@ -569,6 +571,38 @@ except BaseException as error:
                 .extract()
                 .expect("`caught` is a string");
             assert_eq!(caught, "PanicException");
+        });
+    }
+
+    /// `exception_for_kind`'s catch-all arm (`_ =>
+    /// EvidenceClientError::new_err(message)`) is deliberate: it keeps this
+    /// binding compiling and useful as the wrapped `#[non_exhaustive]` error
+    /// enum grows a kind this crate does not yet know about. The same
+    /// catch-all also means that renaming one of the known kind strings in an
+    /// existing match arm degrades that kind to the base class silently
+    /// instead of failing to compile, so this pins every one of the eight
+    /// known kind strings to its own specific exception class directly.
+    #[test]
+    fn exception_for_kind_maps_every_known_kind_to_its_specific_class() {
+        Python::attach(|py| {
+            assert!(exception_for_kind("configuration", "message".to_owned())
+                .is_instance_of::<ConfigurationError>(py));
+            assert!(
+                exception_for_kind("nonce", "message".to_owned()).is_instance_of::<NonceError>(py)
+            );
+            assert!(
+                exception_for_kind("token", "message".to_owned()).is_instance_of::<TokenError>(py)
+            );
+            assert!(exception_for_kind("transport", "message".to_owned())
+                .is_instance_of::<TransportError>(py));
+            assert!(exception_for_kind("denied", "message".to_owned())
+                .is_instance_of::<DeniedError>(py));
+            assert!(exception_for_kind("not_available", "message".to_owned())
+                .is_instance_of::<NotAvailableError>(py));
+            assert!(exception_for_kind("protocol", "message".to_owned())
+                .is_instance_of::<ProtocolError>(py));
+            assert!(exception_for_kind("verification", "message".to_owned())
+                .is_instance_of::<VerificationError>(py));
         });
     }
 }
