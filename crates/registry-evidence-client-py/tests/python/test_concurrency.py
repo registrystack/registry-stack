@@ -105,20 +105,37 @@ class ConstructionGilReleaseTest(unittest.TestCase):
     client, which loads the platform's native trust store. This proves the
     GIL is available to other Python threads for the duration of that work,
     with a daemon thread that spins incrementing a counter in a plain Python
-    loop until told to stop. Each loop iteration can only execute while the
-    spinning thread holds the GIL, so the final count is a direct measure of
-    how much GIL time that thread was given, not of CPU parallelism: unlike
-    timing two overlapping constructions against each other, it cannot be
-    confounded by both constructions instead serializing on a single CPU
-    core.
+    loop until told to stop. The observer can only advance while it holds
+    the GIL, so its tick count during a call is a direct measure of how much
+    GIL time that call gave up: a constructor that keeps the GIL for its
+    Rust work starves the observer, and one that releases it does not.
+    Measuring it this way, rather than timing two overlapping constructions
+    against each other, also means it cannot be confounded by both
+    constructions instead serializing on a single CPU core.
 
     A control window, the observer running while the main thread sleeps
     (which releases the GIL), calibrates this machine's tick rate with
     nothing competing. The same observer, fresh, then runs across one
-    construction on the main thread. The construction window's count is
-    compared against the control count as a fraction, not against an
-    absolute number, so the assertion holds regardless of how fast any given
-    machine ticks.
+    construction on the main thread. Both windows are measured the same way:
+    a tick snapshot taken immediately before and after the timed call, never
+    the observer's count over its whole lifetime, so ticks from starting or
+    stopping the observer thread never enter either number. The construction
+    window's count is compared against the control count as a fraction, not
+    against an absolute number, so the assertion holds regardless of how
+    fast any given machine ticks.
+
+    The switch interval is left at its default rather than raised. A
+    construction call that runs for tens of milliseconds already leaves the
+    observer waiting well past the default interval, so the interpreter
+    hands it one timeslice at the boundary right after the call returns no
+    matter the interval's size; that slice costs at most one interval's
+    worth of ticks, small and roughly constant next to the construction
+    time it is measured against, so it cannot make a held GIL look released.
+    Raising the interval would not shrink that slice away, because the
+    observer never yields the GIL voluntarily: whichever thread holds the
+    GIL when the interval next elapses is the only one that can be made to
+    give it up, so a bigger interval only makes that one unavoidable handoff
+    bigger too. Leaving it at the default keeps that handoff small instead.
     """
 
     def test_construction_releases_the_gil(self):
@@ -159,6 +176,37 @@ class ConstructionGilReleaseTest(unittest.TestCase):
             )
             self.assertEqual(errors, [])
 
+        def wait_until_ticking(thread, counter, errors) -> None:
+            # `threading.Thread.start()` blocks on the new thread's startup
+            # event, and waiting on an event releases the GIL, so the
+            # observer can already be ticking before this is even called.
+            # Waiting here for its first tick keeps that startup handoff
+            # out of the measured window entirely, rather than measuring
+            # from a snapshot that might land before the observer has run
+            # at all for reasons that have nothing to do with the call
+            # being timed.
+            deadline = time.monotonic() + JOIN_TIMEOUT_SECONDS
+            while counter[0] == 0:
+                self.assertTrue(
+                    thread.is_alive(),
+                    f"the GIL observer thread exited before ticking: {errors}",
+                )
+                self.assertLessEqual(
+                    time.monotonic(),
+                    deadline,
+                    "the GIL observer never ticked within the bounded settle timeout",
+                )
+                time.sleep(0)
+
+        def measure_ticks(counter, run) -> int:
+            # The snapshots go immediately around `run`, not over the
+            # observer's whole lifetime, so ticks from starting or stopping
+            # the observer thread never enter the delta: only ticks that
+            # land while `run` itself is executing do.
+            start_ticks = counter[0]
+            run()
+            return counter[0] - start_ticks
+
         # A throwaway construction times roughly how long the real
         # measurement below will take, so the control window spins the
         # observer for a comparable duration.
@@ -168,10 +216,12 @@ class ConstructionGilReleaseTest(unittest.TestCase):
 
         control_thread, control_counter, control_stop, control_errors = start_observer()
         try:
-            time.sleep(approximate_construction_seconds)
+            wait_until_ticking(control_thread, control_counter, control_errors)
+            control_ticks = measure_ticks(
+                control_counter, lambda: time.sleep(approximate_construction_seconds)
+            )
         finally:
             stop_observer(control_thread, control_stop, control_errors)
-        control_ticks = control_counter[0]
 
         (
             construction_thread,
@@ -180,18 +230,23 @@ class ConstructionGilReleaseTest(unittest.TestCase):
             construction_errors,
         ) = start_observer()
         try:
-            build_client()
+            wait_until_ticking(
+                construction_thread, construction_counter, construction_errors
+            )
+            construction_ticks = measure_ticks(construction_counter, build_client)
         finally:
             stop_observer(construction_thread, construction_stop, construction_errors)
-        construction_ticks = construction_counter[0]
 
         # A released GIL lets the observer tick at close to the control
-        # rate. A held GIL still lets some ticks through even for a call
-        # that never touches the interpreter, but nowhere near half of the
-        # control rate on this platform. A floor of half the control count
-        # sits with clear room on both sides of that gap, so the assertion
-        # discriminates a released GIL from a held one without depending on
-        # an exact percentage.
+        # rate. A held GIL keeps the observer from advancing for almost all
+        # of the call's duration, since it can only advance while it holds
+        # the GIL itself; the one unavoidable timeslice at the boundary
+        # right after the call returns costs at most one switch interval's
+        # worth of ticks, small next to a call that runs for tens of
+        # milliseconds. A floor of half the control count sits with clear
+        # room on both sides of that gap, so the assertion discriminates a
+        # released GIL from a held one without depending on an exact
+        # percentage.
         self.assertGreaterEqual(
             construction_ticks,
             control_ticks * 0.5,
