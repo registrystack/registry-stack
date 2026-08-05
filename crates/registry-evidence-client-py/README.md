@@ -74,11 +74,16 @@ trampoline (behind `#[pymethods]`, `#[pyfunction]`, and `#[pymodule]`) wraps
 the call in `std::panic::catch_unwind` and translates a caught panic into
 PyO3's own `PanicException`, before this crate adds anything of its own. See
 `pyo3-0.29.1/src/impl_/trampoline.rs` (the `trampoline` function) in the
-vendored source for the exact mechanism. This crate does not add a second
-guard on top; it relies on PyO3's own. One latent panic path exists upstream,
-unguarded on purpose: `Ulid::new()`'s call into `rand::rng()` can panic if the
-platform RNG is unavailable. A caller who calls a client method from Python
-will see that surface as `PanicException`, not a process abort.
+vendored source for the exact mechanism. The client's own request nonce is
+generated through `getrandom::fill`, which reports entropy failure as an
+ordinary error and cannot panic. The one latent panic path is upstream and
+left unguarded on purpose: the private-key-JWT token provider's `jti` claim,
+generated with `Ulid::new()`, reaches `rand::rng()` and panics if OS entropy
+is unavailable. It is reachable only in a deployment configured for
+private-key-JWT; a static-bearer deployment has no reachable panic at all.
+This crate adds no guard of its own for it: the trampoline above already
+turns any such panic into an ordinary Python exception rather than a process
+abort.
 
 ### The `unsafe_code` lint
 
