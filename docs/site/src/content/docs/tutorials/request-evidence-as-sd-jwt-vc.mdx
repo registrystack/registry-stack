@@ -79,11 +79,11 @@ evidence check --runtime <evidence-project>/runtime.yaml
 For a local project, retain the expected format before sending the request:
 
 ```sh
-evidencectl request prepare <question> \
-  --purpose <purpose> \
-  --subject <role>:<field>=<value> \
+evidencectl request prepare "<question>" \
+  --purpose "<purpose>" \
+  --subject "<role>:<field>=<value>" \
   --format sd-jwt-vc \
-  --name <request-name>
+  --name "<request-name>"
 ```
 
 Only response negotiation changes at the HTTP boundary:
