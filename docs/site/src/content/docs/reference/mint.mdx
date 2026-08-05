@@ -75,7 +75,7 @@ following tables group the surface by the struct that owns each field.
 | `activeKeyId` | string (1..=256 bytes) | required | Must match the `kid` of the private JWK at `activeKeyFile`. |
 | `activeKeyFile` | path | required | Private JWK. Must be a regular, owner-only, single-link file. |
 | `retiredPublicJwkFiles` | list of paths | `[]` | Public JWKs of keys that no longer sign but may still have live tokens. |
-| `jwksPath` | string | `/.well-known/jwks.json` | Must start with `/`, and must not be `/token`, `/health`, `/ready`, or `/.well-known/oauth-authorization-server`. |
+| `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, or `/.well-known/oauth-authorization-server`. |
 
 ### Audit
 
