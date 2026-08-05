@@ -751,7 +751,7 @@ fn insert_token_fields(mapped: &mut MappedError, error: &TokenError) {
 mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::SigningKey;
-    use evidence_client_sdk::{NonceError, TransportKind};
+    use evidence_client_sdk::{NonceError, OAuthErrorCode, TransportKind};
     use pyo3::{
         types::{PyDict, PyList},
         Python,
@@ -1198,12 +1198,53 @@ mod tests {
     }
 
     #[test]
+    fn map_client_error_carries_the_verifier_kind_as_the_code() {
+        let mapped = map_client_error(&EvidenceClientError::Verification(
+            VerificationError::Signature,
+        ));
+        assert_eq!(mapped.kind, "verification");
+        assert_eq!(mapped.code.as_deref(), Some("signature"));
+    }
+
+    /// Every one of `TokenError`'s six sub-kinds carries its own `token_kind`
+    /// under the client-level "token" kind, and only its own further sub-field
+    /// (`transport_kind`, `code`, or `status`) alongside it.
+    #[test]
     fn map_client_error_carries_the_token_kind_and_its_own_sub_fields() {
-        let mapped = map_client_error(&EvidenceClientError::Token(TokenError::Transport {
+        let unavailable = map_client_error(&EvidenceClientError::Token(TokenError::Unavailable));
+        assert_eq!(unavailable.kind, "token");
+        assert_eq!(unavailable.token_kind, Some("unavailable"));
+
+        let invalid = map_client_error(&EvidenceClientError::Token(TokenError::Invalid {
+            reason: "a bearer credential must be non-empty and within the accepted length",
+        }));
+        assert_eq!(invalid.kind, "token");
+        assert_eq!(invalid.token_kind, Some("invalid_credential"));
+
+        let configuration =
+            map_client_error(&EvidenceClientError::Token(TokenError::Configuration {
+                reason: "the token provider cannot be used this way",
+            }));
+        assert_eq!(configuration.kind, "token");
+        assert_eq!(configuration.token_kind, Some("configuration"));
+
+        let transport = map_client_error(&EvidenceClientError::Token(TokenError::Transport {
             kind: TransportKind::Timeout,
         }));
-        assert_eq!(mapped.token_kind, Some("transport"));
-        assert_eq!(mapped.transport_kind, Some("timeout"));
+        assert_eq!(transport.token_kind, Some("transport"));
+        assert_eq!(transport.transport_kind, Some("timeout"));
+
+        let refused = map_client_error(&EvidenceClientError::Token(TokenError::Refused {
+            code: OAuthErrorCode::InvalidClient,
+        }));
+        assert_eq!(refused.token_kind, Some("refused"));
+        assert_eq!(refused.code.as_deref(), Some("invalid_client"));
+
+        let protocol = map_client_error(&EvidenceClientError::Token(TokenError::Protocol {
+            status: 500,
+        }));
+        assert_eq!(protocol.token_kind, Some("protocol"));
+        assert_eq!(protocol.status, Some(500));
     }
 
     /// `code` and `operation` are already bounded upstream
