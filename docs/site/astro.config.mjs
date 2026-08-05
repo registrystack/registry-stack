@@ -337,6 +337,7 @@ export default defineConfig({
               label: 'Verify and trust',
               collapsed: true,
               items: [
+                { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Enable SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
