@@ -1485,6 +1485,10 @@ fn mint_config(
         },
         "audit": {
             "path": "audit/mint.jsonl",
+            // Mint rotates a sealed segment at this threshold. A local
+            // tutorial session never reaches it, and the value matches the
+            // documented deployment example.
+            "maximumFileBytes": 1_073_741_824u64,
             "hashKeyFile": mint_audit_key,
             "hashKeyVersion": 1,
         },
@@ -1967,6 +1971,7 @@ mod tests {
             config["audit"],
             json!({
                 "path": "audit/mint.jsonl",
+                "maximumFileBytes": 1_073_741_824u64,
                 "hashKeyFile": "/private/mint-audit-hmac-key",
                 "hashKeyVersion": 1,
             })
