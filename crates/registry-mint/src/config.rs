@@ -341,6 +341,11 @@ impl MintConfig {
         if !self.signing.jwks_path.starts_with('/') {
             return Err(ConfigError::Invalid("jwks path must be absolute"));
         }
+        if !is_plain_route_path(&self.signing.jwks_path) {
+            return Err(ConfigError::Invalid(
+                "jwks path must be a plain absolute path with no query, fragment, or route pattern",
+            ));
+        }
         if MINT_FIXED_ROUTES.contains(&self.signing.jwks_path.as_str()) {
             return Err(ConfigError::Invalid(
                 "jwks path must not take a route Mint already serves",
@@ -427,6 +432,32 @@ impl MintConfig {
         }
         Ok(())
     }
+}
+
+/// Accept only a path that survives both trips the JWKS path has to make.
+///
+/// The router registers this string literally and the metadata document
+/// publishes it as `jwks_uri`. A query or fragment is lost on the way back: a
+/// client fetching the advertised URI sends the path alone, so it would never
+/// reach a route registered with the decoration attached. A route pattern is
+/// the opposite failure, matching paths the metadata never advertised. Either
+/// way Mint reports itself ready while its published key set does not resolve,
+/// which is an outage no probe can see.
+///
+/// So: one or more non-empty segments of unreserved path characters, no dot
+/// segments, and nothing that could be read as a pattern.
+fn is_plain_route_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    rest.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            })
+    })
 }
 
 /// Parse the only HTTP origin admitted for supervised local development.
@@ -616,6 +647,53 @@ clients:
                 ConfigError::Invalid("jwks path must not take a route Mint already serves"),
                 "jwks path {path} must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn a_jwks_path_must_be_a_path_a_client_can_fetch() {
+        // The path is registered as a route and published as `jwks_uri`. A
+        // query or fragment survives neither trip: the router matches the
+        // literal string, and a client sends only the path back. A route
+        // pattern is worse, because it matches paths the metadata never named.
+        for path in [
+            "/keys?tenant=a",
+            "/keys#v1",
+            "/keys/{tenant}",
+            "/{*rest}",
+            "/keys//v1",
+            "/keys/",
+            "/keys/../token",
+            "/keys/.",
+            "/keys v1",
+            "/keys%2ftoken",
+        ] {
+            let text = VALID.replace(
+                "activeKeyFile: secrets/signing.jwk",
+                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: \"{path}\""),
+            );
+            assert_eq!(
+                load_error(&text),
+                ConfigError::Invalid("jwks path must be a plain absolute path with no query, fragment, or route pattern"),
+                "jwks path {path} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_absolute_jwks_path_is_accepted() {
+        for path in [
+            "/.well-known/jwks.json",
+            "/keys",
+            "/v1/keys.json",
+            "/a~b-c_d",
+        ] {
+            let text = VALID.replace(
+                "activeKeyFile: secrets/signing.jwk",
+                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: \"{path}\""),
+            );
+            let config = load_from(&text).expect("a plain absolute path loads");
+            assert_eq!(config.signing.jwks_path, path);
         }
     }
 
