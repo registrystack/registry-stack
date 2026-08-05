@@ -3,6 +3,7 @@ members = [
     "crates/registry-config-report",
     "crates/registry-evidence",
     "crates/registry-evidence-client",
+    "crates/registry-evidence-client-node",
     "crates/registry-evidence-verifier",
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",
@@ -45,6 +46,7 @@ unsafe_code = "forbid"
 registry-config-report = { path = "crates/registry-config-report", version = "0.17.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.17.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.17.0" }
+registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.17.0" }
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.17.0" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.17.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.17.0" }
@@ -107,6 +109,9 @@ ipnet = { version = "2" }
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+napi = { version = "3.12.0", features = ["async", "serde-json"] }
+napi-build = { version = "2.4.0" }
+napi-derive = { version = "3.6.2" }
 native-tls = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", features = ["features"] }
 p256 = { version = "0.13", features = ["ecdsa"] }

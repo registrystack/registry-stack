@@ -1,0 +1,1092 @@
+//! JS-value <-> Rust conversions for the Evidence Node binding.
+//!
+//! Every function here is a plain Rust function over [`serde_json::Value`],
+//! so the whole conversion layer is unit-testable with `cargo test` and
+//! carries no dependency on `napi`. `src/lib.rs` is the only file in this
+//! crate that touches the `napi`/`napi-derive` crates; it calls into this
+//! module for every conversion and reports failures through
+//! [`map_client_error`], [`map_conversion_error`], and [`map_config_error`].
+
+use std::{fmt, sync::Arc, time::Duration};
+
+use registry_evidence_client::{
+    AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError, EvidenceRequestSpec,
+    ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument, PrivateKeyJwt,
+    PrivateKeyJwtConfig, SelectorValue, StaticToken, SubjectExpectations, SubjectRequest,
+    TokenError, TokenProvider,
+};
+use registry_platform_crypto::PrivateJwk;
+use serde_json::{Map, Value};
+use url::Url;
+
+/// A JS-supplied value did not have the shape this binding requires.
+///
+/// This is distinct from [`EvidenceClientError`]: it is refused before any
+/// client-level Rust type exists, so it carries its own message rather than
+/// borrowing the fixed `&'static str` reason of a type that cannot describe a
+/// dynamically built JS shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionError(pub String);
+
+impl ConversionError {
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for ConversionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConversionError {}
+
+/// Building a client configuration mixes pure shape conversion with a
+/// genuine, semantically real credential construction
+/// ([`PrivateKeyJwt::new`]), so a failure may come from either stage. Keeping
+/// them distinct lets a caller (and a test) tell "the JS object was malformed"
+/// apart from "the configuration it described is unusable."
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigError {
+    Shape(ConversionError),
+    Client(EvidenceClientError),
+}
+
+impl From<ConversionError> for ConfigError {
+    fn from(error: ConversionError) -> Self {
+        Self::Shape(error)
+    }
+}
+
+impl From<TokenError> for ConfigError {
+    fn from(error: TokenError) -> Self {
+        Self::Client(EvidenceClientError::Token(error))
+    }
+}
+
+fn as_object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, ConversionError> {
+    value
+        .as_object()
+        .ok_or_else(|| ConversionError::new(format!("{what} must be an object")))
+}
+
+fn required_string(object: &Map<String, Value>, field: &str) -> Result<String, ConversionError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| ConversionError::new(format!("`{field}` must be a string")))
+}
+
+fn required_u64(object: &Map<String, Value>, field: &str) -> Result<u64, ConversionError> {
+    object
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ConversionError::new(format!("`{field}` must be a non-negative integer")))
+}
+
+fn optional_string(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<String>, ConversionError> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(ConversionError::new(format!("`{field}` must be a string"))),
+    }
+}
+
+fn optional_u64(object: &Map<String, Value>, field: &str) -> Result<Option<u64>, ConversionError> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
+            ConversionError::new(format!("`{field}` must be a non-negative integer"))
+        }),
+    }
+}
+
+fn optional_i64(object: &Map<String, Value>, field: &str) -> Result<Option<i64>, ConversionError> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value.as_i64().map(Some).ok_or_else(|| {
+            ConversionError::new(format!("`{field}` must be an integer that fits in 64 bits"))
+        }),
+    }
+}
+
+fn parse_url(value: &str, what: &str) -> Result<Url, ConversionError> {
+    Url::parse(value).map_err(|_| ConversionError::new(format!("{what} must be a valid URL")))
+}
+
+/// The three scalar shapes a selector value may take on the wire, read off a
+/// JS value.
+///
+/// A float, an array, `null`, and an integer literal too large for `i64` are
+/// all refused here: the request contract's own numeric bound
+/// (`MINIMUM_SELECTOR_INTEGER..=MAXIMUM_SELECTOR_INTEGER`) is enforced later,
+/// by the real `EvidenceClient::prepare` call, once a genuine
+/// `EvidenceRequestSpec` exists.
+fn selector_value_from_json(value: &Value) -> Result<SelectorValue, ConversionError> {
+    match value {
+        Value::String(text) => Ok(SelectorValue::from(text.as_str())),
+        Value::Bool(flag) => Ok(SelectorValue::from(*flag)),
+        Value::Number(number) => number.as_i64().map(SelectorValue::from).ok_or_else(|| {
+            ConversionError::new(
+                "a selector integer value must fit in 64 bits with no fractional part",
+            )
+        }),
+        _ => Err(ConversionError::new(
+            "a selector value must be a string, an integer, or a boolean",
+        )),
+    }
+}
+
+fn subject_request_from_json(value: &Value) -> Result<SubjectRequest, ConversionError> {
+    let object = as_object(value, "a subject request")?;
+    let role = required_string(object, "role")?;
+    let selector_profile = required_string(object, "selectorProfile")?;
+    let selector_values = match object.get("selectorValues") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(values)) => {
+            let mut pairs = Vec::with_capacity(values.len());
+            for (name, value) in values {
+                pairs.push((name.clone(), selector_value_from_json(value)?));
+            }
+            Some(pairs)
+        }
+        Some(_) => {
+            return Err(ConversionError::new(
+                "`selectorValues` must be an object mapping field names to values",
+            ))
+        }
+    };
+    Ok(SubjectRequest {
+        role,
+        selector_profile,
+        selector_values,
+    })
+}
+
+/// `subjectExpectations` accepts `{"pinned": [{"role", "binding"}, ...]}` or
+/// the literal string `"acceptFirstUse"`. There is no third shape, matching
+/// [`SubjectExpectations`] having no third variant.
+pub fn subject_expectations_from_json(
+    value: &Value,
+) -> Result<SubjectExpectations, ConversionError> {
+    match value {
+        Value::String(tag) if tag == "acceptFirstUse" => Ok(SubjectExpectations::AcceptFirstUse),
+        Value::Object(object) => {
+            let pinned = object
+                .get("pinned")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ConversionError::new("a pinned subject expectation must carry a `pinned` array")
+                })?;
+            let mut subjects = Vec::with_capacity(pinned.len());
+            for entry in pinned {
+                let entry = as_object(entry, "a pinned subject expectation")?;
+                subjects.push(ExpectedSubjectDocument {
+                    role: required_string(entry, "role")?,
+                    binding: required_string(entry, "binding")?,
+                });
+            }
+            Ok(SubjectExpectations::Pinned(subjects))
+        }
+        _ => Err(ConversionError::new(
+            "`subjectExpectations` must be \"acceptFirstUse\" or {\"pinned\": [...]}",
+        )),
+    }
+}
+
+/// The inverse of [`subject_expectations_from_json`]. Infallible: every
+/// [`SubjectExpectations`] value already came from a caller's own request, and
+/// both variants have an unambiguous JSON rendering.
+pub fn subject_expectations_to_json(expectations: &SubjectExpectations) -> Value {
+    match expectations {
+        SubjectExpectations::AcceptFirstUse => Value::String("acceptFirstUse".to_owned()),
+        SubjectExpectations::Pinned(subjects) => {
+            let pinned: Vec<Value> = subjects
+                .iter()
+                .map(|subject| {
+                    serde_json::json!({
+                        "role": subject.role,
+                        "binding": subject.binding,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "pinned": pinned })
+        }
+    }
+}
+
+fn expected_outputs_from_json(
+    value: &Value,
+) -> Result<Vec<ExpectedOutputDocument>, ConversionError> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| ConversionError::new(format!("`expectedOutputs` is invalid: {error}")))
+}
+
+fn assurance_profile_from_json(value: &Value) -> Result<AssuranceProfile, ConversionError> {
+    serde_json::from_value(value.clone()).map_err(|error| {
+        ConversionError::new(format!("`expectedAssuranceProfile` is invalid: {error}"))
+    })
+}
+
+/// Build the specification [`registry_evidence_client::EvidenceClient::prepare`]
+/// validates. Only shape is checked here: an empty identifier, an out-of-range
+/// count, or any other business rule is the real client's own refusal, raised
+/// once a genuine `EvidenceRequestSpec` exists.
+pub fn spec_from_json(value: &Value) -> Result<EvidenceRequestSpec, ConversionError> {
+    let object = as_object(value, "a request specification")?;
+
+    let subjects_json = object
+        .get("subjects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ConversionError::new("`subjects` must be an array"))?;
+    let subjects = subjects_json
+        .iter()
+        .map(subject_request_from_json)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let expected_outputs_json = object
+        .get("expectedOutputs")
+        .ok_or_else(|| ConversionError::new("`expectedOutputs` must be present"))?;
+    let expected_outputs = expected_outputs_from_json(expected_outputs_json)?;
+
+    let expected_assurance_profile_json = object
+        .get("expectedAssuranceProfile")
+        .ok_or_else(|| ConversionError::new("`expectedAssuranceProfile` must be present"))?;
+    let expected_assurance_profile = assurance_profile_from_json(expected_assurance_profile_json)?;
+
+    let subject_expectations_json = object
+        .get("subjectExpectations")
+        .ok_or_else(|| ConversionError::new("`subjectExpectations` must be present"))?;
+    let subject_expectations = subject_expectations_from_json(subject_expectations_json)?;
+
+    Ok(EvidenceRequestSpec {
+        requirement: required_string(object, "requirement")?,
+        purpose: required_string(object, "purpose")?,
+        audience: required_string(object, "audience")?,
+        evidence_type: required_string(object, "evidenceType")?,
+        issued_by: required_string(object, "issuedBy")?,
+        provided_by: required_string(object, "providedBy")?,
+        configuration_revision: required_string(object, "configurationRevision")?,
+        expected_assurance_profile,
+        subjects,
+        expected_outputs,
+        maximum_assertion_lifetime_seconds: required_u64(
+            object,
+            "maximumAssertionLifetimeSeconds",
+        )?,
+        clock_skew_seconds: required_u64(object, "clockSkewSeconds")?,
+        subject_expectations,
+    })
+}
+
+/// `token.privateKeyJwt`'s own shape mirrors [`PrivateKeyJwtConfig`]'s builder
+/// surface: one required endpoint, client identifier, and signing key, plus
+/// the same optional knobs the Rust type exposes for its own outbound
+/// exchange with the token endpoint.
+fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, ConfigError> {
+    let object = as_object(value, "`token.privateKeyJwt`").map_err(ConfigError::Shape)?;
+
+    let token_endpoint = parse_url(
+        &required_string(object, "tokenEndpoint").map_err(ConfigError::Shape)?,
+        "`token.privateKeyJwt.tokenEndpoint`",
+    )
+    .map_err(ConfigError::Shape)?;
+    let client_id = required_string(object, "clientId").map_err(ConfigError::Shape)?;
+
+    let client_key_json = object.get("clientKey").ok_or_else(|| {
+        ConfigError::Shape(ConversionError::new(
+            "`token.privateKeyJwt.clientKey` must be present",
+        ))
+    })?;
+    let client_key_text = serde_json::to_string(client_key_json).map_err(|error| {
+        ConfigError::Shape(ConversionError::new(format!(
+            "`token.privateKeyJwt.clientKey` is invalid: {error}"
+        )))
+    })?;
+    let client_key = PrivateJwk::parse(&client_key_text).map_err(|error| {
+        ConfigError::Shape(ConversionError::new(format!(
+            "`token.privateKeyJwt.clientKey` is invalid: {error}"
+        )))
+    })?;
+
+    let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key);
+    if let Some(audience) = optional_string(object, "audience").map_err(ConfigError::Shape)? {
+        config = config.with_audience(audience);
+    }
+    if let Some(seconds) =
+        optional_i64(object, "assertionLifetimeSeconds").map_err(ConfigError::Shape)?
+    {
+        config = config.with_assertion_lifetime_seconds(seconds);
+    }
+    if let Some(seconds) =
+        optional_i64(object, "refreshMarginSeconds").map_err(ConfigError::Shape)?
+    {
+        config = config.with_refresh_margin_seconds(seconds);
+    }
+    if let Some(millis) = optional_u64(object, "requestTimeoutMs").map_err(ConfigError::Shape)? {
+        config = config.with_request_timeout(Duration::from_millis(millis));
+    }
+    if let Some(millis) = optional_u64(object, "connectTimeoutMs").map_err(ConfigError::Shape)? {
+        config = config.with_connect_timeout(Duration::from_millis(millis));
+    }
+    if let Some(user_agent) = optional_string(object, "userAgent").map_err(ConfigError::Shape)? {
+        config = config.with_user_agent(user_agent);
+    }
+    if let Some(pem_bundle) =
+        optional_string(object, "trustedRootCertificates").map_err(ConfigError::Shape)?
+    {
+        config = config.with_trusted_root_certificates(pem_bundle.into_bytes());
+    }
+
+    PrivateKeyJwt::new(config).map_err(ConfigError::from)
+}
+
+fn token_provider_from_json(
+    object: &Map<String, Value>,
+) -> Result<Arc<dyn TokenProvider>, ConfigError> {
+    let token = object
+        .get("token")
+        .ok_or_else(|| ConversionError::new("`token` must be present"))
+        .map_err(ConfigError::Shape)?;
+    let token_object = as_object(token, "`token`").map_err(ConfigError::Shape)?;
+
+    if let Some(value) = token_object.get("static") {
+        let value = value
+            .as_str()
+            .ok_or_else(|| ConversionError::new("`token.static` must be a string"))
+            .map_err(ConfigError::Shape)?;
+        let provider = StaticToken::new(value)?;
+        return Ok(Arc::new(provider));
+    }
+    if let Some(value) = token_object.get("privateKeyJwt") {
+        let provider = private_key_jwt_provider_from_json(value)?;
+        return Ok(Arc::new(provider));
+    }
+    Err(ConfigError::Shape(ConversionError::new(
+        "`token` must carry exactly one of `static` or `privateKeyJwt`",
+    )))
+}
+
+/// Build the configuration [`registry_evidence_client::EvidenceClient::new`]
+/// validates. Only shape is checked here (a missing field, a malformed URL, a
+/// malformed key); the pinned-key-set, transport, and timeout business rules
+/// are the real client's own refusal, raised once a genuine
+/// `EvidenceClientConfig` exists.
+pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigError> {
+    let object = as_object(value, "the client configuration").map_err(ConfigError::Shape)?;
+
+    let base_url = parse_url(
+        &required_string(object, "baseUrl").map_err(ConfigError::Shape)?,
+        "`baseUrl`",
+    )
+    .map_err(ConfigError::Shape)?;
+
+    let trusted_jwks_json = object
+        .get("trustedJwks")
+        .ok_or_else(|| ConfigError::Shape(ConversionError::new("`trustedJwks` must be present")))?;
+    let trusted_jwks: JwksDocument =
+        serde_json::from_value(trusted_jwks_json.clone()).map_err(|error| {
+            ConfigError::Shape(ConversionError::new(format!(
+                "`trustedJwks` is invalid: {error}"
+            )))
+        })?;
+
+    let token_provider = token_provider_from_json(object)?;
+
+    let mut config = EvidenceClientConfig::new(base_url, token_provider, trusted_jwks);
+
+    if let Some(millis) = optional_u64(object, "requestTimeoutMs").map_err(ConfigError::Shape)? {
+        config = config.with_request_timeout(Duration::from_millis(millis));
+    }
+    if let Some(millis) = optional_u64(object, "connectTimeoutMs").map_err(ConfigError::Shape)? {
+        config = config.with_connect_timeout(Duration::from_millis(millis));
+    }
+    if let Some(user_agent) = optional_string(object, "userAgent").map_err(ConfigError::Shape)? {
+        config = config.with_user_agent(user_agent);
+    }
+    if let Some(pem_bundle) =
+        optional_string(object, "trustedRootCertificates").map_err(ConfigError::Shape)?
+    {
+        config = config.with_trusted_root_certificates(pem_bundle.into_bytes());
+    }
+    if let Some(max_bytes) = optional_u64(object, "maxResponseBytes").map_err(ConfigError::Shape)? {
+        config = config.with_max_response_bytes(max_bytes);
+    }
+
+    Ok(config)
+}
+
+/// The verified payload crosses to JS through this, never through `Debug`.
+pub fn evidence_to_json(evidence: &Evidence) -> Result<Value, ConversionError> {
+    serde_json::to_value(evidence).map_err(|error| {
+        ConversionError::new(format!(
+            "the verified evidence payload could not be serialized: {error}"
+        ))
+    })
+}
+
+/// A shape-level failure reports the same stable envelope every mapped
+/// failure uses, so a caller need not special-case where a failure
+/// originated. There is no dedicated "shape" kind among the eight the runtime
+/// client defines; a JS caller that supplied an unusable shape is, from the
+/// caller's side, exactly the "the client cannot be used as configured" case.
+pub fn map_conversion_error(error: &ConversionError) -> Value {
+    serde_json::json!({
+        "kind": "configuration",
+        "message": error.to_string(),
+    })
+}
+
+pub fn map_config_error(error: &ConfigError) -> Value {
+    match error {
+        ConfigError::Shape(shape) => map_conversion_error(shape),
+        ConfigError::Client(client) => map_client_error(client),
+    }
+}
+
+/// Map any [`EvidenceClientError`] to the stable JSON envelope described in
+/// the crate's `AGENTS.md`-linked design: `kind` and `message` always, plus
+/// whichever of `status`, `code`, `operation`, `retryAfterSeconds`, and
+/// `transportKind` the variant carries. `code` is deliberately overloaded: a
+/// `Denied`/`Protocol` wire code, a `Token::Refused` OAuth code, and a
+/// `Verification` failure's own kind string all travel in the same member,
+/// since a caller branches on `kind` first and `code` only refines it.
+///
+/// Never included: response bytes, a credential, a header value, a selector
+/// value, or a subject binding. Every message here is `Display` text over
+/// fixed, non-secret reasons; none of the eight kinds can carry one of those.
+pub fn map_client_error(error: &EvidenceClientError) -> Value {
+    let mut fields = Map::new();
+    fields.insert("kind".to_owned(), Value::String(error.kind().to_owned()));
+    fields.insert("message".to_owned(), Value::String(error.to_string()));
+
+    match error {
+        EvidenceClientError::Configuration { .. } | EvidenceClientError::Nonce(_) => {}
+        EvidenceClientError::Token(token_error) => insert_token_fields(&mut fields, token_error),
+        EvidenceClientError::Transport { kind } => {
+            fields.insert(
+                "transportKind".to_owned(),
+                Value::String(kind.kind().to_owned()),
+            );
+        }
+        EvidenceClientError::Denied {
+            status,
+            code,
+            operation,
+            retry_after_seconds,
+        } => {
+            fields.insert("status".to_owned(), Value::from(*status));
+            fields.insert("code".to_owned(), Value::String(code.clone()));
+            insert_operation(&mut fields, operation);
+            insert_retry_after(&mut fields, *retry_after_seconds);
+        }
+        EvidenceClientError::NotAvailable { operation } => {
+            insert_operation(&mut fields, operation);
+        }
+        EvidenceClientError::Protocol {
+            status,
+            code,
+            operation,
+            retry_after_seconds,
+        } => {
+            fields.insert("status".to_owned(), Value::from(*status));
+            if let Some(code) = code {
+                fields.insert("code".to_owned(), Value::String(code.clone()));
+            }
+            insert_operation(&mut fields, operation);
+            insert_retry_after(&mut fields, *retry_after_seconds);
+        }
+        EvidenceClientError::Verification(verification_error) => {
+            fields.insert(
+                "code".to_owned(),
+                Value::String(verification_error.kind().to_owned()),
+            );
+        }
+        // `EvidenceClientError` is `#[non_exhaustive]`: a variant this crate
+        // does not yet know about still maps, with only `kind` and `message`.
+        _ => {}
+    }
+
+    Value::Object(fields)
+}
+
+fn insert_token_fields(fields: &mut Map<String, Value>, error: &TokenError) {
+    match error {
+        TokenError::Unavailable | TokenError::Invalid { .. } | TokenError::Configuration { .. } => {
+        }
+        TokenError::Transport { kind } => {
+            fields.insert(
+                "transportKind".to_owned(),
+                Value::String(kind.kind().to_owned()),
+            );
+        }
+        TokenError::Refused { code } => {
+            fields.insert("code".to_owned(), Value::String(code.as_str().to_owned()));
+        }
+        TokenError::Protocol { status } => {
+            fields.insert("status".to_owned(), Value::from(*status));
+        }
+        // `TokenError` is `#[non_exhaustive]`.
+        _ => {}
+    }
+}
+
+fn insert_operation(fields: &mut Map<String, Value>, operation: &Option<String>) {
+    if let Some(operation) = operation {
+        fields.insert("operation".to_owned(), Value::String(operation.clone()));
+    }
+}
+
+fn insert_retry_after(fields: &mut Map<String, Value>, retry_after_seconds: Option<u64>) {
+    if let Some(seconds) = retry_after_seconds {
+        fields.insert("retryAfterSeconds".to_owned(), Value::from(seconds));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use ed25519_dalek::SigningKey;
+    use registry_evidence_client::{
+        EvidenceObjectType, OAuthErrorCode, SubjectBinding, SupportedValue, TransportKind,
+        VerificationError,
+    };
+
+    use super::*;
+
+    // --- selector_value_from_json ---
+
+    #[test]
+    fn a_string_selector_value_converts() {
+        assert_eq!(
+            selector_value_from_json(&Value::String("synthetic-record-001".to_owned())).unwrap(),
+            SelectorValue::from("synthetic-record-001")
+        );
+    }
+
+    #[test]
+    fn a_boolean_selector_value_converts() {
+        assert_eq!(
+            selector_value_from_json(&Value::Bool(true)).unwrap(),
+            SelectorValue::from(true)
+        );
+    }
+
+    #[test]
+    fn an_integer_selector_value_converts() {
+        assert_eq!(
+            selector_value_from_json(&serde_json::json!(7)).unwrap(),
+            SelectorValue::from(7_i64)
+        );
+    }
+
+    #[test]
+    fn a_selector_value_outside_the_accepted_shapes_is_refused() {
+        for value in [
+            serde_json::json!(1.5),
+            serde_json::json!([1, 2, 3]),
+            Value::Null,
+            // i64::MAX + 1: a valid JSON integer, but not one `i64` can hold.
+            serde_json::json!(9_223_372_036_854_775_808_u64),
+        ] {
+            assert!(
+                selector_value_from_json(&value).is_err(),
+                "{value} was accepted"
+            );
+        }
+    }
+
+    // --- subject_expectations_from_json / _to_json ---
+
+    #[test]
+    fn accept_first_use_round_trips() {
+        let value = Value::String("acceptFirstUse".to_owned());
+        let expectations = subject_expectations_from_json(&value).expect("the shape is accepted");
+        assert!(matches!(expectations, SubjectExpectations::AcceptFirstUse));
+        assert_eq!(subject_expectations_to_json(&expectations), value);
+    }
+
+    #[test]
+    fn pinned_subject_expectations_round_trip() {
+        let value = serde_json::json!({
+            "pinned": [{"role": "subject", "binding": "y0KMdWluZGluZw"}],
+        });
+        let expectations = subject_expectations_from_json(&value).expect("the shape is accepted");
+        let SubjectExpectations::Pinned(subjects) = &expectations else {
+            panic!("expected a pinned subject expectation");
+        };
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].role, "subject");
+        assert_eq!(subjects[0].binding, "y0KMdWluZGluZw");
+        assert_eq!(subject_expectations_to_json(&expectations), value);
+    }
+
+    #[test]
+    fn a_subject_expectation_outside_the_two_accepted_shapes_is_refused() {
+        for value in [
+            Value::String("something-else".to_owned()),
+            serde_json::json!({}),
+            serde_json::json!({"pinned": [{"role": "subject"}]}),
+            serde_json::json!(1),
+            Value::Null,
+        ] {
+            assert!(
+                subject_expectations_from_json(&value).is_err(),
+                "{value} was accepted"
+            );
+        }
+    }
+
+    // --- spec_from_json ---
+
+    fn valid_spec_json() -> Value {
+        serde_json::json!({
+            "requirement": "urn:example:client:requirement:status:v1",
+            "purpose": "example-decision",
+            "audience": "urn:example:client:audience:relying-party",
+            "evidenceType": "urn:example:client:evidence-type:status:v1",
+            "issuedBy": "urn:example:client:issuer",
+            "providedBy": "urn:example:client:provider",
+            "configurationRevision": "sha256:00",
+            "expectedAssuranceProfile": "local",
+            "subjects": [{
+                "role": "subject",
+                "selectorProfile": "record-lookup-v1",
+                "selectorValues": {
+                    "record_reference": "synthetic-record-001",
+                },
+            }],
+            "expectedOutputs": [{
+                "concept": "urn:example:client:concept:status-holds",
+                "form": "boolean",
+            }],
+            "maximumAssertionLifetimeSeconds": 300,
+            "clockSkewSeconds": 60,
+            "subjectExpectations": "acceptFirstUse",
+        })
+    }
+
+    #[test]
+    fn a_well_formed_specification_converts_in_full() {
+        let spec = spec_from_json(&valid_spec_json()).expect("the specification is accepted");
+        assert_eq!(spec.requirement, "urn:example:client:requirement:status:v1");
+        assert_eq!(spec.expected_assurance_profile, AssuranceProfile::Local);
+        assert_eq!(spec.subjects.len(), 1);
+        assert_eq!(spec.subjects[0].role, "subject");
+        assert_eq!(
+            spec.subjects[0].selector_values.as_ref().unwrap()[0].0,
+            "record_reference"
+        );
+        assert_eq!(spec.expected_outputs.len(), 1);
+        assert_eq!(spec.maximum_assertion_lifetime_seconds, 300);
+        assert_eq!(spec.clock_skew_seconds, 60);
+        assert!(matches!(
+            spec.subject_expectations,
+            SubjectExpectations::AcceptFirstUse
+        ));
+    }
+
+    #[test]
+    fn a_specification_missing_any_required_field_is_refused() {
+        let required_fields = [
+            "requirement",
+            "purpose",
+            "audience",
+            "evidenceType",
+            "issuedBy",
+            "providedBy",
+            "configurationRevision",
+            "expectedAssuranceProfile",
+            "subjects",
+            "expectedOutputs",
+            "maximumAssertionLifetimeSeconds",
+            "clockSkewSeconds",
+            "subjectExpectations",
+        ];
+        for field in required_fields {
+            let mut spec = valid_spec_json();
+            spec.as_object_mut().unwrap().remove(field);
+            assert!(
+                spec_from_json(&spec).is_err(),
+                "missing `{field}` was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_specification_that_is_not_an_object_is_refused() {
+        assert!(spec_from_json(&Value::Null).is_err());
+        assert!(spec_from_json(&serde_json::json!([])).is_err());
+    }
+
+    // --- config_from_json ---
+
+    fn one_key_jwks_json() -> Value {
+        serde_json::json!({
+            "keys": [{
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": "test-key",
+                "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            }],
+        })
+    }
+
+    /// A fresh Ed25519 signing key, generated for one test rather than
+    /// committed to the tree.
+    fn generated_client_key_json(key_id: &str) -> Value {
+        let mut seed = [0_u8; 32];
+        getrandom::fill(&mut seed).expect("the test host supplies randomness");
+        let key = SigningKey::from_bytes(&seed);
+        serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "alg": "EdDSA",
+            "kid": key_id,
+            "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+            "d": URL_SAFE_NO_PAD.encode(key.to_bytes()),
+        })
+    }
+
+    fn valid_config_json_with_static_token() -> Value {
+        serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": { "static": "header-safe-token" },
+        })
+    }
+
+    #[test]
+    fn a_configuration_with_a_static_token_converts() {
+        let config =
+            config_from_json(&valid_config_json_with_static_token()).expect("the config converts");
+        assert_eq!(config.base_url().as_str(), "https://evidence.example.org/");
+        assert_eq!(config.trusted_jwks().keys.len(), 1);
+    }
+
+    #[test]
+    fn a_configuration_with_a_private_key_jwt_token_converts() {
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": generated_client_key_json("signing-key-1"),
+                    "audience": "https://issuer.example.org/",
+                },
+            },
+        });
+        config_from_json(&config_json).expect("the config converts");
+    }
+
+    #[test]
+    fn a_missing_trusted_jwks_is_a_shape_error() {
+        let mut config = valid_config_json_with_static_token();
+        config.as_object_mut().unwrap().remove("trustedJwks");
+        assert!(matches!(
+            config_from_json(&config),
+            Err(ConfigError::Shape(_))
+        ));
+    }
+
+    #[test]
+    fn a_missing_token_is_a_shape_error() {
+        let mut config = valid_config_json_with_static_token();
+        config.as_object_mut().unwrap().remove("token");
+        assert!(matches!(
+            config_from_json(&config),
+            Err(ConfigError::Shape(_))
+        ));
+    }
+
+    #[test]
+    fn an_unparseable_base_url_is_a_shape_error() {
+        let mut config = valid_config_json_with_static_token();
+        config["baseUrl"] = Value::String("not a url".to_owned());
+        assert!(matches!(
+            config_from_json(&config),
+            Err(ConfigError::Shape(_))
+        ));
+    }
+
+    #[test]
+    fn a_malformed_client_key_is_a_shape_error() {
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    // Missing every member a JWK needs.
+                    "clientKey": {},
+                },
+            },
+        });
+        assert!(matches!(
+            config_from_json(&config_json),
+            Err(ConfigError::Shape(_))
+        ));
+    }
+
+    /// A well-shaped `privateKeyJwt` block can still describe a configuration
+    /// `PrivateKeyJwt::new` itself refuses. That refusal is a genuine
+    /// `TokenError`, surfaced as `ConfigError::Client` with `kind: "token"`,
+    /// not a shape error.
+    #[test]
+    fn a_semantically_invalid_private_key_jwt_configuration_is_a_client_error() {
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": generated_client_key_json("signing-key-1"),
+                    // The contract accepts 1..=300 seconds.
+                    "assertionLifetimeSeconds": 0,
+                },
+            },
+        });
+        let error = config_from_json(&config_json).expect_err("the configuration is refused");
+        let ConfigError::Client(client_error) = &error else {
+            panic!("expected a client-level refusal, got {error:?}");
+        };
+        assert_eq!(client_error.kind(), "token");
+        assert_eq!(map_config_error(&error)["kind"], "token");
+    }
+
+    // --- evidence_to_json ---
+
+    fn minimal_evidence() -> Evidence {
+        Evidence {
+            schema: "https://registrystack.example/evidence/v1".to_owned(),
+            assurance_profile: AssuranceProfile::Local,
+            request_nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            id: "urn:example:evidence:1".to_owned(),
+            evidence_type_name: EvidenceObjectType::Evidence,
+            supports_requirement: "urn:example:client:requirement:status:v1".to_owned(),
+            is_conformant_to: "urn:example:client:evidence-type:status:v1".to_owned(),
+            issued_by: "urn:example:client:issuer".to_owned(),
+            provided_by: "urn:example:client:provider".to_owned(),
+            issued_at: "2026-01-01T00:00:00Z".to_owned(),
+            observed_at: "2026-01-01T00:00:00Z".to_owned(),
+            valid_until: "2026-01-01T00:05:00Z".to_owned(),
+            purpose: "example-decision".to_owned(),
+            audience: "urn:example:client:audience:relying-party".to_owned(),
+            configuration_revision: "sha256:00".to_owned(),
+            subjects: vec![SubjectBinding {
+                role: "subject".to_owned(),
+                binding: "y0KMdWluZGluZw".to_owned(),
+            }],
+            supported_values: vec![SupportedValue {
+                provides_value_for: "urn:example:client:concept:status-holds".to_owned(),
+                value: registry_evidence_client::PublicValue::Boolean(true),
+            }],
+        }
+    }
+
+    #[test]
+    fn evidence_converts_to_the_expected_json_shape() {
+        let json = evidence_to_json(&minimal_evidence()).expect("evidence serializes");
+        // `EvidenceObjectType` has no `rename_all` of its own, so its one
+        // variant serializes as the Rust identifier itself.
+        assert_eq!(json["type"], "Evidence");
+        assert_eq!(json["assuranceProfile"], "local");
+        assert_eq!(
+            json["supportsRequirement"],
+            "urn:example:client:requirement:status:v1"
+        );
+        assert_eq!(json["subjects"][0]["role"], "subject");
+        assert_eq!(json["subjects"][0]["binding"], "y0KMdWluZGluZw");
+        assert_eq!(
+            json["supportedValues"][0]["providesValueFor"],
+            "urn:example:client:concept:status-holds"
+        );
+        assert_eq!(json["supportedValues"][0]["value"], true);
+    }
+
+    // --- map_client_error: one case per stable kind ---
+
+    #[test]
+    fn a_configuration_failure_carries_only_kind_and_message() {
+        let error = EvidenceClientError::Configuration {
+            reason: "the client cannot be used this way",
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "configuration");
+        assert!(mapped["message"]
+            .as_str()
+            .unwrap()
+            .contains("the client cannot be used this way"));
+        assert_eq!(mapped.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_nonce_failure_carries_only_kind_and_message() {
+        let error = EvidenceClientError::Nonce(registry_evidence_client::NonceError::Entropy);
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "nonce");
+        assert_eq!(mapped.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_transport_failure_carries_its_transport_kind() {
+        let error = EvidenceClientError::Transport {
+            kind: TransportKind::Timeout,
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "transport");
+        assert_eq!(mapped["transportKind"], "timeout");
+        assert_eq!(mapped.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_denied_failure_carries_status_code_operation_and_retry_after() {
+        let error = EvidenceClientError::Denied {
+            status: 403,
+            code: "not_authorized".to_owned(),
+            operation: Some("01JZZZOPERATION".to_owned()),
+            retry_after_seconds: Some(30),
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "denied");
+        assert_eq!(mapped["status"], 403);
+        assert_eq!(mapped["code"], "not_authorized");
+        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped["retryAfterSeconds"], 30);
+    }
+
+    #[test]
+    fn a_denied_failure_with_no_operation_or_retry_after_omits_them() {
+        let error = EvidenceClientError::Denied {
+            status: 403,
+            code: "not_authorized".to_owned(),
+            operation: None,
+            retry_after_seconds: None,
+        };
+        let mapped = map_client_error(&error);
+        assert!(mapped.get("operation").is_none());
+        assert!(mapped.get("retryAfterSeconds").is_none());
+    }
+
+    #[test]
+    fn a_not_available_failure_carries_only_its_operation() {
+        let error = EvidenceClientError::NotAvailable {
+            operation: Some("01JZZZOPERATION".to_owned()),
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "not_available");
+        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_protocol_failure_carries_status_and_its_optional_members() {
+        let error = EvidenceClientError::Protocol {
+            status: 503,
+            code: Some("temporarily_unavailable".to_owned()),
+            operation: Some("01JZZZOPERATION".to_owned()),
+            retry_after_seconds: Some(5),
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "protocol");
+        assert_eq!(mapped["status"], 503);
+        assert_eq!(mapped["code"], "temporarily_unavailable");
+        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped["retryAfterSeconds"], 5);
+    }
+
+    #[test]
+    fn a_protocol_failure_with_no_code_omits_it() {
+        let error = EvidenceClientError::Protocol {
+            status: 200,
+            code: None,
+            operation: None,
+            retry_after_seconds: None,
+        };
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["status"], 200);
+        assert!(mapped.get("code").is_none());
+    }
+
+    #[test]
+    fn a_verification_failure_carries_its_verifier_kind_as_the_code() {
+        let error = EvidenceClientError::Verification(VerificationError::Signature);
+        let mapped = map_client_error(&error);
+        assert_eq!(mapped["kind"], "verification");
+        assert_eq!(mapped["code"], "signature");
+    }
+
+    #[test]
+    fn a_token_failure_nests_its_own_sub_kind_details_under_the_token_kind() {
+        let unavailable = map_client_error(&EvidenceClientError::Token(TokenError::Unavailable));
+        assert_eq!(unavailable["kind"], "token");
+        assert_eq!(unavailable.as_object().unwrap().len(), 2);
+
+        let transport = map_client_error(&EvidenceClientError::Token(TokenError::Transport {
+            kind: TransportKind::Connect,
+        }));
+        assert_eq!(transport["kind"], "token");
+        assert_eq!(transport["transportKind"], "connect");
+
+        let refused = map_client_error(&EvidenceClientError::Token(TokenError::Refused {
+            code: OAuthErrorCode::InvalidClient,
+        }));
+        assert_eq!(refused["kind"], "token");
+        assert_eq!(refused["code"], "invalid_client");
+
+        let protocol = map_client_error(&EvidenceClientError::Token(TokenError::Protocol {
+            status: 500,
+        }));
+        assert_eq!(protocol["kind"], "token");
+        assert_eq!(protocol["status"], 500);
+    }
+
+    /// The discriminant is what a caller branches on, so every one of the
+    /// eight stable kinds is distinct.
+    #[test]
+    fn every_client_failure_reports_a_distinct_kind() {
+        let errors = [
+            EvidenceClientError::Configuration { reason: "unusable" },
+            EvidenceClientError::Nonce(registry_evidence_client::NonceError::Entropy),
+            EvidenceClientError::Token(TokenError::Unavailable),
+            EvidenceClientError::Transport {
+                kind: TransportKind::Connect,
+            },
+            EvidenceClientError::Denied {
+                status: 403,
+                code: "not_authorized".to_owned(),
+                operation: None,
+                retry_after_seconds: None,
+            },
+            EvidenceClientError::NotAvailable { operation: None },
+            EvidenceClientError::Protocol {
+                status: 200,
+                code: None,
+                operation: None,
+                retry_after_seconds: None,
+            },
+            EvidenceClientError::Verification(VerificationError::Signature),
+        ];
+        let kinds: std::collections::BTreeSet<String> = errors
+            .iter()
+            .map(|error| map_client_error(error)["kind"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(kinds.len(), errors.len(), "two variants share a kind");
+    }
+
+    #[test]
+    fn a_conversion_error_maps_to_the_configuration_kind() {
+        let mapped = map_conversion_error(&ConversionError::new("bad shape"));
+        assert_eq!(mapped["kind"], "configuration");
+        assert_eq!(mapped["message"], "bad shape");
+    }
+}
