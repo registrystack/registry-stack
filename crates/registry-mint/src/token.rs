@@ -325,6 +325,22 @@ fn build_jwks(
     for path in retired {
         keys.push(load_retired_public_key(path)?);
     }
+    // One key id must resolve to one key. A verifier that indexes the set by
+    // `kid` is free to keep either entry, so a repeated id could leave the
+    // retired key standing in for the key every new token is signed with,
+    // with Mint still reporting itself ready.
+    let mut key_ids = std::collections::BTreeSet::new();
+    for key in &keys {
+        let key_id = key
+            .get("kid")
+            .and_then(Value::as_str)
+            .ok_or(MinterError::RetiredKey("has no key id"))?;
+        if !key_ids.insert(key_id) {
+            return Err(MinterError::RetiredKey(
+                "repeats a key id already in the published set",
+            ));
+        }
+    }
     Ok(json!({ "keys": keys }))
 }
 
@@ -442,6 +458,63 @@ clients:
             minter,
             registry,
         }
+    }
+
+    /// The active signer the published set is built around, matching the
+    /// `mint-2026-01` key id the fixture configuration declares.
+    fn active_signer() -> LocalJwkSigner {
+        let (private, _public) = ed25519_key(9, "mint-2026-01");
+        LocalJwkSigner::new(PrivateJwk::parse(&private).expect("private JWK parses"))
+            .expect("signer builds")
+    }
+
+    fn write_public_key(directory: &Path, name: &str, seed: u8, kid: &str) -> std::path::PathBuf {
+        let path = directory.join(name);
+        let (_private, public) = ed25519_key(seed, kid);
+        fs::write(&path, public.to_string()).expect("write public key");
+        path
+    }
+
+    #[test]
+    fn retired_keys_publish_beside_the_active_key() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let retired = write_public_key(directory.path(), "retired.jwk", 4, "mint-2025-07");
+
+        let jwks = build_jwks(&active_signer(), &[retired]).expect("set builds");
+
+        let ids: Vec<&str> = jwks["keys"]
+            .as_array()
+            .expect("keys is an array")
+            .iter()
+            .map(|key| key["kid"].as_str().expect("key id is a string"))
+            .collect();
+        assert_eq!(ids, ["mint-2026-01", "mint-2025-07"]);
+    }
+
+    #[test]
+    fn a_retired_key_may_not_repeat_the_active_key_id() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        // Different key material published under the id the active key already
+        // uses. A verifier keyed by `kid` would be free to resolve either, so
+        // the retired key could displace the key every new token is signed
+        // with while Mint went on reporting itself ready.
+        let retired = write_public_key(directory.path(), "retired.jwk", 4, "mint-2026-01");
+
+        let error = build_jwks(&active_signer(), &[retired]).expect_err("duplicate id is rejected");
+
+        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+    }
+
+    #[test]
+    fn two_retired_keys_may_not_repeat_one_key_id() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let first = write_public_key(directory.path(), "first.jwk", 4, "mint-2025-07");
+        let second = write_public_key(directory.path(), "second.jwk", 5, "mint-2025-07");
+
+        let error =
+            build_jwks(&active_signer(), &[first, second]).expect_err("duplicate id is rejected");
+
+        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
     }
 
     fn undelegated(client: &std::sync::Arc<RegisteredClient>) -> AuthenticatedClient {
