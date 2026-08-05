@@ -120,6 +120,20 @@ impl MintAuditLog {
         })
     }
 
+    /// Check the audit configuration without taking the serving writer lock.
+    ///
+    /// `mint check` reads a configuration while the deployment it describes is
+    /// usually still serving, and the chain admits one writer for the life of
+    /// that process. Opening the sink here would report a healthy deployment
+    /// back as a broken one. The hash key is what a misconfigured deployment
+    /// actually gets wrong, and reading it takes nothing the writer holds.
+    pub fn check(config: &AuditConfig) -> Result<(), MintAuditError> {
+        let secret =
+            secretfile::read_owner_only(&config.hash_key_file).map_err(MintAuditError::Secret)?;
+        AuditHashSecret::new(secret.as_bytes().to_vec())?;
+        Ok(())
+    }
+
     /// Verify the retained chain without taking the serving writer lock.
     pub fn verify(config: &AuditConfig) -> Result<MintAuditSummary, MintAuditError> {
         let secret =

@@ -108,6 +108,19 @@ impl MintService {
         })
     }
 
+    /// Validate a configuration without taking what a serving instance holds.
+    ///
+    /// Everything [`MintService::load`] does except claiming the audit writer,
+    /// so an operator can check an edited configuration against the deployment
+    /// it is about to replace. Returns the number of registered clients.
+    pub fn check(config: &MintConfig) -> Result<usize, ServiceError> {
+        let minter = TokenMinter::new(config)?;
+        let registry = ClientRegistry::load(&config.clients.directory)?;
+        check_delegations(&registry, minter.claims())?;
+        MintAuditLog::check(&config.audit)?;
+        Ok(registry.len())
+    }
+
     /// Re-read the client registry directory and swap it in atomically.
     ///
     /// A failed reload leaves the previous registry in place: a malformed file

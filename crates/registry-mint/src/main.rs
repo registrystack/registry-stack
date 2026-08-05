@@ -127,15 +127,14 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Check { config } => {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("the async runtime could not start: {error}"))?;
-            let service = runtime.block_on(load(&config))?;
+            let config = MintConfig::load(&config)
+                .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
+            let clients = MintService::check(&config)
+                .map_err(|error| format!("the configuration cannot be served: {error}"))?;
             tracing::info!(
                 target: "registry_mint",
-                issuer = service.issuer(),
-                clients = service.client_count(),
+                issuer = config.issuer,
+                clients,
                 "configuration is valid"
             );
             Ok(())

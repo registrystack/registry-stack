@@ -268,6 +268,28 @@ fn the_subcommand_obtains_a_token_the_endpoint_agreed_to_issue() {
 }
 
 #[test]
+fn the_configuration_check_runs_against_a_deployment_that_is_already_serving() {
+    // The whole point of `mint check` is to read a configuration before
+    // restarting the service that is running on it. One writer holds the audit
+    // chain for the life of the serving process, so a check that took the
+    // writer would report every live deployment as broken.
+    let server = server();
+    let output = Command::new(env!("CARGO_BIN_EXE_mint"))
+        .arg("check")
+        .arg("--config")
+        .arg(&server.config)
+        .output()
+        .expect("the checker runs");
+
+    assert!(
+        output.status.success(),
+        "check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn a_delegated_token_carries_the_actor_and_the_subject_from_the_registry_paths() {
     let server = server();
     let subject = server.root.join("subject.json");
