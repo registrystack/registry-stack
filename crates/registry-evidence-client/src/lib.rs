@@ -120,6 +120,7 @@ pub use prepare::{
 pub use private_key_jwt::{
     PrivateKeyJwt, PrivateKeyJwtConfig, DEFAULT_ASSERTION_LIFETIME_SECONDS,
     DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+    MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
 };
 pub use request::SelectorValue;
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};

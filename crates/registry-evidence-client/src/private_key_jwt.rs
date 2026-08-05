@@ -55,6 +55,20 @@ pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: i64 = 300;
 /// How much of an access token's remaining life is treated as already spent.
 pub const DEFAULT_REFRESH_MARGIN_SECONDS: i64 = 30;
 
+/// Longest an issuer's stated `expires_in` is trusted for, when deciding how
+/// long to cache the credential it came with.
+///
+/// `expires_in` is a remote-controlled value. An authorization server that
+/// reports one far longer than any real access token lives, whether by a bug
+/// or by intent, must not be able to keep a credential cached, and therefore
+/// live in memory, for the life of the process with no way for the integrator
+/// to evict it. Re-acquiring a token earlier than an issuer's stated lifetime
+/// requires is always safe, so clamping to 86400 seconds (24 hours) cannot
+/// break a correct deployment.
+pub const MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS: i64 = 86_400;
+// Ties the doc comment above to the constant, so the two cannot drift apart.
+const _: () = assert!(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS == 86_400);
+
 /// The grant this provider asks for. The client authenticates as itself, on its
 /// own behalf, which is the only grant an Evidence relying party needs.
 const GRANT_TYPE: &str = "client_credentials";
@@ -409,7 +423,7 @@ impl PrivateKeyJwt {
         };
 
         if !(200..300).contains(&status) {
-            return Err(declined(status, &body));
+            return Err(declined(status, media_type.as_deref(), &body));
         }
         if status != 200
             || !media_type
@@ -430,9 +444,12 @@ impl PrivateKeyJwt {
             token: BearerToken::new(issued.access_token)?,
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
+            // A lifetime longer than this provider will trust is clamped before
+            // it ever reaches the cache arithmetic below.
             expires_at: issued
                 .expires_in
                 .filter(|seconds| *seconds > 0)
+                .map(|seconds| seconds.min(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS))
                 .map(|seconds| now.saturating_add(seconds)),
         })
     }
@@ -515,9 +532,14 @@ struct DeclinedToken {
 /// RFC 6749 section 5.2 puts a decision about the client at 400, and an
 /// authentication failure at 401. Any other status is the server reporting
 /// something about itself, which is not a statement this client can act on as a
-/// refusal.
-fn declined(status: u16, body: &[u8]) -> TokenError {
-    if !matches!(status, 400 | 401) {
+/// refusal. A body is read as a refusal only when it arrives in the media type
+/// the request asked for; an intermediary answering in some other media type,
+/// or none at all, never reached the authorization server's own refusal logic,
+/// so it is reported as a protocol failure instead.
+fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
+    if !matches!(status, 400 | 401)
+        || !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
+    {
         return TokenError::Protocol { status };
     }
     match serde_json::from_slice::<DeclinedToken>(body) {
@@ -844,6 +866,44 @@ mod tests {
         );
     }
 
+    /// A stated lifetime the issuer never bounded, such as `i64::MAX`, must not
+    /// keep a credential cached for the life of the process. The provider clamps
+    /// it to its own configured maximum before caching.
+    #[tokio::test]
+    async fn an_unbounded_stated_lifetime_is_clamped_to_the_configured_maximum() {
+        let server = token_endpoint_serving(issued(Some(i64::MAX))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = provider(endpoint(&server.uri()), &clock);
+
+        provider.bearer_token().await.expect("a first credential");
+        assert_eq!(token_requests(&server).await, 1);
+
+        // Well inside the clamped lifetime, despite the issuer stating an
+        // effectively unbounded one.
+        clock.set(NOW + MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS - DEFAULT_REFRESH_MARGIN_SECONDS - 1);
+        provider
+            .bearer_token()
+            .await
+            .expect("the cached credential");
+        assert_eq!(
+            token_requests(&server).await,
+            1,
+            "a usable cached credential was discarded"
+        );
+
+        // The first instant inside the refresh margin of the clamped lifetime.
+        clock.set(NOW + MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS - DEFAULT_REFRESH_MARGIN_SECONDS);
+        provider
+            .bearer_token()
+            .await
+            .expect("a replacement credential");
+        assert_eq!(
+            token_requests(&server).await,
+            2,
+            "an unbounded stated lifetime was cached past the configured maximum"
+        );
+    }
+
     /// A server that states no lifetime has told the client nothing it may cache
     /// against, so every request asks again rather than guessing a lifetime.
     #[tokio::test]
@@ -888,6 +948,35 @@ mod tests {
             1,
             "concurrent callers stampeded the token endpoint"
         );
+    }
+
+    /// Tokio's asynchronous mutex is not poisoned when a guard is dropped
+    /// mid-await, unlike `std::sync::Mutex`. A caller abandoned while it holds
+    /// the refresh lock, whether by cancellation or a panic elsewhere in the
+    /// same task, must still let the next caller acquire the lock and receive
+    /// a credential rather than waiting on a lock nothing will ever release.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_acquisition_releases_the_refresh_lock_for_the_next_caller() {
+        let server = token_endpoint_serving(
+            issued(Some(TOKEN_LIFETIME_SECONDS)).set_delay(Duration::from_millis(200)),
+        )
+        .await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = Arc::new(provider(endpoint(&server.uri()), &clock));
+
+        let abandoned = {
+            let provider = provider.clone();
+            tokio::spawn(async move { provider.bearer_token().await })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        abandoned.abort();
+        let _ = abandoned.await;
+
+        let token = tokio::time::timeout(Duration::from_secs(2), provider.bearer_token())
+            .await
+            .expect("the refresh lock was not left held by the abandoned acquisition")
+            .expect("a subsequent caller still receives a credential");
+        assert_eq!(token.expose(), ISSUED_CREDENTIAL);
     }
 
     /// A declined request reports the registered code and nothing else. The
@@ -937,9 +1026,7 @@ mod tests {
 
         for (status, body, expected) in cases {
             let server = token_endpoint_serving(
-                ResponseTemplate::new(status)
-                    .insert_header("content-type", "application/json")
-                    .set_body_string(body.clone()),
+                ResponseTemplate::new(status).set_body_raw(body.clone(), "application/json"),
             )
             .await;
             let clock = Arc::new(TestClock::new(NOW));
@@ -952,6 +1039,40 @@ mod tests {
             assert_eq!(error, expected, "status {status}");
             let rendered = error.to_string();
             assert!(!rendered.contains("canary"), "{rendered}");
+        }
+    }
+
+    /// A 400 or 401 body is read as a refusal only when it is announced in the
+    /// media type the request asked for. An intermediary that answers in a
+    /// different media type, or none at all, never reached the authorization
+    /// server's own refusal logic, so it must be reported as a protocol failure
+    /// rather than as a refusal the adopter cannot act on.
+    #[tokio::test]
+    async fn a_declined_status_in_the_wrong_media_type_is_a_protocol_failure() {
+        let refusal = json!({"error": "invalid_request"}).to_string();
+        let cases = [
+            (
+                400,
+                ResponseTemplate::new(400).set_body_bytes(refusal.clone()),
+                "absent content type",
+            ),
+            (
+                401,
+                ResponseTemplate::new(401).set_body_raw(refusal.clone(), "text/plain"),
+                "wrong content type",
+            ),
+        ];
+
+        for (status, response, label) in cases {
+            let server = token_endpoint_serving(response).await;
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = provider(endpoint(&server.uri()), &clock);
+
+            let error = provider
+                .bearer_token()
+                .await
+                .expect_err("the answer is not a usable refusal");
+            assert_eq!(error, TokenError::Protocol { status }, "{label}");
         }
     }
 
