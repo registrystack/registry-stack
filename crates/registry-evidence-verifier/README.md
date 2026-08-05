@@ -65,8 +65,9 @@ products/evidence/scripts/check-verifier-portability.sh
 ```
 
 The second command proves the normal dependency tree still carries no async
-runtime, HTTP stack, script engine, command line parser, or logging framework,
-so client tooling links none of the service runtime.
+runtime, HTTP stack, script engine, command line parser, logging framework, or
+filesystem and socket syscall layer, so client tooling links none of the service
+runtime.
 
 It does not make the crate target independent. The crypto stack reaches
 `aws-lc-sys`, so a build needs a C toolchain and is limited to the targets
