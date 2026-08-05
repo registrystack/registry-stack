@@ -12,7 +12,8 @@ export * from './index'
  *
  * `kind` is always present. The rest are present only when the underlying
  * failure carries them:
- * - `status`: `denied` and `protocol`
+ * - `status`: `denied`, `protocol`, and any `token` failure whose `tokenKind`
+ *   is `protocol`
  * - `code`: `denied`, `protocol` (optional), `verification`, and any `token`
  *   failure whose `tokenKind` is `refused`
  * - `operation`: `denied`, `not_available`, `protocol` (all optional)
