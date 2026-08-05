@@ -17,7 +17,7 @@ use crate::consultation::{
 use crate::error::{ConfigError, Error, RuntimeBindingError};
 use crate::state_plane::{AuditChainKeyEpochId, AuditPseudonymKeyringLockKey, ServingFenceLockKey};
 use crate::table_provider::table_name;
-use registry_manifest_core::CompiledMetadata;
+use registry_manifest_core::{CompiledMetadata, REGISTRY_EVIDENCE_ACCESS_KIND};
 use registry_platform_authcommon::CredentialFingerprintRefError;
 use registry_platform_httpsec::CorsPolicy;
 use registry_platform_httputil::destination::MAX_SERVICE_HOP_OPERATION_TIMEOUT;
@@ -790,13 +790,13 @@ pub fn validate_runtime_bindings(
                     return Err(RuntimeBindingError::FieldMissing);
                 }
             }
-            if offering.access.kind != "registry-notary" {
+            if offering.access.kind != REGISTRY_EVIDENCE_ACCESS_KIND {
                 tracing::error!(
                     code = "runtime.binding.unsupported_evidence_offering",
                     dataset_id = %dataset.id,
                     offering = %offering.id,
                     access_kind = %offering.access.kind,
-                    "Registry Relay only supports external Registry Notary evidence offerings"
+                    "Registry Relay only advertises external Evidence offerings"
                 );
                 return Err(RuntimeBindingError::UnsupportedEvidenceOffering);
             }

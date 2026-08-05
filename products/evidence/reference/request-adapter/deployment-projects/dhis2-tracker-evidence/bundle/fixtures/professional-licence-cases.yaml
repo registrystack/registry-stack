@@ -1,0 +1,455 @@
+fixture: registry.evidence.reference.dhis2-professional-licence/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: tracked-entity-reference-v1
+      values: {record_reference: Tei00000001}
+  derivationSelectorInputs:
+    subject:
+      profile: tracked-entity-reference-v1
+      values: {record_reference: Tei00000001}
+  expectedRequestParts:
+    query:
+      - name: program
+        value: Prg00000002
+      - name: orgUnits
+        value: Org00000001
+      - name: trackedEntities
+        value: Tei00000001
+      - name: fields
+        value: "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]"
+      - name: pageSize
+        value: "2"
+      - name: page
+        value: "1"
+      - name: totalPages
+        value: "true"
+    body: null
+  expectedTransport:
+    path: /api/tracker/trackedEntities
+    fixedHeaders:
+      - name: Accept
+        value: application/json
+cases:
+  - id: positive
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-20"
+            - attribute: Oth00000001
+              value: LICENCE-UNRELATED-CANARY
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events:
+                - programStage: Rev00000001
+                  status: COMPLETED
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: ACTIVE
+        valid_from: "2025-01-01"
+        valid_until: "2026-08-20"
+        restriction_recorded: false
+      values:
+        urn:gov:example:concept:professional-licence-active: true
+        urn:gov:example:concept:professional-licence-expiry-category: within-30-days
+
+  # A completed restriction event withholds the active licence without changing
+  # the enrollment state, so the two signals are read together.
+  - id: restricted-licence-is-not-active
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-12-31"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events:
+                - programStage: Rst00000001
+                  status: COMPLETED
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: ACTIVE
+        valid_from: "2025-01-01"
+        valid_until: "2026-12-31"
+        restriction_recorded: true
+      values:
+        urn:gov:example:concept:professional-licence-active: false
+        urn:gov:example:concept:professional-licence-expiry-category: later
+
+  # A restriction event that exists but is not completed is a restriction that
+  # has not been recorded, not a restriction in force.
+  - id: scheduled-restriction-is-not-recorded
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-09-15"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events:
+                - programStage: Rst00000001
+                  status: SCHEDULE
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: ACTIVE
+        valid_from: "2025-01-01"
+        valid_until: "2026-09-15"
+        restriction_recorded: false
+      values:
+        urn:gov:example:concept:professional-licence-active: true
+        urn:gov:example:concept:professional-licence-expiry-category: within-90-days
+
+  - id: negative-cancelled-enrollment-is-success
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-10-01"
+          enrollments:
+            - program: Prg00000002
+              status: CANCELLED
+              events: []
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: CANCELLED
+        valid_from: "2025-01-01"
+        valid_until: "2026-10-01"
+        restriction_recorded: false
+      values:
+        urn:gov:example:concept:professional-licence-active: false
+        urn:gov:example:concept:professional-licence-expiry-category: within-90-days
+  - id: boundary-last-valid-day
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-02"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events: []
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: ACTIVE
+        valid_from: "2025-01-01"
+        valid_until: "2026-08-02"
+        restriction_recorded: false
+      values:
+        urn:gov:example:concept:professional-licence-active: true
+        urn:gov:example:concept:professional-licence-expiry-category: within-30-days
+  - id: boundary-first-expired-day
+    observed_at: "2026-08-03T00:00:00Z"
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-02"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events: []
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        licence_state: ACTIVE
+        valid_from: "2025-01-01"
+        valid_until: "2026-08-02"
+        restriction_recorded: false
+      values:
+        urn:gov:example:concept:professional-licence-active: false
+        urn:gov:example:concept:professional-licence-expiry-category: expired
+  # A tracked entity with no enrollment in the licence programme legitimately
+  # carries no licence state, which is unresolved rather than a denied licence.
+  - id: missing-fact
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-20"
+          enrollments:
+            - program: Prg00000001
+              status: ACTIVE
+              events: []
+    expected:
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: no-match
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 0
+        pageCount: 0
+      trackedEntities: []
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: ambiguous
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 2
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: []
+          enrollments: []
+        # The second record carries no reference of its own, only the lists
+        # the projection insists on. The pager decides this page before any
+        # record is read, so a response shape that demanded a complete record
+        # here would turn an ordinary ambiguous lookup into a source-protocol
+        # failure.
+        - attributes: []
+          enrollments: []
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  # Two enrollments in one programme leave no reviewed rule for which one
+  # governs the licence, and an event without a status cannot be read at all.
+  - id: duplicate-programme-enrollment
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-20"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events: []
+            - program: Prg00000002
+              status: CANCELLED
+              events: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: event-without-status
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-20"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events:
+                - programStage: Rst00000001
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: truncated-pager
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: []
+          enrollments: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  # A validity window that ends before it starts is an inconsistent record, and
+  # it collapses publicly with the unresolved classes rather than signing false.
+  - id: inverted-validity-window
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Vfr00000001
+              value: "2026-12-01"
+            - attribute: Vun00000001
+              value: "2026-01-01"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events: []
+    expected:
+      lookup: match
+      error: derivation_input_error
+      publicProblem: evidence_not_available
+      derivationRuns: true
+      signed: false
+
+  - id: returned-subject-mismatch
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000002
+          attributes:
+            - attribute: Vfr00000001
+              value: "2025-01-01"
+            - attribute: Vun00000001
+              value: "2026-08-20"
+          enrollments:
+            - program: Prg00000002
+              status: ACTIVE
+              events: []
+    expected:
+      lookup: match
+      error: derivation_input_error
+      publicProblem: evidence_not_available
+      derivationRuns: true
+      signed: false
+
+  - id: source-failure
+    sourceFailure: connection-refused
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+
+  - id: hostile-reference
+    selectorOverrides:
+      subject:
+        values: {record_reference: "X&fields=*%0D%0AInjected:yes"}
+    expected:
+      sourceRequestCount: 1
+      expectedTransport:
+        path: /api/tracker/trackedEntities
+        query: "program=Prg00000002&orgUnits=Org00000001&trackedEntities=X%26fields%3D%2A%250D%250AInjected%3Ayes&fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D%2Cenrollments%5Bprogram%2Cstatus%2Cevents%5BprogramStage%2Cstatus%5D%5D&pageSize=2&page=1&totalPages=true"
+        body: null
+
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
+privacyExpectation:
+  evidenceContains:
+    - urn:gov:example:concept:professional-licence-active
+    - urn:gov:example:concept:professional-licence-expiry-category
+  evidenceExcludes:
+    - licence_state
+    - valid_from
+    - valid_until
+    - restriction_recorded
+    - record_reference
+    - tracked-entity-reference-v1
+    - Tei00000001
+    - Tei00000002
+    - ACTIVE
+    - CANCELLED
+  diagnosticsExclude: [Tei00000001, Tei00000002, "2026-08-20", ACTIVE, LICENCE-UNRELATED-CANARY]

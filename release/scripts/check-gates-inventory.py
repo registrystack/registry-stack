@@ -60,20 +60,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         '"${RUNNER_TEMP}/bin/actionlint"',
     ),
     (
-        "Advisory checker byte identity",
-        "run: python3 release/scripts/check_advisory_checker_copies.py",
-    ),
-    (
-        "Notary advisory checker tests",
-        "python3 -m unittest products/notary/tests/advisory_baseline_check_test.py",
-    ),
-    (
         "Relay advisory checker tests",
         "python3 -m unittest crates/registry-relay/tests/advisory_baseline_check_test.py",
-    ),
-    (
-        "Advisory checker identity guard tests",
-        "run: python3 -m unittest release/scripts/test_check_advisory_checker_copies.py",
     ),
     (
         "Debian 13 image contract",
@@ -162,10 +150,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Platform fuzz directory",
         "cargo +nightly fuzz run --fuzz-dir fuzz",
     ),
-    ("Notary OpenAPI baseline", "run: just openapi-check"),
-    ("Notary OpenAPI contract", "name: Notary OpenAPI contract"),
-    ("Notary exposure check", "name: Notary exposure check"),
-    ("Notary exposure command", "run: just exposure-check"),
+    ("Evidence contract gate", "evidence-contracts:"),
+    (
+        "Evidence contract reproduction",
+        "run: products/evidence/scripts/check-contracts.sh",
+    ),
+    (
+        "Evidence source neutrality",
+        "run: products/evidence/scripts/check-source-neutrality.sh",
+    ),
     ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
@@ -236,14 +229,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "OpenID conformance runner tests",
         "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",
-    ),
-    (
-        "External integration evidence runner tests",
-        "run: python3 -m unittest release/scripts/test_integration_e2_runner.py",
-    ),
-    (
-        "External integration evidence packet",
-        "run: python3 release/scripts/integration-e2-runner.py validate",
     ),
     (
         "Relay OIDC smoke tests",

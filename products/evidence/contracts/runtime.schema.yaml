@@ -1,0 +1,98 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/runtime-v1.json
+title: Evidence closed operator runtime configuration Version 1
+type: object
+additionalProperties: false
+required: [version, bundleDirectory, listener, secretProviders, auditStorage, outboundTls]
+properties:
+  version: {const: 1}
+  bundleDirectory: {$ref: '#/$defs/absolute-path'}
+  listener:
+    type: object
+    additionalProperties: false
+    required: [bindHost, port, tlsTermination, trustProxyIdentityHeaders, maximumRequestBytes, maximumConcurrentRequests, requestTimeoutMilliseconds, shutdownGraceMilliseconds]
+    properties:
+      bindHost:
+        type: string
+        minLength: 2
+        maxLength: 64
+        description: Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.
+        x-runtime-validation: Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6.
+      port: {type: integer, minimum: 1, maximum: 65535}
+      tlsTermination: {const: operator-controlled-upstream}
+      trustProxyIdentityHeaders: {const: false}
+      maximumRequestBytes: {type: integer, minimum: 1024, maximum: 1048576}
+      maximumConcurrentRequests: {type: integer, minimum: 1, maximum: 4096}
+      requestTimeoutMilliseconds: {type: integer, minimum: 1, maximum: 30000}
+      shutdownGraceMilliseconds: {type: integer, minimum: 1, maximum: 120000}
+  metricsListener:
+    type: object
+    additionalProperties: false
+    required: [bindHost, port]
+    description: Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. It is a separate binding from the evidence listener and is not described by the public evidence contract.
+    properties:
+      bindHost:
+        type: string
+        minLength: 2
+        maxLength: 64
+        description: Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.
+        x-runtime-validation: Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6.
+      port: {type: integer, minimum: 1, maximum: 65535}
+    x-runtime-validation: Rejected at startup when bindHost and port together repeat the evidence listener binding.
+  secretProviders:
+    type: object
+    additionalProperties: false
+    required: [file]
+    properties:
+      file:
+        type: object
+        additionalProperties: false
+        required: [root]
+        properties:
+          root: {$ref: '#/$defs/absolute-path'}
+  auditStorage:
+    type: object
+    additionalProperties: false
+    required: [path, maximumFileBytes]
+    properties:
+      path: {$ref: '#/$defs/absolute-path'}
+      maximumFileBytes: {type: integer, minimum: 1048576, maximum: 1099511627776}
+  outboundTls:
+    type: object
+    additionalProperties: false
+    required: [systemRoots, trustProfiles]
+    properties:
+      systemRoots: {const: true}
+      trustProfiles:
+        type: object
+        maxProperties: 64
+        propertyNames: {$ref: '#/$defs/local-id'}
+        additionalProperties:
+          type: object
+          additionalProperties: false
+          required: [caBundleFile]
+          properties:
+            caBundleFile: {$ref: '#/$defs/absolute-path'}
+$defs:
+  local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  absolute-path: {type: string, minLength: 2, maxLength: 512, pattern: '^/(?!/)(?!.*(?:^|/)\.\.?(?:/|$))[^\\\u0000]+$'}
+ownership:
+  governed_fields: prohibited
+  allowed:
+    - bundle directory
+    - listener binding and process limits
+    - optional operator metrics listener binding
+    - file-secret root
+    - audit path and rotation bound
+    - logical private-CA file bindings
+  overrides: prohibited
+startup:
+  unknown_keys: rejected at every level
+  mutability: runtime.yaml and bound CA files are captured read-only once; reload, merge, fallback, and partial serving are prohibited
+  digest: independent SHA-256 revision over exact runtime.yaml bytes plus logical trust-profile names and exact CA bytes
+  trust_profiles: names must exactly equal the logical tlsTrustProfile names used by the governed bundle
+  secrets: values are never parsed into or included in the runtime document or digest
+  proxy: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY are ignored; no application-level proxy field exists
+platform:
+  supported: Unix
+  reason: Version 1 requires Unix owner, mode, no-follow, link-count, and file-identity guarantees for secrets and audit storage.

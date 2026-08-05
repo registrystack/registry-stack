@@ -1,0 +1,383 @@
+//! Fixture-run driver. Shells out to the `evidence` binary for every
+//! semantic decision and only aggregates results.
+
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Command, ExitCode},
+};
+
+use anyhow::{anyhow, bail, Context, Result};
+use clap::{Args, Subcommand};
+use serde::Serialize;
+use serde_norway::Value as YamlValue;
+
+#[derive(Debug, Subcommand)]
+pub enum FixturesCommand {
+    /// Run `evidence check` and every bundle fixture through `evidence evaluate`.
+    Run(RunArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Deployment project directory containing runtime.yaml and bundle/.
+    #[arg(long)]
+    pub project: PathBuf,
+
+    /// Path to the evidence binary; defaults to `evidence` on PATH.
+    #[arg(long)]
+    pub evidence_bin: Option<PathBuf>,
+
+    /// Emit one machine-readable JSON report on standard output.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// The result of one `evidence` invocation: whether it exited zero, when it did
+/// not its captured stderr for the operator to read, and, for a fixture run,
+/// how many cases that fixture evaluated.
+struct StepOutcome {
+    passed: bool,
+    stderr: Option<String>,
+    evaluated_cases: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct CheckReport {
+    passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FixtureReport {
+    path: String,
+    passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
+    /// Absent when the fixture failed, or when `evidence` reported no count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evaluated_cases: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunReport {
+    check: CheckReport,
+    fixtures: Vec<FixtureReport>,
+    passed: bool,
+    /// The cases every fixture in this run evaluated, summed.
+    ///
+    /// The step counts above measure artifacts, which a reader mistakes for
+    /// coverage: a project with four fixture files reports the same `5 passed`
+    /// whether those files hold four cases or forty.
+    evaluated_cases: usize,
+}
+
+pub fn run(command: FixturesCommand) -> Result<ExitCode> {
+    match command {
+        FixturesCommand::Run(args) => run_fixtures(args),
+    }
+}
+
+fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
+    let runtime_path = args.project.join("runtime.yaml");
+    if !runtime_path.is_file() {
+        bail!(
+            "runtime configuration not found at {} (expected a deployment project directory containing runtime.yaml)",
+            runtime_path.display()
+        );
+    }
+    let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
+    let bundle_config_path = bundle_directory.join("evidence.yaml");
+    let fixture_paths = discover_fixtures(&bundle_config_path)?;
+    let evidence_bin = resolve_evidence_binary(args.evidence_bin.as_deref())?;
+
+    let check_outcome = run_evidence_step(&evidence_bin, &runtime_path, &["check"]);
+    let check_passed = check_outcome.passed;
+
+    // A broken bundle makes per-fixture results meaningless, so a failing
+    // check short-circuits before any fixture is evaluated.
+    let mut fixtures = Vec::new();
+    if check_passed {
+        for fixture_path in &fixture_paths {
+            let outcome = run_evidence_step(
+                &evidence_bin,
+                &runtime_path,
+                &["evaluate", "--fixture", fixture_path],
+            );
+            fixtures.push(FixtureReport {
+                path: fixture_path.clone(),
+                passed: outcome.passed,
+                stderr: outcome.stderr,
+                evaluated_cases: outcome.evaluated_cases,
+            });
+        }
+    }
+
+    let overall_passed = check_passed && fixtures.iter().all(|fixture| fixture.passed);
+    let evaluated_cases = fixtures
+        .iter()
+        .filter_map(|fixture| fixture.evaluated_cases)
+        .sum();
+    let report = RunReport {
+        check: CheckReport {
+            passed: check_passed,
+            stderr: check_outcome.stderr,
+        },
+        fixtures,
+        passed: overall_passed,
+        evaluated_cases,
+    };
+
+    if args.json {
+        print_diagnostics(&report, true);
+        let encoded = serde_json::to_string(&report).context("failed to encode the JSON report")?;
+        println!("{encoded}");
+    } else {
+        print_diagnostics(&report, false);
+    }
+
+    Ok(if overall_passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// Resolve the bundle directory a project's `runtime.yaml` names. A relative
+/// `bundleDirectory` is resolved against the runtime file's own directory, an
+/// absolute one is used as-is, and `<project>/bundle` is the default only when
+/// the key is absent. This is discovery, not validation: `evidence check` is
+/// left to reject a runtime configuration that is otherwise malformed.
+fn resolve_bundle_directory(runtime_path: &Path, project: &Path) -> Result<PathBuf> {
+    let bytes = fs::read(runtime_path).with_context(|| {
+        format!(
+            "failed to read runtime configuration at {}",
+            runtime_path.display()
+        )
+    })?;
+    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
+        format!(
+            "failed to parse runtime configuration at {}",
+            runtime_path.display()
+        )
+    })?;
+    match document.get("bundleDirectory") {
+        Some(value) => {
+            let value = value.as_str().ok_or_else(|| {
+                anyhow!(
+                    "bundleDirectory in {} is not a string",
+                    runtime_path.display()
+                )
+            })?;
+            let path = Path::new(value);
+            if path.is_absolute() {
+                Ok(path.to_path_buf())
+            } else {
+                let base = runtime_path.parent().unwrap_or(project);
+                Ok(base.join(path))
+            }
+        }
+        None => Ok(project.join("bundle")),
+    }
+}
+
+/// Enumerate the bundle-relative fixture paths a project's requirements
+/// reference. This is discovery, not validation: unknown fields anywhere in
+/// the document are tolerated, and `evidence check` is left to reject a
+/// bundle that is otherwise malformed.
+fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
+    let bytes = fs::read(bundle_config_path).with_context(|| {
+        format!(
+            "failed to read bundle configuration at {}",
+            bundle_config_path.display()
+        )
+    })?;
+    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
+        format!(
+            "failed to parse bundle configuration at {}",
+            bundle_config_path.display()
+        )
+    })?;
+    let requirements = document
+        .get("requirements")
+        .and_then(YamlValue::as_sequence)
+        .ok_or_else(|| {
+            anyhow!(
+                "bundle configuration at {} has no requirements list",
+                bundle_config_path.display()
+            )
+        })?;
+
+    let mut fixture_paths: Vec<String> = Vec::new();
+    for requirement in requirements {
+        let fixture_path = requirement
+            .get("fixtures")
+            .and_then(YamlValue::as_str)
+            .ok_or_else(|| {
+                anyhow!(
+                    "a requirement in {} has no fixtures path",
+                    bundle_config_path.display()
+                )
+            })?;
+        if !fixture_paths
+            .iter()
+            .any(|existing| existing == fixture_path)
+        {
+            fixture_paths.push(fixture_path.to_owned());
+        }
+    }
+    Ok(fixture_paths)
+}
+
+/// Resolve the `evidence` binary: an explicit `--evidence-bin`, else
+/// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
+/// Crate-visible so `suggest::emit` resolves the runtime binary the same way.
+pub(crate) fn resolve_evidence_binary(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        if !path.is_file() {
+            bail!("evidence binary not found at {}", path.display());
+        }
+        return Ok(path.to_path_buf());
+    }
+    if let Ok(env_path) = env::var("EVIDENCE_BIN") {
+        let path = PathBuf::from(&env_path);
+        if !path.is_file() {
+            bail!(
+                "evidence binary not found at {} (from EVIDENCE_BIN)",
+                path.display()
+            );
+        }
+        return Ok(path);
+    }
+    find_on_path("evidence").ok_or_else(|| {
+        anyhow!(
+            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH"
+        )
+    })
+}
+
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    env::split_paths(&path_var).find_map(|dir| {
+        let candidate = dir.join(name);
+        is_candidate_executable(&candidate).then_some(candidate)
+    })
+}
+
+/// A regular file, and, on unix, one with at least one executable bit set. A
+/// non-executable file on `PATH` is skipped so resolution falls through to
+/// the clearer "not found" error instead of a spawn failure later.
+fn is_candidate_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Run one `evidence --runtime <runtime_path> <args...>` invocation.
+///
+/// Standard output and standard error are captured rather than inherited so
+/// steps never interleave, and any failure to even spawn the process is
+/// treated the same as a nonzero exit: the step failed.
+fn run_evidence_step(evidence_bin: &Path, runtime_path: &Path, args: &[&str]) -> StepOutcome {
+    let mut command = Command::new(evidence_bin);
+    command.arg("--runtime").arg(runtime_path).args(args);
+    match command.output() {
+        Ok(output) if output.status.success() => StepOutcome {
+            passed: true,
+            stderr: None,
+            evaluated_cases: evaluated_cases(&String::from_utf8_lossy(&output.stdout)),
+        },
+        Ok(output) => StepOutcome {
+            passed: false,
+            stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
+            evaluated_cases: None,
+        },
+        Err(error) => StepOutcome {
+            passed: false,
+            stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
+            evaluated_cases: None,
+        },
+    }
+}
+
+/// Read the case count out of `Evidence fixture passed (N evaluated cases)`.
+///
+/// This driver makes no semantic decision, so the count is `evidence`'s own
+/// figure or nothing at all. An unrecognized line leaves it absent rather than
+/// guessed, which keeps a total that is short honest instead of wrong.
+fn evaluated_cases(stdout: &str) -> Option<usize> {
+    stdout.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Evidence fixture passed (")?
+            .strip_suffix(" evaluated cases)")?
+            .parse()
+            .ok()
+    })
+}
+
+/// Print one line per step and a summary line.
+///
+/// In JSON mode this goes to stderr, keeping stdout reserved for the single
+/// JSON document; in human mode it is the entire report and goes to stdout.
+fn print_diagnostics(report: &RunReport, to_stderr: bool) {
+    let mut lines = Vec::new();
+    lines.push(step_line("check", report.check.passed));
+    if !report.check.passed {
+        lines.extend(indented(report.check.stderr.as_deref()));
+    }
+    for fixture in &report.fixtures {
+        let mut line = step_line(&fixture.path, fixture.passed);
+        if let Some(cases) = fixture.evaluated_cases {
+            line.push_str(&format!(" ({cases} cases)"));
+        }
+        lines.push(line);
+        if !fixture.passed {
+            lines.extend(indented(fixture.stderr.as_deref()));
+        }
+    }
+    let passed_count =
+        usize::from(report.check.passed) + report.fixtures.iter().filter(|f| f.passed).count();
+    let failed_count =
+        usize::from(!report.check.passed) + report.fixtures.iter().filter(|f| !f.passed).count();
+    // The step counts stay, because they are what the exit code is made of.
+    // The case total is beside them because it is the number a reader is
+    // actually looking for: how much of the deployment this run exercised.
+    lines.push(format!(
+        "{passed_count} passed, {failed_count} failed ({} cases evaluated)",
+        report.evaluated_cases
+    ));
+
+    for line in lines {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    }
+}
+
+fn step_line(name: &str, passed: bool) -> String {
+    let status = if passed { "PASS" } else { "FAIL" };
+    format!("{status}: {name}")
+}
+
+fn indented(stderr: Option<&str>) -> Vec<String> {
+    let text = stderr.unwrap_or_default();
+    if text.trim().is_empty() {
+        return vec!["    (no output captured)".to_owned()];
+    }
+    text.lines().map(|line| format!("    {line}")).collect()
+}

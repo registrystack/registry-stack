@@ -1,0 +1,12 @@
+fixture: registry.evidence.conformance.selector-full-path/v1
+synthetic_only: true
+cases:
+  - {id: positive}
+  - {id: negative-selector}
+  - {id: boundary-aggregate}
+  - {id: missing-selector}
+  - {id: no-match}
+  - {id: ambiguous}
+  - {id: source-failure}
+  - {id: unauthorized-entitlement}
+  - {id: anti-reconstruction}

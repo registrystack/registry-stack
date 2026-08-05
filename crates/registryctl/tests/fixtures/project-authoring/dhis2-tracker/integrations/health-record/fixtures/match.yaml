@@ -1,15 +1,5 @@
 name: complete-child-health-evidence
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: dhis2_tracked_entity, value: A0000000001 }]
-    attributes: { include_inactive: true }
-  variables: { as_of_date: 2026-01-01 }
-  claims: [child-program-active]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: programme-enrollment-verification
 input: { tracked_entity: A0000000001, include_inactive: true }
 variables: { as_of_date: 2026-01-01 }
 interactions:
@@ -54,16 +44,3 @@ expect:
     bcg_birth_dose_recorded: true
     opv_birth_dose_recorded: true
     measles_dose_recorded: true
-  claims:
-    tracked-entity-first-name: Nia
-    tracked-entity-last-name: Example
-    child-program-active: true
-    child-age-band: 5-17
-    programme-code: DEMO_CHILD_PROGRAM
-    reconciliation-reference: redacted
-    maternal-postnatal-care-active: true
-    child-health-visit-recorded: true
-    tb-program-active: false
-    bcg-birth-dose-recorded: true
-    opv-birth-dose-recorded: true
-    measles-dose-recorded: true

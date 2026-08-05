@@ -33,11 +33,9 @@
     },
     "dimension": {
       "enum": [
-        "claim",
         "integration",
         "service_policy",
         "operator_security",
-        "disclosure",
         "compiler"
       ]
     },
@@ -56,7 +54,6 @@
       "enum": [
         "registryctl_authoring",
         "registry_relay",
-        "registry_notary",
         "editor_tooling",
         "docs_generator",
         "bundle_signer",
@@ -73,7 +70,6 @@
         "privacy",
         "security",
         "relay",
-        "notary",
         "compatibility",
         "documentation",
         "testing",
@@ -176,8 +172,6 @@
             "fixture",
             "service_policy",
             "consultation",
-            "claim",
-            "disclosure",
             "product_input",
             "generated_artifact"
           ]
@@ -196,7 +190,6 @@
           "enum": [
             "registryctl",
             "relay",
-            "notary",
             "editor",
             "docs"
           ]
@@ -224,10 +217,10 @@
     },
     "product_actions": {
       "type": "array",
-      "maxItems": 3,
+      "maxItems": 2,
       "uniqueItems": true,
       "items": {
-        "enum": ["relay-public", "relay-consultation", "notary"]
+        "enum": ["relay-public", "relay-consultation"]
       }
     },
     "semantic_impact": {

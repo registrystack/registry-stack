@@ -1,27 +1,29 @@
 ---
 title: Inspect and diagnose a running deployment
-description: Inspect redacted runtime posture, audit, health, readiness, and instance OpenAPI, then classify failures with stable diagnostics.
+description: Inspect Relay, Evidence, and Registry Mint runtime posture, audit, health, readiness, and API shape, then classify failures with stable diagnostics.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
+  - registry-evidence
+  - registry-mint
   - registry-platform
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure to inspect a running Relay or Notary instance and diagnose source denial,
-policy denial, ambiguity, stale materialization, bundle rejection, or product capability mismatch
-without collecting source rows or secret values.
+Use this procedure to inspect a running Relay, Evidence, or Registry Mint instance and diagnose
+source denial, policy denial, ambiguity, stale materialization, bundle rejection, or capability
+mismatch without collecting source rows or secret values.
 
 ## Prerequisites
 
 - Use the protected operator network and a least-privilege posture or API credential.
-- Know the active product, environment, stream, instance, and expected bundle sequence.
+- Know the active product, environment, stream, instance, and expected bundle sequence for Relay,
+  and the deployment revision for Evidence and Registry Mint.
 - Keep public problem responses, operator diagnostics, restricted posture, and protected audit
   records in separate access classes.
 - Reproduce with synthetic identifiers unless separate authority permits another probe.
@@ -32,7 +34,12 @@ Public problem details give callers stable, minimized classifications.
 The default posture tier is redacted for operational sharing.
 Restricted posture can contain per-resource or provider detail and belongs only to trusted
 operators.
-Relay and Notary write separate audit chains and keep their keys separate.
+Relay, Evidence, and Registry Mint each write their own audit or operational records and keep
+their own keys separate: Relay's redacted posture and audit sink, Evidence's keyed JSONL audit
+chain (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data), and Registry Mint's
+keyed JSONL token-decision chain.
+
+No deployment exposes a cross-product posture view: each product reports only its own.
 
 The generated diagnostic catalogs contain static meanings, rules, remediation, evidence scope,
 and limitations.
@@ -41,8 +48,9 @@ hash, credential, source response, or country value.
 
 {/* Evidence: docs/site/src/content/docs/reference/diagnostics/operator.mdx,
     docs/site/src/content/docs/reference/errors.mdx,
-    crates/registry-relay/docs/ops.md, and
-    products/notary/docs/security-assurance.md. */}
+    crates/registry-relay/docs/ops.md,
+    products/evidence/OPERATOR-CONTRACT.md, and
+    docs/site/src/content/docs/reference/evidence-problems.mdx. */}
 
 ## Inspect the runtime surfaces
 
@@ -50,39 +58,39 @@ Inspect each surface for its own purpose:
 
 | Surface | Use | Boundary |
 | --- | --- | --- |
-| `GET /healthz` | Process liveness | Does not check all dependencies or data freshness |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval |
-| `GET /admin/v1/posture` | Redacted deployment and control observations | Default and restricted tiers expose different detail |
-| Product audit sink | Security and request evidence | Retained chain integrity does not prove complete off-host receipt |
-| `GET /openapi.json` | Concrete API shape for the running instance | Access is product configuration and authentication dependent |
-
-For a CEL-backed Notary configuration, `/ready` counts only workers that
-completed the fixed CEL protocol probe. A missing, warming, sleeping, or
-wrong-protocol worker keeps readiness false. CEL-free configurations do not
-start a worker.
+| `GET /healthz` (Relay) or `GET /health` (Evidence, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence's `/health` answers 200 even when a source credential is missing |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist and its audit writer is healthy |
+| `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence and Registry Mint have no equivalent admin posture endpoint |
+| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence and `mint verify-audit` for Mint |
+| `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence's is the released generated artifact, unauthenticated and independent of the deployed bundle |
+| Evidence `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
 
 Query health and readiness through the same network path used by traffic admission:
 
 ```sh
 curl -fsS https://<relay-host>/healthz
 curl -fsS https://<relay-host>/ready
-curl -fsS https://<notary-host>/healthz
-curl -fsS https://<notary-host>/ready
+curl -fsS https://<evidence-host>/health
+curl -fsS https://<evidence-host>/ready
+curl -fsS https://<mint-host>/health
+curl -fsS https://<mint-host>/ready
 ```
 
 Read Relay posture only through its protected admin listener:
 
 ```sh
 curl -fsS \
-  -H "Authorization: Bearer <ops-read-token>" \
+  -H "Authorization: Bearer ${OPS_READ_TOKEN}" \
   http://127.0.0.1:8081/admin/v1/posture
 ```
 
-Fetch the concrete Relay or Notary instance OpenAPI only through its configured authenticated
-route.
-Compare the instance document with the reviewed generated input and the
-[Relay API reference](../../../reference/apis/registry-relay/) or
-[Notary API reference](../../../reference/apis/registry-notary/).
+Fetch the concrete Relay instance OpenAPI only through its configured authenticated route, and
+compare it with the reviewed generated input and the
+[Relay API reference](../../../reference/apis/registry-relay/).
+Evidence's `GET /openapi.json` needs no credential, because it always serves the same released
+generated artifact rather than a deployment-specific document
+(`products/evidence/OPERATOR-CONTRACT.md`, Startup and readiness); compare it with the
+[Evidence API reference](../../../reference/apis/registry-evidence/).
 An OpenAPI match does not prove authorization, source behavior, or claim semantics.
 
 ## Load the stable diagnostic catalogs
@@ -101,36 +109,54 @@ Use the generated [operator](../../../reference/diagnostics/operator/),
 Branch on the exact code and response status.
 Do not parse error prose, paths, or type URI segments.
 
+These catalogs cover Relay, `registryctl`, and shared platform operations; they do not enumerate
+Evidence or Registry Mint failures. Evidence's closed problem-code catalog is the
+[Evidence errors and problems reference](../../../reference/evidence-problems/) instead, and it
+needs no separate CLI catalog because the codes are fixed by the frozen public contract.
+
 ## Diagnose the failure class
 
 ### Source denial or source failure
 
 Separate caller authorization from upstream source access.
 Public `auth.*` codes describe Relay caller authentication and scope.
-`relay.consultation.activation.source_credentials_unavailable` and
-`notary.relay.credential_unavailable` describe activation boundaries.
-`notary.relay.credentials_rejected` describes a rejected Notary workload credential.
+`relay.consultation.activation.source_credentials_unavailable` describes a Relay activation
+boundary: Relay could not activate the source-credential capability its consultation registry
+needs at startup.
 Offline fixture failures such as `source.status_rejected`, `source.unavailable`, and
-`authorization.denied` classify synthetic source behavior.
+`authorization.denied` classify synthetic Relay source behavior.
+Evidence collapses every source-boundary failure (unreachable, timed out, wrong credential, wrong
+media type, an oversized response, malformed JSON, or an error envelope) into the single
+`dependency_unavailable` problem (`crates/registry-evidence/src/runtime.rs`,
+`source_failure_problem`; see the
+[Evidence errors and problems reference](../../../reference/evidence-problems/)).
 
 Confirm which boundary denied access before changing a credential or policy.
 Do not widen a source path or caller scope to clear a source credential failure.
 
 ### Policy denial
 
-Stable `pdp.*` codes identify policy decisions such as `pdp.purpose_not_permitted`,
-`pdp.assurance_insufficient`, and `pdp.evidence_stale`.
+Stable `pdp.*` codes identify Relay policy decisions such as `pdp.purpose_not_permitted`,
+`pdp.assurance_insufficient`, and `pdp.evidence_stale`; despite the shared word, `pdp.evidence_stale`
+is Relay's policy-decision-point code for stale source data
+(`crates/registry-platform-pdp/src/lib.rs`) and is unrelated to the Evidence product.
 Use the policy id, hash, checked rule ids, and other redacted audit evidence available to the
 authorized operator.
 Do not turn a policy denial into source unavailability or bypass the rule during diagnosis.
 
 ### Ambiguity
 
-`ambiguous` is a valid minimized consultation outcome, not an operator startup failure.
-The result carries no selected output map, and Notary must not choose a source record.
+`ambiguous` is a valid minimized outcome for a Relay consultation or attribute-release request,
+not an operator startup failure.
+The result carries no selected output map, and Relay must not choose a source record.
 Reproduce the selector and cardinality with synthetic fixtures.
 Use `source.cardinality_violation` only when the source behavior violates the declared fixture or
 decoder contract.
+Evidence applies the same discipline to a `POST /v1/evidence` request: an ambiguous match is one
+of the conditions the `evidence_not_available` problem collapses into a single value-free
+response, so timing and status code do not reveal which condition occurred
+(`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
+[Evidence errors and problems reference](../../../reference/evidence-problems/)).
 
 ### Stale materialization
 
@@ -145,30 +171,32 @@ cannot close this diagnosis.
 
 Use the shared stable results `rejected_signature`, `rejected_binding`,
 `rejected_validation`, and `rejected_rollback`.
-Product startup codes include:
+Relay's startup codes include:
 
 - `relay.startup.bundle_signature_rejected`
 - `relay.startup.bundle_binding_rejected`
 - `relay.startup.bundle_validation_rejected`
 - `relay.startup.bundle_rollback_rejected`
-- `notary.configuration.invalid`
-- `notary.runtime.activation_failed`
+
+Evidence and Registry Mint have no equivalent stable startup-rejection codes: `evidence check` and
+`mint check` fail with a descriptive message instead, covered in
+[Rotate Evidence signing keys](../../../tutorials/move-evidence-to-production-signing/#validate-and-coordinate-consumer-approval)
+and [Configure Registry Mint](../../../configure/mint/#troubleshooting).
 
 Correct the signer, binding, closed file set, product validation, or sequence.
 Do not disclose the rejected configuration or delete anti-rollback state.
 
-### Capability or Relay-to-Notary mismatch
+### Capability or activation mismatch
 
-Use `relay.consultation.activation.unsupported_plan`,
-`relay.consultation.activation.artifact_registry_invalid`,
-`notary.relay.profile_not_found`, and `notary.relay.profile_mismatch` for activation failures.
-The public admin code `registry.admin.capability.not_supported` means the requested admin
-capability is absent.
+Use `relay.consultation.activation.unsupported_plan` and
+`relay.consultation.activation.artifact_registry_invalid` for a Relay consultation-lane activation
+failure: Relay could not compile or activate the verified artifact registry its runtime needs at
+startup.
 
-Compare the generated capability inventory, public consultation contract, and exact
-`contract_hash`.
+Compare the generated capability inventory, the public consultation contract, and the exact
+`contract_hash` against what the running instance actually compiled.
 Relay rejects an execute-time contract mismatch before source access.
-Stage compatible product bundles separately and repeat the Notary-to-Relay check.
+Stage a compatible product bundle separately and repeat the check before returning it to traffic.
 
 ## Expected evidence
 
@@ -177,7 +205,11 @@ Retain:
 - Timestamped health and readiness status without response secrets.
 - Default redacted posture and restricted fields only in the protected operator record.
 - Stable public, operator, fixture, or authoring diagnostic codes.
-- Product, environment, stream, instance, and bundle sequence.
+- Product, environment, stream, instance, and bundle sequence for Relay.
+- Evidence's `operation` identifier from the problem response or `X-Request-Id` header, and the
+  output of `evidence verify-audit` when a signing or audit failure is suspected.
+- Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
+  when a token-decision audit failure is suspected. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
 - The traffic-admission, quarantine, or escalation decision.
 
@@ -201,7 +233,7 @@ After a higher sequence or new correctness-state write, use a reviewed higher-se
 path unless the release documents safe rollback.
 
 For ambiguity, fix or narrow the reviewed selector or source data.
-Do not select a record manually inside Relay or Notary.
+Do not select a record manually inside Relay or Evidence.
 For stale materialization, follow the materialization recovery procedure without enabling live
 fallback.
 
@@ -219,3 +251,4 @@ anti-rollback state or runtime schemas.
 - [Refresh and recover a materialization](../refresh-and-recover-materialization/)
 - [Recover, upgrade, migrate, and roll back](../recover-upgrade-migrate-and-rollback/)
 - [Review the error and status code reference](../../../reference/errors/)
+- [Evidence errors and problems reference](../../../reference/evidence-problems/)

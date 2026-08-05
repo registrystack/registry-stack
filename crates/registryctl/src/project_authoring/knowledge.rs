@@ -64,7 +64,6 @@ pub enum SemanticOwner {
     FixtureHarness,
     EntityContract,
     RelayRuntime,
-    NotaryRuntime,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -79,7 +78,6 @@ pub enum HumanOwner {
     TestMaintainers,
     DataModelMaintainers,
     RelayMaintainers,
-    NotaryMaintainers,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -118,7 +116,6 @@ impl Sensitivity {
 pub enum Product {
     Registryctl,
     Relay,
-    Notary,
     Editor,
     Docs,
 }
@@ -150,7 +147,6 @@ pub enum Migration {
 pub enum Consumer {
     RegistryctlAuthoring,
     RegistryRelay,
-    RegistryNotary,
     EditorTooling,
     DocsGenerator,
 }
@@ -161,7 +157,6 @@ pub enum GeneratedArtifact {
     EditorSchemas,
     ProjectBuild,
     RelayConfig,
-    NotaryConfig,
     FixtureReport,
     FieldReference,
 }
@@ -173,7 +168,6 @@ pub enum ReviewClass {
     Security,
     Privacy,
     Relay,
-    Notary,
     Compatibility,
     Documentation,
     Testing,

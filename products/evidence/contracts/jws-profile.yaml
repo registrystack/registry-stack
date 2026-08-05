@@ -1,0 +1,92 @@
+contract: registry.evidence.jws-profile/v1
+status: frozen
+response:
+  media_type: application/jose+json
+  serialization: flattened-jws-json
+  members:
+    required: [protected, payload, signature]
+    prohibited: [header]
+  payload: base64url without padding of the exact UTF-8 Evidence JSON bytes
+  negotiation: Missing Accept, */*, and exact application/jose+json select this default signed format. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the separately governed unsigned envelope, and only when the immutable bundle and the complete matched authority grant permit it. Every response varies on Accept and remains no-store.
+unsigned_envelope:
+  media_type: application/vnd.registrystack.evidence-unsigned+json
+  schema: registry.unsigned-evidence-envelope/v1
+  members:
+    required: [schema, type, integrityProtection, warning, evidence]
+    prohibited: [protected, payload, signature, header]
+  integrity: none; transport-authenticated convenience only, never later-verifiable evidence and never a fallback from any signed-path failure
+  verifier_rule: The strict JWS verifier rejects this representation. A dedicated unsigned parser may validate the envelope, the Evidence schema, and expected policy fields, but returns an explicitly unverified result type and never the verified-JWS result type. Version 1 never uses JWS alg none, an empty signature, or a JWS-shaped unsigned object.
+protected_header:
+  exact_members: [alg, kid, typ, cty]
+  alg:
+    allowed: [EdDSA]
+    rule: Must equal the algorithm bound to the trusted key.
+  kid:
+    required: true
+    maximum_bytes: 256
+    rule: Resolved only within the verifier-pinned provider JWKS.
+  typ: {const: evidence+jws}
+  cty: {const: application/evidence+json}
+  prohibited: [jku, x5u, jwk, x5c, crit, b64]
+signing:
+  active_keys: 1
+  private_key_location: signing.activeKeyRef through a supported runtime secret provider only
+  retired_public_keys: signing.retiredPublicJwkFiles are bundle-owned public JWKs and never contain private members
+  bundle_private_key_material: prohibited
+  order:
+    - core validates the complete derivation result
+    - core constructs the exact evidence payload including the exact request nonce
+    - signing provider signs protected header plus payload
+    - core serializes the final immutable response bytes
+    - disclosure-release audit is durably accepted
+    - the exact pre-audited bytes are released
+  unsigned_order: For an explicitly authorized unsigned request the core performs no signing operation, still requires the ordinary signing dependency to be ready, constructs and serializes the final immutable envelope bytes, durably accepts disclosure-release audit, then releases those exact bytes.
+  failure: safe 503 with no unsigned fallback
+key_discovery:
+  path: /.well-known/evidence/jwks.json
+  media_type: application/jwk-set+json
+  content: public keys only
+  trust_rule: Discovery is not a trust anchor; provider identity and JWKS location are pinned through governed verifier configuration.
+rotation:
+  new_assertions_use: the single configured active key
+  retired_public_key_minimum_availability: maximum assertion validity plus allowed verifier clock skew
+  kid_reuse: prohibited for different key material
+verifier_rules:
+  - Parse flattened JWS with strict duplicate-member rejection.
+  - Reject unprotected headers and any protected member outside the exact allowlist.
+  - Resolve kid only in the pinned provider key set and require the allowlisted algorithm.
+  - Verify the signature before parsing or acting on payload claims.
+  - Validate the strict payload against the complete committed Evidence JSON Schema before deserializing or applying relying-procedure policy.
+  - Require the assurance profile, schema, issuer, provider, requirement, Evidence Type, purpose, audience, observation, validity, and configuration revision expected independently by the relying procedure. An authentic local assertion never satisfies a production or evidence-grade expectation.
+  - Require the exact request nonce from the independently retained original request. Nonce reuse is not replay prevention and is not rejected by the runtime.
+  - Require the exact expected role-bound opaque subject bindings as an unordered set of unique role and binding pairs, compared only after signature and schema verification. Expectations come from independent trusted state, never from the JWS under verification.
+  - Require the exact expected concept identifiers, value forms, and cardinalities; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
+  - Return one generic policy mismatch without revealing which hidden selector or policy comparison failed.
+  - Impose a maximum accepted assertion lifetime in addition to current validity.
+  - Treat validUntil as an exclusive upper bound and apply only the configured clock skew.
+  - Report cryptographic authenticity separately from current validity; an expired assertion may remain authentic without being current evidence.
+  - Do not infer source truth, legal-signature status, holder binding, or single-use semantics from a valid signature.
+durable_verification_record:
+  - the exact flattened JWS bytes
+  - the original request and its request nonce
+  - the expected audience, purpose, requirement, Evidence Type, issuer, and technical provider
+  - the expected assurance profile
+  - the expected role-bound subject bindings
+  - the expected concept identifiers, forms, and cardinalities or the exact trusted requirement contract that defines them
+  - the configuration revision
+  - the trusted signing-key or JWKS snapshot selected through governed metadata
+  - the trusted time at which current-validity verification was performed
+negative_tests:
+  - expected-assurance-profile-mismatch
+  - jws-payload-modification
+  - jws-protected-header-modification
+  - jws-message-key-url-rejected
+  - jws-unknown-kid-rejected
+  - jws-schema-invalid-signed-payload-rejected
+  - jws-retired-key-window
+  - signing-failure-no-unsigned-success
+  - expected-nonce-mismatch
+  - expected-subject-set-mismatch
+  - expected-output-contract-mismatch
+  - assertion-lifetime-above-accepted-maximum
+  - unsigned-envelope-rejected-by-jws-verifier

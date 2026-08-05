@@ -9,14 +9,14 @@
       "label": "Registry Platform crates",
       "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates"
     },
-    "consumer_note": "Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally."
+    "consumer_note": "Relay, Evidence, Registry Mint, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally."
   },
   {
     "id": "registry-platform.ops-posture-v1",
     "name": "Registry Ops Posture v1",
     "owner": "registry-platform",
     "status": "current-source",
-    "surface": "Versioned JSON Schema for protected Registry Relay and Registry Notary operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references.",
+    "surface": "Versioned JSON Schema for protected Registry Relay operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references. The frozen v1 shape still models the retired Registry Notary component so that a consumer can validate a document it already holds.",
     "source_of_truth": {
       "label": "Registry Ops Posture v1 JSON Schema",
       "url": "https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json"
@@ -34,42 +34,6 @@
       "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-relay/openapi/registry-relay.openapi.json"
     },
     "consumer_note": "Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling."
-  },
-  {
-    "id": "registry-notary.openapi",
-    "name": "Registry Notary OpenAPI",
-    "owner": "registry-notary",
-    "status": "pinned-generated-snapshot",
-    "surface": "Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.",
-    "source_of_truth": {
-      "label": "Registry Notary OpenAPI generator",
-      "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/openapi.rs"
-    },
-    "consumer_note": "Generate with `cargo run -p registry-notary -- openapi`. Both direct and OID4VCI credential routes require a fresh non-delegated stored evaluation with exact claim pins and normalized unique Relay execution records for every selected root's registry-backed dependency closure."
-  },
-  {
-    "id": "registry-notary.oid4vci",
-    "name": "Registry Notary OID4VCI surface",
-    "owner": "registry-notary",
-    "status": "current-source",
-    "surface": "OID4VCI issuer metadata, Type Metadata, offer start and authenticated callback, pre-authorized token redemption, and registry-backed credential issuance. The wallet-facing grant is issuer-initiated pre-authorized code. Primitives are sourced from the `registry-platform-oid4vci` crate.",
-    "source_of_truth": {
-      "label": "Registry Notary OID4VCI routes",
-      "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/api.rs"
-    },
-    "consumer_note": "Registry Notary advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Credential configurations accept non-delegated registry-backed claims only, and issuance verifies the stored transaction plus exact dependency-closure Relay execution provenance before signing. Transaction code is required by default. An explicit no-PIN profile has a maximum 300-second bearer-offer window. There is no wallet-facing authorization-code grant, public nonce route, response next nonce, issuance from caller-provided evidence, ES256 holder proof, PAR, DPoP, wallet attestation, EUDI, or HAIP claim. External wallet and verifier evidence is candidate-only until recorded against a frozen artifact."
-  },
-  {
-    "id": "registry-notary.federated-evaluation",
-    "name": "Registry Notary Federated Evaluation MVP",
-    "owner": "registry-notary",
-    "status": "current-source",
-    "surface": "Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.",
-    "source_of_truth": {
-      "label": "Registry Notary federation module",
-      "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/federation"
-    },
-    "consumer_note": "This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP."
   },
   {
     "id": "registry-manifest.metadata-yaml",

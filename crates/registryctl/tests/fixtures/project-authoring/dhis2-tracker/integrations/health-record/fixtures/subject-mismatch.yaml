@@ -12,4 +12,4 @@ interactions:
     respond:
       status: 200
       body: { trackedEntity: B0000000002, attributes: [], enrollments: [] }
-expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }
+expect: { error: failure.subject_mismatch, outputs: {} }

@@ -43,28 +43,22 @@ pub enum CapabilityId {
     RhaiRuntime,
     RhaiAbi,
     RegistryRelayProduct,
-    RegistryNotaryProduct,
     RegistryRelayValidator,
-    RegistryNotaryValidator,
     ProjectAuthoringSchemas,
     RegistryRelayConfigSchema,
-    RegistryNotaryConfigSchema,
 }
 
 impl CapabilityId {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 9] = [
         Self::SourceHttp,
         Self::SourceScript,
         Self::SourceSnapshot,
         Self::RhaiRuntime,
         Self::RhaiAbi,
         Self::RegistryRelayProduct,
-        Self::RegistryNotaryProduct,
         Self::RegistryRelayValidator,
-        Self::RegistryNotaryValidator,
         Self::ProjectAuthoringSchemas,
         Self::RegistryRelayConfigSchema,
-        Self::RegistryNotaryConfigSchema,
     ];
 
     const fn project_declarable(self) -> bool {
@@ -74,7 +68,6 @@ impl CapabilityId {
                 | Self::SourceScript
                 | Self::SourceSnapshot
                 | Self::RegistryRelayProduct
-                | Self::RegistryNotaryProduct
         )
     }
 
@@ -99,7 +92,6 @@ pub enum CapabilityKind {
 pub enum CapabilityOwner {
     Registryctl,
     RegistryRelay,
-    RegistryNotary,
     ReleaseEngineering,
 }
 
@@ -117,7 +109,6 @@ pub enum SupportedCapabilityVersion {
     RhaiLanguageV1,
     RhaiXwV1,
     RegistryRelayConfigV1,
-    RegistryNotaryConfigV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -145,7 +136,7 @@ pub(crate) const COMPILED_CAPABILITY_RELEASE_FACTS: [(
     CapabilityId,
     InstalledCapabilityState,
     InstalledCapabilityEvidence,
-); 12] = [
+); 9] = [
     (
         CapabilityId::SourceHttp,
         InstalledCapabilityState::Compiled,
@@ -177,17 +168,7 @@ pub(crate) const COMPILED_CAPABILITY_RELEASE_FACTS: [(
         InstalledCapabilityEvidence::LinkedCrate,
     ),
     (
-        CapabilityId::RegistryNotaryProduct,
-        InstalledCapabilityState::Compiled,
-        InstalledCapabilityEvidence::LinkedCrate,
-    ),
-    (
         CapabilityId::RegistryRelayValidator,
-        InstalledCapabilityState::Compiled,
-        InstalledCapabilityEvidence::LinkedProductValidator,
-    ),
-    (
-        CapabilityId::RegistryNotaryValidator,
         InstalledCapabilityState::Compiled,
         InstalledCapabilityEvidence::LinkedProductValidator,
     ),
@@ -198,11 +179,6 @@ pub(crate) const COMPILED_CAPABILITY_RELEASE_FACTS: [(
     ),
     (
         CapabilityId::RegistryRelayConfigSchema,
-        InstalledCapabilityState::Compiled,
-        InstalledCapabilityEvidence::EmbeddedSchema,
-    ),
-    (
-        CapabilityId::RegistryNotaryConfigSchema,
         InstalledCapabilityState::Compiled,
         InstalledCapabilityEvidence::EmbeddedSchema,
     ),
@@ -228,14 +204,11 @@ pub enum EnvironmentEnablementState {
 pub struct CapabilityUsageCounts {
     pub services: u32,
     pub consultations: u32,
-    pub claims: u32,
 }
 
 impl CapabilityUsageCounts {
     fn total(self) -> Option<u32> {
-        self.services
-            .checked_add(self.consultations)?
-            .checked_add(self.claims)
+        self.services.checked_add(self.consultations)
     }
 
     fn is_empty(self) -> bool {
@@ -252,10 +225,9 @@ impl Serialize for CapabilityUsageCounts {
             .total()
             .filter(|total| *total <= MAX_CAPABILITY_USAGE_COUNT)
             .ok_or_else(|| serde::ser::Error::custom("capability usage exceeds the report cap"))?;
-        let mut state = serializer.serialize_struct("CapabilityUsageCounts", 4)?;
+        let mut state = serializer.serialize_struct("CapabilityUsageCounts", 3)?;
         state.serialize_field("services", &self.services)?;
         state.serialize_field("consultations", &self.consultations)?;
-        state.serialize_field("claims", &self.claims)?;
         state.serialize_field("total", &total)?;
         state.end()
     }
@@ -271,7 +243,6 @@ impl<'de> Deserialize<'de> for CapabilityUsageCounts {
         struct Wire {
             services: u32,
             consultations: u32,
-            claims: u32,
             total: u32,
         }
 
@@ -279,7 +250,6 @@ impl<'de> Deserialize<'de> for CapabilityUsageCounts {
         let usage = Self {
             services: wire.services,
             consultations: wire.consultations,
-            claims: wire.claims,
         };
         validate_usage(usage).map_err(|_| {
             de::Error::custom("capability usage total exceeds the report aggregate cap")
@@ -329,37 +299,29 @@ pub enum SupportComponent {
     SnapshotMaterializationWorker,
     RhaiXwProtocolHelper,
     RegistryRelayProduct,
-    RegistryNotaryProduct,
     RegistryRelayValidator,
-    RegistryNotaryValidator,
     ProjectAuthoringSchema,
     RegistryRelayConfigSchema,
-    RegistryNotaryConfigSchema,
     RegistryctlDistribution,
     RegistryRelayImage,
-    RegistryNotaryImage,
 }
 
 impl SupportComponent {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 10] = [
         Self::HttpSourceWorker,
         Self::RhaiScriptWorker,
         Self::SnapshotMaterializationWorker,
         Self::RhaiXwProtocolHelper,
         Self::RegistryRelayProduct,
-        Self::RegistryNotaryProduct,
         Self::RegistryRelayValidator,
-        Self::RegistryNotaryValidator,
         Self::ProjectAuthoringSchema,
         Self::RegistryRelayConfigSchema,
-        Self::RegistryNotaryConfigSchema,
         Self::RegistryctlDistribution,
         Self::RegistryRelayImage,
-        Self::RegistryNotaryImage,
     ];
 
     const fn is_image(self) -> bool {
-        matches!(self, Self::RegistryRelayImage | Self::RegistryNotaryImage)
+        matches!(self, Self::RegistryRelayImage)
     }
 }
 
@@ -915,7 +877,6 @@ fn validate_usage(usage: CapabilityUsageCounts) -> Result<(), CapabilityInventor
         .ok_or(CapabilityInventoryError::UsageCountOutOfRange)?;
     if usage.services > MAX_CAPABILITY_USAGE_COUNT
         || usage.consultations > MAX_CAPABILITY_USAGE_COUNT
-        || usage.claims > MAX_CAPABILITY_USAGE_COUNT
         || total > MAX_CAPABILITY_USAGE_COUNT
     {
         return Err(CapabilityInventoryError::UsageCountOutOfRange);
@@ -1057,20 +1018,10 @@ fn capability_metadata(capability: CapabilityId) -> CapabilityMetadata {
             owner: CapabilityOwner::RegistryRelay,
             supported_versions: &[Version::RegistryRelayConfigV1],
         },
-        CapabilityId::RegistryNotaryProduct => CapabilityMetadata {
-            kind: CapabilityKind::Product,
-            owner: CapabilityOwner::RegistryNotary,
-            supported_versions: &[Version::RegistryNotaryConfigV1],
-        },
         CapabilityId::RegistryRelayValidator => CapabilityMetadata {
             kind: CapabilityKind::ProductValidator,
             owner: CapabilityOwner::RegistryRelay,
             supported_versions: &[Version::RegistryRelayConfigV1],
-        },
-        CapabilityId::RegistryNotaryValidator => CapabilityMetadata {
-            kind: CapabilityKind::ProductValidator,
-            owner: CapabilityOwner::RegistryNotary,
-            supported_versions: &[Version::RegistryNotaryConfigV1],
         },
         CapabilityId::ProjectAuthoringSchemas => CapabilityMetadata {
             kind: CapabilityKind::Schema,
@@ -1081,11 +1032,6 @@ fn capability_metadata(capability: CapabilityId) -> CapabilityMetadata {
             kind: CapabilityKind::Schema,
             owner: CapabilityOwner::RegistryRelay,
             supported_versions: &[Version::RegistryRelayConfigV1],
-        },
-        CapabilityId::RegistryNotaryConfigSchema => CapabilityMetadata {
-            kind: CapabilityKind::Schema,
-            owner: CapabilityOwner::RegistryNotary,
-            supported_versions: &[Version::RegistryNotaryConfigV1],
         },
     }
 }
@@ -1129,20 +1075,10 @@ fn support_metadata(component: SupportComponent) -> SupportMetadata {
                 Capability::RegistryRelayProduct,
             ],
         },
-        SupportComponent::RegistryNotaryProduct => SupportMetadata {
-            kind: SupportKind::Product,
-            owner: CapabilityOwner::RegistryNotary,
-            required_by: &[Capability::RegistryNotaryProduct],
-        },
         SupportComponent::RegistryRelayValidator => SupportMetadata {
             kind: SupportKind::ProductValidator,
             owner: CapabilityOwner::RegistryRelay,
             required_by: &[Capability::RegistryRelayProduct],
-        },
-        SupportComponent::RegistryNotaryValidator => SupportMetadata {
-            kind: SupportKind::ProductValidator,
-            owner: CapabilityOwner::RegistryNotary,
-            required_by: &[Capability::RegistryNotaryProduct],
         },
         SupportComponent::ProjectAuthoringSchema => SupportMetadata {
             kind: SupportKind::Schema,
@@ -1158,11 +1094,6 @@ fn support_metadata(component: SupportComponent) -> SupportMetadata {
             owner: CapabilityOwner::RegistryRelay,
             required_by: &[Capability::RegistryRelayProduct],
         },
-        SupportComponent::RegistryNotaryConfigSchema => SupportMetadata {
-            kind: SupportKind::Schema,
-            owner: CapabilityOwner::RegistryNotary,
-            required_by: &[Capability::RegistryNotaryProduct],
-        },
         SupportComponent::RegistryctlDistribution => SupportMetadata {
             kind: SupportKind::Distribution,
             owner: CapabilityOwner::ReleaseEngineering,
@@ -1177,11 +1108,6 @@ fn support_metadata(component: SupportComponent) -> SupportMetadata {
             kind: SupportKind::Image,
             owner: CapabilityOwner::ReleaseEngineering,
             required_by: &[Capability::RegistryRelayProduct],
-        },
-        SupportComponent::RegistryNotaryImage => SupportMetadata {
-            kind: SupportKind::Image,
-            owner: CapabilityOwner::ReleaseEngineering,
-            required_by: &[Capability::RegistryNotaryProduct],
         },
     }
 }

@@ -28,6 +28,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims:
-    birth-event-found: false
-    birth-event-registered: false

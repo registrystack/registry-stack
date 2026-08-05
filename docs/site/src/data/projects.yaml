@@ -2,15 +2,14 @@
   name: Registry Platform
   repo_path: ../registry-platform
   target_repo_path: ../registry-platform
-  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Notary, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
+  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
   owns:
     - Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
-    - OID4VCI pre-authorized offer, token request, credential request, issuer metadata, and replay-bound holder-proof primitives via the `registry-platform-oid4vci` crate.
-    - Cross-service crate APIs that must behave consistently in Relay, Notary, and future registry services.
+    - Cross-service crate APIs that must behave consistently in Relay, Evidence, and other registry services.
     - Shared Rust hygiene templates and supported integration-test fixtures.
   does_not_own:
     - Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.
-    - Registry Notary claim configuration, evaluation rules, disclosure policy decisions, or service routes.
+    - Evidence requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
     - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
   source_docs:
     - label: README
@@ -22,16 +21,16 @@
   name: Registry Manifest
   repo_path: ../registry-manifest
   target_repo_path: ../registry-manifest
-  role: Renders standards-shaped catalog, service, schema, form, policy, evidence-offering, public Notary federation, OGC Records, and embedded SKOS-shaped codelist metadata from a single YAML metadata manifest, so a registry's published surface stays consistent across formats.
+  role: Renders standards-shaped catalog, service, schema, form, policy, evidence-offering, OGC Records, and embedded SKOS-shaped codelist metadata from a single YAML metadata manifest, so a registry's published surface stays consistent across formats.
   owns:
     - Metadata manifest model and compiled metadata model.
     - Pure renderers for catalog, DCAT, CPSV-AP service catalogues, CCCEV requirements and evidence type lists, BRegDCAT-AP, SHACL, JSON Schema, form JSON Schema, OGC Records, policies, evidence offerings, and embedded SKOS-shaped codelist nodes.
-    - Public Registry Notary federation metadata and evaluation profile validation.
     - CLI validation, rendering, static publication, and profile fixture validation.
   does_not_own:
     - Registry Relay runtime data access.
     - Auth, audit, observability, DataFusion, Postgres, Axum, or secret handling.
     - Production source configuration.
+    - Evidence deployment configuration. An Evidence process loads one immutable governed bundle and one closed runtime file mounted read-only at startup, and reads no portable manifest.
   source_docs:
     - label: README
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/products/manifest/README.md
@@ -52,8 +51,7 @@
   does_not_own:
     - Source-registry provisioning, write-back, or domain-data mutation paths in v1.
     - Portable metadata schema ownership.
-    - Standalone claim service internals owned by Registry Notary.
-    - Credential issuance, DID hosting, and issuer signing keys owned by Registry Notary.
+    - Assertion evaluation, disclosure policy, and signing owned by Evidence, which reads a Relay API as one ordinary fixed HTTP source.
     - Shared security and operational primitives owned by Registry Platform.
     - Storage table ids or arbitrary SQL in public APIs.
   source_docs:
@@ -64,42 +62,55 @@
     - label: Local metadata docs
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-relay/docs/metadata.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
-- id: registry-notary
-  name: Registry Notary
-  repo_path: ../registry-notary
-  target_repo_path: ../registry-notary
-  role: Standalone service that evaluates claims from compiler-pinned Relay consultations, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials only from exact Relay-backed evaluation provenance, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.
+- id: registry-evidence
+  name: Evidence
+  repo_path: ../registry-stack
+  target_repo_path: ../registry-stack
+  role: Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, it answers one bounded question about one subject and returns the smallest sufficient signed assertion, composing shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.
   owns:
-    - Claim configuration and evaluation.
-    - Disclosure policy and redacted audit event semantics.
-    - Registry Notary API routes.
-    - Static-peer delegated evaluation at `/federation/v1/evaluations`.
-    - Credential issuance workflow, exact Relay execution provenance verification, and claim-to-credential mapping.
-      - Profiled OID4VCI issuer-initiated pre-authorized flow, transaction-bound holder proof, Type Metadata, credential endpoint, and issuer metadata.
-      - Digitally authenticated representative OID4VCI issuance with a Relay-proven requester-to-target relationship.
-    - Compiler-pinned Registry Relay consultation contracts for registry-backed claims.
+    - Requirement definitions, bounded evaluation, and the acquisition posture recorded with every answer.
+    - Authorization grants, purpose and audience checks, and the disclosure decision that releases an assertion.
+    - Fixed bounded HTTP JSON source execution, and bounded script-owned request preparation, extraction, and derivation.
+    - Assertion construction, signing, response format selection, and redacted audit events.
+    - The `evidence` binary, one serving process, and one operator-controlled trust domain.
   does_not_own:
-    - Registry source access, credentials, protocol adaptation, or Registry Relay runtime internals.
-    - Credential issuance from claims without exact Relay evaluation provenance or from unconfigured delegated evaluations.
-    - Wallet-facing authorization-code, EUDI, HAIP, PAR, DPoP, wallet-attestation, or ES256-holder profiles.
+    - General source access, protocol adaptation, or Registry Relay runtime internals. A Relay API is one ordinary fixed HTTP source.
+    - Record lookup or identity resolution beyond a provider outcome of match, no match, or ambiguous.
     - Portable metadata renderers owned by Registry Manifest.
     - Shared security and operational primitives owned by Registry Platform.
-    - Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.
-    - Browser inspection workflows outside the current formal v1 stack scope.
-    - Claim evidence supplied only by the caller or identity token.
+    - Token issuance, end-user authentication, or identity proofing.
+    - A credential lifecycle. No issuance workflow, holder binding, status list, revocation, delegated evaluation, or federation. SD-JWT VC adds a response format under a frozen profile, never a lifecycle.
+    - How a consumer acts on a returned assertion.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.16.3/products/notary/README.md
-    - label: OpenAPI source
-      url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-notary-server/src/openapi.rs
-  rename_status: Already using the target repo name locally.
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/README.md
+    - label: Operator contract
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/OPERATOR-CONTRACT.md
+  rename_status: Developed in the Registry Stack monorepo as one `registry-evidence` crate; no separate repository.
+- id: registry-mint
+  name: Registry Mint
+  repo_path: ../registry-stack
+  target_repo_path: ../registry-stack
+  role: Supporting service rather than a product line. Issues short-lived, audience-bound access tokens to registered machine clients, so a resource server such as Evidence can require signed expiring tokens without the deployment first standing up a general purpose identity provider.
+  owns:
+    - The client registry that binds a client id to that client's own public keys and to the authority Mint asserts for it.
+    - The `client_credentials` grant with `private_key_jwt` client authentication, verifying an assertion against the keys of the client it claims to be, selected before signature verification.
+    - Token signing, lifetime, and audience binding, and the `mint` binary.
+  does_not_own:
+    - End-user authentication, identity proofing, or consent.
+    - Caller-declared authority. Authority is written from the client registry, never from the assertion payload.
+    - Evidence requirement definitions, authorization grants, or disclosure decisions.
+  source_docs:
+    - label: README
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/crates/registry-mint/README.md
+  rename_status: Developed in the Registry Stack monorepo as one `registry-mint` crate; no separate repository.
 - id: solmara-lab
   name: Solmara Lab
   repo_path: ../solmara-lab
   target_repo_path: ../solmara-lab
-  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs published Registry Stack images pinned by digest with generated synthetic data, purpose-limited Relay APIs, Notary evidence services, and citizen portal journeys.
+  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs a whole country's worth of registry services over generated synthetic data, with purpose-limited Relay APIs per authority, short-lived access tokens from Registry Mint, Evidence answering over a Relay-protected API, a citizen portal, and a public Visitor's Center.
   owns:
-    - End-to-end local and hosted demo topologies for Relay, Notary, Postgres, eSignet, static metadata, scenario services, and the citizen portal.
+    - End-to-end local and hosted demo topologies for Relay, Evidence, Mint, workload identity agents, Postgres, static metadata, scenario services, the citizen portal, and the Visitor's Center.
     - Deterministic synthetic data, authority-owned demo configuration, purpose catalogues, and fictional country stories.
     - Demo orchestration, smoke checks, browser journeys, hosted deployment wrappers, and release-pin checks.
   does_not_own:

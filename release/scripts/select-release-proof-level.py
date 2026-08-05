@@ -28,9 +28,6 @@ SENSITIVE_PATHS = (
     "crates/registry-relay/release/**",
     "crates/registry-relay/scripts/check_advisory_baselines.py",
     "crates/registry-relay/security/advisory-baseline*.json",
-    "products/notary/release/**",
-    "products/notary/scripts/check_advisory_baselines.py",
-    "products/notary/security/advisory-baseline*.json",
 )
 BUILDER_FIELDS = {
     "binary_image",

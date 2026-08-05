@@ -1,13 +1,5 @@
 name: no-todo
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: public_todo_id, value: "999999" }]
-  claims: [todo-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-source-connection-demonstration
 input: { todo_id: "999999" }
 interactions:
   - expect:
@@ -17,4 +9,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims: { todo-record-exists: false, todo-completed: null }

@@ -152,6 +152,7 @@ fn removed_pre_1_0_roots_and_aliases_are_usage_errors() {
         "authoring",
         "project",
         "bruno",
+        "__registryctl-cel-worker-v1",
     ] {
         let output = run(&[root]);
         assert_eq!(
@@ -221,6 +222,48 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
 }
 
 #[test]
+fn trust_lane_selectors_are_relay_only() {
+    let anchor_help = stdout(&["trust", "anchor", "create", "--help"]);
+    assert!(
+        anchor_help.contains("possible values: relay-public, relay-consultation"),
+        "{anchor_help}"
+    );
+    assert!(!anchor_help.contains("notary"), "{anchor_help}");
+
+    let approved_set_help = stdout(&["trust", "approved-set", "assemble", "--help"]);
+    assert!(
+        approved_set_help.contains("--relay-public"),
+        "{approved_set_help}"
+    );
+    assert!(
+        approved_set_help.contains("--relay-consultation"),
+        "{approved_set_help}"
+    );
+    assert!(!approved_set_help.contains("notary"), "{approved_set_help}");
+
+    assert_eq!(
+        run(&[
+            "trust",
+            "anchor",
+            "create",
+            "--lane",
+            "notary",
+            "--input",
+            "unused",
+            "--public-key",
+            "unused",
+            "--threshold",
+            "1",
+            "--output-file",
+            "unused",
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
+}
+
+#[test]
 fn check_explain_adds_the_classifier_safe_review_to_human_output() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("project");
@@ -252,7 +295,8 @@ fn check_explain_adds_the_classifier_safe_review_to_human_output() {
         "Explanation: registry.project.explanation.v1 for fictional-citizen-registry in local",
         "integration person-record",
         "[authored, effective]",
-        "<redacted:secret_reference>",
+        "environment local /relay/consultation/client_id = <redacted:sensitive>",
+        "<redacted:redacted_fixture>",
         "Full provenance and constraint metadata: rerun with --format json.",
     ] {
         assert!(
@@ -531,7 +575,6 @@ fn trace_renders_the_selected_synthetic_fixture_in_human_output() {
         "inputs: person_id",
         "calls:",
         "outputs: active",
-        "claims: person-active, person-record-exists",
         "outcome: match",
     ] {
         assert!(

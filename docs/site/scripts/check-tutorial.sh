@@ -30,6 +30,11 @@
 #   SOLMARA_LAB_REF    commit to clone when SOLMARA_LAB_PATH is unset.
 #                      This pins the check's own reproducibility; the
 #                      tutorial itself tells readers to clone `main`.
+#   REGISTRY_STACK_SOURCE_DIR
+#                      clean Registry Stack checkout the lab builds the
+#                      Evidence and Mint images from, a documented tutorial
+#                      prerequisite until a release publishes them.
+#                      Default: this repository.
 #
 # Exit codes:
 #   0   success
@@ -41,8 +46,9 @@
 #     were extracted from the matching sections; bump these constants when you
 #     intentionally add or remove a documented command
 #   - after compose comes up, the script asserts every entry in
-#     EXPECTED_SERVICES is in `running` state; bump the array when you
-#     intentionally add or remove a long-running service
+#     EXPECTED_SERVICES is in `running` state and that EXPECTED_RUNNING_TOTAL
+#     services are running in all; bump both when you intentionally add or
+#     remove a long-running service
 #   - the script runs whatever commands appear in the tutorial verbatim, so a
 #     command change in the docs causes the runner to exercise the new command
 #
@@ -50,9 +56,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-solmara-lab.mdx"
-EXPECTED_STEP_COUNT=3
+EXPECTED_STEP_COUNT=4
 EXPECTED_VERIFY_COUNT=4
 EXPECTED_DEMO_ARTIFACTS=3
+# Every service the tutorial names or gives a host port. The topology holds far
+# more; EXPECTED_RUNNING_TOTAL below covers the rest as a count, because the
+# page states one.
 EXPECTED_SERVICES=(
 	cra-civil-relay
 	nia-population-relay
@@ -60,24 +69,26 @@ EXPECTED_SERVICES=(
 	programme-mis-relay
 	sipf-pensions-relay
 	nagdi-agriculture-relay
-	child-benefit-notary
-	pension-notary
-	nagdi-notary
-	citizen-notary
+	child-benefit-federator
 	static-metadata
 	portal
 	home
 	scenario-runner
 	postgres
-	redis
+	evidence-gateway
+	mint
+	cra-records-relay
+	cra-records-workload-agent
+	evidence
 )
+EXPECTED_RUNNING_TOTAL=41
 
 DRY_RUN=0
 for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,37p' "$0"
+		sed -n '3,53p' "$0"
 		exit 0
 		;;
 	*)
@@ -168,7 +179,6 @@ REGISTRYCTL_TUTORIALS=(
 	"configure-project-script-adapter:49"
 	"publish-spreadsheet-secured-registry-api:20"
 	"use-your-spreadsheet:9"
-	"verify-claim-registry-api:15"
 	"verify-opencrvs-claims:45"
 )
 
@@ -222,8 +232,6 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secur
 	'registryctl init my-first-registry --template spreadsheet'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx" \
 	'registryctl dev smoke'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx" \
-	'project-status-accepted'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'file: adapter.rhai'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
@@ -233,7 +241,7 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-
 require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
 	'POST /api/events/events/search'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
-	'birth-event-found'
+	'birth-event-verification'
 
 if ((DRY_RUN)); then
 	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'
@@ -267,6 +275,43 @@ else
 	(cd "$CLONE_DIR" && just setup)
 fi
 
+# The tutorial's Steps run the Evidence overlay. A lab checkout that predates it
+# would fail several commands in without saying why.
+if [[ ! -f "$LAB_DIR/compose.evidence.yaml" ]]; then
+	printf 'solmara-lab checkout has no compose.evidence.yaml: %s\n' "$LAB_DIR" >&2
+	printf 'the tutorial runs the Evidence overlay; advance SOLMARA_LAB_REF in %s\n' \
+		"${BASH_SOURCE[0]}" >&2
+	exit 1
+fi
+
+# No Registry Stack release ships the Evidence or Mint binaries, so the lab
+# builds both images from a checkout the operator names, and refuses a dirty
+# one. This is a documented tutorial prerequisite until a release publishes
+# them; default it to the repository this script lives in.
+REGISTRY_STACK_SOURCE_DIR="${REGISTRY_STACK_SOURCE_DIR:-$(cd "$REPO_ROOT/../.." && pwd)}"
+export REGISTRY_STACK_SOURCE_DIR
+if [[ -n "$(git -C "$REGISTRY_STACK_SOURCE_DIR" status --porcelain 2>&1)" ]]; then
+	printf 'REGISTRY_STACK_SOURCE_DIR is not a clean git checkout: %s\n' \
+		"$REGISTRY_STACK_SOURCE_DIR" >&2
+	printf 'point it at a clean checkout or git worktree carrying crates/registry-evidence\n' >&2
+	exit 1
+fi
+
+# Step 1 rotates every local credential, including the Postgres password, so a
+# data volume left by an earlier run no longer matches it and the stack cannot
+# bootstrap. Clone mode always starts empty. A caller-supplied checkout has to be
+# reset by its owner, because cleanup below never deletes their volumes.
+if [[ -z "$CLONE_DIR" ]]; then
+	lab_project="$(cd "$LAB_DIR" && python3 scripts/compose_project_name.py)"
+	if docker volume ls --format '{{.Name}}' | grep -q "^${lab_project}_"; then
+		printf 'solmara-lab checkout still holds volumes from an earlier run: %s\n' \
+			"$lab_project" >&2
+		printf 'step 1 rotates the Postgres password; run just reset-evidence in %s first\n' \
+			"$LAB_DIR" >&2
+		exit 1
+	fi
+fi
+
 for tool in just docker uv pnpm python3 openssl git; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
@@ -285,11 +330,11 @@ cleanup() {
 	# Clone mode owns its stack outright, so remove the volumes too; for a
 	# caller-supplied checkout, stop containers but never touch its volumes.
 	if [[ -n "$CLONE_DIR" ]]; then
-		printf '\n--- cleanup: just reset ---\n' | tee -a "$LOG_FILE"
-		(cd "$LAB_DIR" && just reset) >>"$LOG_FILE" 2>&1 || true
+		printf '\n--- cleanup: just reset-evidence ---\n' | tee -a "$LOG_FILE"
+		(cd "$LAB_DIR" && just reset-evidence) >>"$LOG_FILE" 2>&1 || true
 	else
-		printf '\n--- cleanup: just down ---\n' | tee -a "$LOG_FILE"
-		(cd "$LAB_DIR" && just down) >>"$LOG_FILE" 2>&1 || true
+		printf '\n--- cleanup: just down-evidence ---\n' | tee -a "$LOG_FILE"
+		(cd "$LAB_DIR" && just down-evidence) >>"$LOG_FILE" 2>&1 || true
 	fi
 	if [[ -n "$CLONE_DIR" ]]; then
 		rm -rf "$CLONE_DIR"
@@ -320,11 +365,11 @@ for i in "${!STEPS[@]}"; do
 	run_command "step $((i + 1))" "${STEPS[$i]}"
 done
 
-# After all Steps, the topology should be up. Assert every long-running
-# service (everything except the one-shot volume-permissions init job) is in
-# `running` state.
+# After all Steps, the topology should be up. Assert every service the tutorial
+# names is in `running` state, and that the total matches the count the page
+# states (everything except the one-shot bootstrap and secret-root jobs).
 printf '\n--- assert services running ---\n' | tee -a "$LOG_FILE"
-running_services="$(docker compose --env-file versions.env --env-file .env -f compose.yaml ps --services --filter status=running)"
+running_services="$(docker compose --env-file versions.env --env-file .env -f compose.yaml -f compose.evidence.yaml ps --services --filter status=running)"
 printf 'running services:\n%s\n' "$running_services" >>"$LOG_FILE"
 missing=()
 for svc in "${EXPECTED_SERVICES[@]}"; do
@@ -338,10 +383,19 @@ if ((${#missing[@]} > 0)); then
 		printf '  %s\n' "$svc" >&2
 	done
 	printf 'docker compose ps:\n' >&2
-	docker compose --env-file versions.env --env-file .env -f compose.yaml ps >&2 || true
+	docker compose --env-file versions.env --env-file .env -f compose.yaml -f compose.evidence.yaml ps >&2 || true
 	exit 1
 fi
-printf 'all %d expected services running\n' "${#EXPECTED_SERVICES[@]}"
+running_total="$(grep -c . <<<"$running_services")"
+if ((running_total != EXPECTED_RUNNING_TOTAL)); then
+	printf 'tutorial drift: %d services running, the tutorial states %d\n' \
+		"$running_total" "$EXPECTED_RUNNING_TOTAL" >&2
+	printf 'if this change was intentional, update EXPECTED_RUNNING_TOTAL in %s and the count on the page\n' \
+		"${BASH_SOURCE[0]}" >&2
+	exit 1
+fi
+printf 'all %d named services running, %d in total\n' \
+	"${#EXPECTED_SERVICES[@]}" "$running_total"
 
 for i in "${!VERIFY[@]}"; do
 	run_command "verify $((i + 1))" "${VERIFY[$i]}"

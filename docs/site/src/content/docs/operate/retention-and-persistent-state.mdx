@@ -1,11 +1,13 @@
 ---
 title: Retention and persistent state
-description: What Registry Relay and Registry Notary retain, what expires, and what operators must preserve or ship off host.
+description: What Registry Relay, Evidence, and Registry Mint retain, what expires, and what operators must preserve or ship off host.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-09"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -13,7 +15,7 @@ standards_referenced: []
 
 Use this page to decide which Registry Stack state needs backup, off-host shipping, expiry,
 or deletion policy outside the products.
-It documents current Registry Relay and Registry Notary behavior.
+It documents current Registry Relay, Evidence, and Registry Mint behavior.
 Retention enforcement, record-level erasure, and data-subject-rights workflows are outside the
 1.0 product boundary.
 
@@ -31,50 +33,51 @@ Two consequences follow from that boundary:
   Use off-host shipping when completeness matters.
 - Treat keyed pseudonyms as a linkability control, not as erasure.
   Destroying or rotating the HMAC secret prevents recomputing old pseudonyms from raw values,
-  but it does not delete audit records, cache entries, status records, or source data.
+  but it does not delete audit records, cache entries, or source data.
 
 ## Durable state and externally retained records
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay and Notary audit sinks | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | Product file sinks default to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
-| Relay and Notary audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. The runtime does not expire or rewrite it. | Mount the file read-only for the Registry process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
+| Relay audit sink | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | The file sink defaults to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
+| Evidence audit chain | A keyed, hash-chained JSONL log of the access-attempt event before every source read and the disclosure-release event before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a total ceiling. When an append would exceed it, the runtime seals the active segment as `<auditStorage.path>.<sequence>` and opens a new active segment online, with no operator action. Nothing in the runtime deletes or compacts a sealed segment; total retention is entirely operator-owned. | Set `auditStorage.path`, `auditStorage.maximumFileBytes`, and the hash secret in `runtime.yaml`. Archive sealed segments to cold storage oldest sequence first, never touch the active segment while the service runs, and run `evidence verify-audit` on the cadence the deployment's audit policy requires. |
+| Mint audit chain | A keyed, hash-chained JSONL log of token releases and denials. Records use keyed pseudonyms and omit raw assertions, access tokens, client ids, principals, authority values, actors, and subject values. | `audit.maximumFileBytes` is a per-segment threshold, not a total ceiling. Registry Mint seals full segments as `<audit.path>.<sequence>` online and never deletes or compacts them. | Set `audit.path`, `audit.maximumFileBytes`, and the hash key in `mint.yaml`. Archive sealed segments oldest first, never touch the active segment while Registry Mint runs, and run `mint verify-audit` on the deployment's verification cadence. |
+| Relay audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. Relay does not expire or rewrite it. | Mount the file read-only for the Relay process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
 | Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. For audited SnapshotExact, the authored `retain_generations` value keeps between `1` and `16` completed cache generations, including the active generation, after successful publication. Ordinary sources keep the built-in current and previous generations. Older snapshots are removed best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. Treat authored retention as a bounded recovery set, not an API for selecting arbitrary rollback targets. |
 | Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
 | Relay consultation correctness state | Durable consultation audit, attempts and completions, dispatch permits, quota buckets, materialization publication history, batch-child replay bindings, serving-fence state, and audit-pseudonym keyring metadata. Pseudonymous handles and operational metadata can remain linkable. | Batch-child replay rows expire after `15 minutes` and are pruned on later reservations. Other Relay consultation tables have no general time-based pruning. Keyring retention controls when retired pseudonym key metadata can leave the retained set; it does not delete durable audit rows. | Back up the complete Relay database at a quiesced or coordinated recovery point. Preserve role bindings and key material, and keep any potentially stale restore offline until acknowledged writes are reconciled. |
-| Notary correctness state | Hashed replay and nonce identifiers, evaluations, batch idempotency, credential status, keyed quota pseudonyms, encrypted preauthorization login state, and transaction-code verifiers. Credential identifiers and operational metadata can still be linkable. | Each typed domain has an absolute expiry or bounded window. Consumed nonce tombstones last `60` seconds. Credential status lasts through credential expiry plus `retention_seconds`. | Use the Notary-owned PostgreSQL schema for production and multi-instance deployments. Back up the complete database and keep a potentially stale restore offline through the documented quarantine. |
-| Operator-owned config, source, and secret paths | Runtime configuration, signed bundles, trust anchors, metadata manifests, source files, provenance keys, and secret references. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit, cache, replay, status, and break-glass mechanics above. | Mount source data read-only where possible; back up config, trust anchors, anti-rollback state, and secrets through your platform controls. |
+| Operator-owned config, source, and secret paths | Runtime configuration, signed Relay bundles and trust anchors, Evidence's governed bundle and runtime document, Registry Mint's signing key and client registry, metadata manifests, source files, and secret references. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit, cache, replay, and break-glass mechanics above. | Mount source data read-only where possible; back up config, trust anchors, anti-rollback state, and secrets through your platform controls. |
 
 ## Process-local caches and client-held state
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay and Notary OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. | In process only. Default positive cache TTL is `600` seconds and default negative cache TTL is `60` seconds. | Configure Relay OIDC `jwks_cache_ttl` where exposed. Notary shared fetchers use platform defaults where no product knob is exposed. Restart clears the cache. |
+| Relay OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. | In process only. Default positive cache TTL is `600` seconds and default negative cache TTL is `60` seconds. | Configure Relay OIDC `jwks_cache_ttl` where exposed. Restart clears the cache. |
+| Evidence OIDC JWKS cache | Issuer signing keys and negative lookup entries for the configured `authentication.jwksUri`, not subject records. | In process only. Evidence exposes no product-level override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. An unreachable key set is retried and reported at a bounded interval rather than silently ignored. |
 | Relay auth-failure throttle | Process-local counters keyed by resolved client address. Client IP addresses can be personal data. | Fixed window when enabled; defaults are disabled, `20` failures, and `60` seconds. Restart clears counters. | Configure `auth.failure_throttle.*` and `server.trust_proxy` correctly behind proxies. |
 | Relay response headers | No Relay-owned response/result cache was found. Client and proxy caching follow HTTP headers. | Metadata and default release responses are `no-store`; successful release responses can opt into private max-age. | Configure release-profile response max age only when private client caching is acceptable. |
 | Relay pagination cursors | Client-held signed cursor payloads can include query context, filters, principal ID, ingest version, and position. | Not stored server-side and no product TTL. Cursors become invalid when signer, principal, query, config, or ingest version changes. | Treat cursor tokens as client-held request context and avoid logging them unnecessarily. |
-| Credential status-list JWT cache | Signed status-list JWT strings and hashed cache keys derived from credential status metadata, status URL, timestamps, and public JWK hash. | In memory only. Entries are pruned on access and expire no later than the `300` second JWT expiry; valid status entries expire earlier when the credential expires first. | Enabled only when credential status is enabled. Restart clears the cache; there is no separate size or storage knob. |
 | Relay source OAuth token caches | Access tokens used by compiled Relay source credential providers. | In memory and bounded by the provider's token lifetime. | Configure the Relay integration credential binding and keep token secrets out of logs and config files. |
+| Mint client-assertion replay cache | Seen `jti` values from presented client assertions, used to refuse a repeated assertion. | In memory only, bounded by `clientAssertion.replayCacheEntries` (default `8192`, minimum `256`). Restart clears it. | Size `replayCacheEntries` to the deployment's client population and assertion volume; there is no separate time-based expiry knob. |
 
 ## Audit retention
 
-Relay and Notary can write chained JSONL audit records.
-The product file-sink defaults retain `14` files at `100 MB` each.
-The shared platform sink has a smaller generic default, but the products override it when their
-own audit config is used.
+Relay writes chained JSONL audit records.
+The product file-sink default retains `14` files at `100 MB` each.
+The shared platform sink has a smaller generic default, but Relay overrides it when its own audit
+config is used.
 
 The chain detects edits, insertions, reordering, and deletion after the first retained record
 within the retained set.
 It does not prove that older rotated-away records, or earlier retained records, still exist.
-If a deployment uses a local rotating file sink without off-host shipping, Relay and Notary surface
-deployment-posture findings such as `relay.audit.retention_local_only` and
-`notary.audit.retention_local_only`.
-Under `evidence_grade`, those findings refuse startup.
+If a deployment uses a local rotating file sink without off-host shipping, Relay surfaces the
+deployment-posture finding `relay.audit.retention_local_only`.
+Under `evidence_grade`, that finding refuses startup.
 Set `deployment.evidence.audit_offhost_shipping` only after the deployment really ships audit
 records to external durable storage.
 
-An `evidence_grade` Relay or Notary also requires an acknowledgement cursor for every configured
-shipping target, including `stdout` and `syslog`.
+An `evidence_grade` Relay also requires an acknowledgement cursor for every configured shipping
+target, including `stdout` and `syslog`.
 The cursor is healthy only when its timestamp is fresh and its last acknowledged hash equals the
 live keyed audit chain tail.
 That equality records the trusted shipper's claim that the local backlog is zero; the unsigned
@@ -88,6 +91,37 @@ Never truncate, rewrite, or reserialize audit files as part of cleanup.
 Back them up as files, keep old hash secrets for the audit retention period, and rotate hash
 secrets only as an intentional key-lifecycle event.
 
+## Evidence and Registry Mint retention
+
+Evidence has no application database and persists no selector, source, evidence, or response
+data. Its only durable state is the operator-configured signing key material and the audit chain
+described in
+[Durable state and externally retained records](#durable-state-and-externally-retained-records).
+An external durable audit service may own its own storage, but Evidence itself does not maintain
+one.
+
+Run `evidence verify-audit` against the runtime document's configured audit path to check chain
+integrity across every segment. It replays every segment across every seam and reports `segments`,
+`records`, `sealed-sequence`, `head`, and `active-segment`; a gap in the sealed sequence is
+reported as a distinct missing-segment result rather than treated as silent history loss. Archive
+sealed segments to cold storage oldest sequence first and never rename or otherwise touch the
+active segment while the service runs: the runtime recognizes a segment by its
+`<auditStorage.path>.<sequence>` name, and a rename outside that namespace produces a silent fork
+on the next restart rather than a rotation.
+
+Registry Mint's durable state is the operator-owned signing key, the client registration files
+under `clients.directory`, and the segmented audit chain. Onboarding, offboarding, and caller key
+rotation reload the client directory on `SIGHUP` without a restart. The client-assertion replay
+cache is in-memory only and clears on restart, so a restarted Registry Mint accepts a previously
+used `jti` again for whatever lifetime remains on that assertion. Keep
+`clientAssertion.maximumLifetimeSeconds` short enough that this window stays small.
+
+Run `mint verify-audit` to replay the Mint chain across every retained segment. The command reports
+segment and record counts, the first and last sealed sequence, the chain tail, and whether the
+active segment was verified. A running writer keeps the active segment out of the verification
+pass and produces `active-segment: not verified`; stop Registry Mint for a complete retained-chain
+pass.
+
 ## Relay consultation-state retention
 
 When `consultation` is enabled, Registry Relay uses PostgreSQL transactions for durable audit,
@@ -95,9 +129,8 @@ single-holder dispatch fencing, quota decisions, consultation completion, batch-
 materialization publication, and audit-pseudonym keyring authority. Process restart and fence
 takeover recover unfinished consultation attempts before admission opens.
 
-Relay owns `relay_state_private` and `relay_state_api`. Registry Notary owns
-`registry_notary_private` and `registry_notary_api`. The products do not share tables, migrations,
-runtime roles, or keyrings even when their databases run in one PostgreSQL cluster.
+Relay owns `relay_state_private` and `relay_state_api`. No other product shares these tables,
+migrations, runtime roles, or keyrings.
 
 The Relay consultation store excludes registry source rows, raw selectors, source URLs, and source
 credentials. It retains bounded canonical operation state, keyed commitments and pseudonyms,
@@ -127,23 +160,10 @@ restricted content digest in access-controlled recovery evidence. `retain_genera
 bounded set of cache files available for recovery and readers. It does not expose an operation
 that activates any retained generation as an arbitrary rollback target.
 
-## Notary correctness-state retention
-
-Registry Notary enforces one-time use, cross-replica quota decisions, evaluation retention,
-idempotent completion, and credential lifecycle transitions through typed PostgreSQL transactions.
-The process-local backend is available only for explicit local, single-instance development and
-loses every correctness decision on restart.
-
-The PostgreSQL store does not retain credential bodies, source rows, holder private keys, raw
-transaction-code PINs, or source-system credentials. It does retain encrypted or pseudonymized
-operational state that needs access, backup, and deletion controls. Use the
-[Registry Notary PostgreSQL operations guide](https://docs.registrystack.org/products/registry-notary/postgresql-state-operations/)
-for domain retention, bounded pruning, backup, recovery, and stale-restore quarantine.
-
 ## What remains outside the product
 
 Registry Stack does not implement a general erasure workflow for source records, audit records,
-cache entries, or credential status records.
+or cache entries.
 It also does not prune operator-owned config files, source files, old release artifacts, or
 break-glass evidence after the product-level expiry checks have run.
 Those controls belong in the operator's storage, backup, incident-response, and data-protection

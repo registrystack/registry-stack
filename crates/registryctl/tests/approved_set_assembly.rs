@@ -38,7 +38,7 @@ fn initial_assembly_emits_one_deterministic_value_free_entry_for_each_fixed_lane
     assert_eq!(
         first_report.affected_lanes,
         ApprovedLaneV1::ALL,
-        "initial review requires all three fixed lanes"
+        "initial review requires both fixed Relay lanes"
     );
     assert_eq!(
         first_report.approved_set.schema_id,
@@ -48,28 +48,6 @@ fn initial_assembly_emits_one_deterministic_value_free_entry_for_each_fixed_lane
         first_report.approved_set.schema_version,
         APPROVED_BASELINE_SET_SCHEMA_VERSION
     );
-    assert_eq!(
-        first_report
-            .approved_set
-            .lanes
-            .relay_consultation
-            .interfaces
-            .consultation_relay_notary,
-        first_report
-            .approved_set
-            .lanes
-            .notary
-            .interfaces
-            .consultation_relay_notary
-    );
-    assert!(first_report
-        .approved_set
-        .lanes
-        .relay_public
-        .interfaces
-        .consultation_relay_notary
-        .is_none());
-
     let json = String::from_utf8(std::fs::read(&first).expect("set reads")).expect("set is UTF-8");
     for forbidden in [
         "example-project",
@@ -91,7 +69,7 @@ fn initial_assembly_emits_one_deterministic_value_free_entry_for_each_fixed_lane
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
-        vec!["notary", "relay-consultation", "relay-public"]
+        vec!["relay-consultation", "relay-public"]
     );
     assert!(parsed["lanes"]["relay-public"].get("lane").is_none());
     assert!(parsed["lanes"]["relay-public"]
@@ -116,12 +94,10 @@ fn update_reverifies_every_preceding_lane_and_only_replaces_reviewed_affected_la
     let reviewed = ReviewedBuildUpdateV1 {
         relay_public: None,
         relay_consultation: Some(reviewed_binding(ApprovedLaneV1::RelayConsultation)),
-        notary: Some(reviewed_binding(ApprovedLaneV1::Notary)),
     };
     let replacements = AffectedLaneReplacements {
         relay_public: None,
         relay_consultation: Some(temporary.path().join("consultation-next")),
-        notary: Some(temporary.path().join("notary-next")),
     };
     let requests = RefCell::new(Vec::new());
 
@@ -148,7 +124,7 @@ fn update_reverifies_every_preceding_lane_and_only_replaces_reviewed_affected_la
     .expect("governed update assembles");
 
     let requests = requests.into_inner();
-    assert_eq!(requests.len(), 5, "three preceding and two replacements");
+    assert_eq!(requests.len(), 3, "two preceding and one replacement");
     assert_eq!(
         requests
             .iter()
@@ -157,11 +133,11 @@ fn update_reverifies_every_preceding_lane_and_only_replaces_reviewed_affected_la
                 LaneVerificationSourceV1::PrecedingApprovedEntry { .. }
             ))
             .count(),
-        3
+        2
     );
     assert_eq!(
         report.affected_lanes,
-        vec![ApprovedLaneV1::RelayConsultation, ApprovedLaneV1::Notary]
+        vec![ApprovedLaneV1::RelayConsultation]
     );
     assert_eq!(
         report.approved_set.lanes.relay_public,
@@ -170,21 +146,6 @@ fn update_reverifies_every_preceding_lane_and_only_replaces_reviewed_affected_la
     assert_ne!(
         report.approved_set.lanes.relay_consultation,
         preceding.lanes.relay_consultation
-    );
-    assert_ne!(report.approved_set.lanes.notary, preceding.lanes.notary);
-    assert_eq!(
-        report
-            .approved_set
-            .lanes
-            .relay_consultation
-            .interfaces
-            .consultation_relay_notary,
-        report
-            .approved_set
-            .lanes
-            .notary
-            .interfaces
-            .consultation_relay_notary
     );
     assert_eq!(
         load_approved_baseline_set_structure(&next_file).expect("updated set round trips"),

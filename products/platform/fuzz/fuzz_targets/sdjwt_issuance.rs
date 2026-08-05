@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_sdjwt::{Disclosure, HolderConfirmation, SdJwtIssuanceInput, SdJwtIssuer};
+use registry_platform_sdjwt::{
+    Disclosure, HolderConfirmation, ObjectDisclosure, SdJwtIssuanceInput, SdJwtIssuer,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -23,6 +25,7 @@ struct SeedInput {
     status: Option<Value>,
     public_claims: Option<BTreeMap<String, Value>>,
     disclosures: Option<Vec<SeedDisclosure>>,
+    object_disclosures: Option<Vec<SeedObjectDisclosure>>,
     bind_holder: Option<bool>,
 }
 
@@ -30,6 +33,12 @@ struct SeedInput {
 struct SeedDisclosure {
     name: String,
     value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct SeedObjectDisclosure {
+    name: String,
+    fields: Option<Vec<SeedDisclosure>>,
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -57,14 +66,15 @@ impl SeedInput {
             status: self.status,
             public_claims: bound_claims(self.public_claims.unwrap_or_default()),
             cnf: self.bind_holder.unwrap_or(false).then(holder_confirmation),
-            disclosures: self
-                .disclosures
+            disclosures: bound_disclosures(self.disclosures.unwrap_or_default()),
+            object_disclosures: self
+                .object_disclosures
                 .unwrap_or_default()
                 .into_iter()
-                .take(8)
-                .map(|disclosure| Disclosure {
-                    name: take_chars(&disclosure.name, 128),
-                    value: disclosure.value,
+                .take(4)
+                .map(|object| ObjectDisclosure {
+                    name: take_chars(&object.name, 128),
+                    fields: bound_disclosures(object.fields.unwrap_or_default()),
                 })
                 .collect(),
         }
@@ -88,6 +98,17 @@ fn bytes_to_issuance_input(data: &[u8]) -> SdJwtIssuanceInput {
             name: format!("claim-{first}"),
             value: Value::String(take_chars(&String::from_utf8_lossy(data), 128)),
         }],
+        object_disclosures: (second % 3 == 0)
+            .then(|| {
+                vec![ObjectDisclosure {
+                    name: format!("object-{second}"),
+                    fields: vec![Disclosure {
+                        name: format!("field-{first}"),
+                        value: Value::String(take_chars(&String::from_utf8_lossy(data), 128)),
+                    }],
+                }]
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -114,6 +135,17 @@ fn holder_confirmation() -> HolderConfirmation {
         jwk: holder.public(),
         kid: Some("did:jwk:holder#key-1".to_string()),
     }
+}
+
+fn bound_disclosures(seeds: Vec<SeedDisclosure>) -> Vec<Disclosure> {
+    seeds
+        .into_iter()
+        .take(8)
+        .map(|disclosure| Disclosure {
+            name: take_chars(&disclosure.name, 128),
+            value: disclosure.value,
+        })
+        .collect()
 }
 
 fn bound_claims(claims: BTreeMap<String, Value>) -> BTreeMap<String, Value> {

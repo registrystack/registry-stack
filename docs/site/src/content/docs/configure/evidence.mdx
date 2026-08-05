@@ -1,0 +1,264 @@
+---
+title: Configure Evidence
+description: Shape an Evidence deployment project's runtime file, governed bundle, key material, immutability, and validation with evidence check.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Configuring Evidence means assembling one deployment project: a governed `bundle/` of YAML,
+Rhai scripts, schemas, and fixtures, plus a process-local `runtime.yaml` that binds it to a
+listener, a secret root, and audit storage. Both are trusted, startup-only artifacts. Evidence
+loads them once, compiles and validates them together, and refuses to reload, merge, or
+partially serve a later change. `evidence check` is the gate every edit to the project must pass
+before `evidence serve` runs it.
+
+## The project layout
+
+`evidencectl new` starts an incomplete local authoring workspace from an OpenAPI document
+(`crates/registry-evidencectl/src/scaffold.rs`):
+
+```sh
+project_dir="<dir>"
+openapi_source="<file-or-url>"
+evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
+```
+
+```text
+<dir>/
+  .gitignore
+  source.openapi.yaml  retained OpenAPI document
+  selectors/           reusable Version 1 selector-profile objects
+  sources/             reusable Version 1 source objects
+  adapters/            source preparation and extraction scripts
+  schemas/             source parameter, response, and fact schemas
+  questions/           empty question-authoring directory
+  derivations/         empty derivation-authoring directory
+  fixtures/            empty production-fixture directory
+  secrets/             optional owner-only, unbound local keys
+```
+
+The command retains the OpenAPI bytes exactly and creates no fixture content, question, source policy,
+Mint configuration, README, production target, or deployable bundle. Add `--generate-keys` to create disposable local
+signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
+editable artifacts from the retained contract. After you add a question, `evidencectl dev`
+compiles the authoring objects into a private local runtime and delegates validation to the real
+Evidence loader.
+
+## The runtime file
+
+`runtime.yaml` binds one governed bundle to one process: where the bundle lives, what the
+listener binds to, where secrets and audit storage sit, and which private CA files a source may
+trust. It is process-local operator configuration, not part of the reviewed bundle, and
+`products/evidence/contracts/runtime.schema.yaml` is its schema of record.
+
+Top-level required fields:
+
+| Field | Binds |
+| --- | --- |
+| `version` | Fixed at `1`. |
+| `bundleDirectory` | Absolute path to the governed `bundle/` directory. |
+| `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
+| `secretProviders.file.root` | The owner-only directory the file secret provider resolves every `secret:file/<name>` reference beneath. |
+| `auditStorage` | `path` for the active audit segment and `maximumFileBytes`, a per-segment rotation threshold. |
+| `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source can select through `tlsTrustProfile`. |
+
+An optional `metricsListener` (`bindHost`, `port`) serves `GET /metrics` on a second private
+binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
+Metrics reference rather than in the public Evidence contract.
+
+`runtime.yaml` cannot override anything the bundle governs. The schema's `ownership` block closes
+the allowed set to the bundle directory, listener binding and process limits, the optional
+metrics listener binding, the file-secret root, audit path and rotation bound, and logical
+private-CA file bindings. Every other field, including service identity, authentication,
+authority, sources, disclosure, and signing policy, belongs to the bundle alone.
+
+## The bundle
+
+`bundle/evidence.yaml` is the single governed contract Evidence compiles and validates as one
+atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-level sections:
+
+| Section | Declares |
+| --- | --- |
+| `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
+| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. |
+| `audit` | Keyed JSONL audit: the hash secret reference, key version, and fixed fail-closed behavior. |
+| `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
+| `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
+| `signing` | The active EdDSA signing key reference, retired public JWK files, the fixed JWKS path, and assertion validity and clock-skew bounds. |
+| `responseFormats` (optional) | The bundle-wide ceiling on releasable serializations; defaults to signed JWS alone and must always include it. |
+| `selectorProfiles` | Named, bounded scalar field sets a subject role may be looked up by. |
+| `sources` | Named fixed HTTP JSON sources: transport, base URL, acquisition posture, authentication, the fixed request shape, and the response, extraction, and fact schemas bound to it. |
+| `authorityProfiles` | Named requester-tag gates: which grants (requirement, purpose, audience, subject roles, selector profiles, value origins) a caller carrying those tags holds. |
+| `requirements` | The assertion definitions themselves: id, source, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
+
+Everything under `bundle/` is mounted read-only and covered by one revision digest computed over
+the exact bundle bytes; there is no partial edit, hot reload, or fallback
+(`bundle.schema.yaml`, `atomic_revision`). Allowed bundle directories are `adapters/`,
+`derivations/`, `schemas/`, `codelists/`, `fixtures/`, and `public-keys/`; symlinks and any file
+outside them fail startup (`bundle.schema.yaml`, `bundle_layout`).
+
+Evidence's four coequal acceptance definitions are adult status, residence region, professional
+licence status, and legal-parent relationship (`products/evidence/README.md`,
+`products/evidence/OPERATOR-CONTRACT.md`). You shape each as an ordinary `requirements` entry
+with its own source, derivation script, and fixtures. The four are presented as coequal, and none
+of them is a privileged domain type, a Rust built-in operation, or a special route.
+
+## What Rhai scripts may and may not do
+
+A deployment project supplies three kinds of Rhai script, one per source or requirement, and Rust
+compiles and reviews all of them at startup (`products/evidence/contracts/rhai-abi.yaml`).
+Scripts are trusted, reviewed, immutable bundle artifacts; that trust extends to provider and
+requirement semantics only, and it never grants transport, credential, authorization, signing,
+audit, or evidence-construction authority.
+
+### Preparation, extraction, derivation
+
+| Script | Signature | Owns | Never touches |
+| --- | --- | --- | --- |
+| `prepare` (adapters) | `(source_required_selectors, adapter_parameters) -> RequestParts` | Rendering an ordered query and a bounded JSON body from already authorized selector values. | Source origin, method, path, headers, credentials, TLS, proxy, timeout, redirects, or request count; those stay Rust-owned. |
+| `extract` (adapters) | `(projected_source_response, adapter_parameters) -> LookupResult` | Reading one already-projected, schema-validated response and returning `match` with facts, `no_match`, or `ambiguous`. | Choosing a candidate, scoring, counting, or emitting any diagnostic beyond the closed outcome. |
+| `derive` (derivations) | `(facts, declared_authorized_selectors, evaluation_context) -> ConceptValueSet` | Comparing facts against declared authorized selectors and producing at most 16 typed concept values. | Requester, purpose, audience, authority, grant, token, credential, or a logging, audit, or signing handle. |
+
+Every stage runs on fresh invocation state; nothing carries over between requests or between
+stages. Failures map to one closed, value-free class per stage (`adapter_input_error`,
+`source_protocol_error`, `derivation_input_error`), and raw Rhai errors never reach a public
+response.
+
+### Capability boundary
+
+Scripts get fresh local variables, bounded same-file helper functions, pure expressions, and
+bounded array, map, and string construction. They cannot reach the filesystem, environment,
+network, process, or a module system; they get no ambient clock, timezone, randomness, UUID,
+logging, or printing; and they cannot define anonymous functions, dispatch dynamically, or index
+an array with a computed negative offset (`products/evidence/contracts/rhai-abi.yaml`,
+`capabilities`).
+
+Everything a script computes with runs through a fixed primitive library: date and instant
+parsing, exact-decimal arithmetic, calendar addition, bucket lookup, codelist lookup, list and set
+membership, and a handful of bounded string and array operations, each pure, deterministic, and
+domain-neutral (`products/evidence/contracts/primitive-library.yaml`). Ordinary floating-point
+values stay usable inside preparation and extraction, but a derived concept value can never be an
+ordinary Rhai float: exact numbers use the declared integer or the Rust-owned `Decimal` type.
+`entity_reference_seed` wraps a source-derived value in a protected type Rhai can construct but
+never read back, print, or serialize; only Rust projects it into an audience-scoped reference
+after output validation.
+
+## Key material
+
+Generate each secret independently and keep the private files inside the configured secret root.
+`evidencectl keygen` writes private material as owner-only files and never prints its contents
+(`crates/registry-evidencectl/src/keygen.rs`):
+
+```sh
+evidencectl keygen signing --out-dir "<secrets-dir>" --kid "<active-signing-key-id>"
+evidencectl keygen secret --out "<secrets-dir>/audit-hmac-key"
+evidencectl keygen secret --out "<secrets-dir>/subject-binding-hmac-key"
+```
+
+### `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json`
+
+Evidence signs assertions with the private Ed25519 JSON Web Key (JWK). Verifiers use the public
+JWK to check the signature without receiving the private key. The key identifier must match
+`signing.activeKeyId` in `bundle/evidence.yaml`.
+
+### `audit-hmac-key`
+
+Evidence uses this random secret to authenticate the audit chain. A changed, removed, or
+reordered audit entry then fails chain verification.
+
+### `subject-binding-hmac-key`
+
+Evidence uses this random secret to derive audience-scoped subject references from authorized
+selector values. The references let an assertion identify its subject without disclosing the
+selector values or creating one identifier that every audience can reuse.
+
+## Immutability
+
+Evidence refuses to start from a deployment input it could write to, and reports a
+non-immutable-input error rather than starting on it (`products/evidence/OPERATOR-CONTRACT.md`).
+Version 1 permits no reload, merge, mutation, governed-field override, or fallback bundle or
+runtime file: a project is either the exact bytes Evidence loaded at startup, or it is a different
+revision that requires a restart.
+
+Freeze the project before validating or serving it:
+
+```sh
+chmod -R a-w bundle && chmod 444 runtime.yaml
+```
+
+The bundle directory and every file beneath it carry no write bits, `runtime.yaml` is mode `444`,
+and the secret root stays owner-only at mode `0700` with mode `0600` secret files. Evidence
+Version 1 supports Unix targets only because these invariants rely on owner, mode, no-follow,
+link-count, and open-file-identity checks the platform provides
+(`products/evidence/contracts/runtime.schema.yaml`, `platform`). To edit the project again,
+restore write permission, make the change, and freeze it again before the next `evidence check`.
+
+## Validating a project
+
+Two offline commands prove a project before it ever binds a port:
+
+```sh
+evidence --runtime runtime.yaml check
+evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml"
+```
+
+`evidence check` loads, compiles, and validates the complete bundle and runtime file together:
+every selector, role, profile, authority, and source binding resolves, every script compiles
+against the frozen ABI, and mounted secret and signing material parses, all without opening the
+audit chain or contacting a source. `evidence evaluate` replays one fixture file's synthetic
+cases through the reviewed adapter, derivation, and output gate, with no source and no network
+involved.
+
+`evidencectl fixtures run --project <dir>` drives both commands across a complete deployment
+project: it runs `check`, then `evaluate` against every fixture path the bundle's requirements
+reference, and reports `PASS` or `FAIL` per step
+(`crates/registry-evidencectl/src/fixtures.rs`). The incomplete workspace created by
+`evidencectl new` has no bundle, runtime, or fixture cases, so it cannot pass this gate. After an
+operator supplies those deployment artifacts, both `check` and `fixtures run` must pass before
+`evidence serve` runs the revision.
+
+## Build a production candidate
+
+An editable project is not a deployment input. Add one explicit target under
+`deployment-targets/production/` when the reviewed source, questions, and fixtures are ready:
+
+```text
+deployment-targets/
+  production/
+    governance.yaml
+    runtime.yaml
+```
+
+`governance.yaml` supplies the production-owned bundle fields, including service, issuer,
+authentication, audit, subject binding, rate limits, signing, response formats, and authority
+profiles. It cannot override selectors, sources, or requirements. Each production question adds
+stable concept identifiers and a `governance` block with its requirement, frameworks, Evidence
+Type, validity, observation timezone, fixture, and disclosure families.
+
+`runtime.yaml` remains the ordinary runtime document. It names the final absolute bundle,
+private listener, secret root, audit path, and any private CA files for one target. It is copied
+without transformation.
+
+Build a new candidate directory with explicit target and output paths:
+
+```sh
+evidencectl build \
+  --project "<editable-project>" \
+  --target "<editable-project>/deployment-targets/production" \
+  --output "<new-candidate-directory>"
+```
+
+The output is create-only and contains `runtime.yaml` and a closed `bundle/`. It contains no
+secret values, source responses, local request state, or audit records. The compiler validates
+the resulting bundle with the `evidence` binary and every referenced fixture before publishing.
+It does not contact an identity provider, Mint, or a source endpoint.
+
+Use [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+for the full handoff, and [Evidencectl command reference](../../reference/evidencectl/) for the
+command contract.

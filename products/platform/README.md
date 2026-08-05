@@ -4,8 +4,8 @@
 
 Release label: pre-1.0 technical release for evaluation and integration pilots.
 
-Shared Rust security and operational primitives for Registry Relay, Registry
-Notary, and related registry services.
+Shared Rust security and operational primitives for Registry Relay, Evidence,
+and related registry services.
 
 The workspace is consumed by applications through a pinned git tag. It centralizes
 the pieces that should behave identically across services: outbound HTTP policy,
@@ -20,21 +20,14 @@ and integration-test fixtures.
 | [`registry-config-report`](crates/registry-config-report/README.md) | Shared configuration diagnostic and explanation report schemas, fixtures, serde types, and redaction helpers. |
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
-| [`registry-platform-cache`](crates/registry-platform-cache/README.md) | Generic cache-store trait, redacted hashed keys, and a bounded in-memory cache for focused tests and local use. |
 | [`registry-platform-config`](crates/registry-platform-config/README.md) | Config Bundle v1 manifests, trust anchors, file-closure verification, and local break-glass override contracts. |
 | [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
-| [`registry-platform-oid4vci`](crates/registry-platform-oid4vci/README.md) | OID4VCI protocol constants, issuer metadata, holder proof validation, and credential endpoint wire types. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ops`](crates/registry-platform-ops/README.md) | Shared public operations posture schemas, examples, and redaction fixtures. |
-| [`registry-platform-replay`](crates/registry-platform-replay/README.md) | Shared in-memory replay and consumable nonce semantics for focused tests and single-process local use. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
-
-Parked source retained in this repository: `crates/registry-platform-sts` is not
-a workspace member or release artifact until Assisted Access or the delegation
-profile work promotes a consumer (#298).
 
 ## Design Principles
 
@@ -132,9 +125,8 @@ Secret-provider integrations should follow the
 [`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for
 provider labels, readiness-gated apply, and posture-safe redaction.
 
-The in-memory cache and replay stores are for tests and single-process
-development. Product runtimes own their typed durable correctness state rather
-than selecting a generic platform cache backend.
+Product runtimes own their typed durable correctness state rather than selecting
+a generic platform storage backend.
 
 Report security-sensitive issues privately before opening a public issue.
 

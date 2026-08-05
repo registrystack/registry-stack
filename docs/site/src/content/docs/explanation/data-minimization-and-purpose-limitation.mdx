@@ -5,7 +5,8 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-28"
+  - registry-evidence
+last_reviewed: "2026-08-04"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -26,94 +27,91 @@ offered: that judgement remains yours.
 The specifications here are all draft, pre-1.0 documents and may change, so treat the design as a
 posture under development rather than a finished or warranted product.
 Four terms are enough to follow this page.
-A *claim* is one pre-modelled question (one decision or one extracted value) that a system can ask
-about a person against a registry the institution already holds.
-A *Relay consultation* is the compiler-pinned contract that connects a registry-backed claim to
-the minimized typed outputs Relay may return.
+A *requirement* is one predefined, reviewed question about one set of subject roles, together with
+the exact set of values its answer may carry, asked against a registry the institution already
+holds.
+A *Relay consultation* is a Relay-owned contract that fixes the closed request inputs and the
+minimized typed outputs one protected read route may return.
 *Minimized evidence* means a response shaped by data minimization or selective disclosure; a
 *purpose-bound request* is a request that carries or is evaluated against a stated purpose.
 
-## How the claim model limits collection at the source
+Two runtime patterns carry these principles, Registry Relay and Evidence, and each enforces them
+at its own boundary rather than in one chain.
+
+## How the requirement model limits collection at the source
 
 The first place minimization appears is in the unit of data the system is built around.
-A claim definition describes one decision or one extracted value, not a whole record, so returning
-a full record would over-collect relative to the question actually asked.
+A requirement describes one reviewed question and the exact values its answer may carry, not a
+whole record, so returning a full record would over-collect relative to the question actually
+asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
 That principle is enforced at two separate boundaries. A Relay integration declares closed
-request inputs and minimized typed outputs. A Notary claim can consume only the outputs of its
-compiler-pinned consultation, or the configured authenticated context for subject access.
+request inputs and minimized typed outputs. An Evidence requirement reads a fixed, bounded source
+request whose origin, method, path, headers, and client-side response projection are all set by
+reviewed configuration, and it discloses only the concepts it declares.
 Callers cannot choose a source destination, credential, selector field, adapter capability, or
-undeclared output at request time.
+undeclared output at request time in either product.
 
-The project author still decides which Relay outputs the claim needs. Minimization therefore
-depends on a reviewed integration contract and synthetic fixtures, not on Notary deriving a
-source projection from the claim rule.
+The project author still decides which source fields the answer needs. Minimization therefore
+depends on a reviewed contract and its fixtures, not on a runtime deriving a source projection
+from the question it was asked.
 
 ## Purpose limitation as an enforced gate, not a label
 
-Purpose limitation in this design is more than a field written into a log. A Registry Stack
-project authors the evidence-service purpose once and compiles it into the Notary claim contract
-and the Relay consultation profile. Notary rejects a missing or mismatched purpose, missing
-scope, or inadmissible typed input before calling Relay. Relay separately verifies its workload
-caller, the same purpose, the consultation profile, and the contract hash before source work.
+Purpose limitation in this design is more than a field written into a log. In Evidence, the
+purpose a caller states is one dimension of a single authorization decision that also binds the
+requester, the requirement revision, every subject role and selector profile, the subject
+authority, and the audience. The match must be exact and complete, and it happens before audit,
+credential resolution, or source access, so a request with a missing or unauthorized purpose
+reaches no source at all. Relay separately verifies its own caller, scopes, and governed policy
+gates before source work.
 
-The compiler-pinned input mapping carries the same idea further: the request can populate only
-declared typed inputs, and Notary cannot substitute a different consultation when authorization or
-contract validation fails.
+The closed request schema carries the same idea further: a caller supplies a nonce, a requirement,
+a purpose, one selector per declared role, and optionally a holder public key that matters only to
+the SD-JWT VC response format. There are no thresholds,
+expressions, paths, headers, source fields, or response projections a caller can set.
 The effect a reviewer should take away is that purpose, when configured, acts as a precondition
 for access rather than an after-the-fact annotation.
 
 Several of these protections apply only when configured; the operator-responsibilities section
 lists them.
 
-## Minimization at the output: disclosure modes and selective credentials
+## Minimization at the output: closed value forms
 
-Minimization also applies to what leaves the boundary.
-A claim's result can be shaped into one of three disclosure modes: *value* returns the full value,
-*predicate* returns only the true/false satisfaction, and *redacted* hides the value entirely.
-A privacy-sensitive claim is expected to default to the least-revealing mode that still answers
-the question.
-(How a mode is selected and policy-bound is covered in [Disclosure modes and computed
-answers](../disclosure-modes-and-computed-answers/) and is out of scope here.)
+Minimization also applies to what leaves the boundary. Evidence has no caller-selectable
+disclosure at all, so there is no request-time negotiation to review.
 
-The redacted mode is worth a reviewer's attention because it shows minimization without loss of
-accountability: a redacted result carries neither the underlying value nor the satisfaction
-outcome, yet the evaluation stays referenceable and verifiable through an evaluation identifier, a
-verification identifier, and a claim hash.
-You can audit that an evaluation happened and verify it later without the result itself disclosing
-anything about the person.
+Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
+form* its fact takes: a boolean, a code from a reviewed codelist, a bounded number, a date or time
+bucket, an audience-scoped opaque reference, or a reviewed closed structure. The set of forms is
+closed at eleven. The answer carries a value for each declared concept and nothing else, and the
+assertion schema rejects additional properties.
+For a reviewer, this moves the disclosure decision from request time, where a caller could argue
+for more, to authoring and review time, where an operator justifies it once and can be held to it.
+(The forms themselves are catalogued in [Disclosure modes and computed
+answers](../disclosure-modes-and-computed-answers/) and are out of scope here.)
 
-When the system issues a credential rather than returning a direct answer, minimization continues
-at presentation time.
-Issuance also requires one exact compiler pin for every registry-backed claim
-in each selected root's dependency closure, plus one normalized execution
-record per unique Relay consultation ULID. Notary retains those private Relay
-ids and acquisition times only when all selected roots share a mutually
-validated credential profile; registry-backed evaluation-only claims retain no
-private issuance provenance. A deterministic unkeyed SHA-256 binding detects
-partial mutation between a claim pin, execution record, and claim provenance,
-but is not an authenticity anchor against an operator able to rewrite all
-committed fields and the digest. A delegated evaluation without the
-representative ceremony or a legacy evaluation cannot cross the
-credential trust boundary.
-Issued credentials are SD-JWT VC: a verifiable-credential format in which the signed body carries
-only a SHA-256 digest of each selectively disclosable field, so a field the holder does not
-present stays hidden, and the holder controls what is revealed.
-Selective disclosure here is at the claim (or configured-projection) level: by default each claim
-becomes one disclosure carrying its whole value, so an object-valued claim is revealed as a unit
-unless an explicit projection splits it into separately-disclosable fields.
-Holder binding (tying the credential to a holder key with `did:jwk`) is enabled by default per
-profile, and the registry-backed OID4VCI issuance path requires EdDSA proof of possession; an operator
-can explicitly configure `holder_binding.mode: none` for a bearer-style credential profile.
-The direct claim or evaluation result is not a credential and is never holder-bound.
-One caveat for a reviewer: the issuance surface is a profiled, partial subset, not a full
-credential-issuer implementation, and should not be read as general wallet interoperability or
-full standards conformance.
+There is no equivalent of the retired redacted mode, and this is structural rather than an
+omission: an assertion must carry at least one supported value, so an assertion with nothing in it
+cannot be produced. A request that cannot be answered returns a problem document and no assertion.
+
+Minimization can continue past the response boundary when the operator enables the SD-JWT VC
+format. That format is a second encoding of the same assertion, never a credential lifecycle: the
+signed body carries a SHA-256 digest of each selectively disclosable value, so a holder can later
+present a subset. A value uses one disclosure by default. A governed structured value can instead
+place each direct field in a separate disclosure while keeping nested field values atomic. Two
+limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
+receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
+Evidence also performs no presentation-side verification, no key-binding JWT validation, and no
+wallet interaction, and the profile excludes OID4VCI in every part. A caller may supply a holder
+public key that Evidence echoes into the `cnf` claim for a relying party to check itself.
 
 A further minimization detail guards against a subtler leak.
-A failed or ambiguous consultation does not let Notary choose a source record. The public Notary
-surface reports unavailable evidence without returning the raw Relay observation.
+No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
+one problem response with the same title and body shape, so a caller cannot use a refusal to learn
+whether a record exists. The outcomes stay distinct in the audit record; collapsing is a property
+of what the caller sees, not of what the operator can review.
 
 ## Data stays at source: distributed custody
 
@@ -143,10 +141,14 @@ data.
 
 Accountability is supported through audit, which is treated as a security control rather than an
 optional log.
-Every request that returns person-level records or claim results must be recorded with at least
+Every request that returns person-level records or an assertion must be recorded with at least
 the caller principal, the scopes exercised, a request identifier, and the purpose value where one
 was supplied, and a deployment can run audit fail-closed so that a request whose audit record
 cannot be written does not succeed.
+Evidence takes that further and is fail-closed by construction rather than by configuration: it
+writes an access record before it contacts any source and a release record after signing and
+before release, and an audit failure fails the request. Selector, source, and disclosed values
+never appear in those records or in logs, and raw source responses are never persisted.
 
 Audit fail-closed is a capability a deployment can turn on, not a guarantee that every route in
 any given build has been individually audited against it.
@@ -166,9 +168,11 @@ The full, canonical inventory is in [Known limitations and non-guarantees](../kn
 - No rectification or data-subject-rights flow: Beyond erasure, there is no rectification or
   general data-subject-rights mechanism.
 
-Revocation mechanics, federation's cross-authority scope, aggregate-analytics privacy budgeting,
-and the general compliance disclaimer are stack-wide absences rather than specifics of data
-minimization or purpose limitation, but a data-protection assessment should weigh them too.
+There is also no revocation, suspension, status list, or credential-status endpoint of any kind: an
+assertion carries a validity window and is otherwise final once released. Cross-authority
+federation, aggregate-analytics privacy budgeting, and the general compliance disclaimer are
+likewise stack-wide absences rather than specifics of data minimization or purpose limitation, but
+a data-protection assessment should weigh them too.
 See the [known limitations hub](../known-limitations/) for the full inventory.
 
 ## Operator responsibilities: what the design leaves to you
@@ -178,11 +182,13 @@ operator owns the configuration.
 Several of the protections are conditional, and a reviewer should test the deployment, not the
 design, for each one.
 
-The main conditional control is the authored projection. The compiler prevents Notary from
-bypassing the Relay consultation, but it does not decide which typed outputs an institution has a
-lawful reason to expose. Project reviewers must confirm the source authority, selector inputs,
-output projection, purpose, claims, and disclosure defaults together. Operators must then bind
-only the reviewed source and workload credentials to the generated product inputs.
+The main conditional control is the authored projection. A runtime can stop a caller from reaching
+past the reviewed contract, but it cannot decide which values an institution has a lawful reason to
+expose. Project reviewers must confirm the source authority, selector inputs, output projection,
+purpose, requirements, and declared value forms together, and Evidence expects the complete
+simultaneously enabled configuration to be reviewed as one disclosure surface, since two answers
+that are each defensible alone can reconstruct a protected value between them. Operators must then
+bind only the reviewed source and workload credentials to the generated product inputs.
 
 More broadly, the architecture defines primitives and leaves a large set of
 data-protection-relevant controls to the operator.
@@ -197,13 +203,12 @@ whether it meets any legal obligation) depends on how the operator configures an
 
 ## Related
 
-- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/): how
-  disclosure modes are selected and policy-bound
+- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/): the closed
+  value forms and what each one reveals
 - [Threat model](../threat-model/): the boundaries, assets, and threats behind this posture
 - [Security overview](../../security/): the high-level security summary
 - [Known limitations and non-guarantees](../known-limitations/): the full inventory of edges
 - [Records stay home](../records-stay-home/): what stays inside the institution's boundary and
   what crosses it
 - The security and protocol specifications: [RS-SEC-G](../../spec/rs-sec-g/),
-  [RS-DM-CLAIM](../../spec/rs-dm-claim/), [RS-PR-NOTARY](../../spec/rs-pr-notary/),
-  [RS-PR-RELAY](../../spec/rs-pr-relay/)
+  [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/), [RS-PR-RELAY](../../spec/rs-pr-relay/)

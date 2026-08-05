@@ -1,0 +1,11 @@
+fixture: registry.evidence.conformance.supported-values-bundle/v1
+synthetic_only: true
+cases:
+  - {id: positive}
+  - {id: negative-output}
+  - {id: boundary-value}
+  - {id: missing-fact}
+  - {id: no-match}
+  - {id: ambiguous-result}
+  - {id: source-failure}
+  - {id: anti-reconstruction}

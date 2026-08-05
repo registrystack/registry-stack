@@ -1,0 +1,96 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/request-v1.json
+title: Evidence request Version 1
+type: object
+additionalProperties: false
+required: [requestNonce, requirement, purpose, subjects]
+properties:
+  requestNonce:
+    type: string
+    pattern: '^[A-Za-z0-9_-]{43}$'
+  requirement:
+    type: string
+    format: uri
+    minLength: 1
+    maxLength: 512
+  purpose:
+    type: string
+    pattern: '^[a-z][a-z0-9._:-]{0,127}$'
+  subjects:
+    type: array
+    minItems: 1
+    maxItems: 8
+    description: >-
+      Unordered role set encoded as an array. Each configured role appears
+      exactly once. Runtime resolves roles by name and emits the requirement's
+      declaration order internally.
+    items: {$ref: '#/$defs/subject'}
+  holderKey:
+    $ref: '#/$defs/holder-key'
+    description: >-
+      Optional holder public key echoed into the SD-JWT VC cnf claim. It is
+      meaningful only for the SD-JWT VC response format and never reaches
+      authorization, selectors, Rhai, source requests, or audit.
+$defs:
+  subject:
+    type: object
+    additionalProperties: false
+    required: [role, selector]
+    properties:
+      role:
+        type: string
+        pattern: '^[a-z][a-z0-9._-]{0,63}$'
+      selector: {$ref: '#/$defs/selector'}
+  selector:
+    type: object
+    additionalProperties: false
+    required: [profile]
+    properties:
+      profile:
+        type: string
+        pattern: '^[a-z][a-z0-9._-]{0,127}$'
+      values:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        propertyNames:
+          pattern: '^[a-z][a-z0-9._-]{0,63}$'
+        additionalProperties: {$ref: '#/$defs/scalar-selector-value'}
+  holder-key:
+    type: object
+    additionalProperties: false
+    required: [kty, crv, x]
+    properties:
+      kty: {type: string, enum: [OKP]}
+      crv: {type: string, enum: [Ed25519]}
+      x:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{43}$'
+      alg: {type: string, enum: [EdDSA]}
+      kid: {type: string, minLength: 1, maxLength: 256}
+  scalar-selector-value:
+    oneOf:
+      - {type: string, minLength: 1, maxLength: 512}
+      - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - {type: boolean}
+$comment: >-
+  This transport schema is followed by named-profile validation. The profile
+  closes the exact field names, scalar types, byte and numeric bounds,
+  aggregate size, value origin, and source placements. Values must be absent
+  for authenticated-context and authenticated-grant origins, and present for
+  an authorized request origin. Dates and controlled codes are strings whose
+  exact lexical rules are declared by the profile. Unknown, missing, extra,
+  mistyped, empty, oversized, wrong-origin, or unauthorized values fail before
+  credential acquisition or source access. Array position is not semantic;
+  duplicate, missing, unknown, or wrong-profile roles fail before access audit.
+  requestNonce is the canonical unpadded base64url encoding of exactly 32
+  bytes generated independently for each request by a cryptographically secure
+  random source; a padded, wrong-length, or noncanonical value fails before
+  credential acquisition or source access. The nonce is uninterpreted
+  correlation data echoed into the Evidence payload. It is never stored,
+  never uniqueness-checked, and never reaches authorization, rate limits,
+  Rhai, source requests, logs, metrics, traces, or native audit. Callers must
+  not encode identifiers, selectors, secrets, or document digests into it.
+  holderKey is an Ed25519 public JWK. A key carrying any private member, a
+  non-allowlisted algorithm, or an unparseable body fails before credential
+  acquisition or source access.

@@ -131,7 +131,7 @@ jobs:
             echo "GitHub Release destination is not absent" >&2
             exit 1
           fi
-          for package in registry-notary registry-relay; do
+          for package in registry-relay; do
             versions="${RUNNER_TEMP}/${package}-versions.json"
             gh api --paginate --slurp \
               "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
@@ -187,8 +187,6 @@ jobs:
           REGISTRY_RELEASE_SOURCE_MODE=monorepo \
             release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
-          python3 -m unittest \
-            release/scripts/test_check_advisory_checker_copies.py
 
   build-canonical:
     name: Build Linux payload, private images, and docs once
@@ -240,7 +238,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/images
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             package="${name}-candidate"
             candidate="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             metadata="dist/images/${name}.metadata.json"
@@ -372,7 +370,8 @@ jobs:
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
-            -p registryctl --target "${{ matrix.target }}"
+            -p registryctl -p registry-evidence -p registry-evidencectl \
+            -p registry-mint --target "${{ matrix.target }}"
           mkdir -p platform
           asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
           cp "target/${{ matrix.target }}/release/registryctl" "platform/${asset}"
@@ -380,6 +379,12 @@ jobs:
           release/scripts/registry-release verify-registryctl-binary-version \
             "platform/${asset}" \
             --version "${{ needs.validate.outputs.version }}"
+          for evidence_binary in evidence evidencectl mint; do
+            asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${evidence_binary}" \
+              "platform/${asset}"
+            chmod 0755 "platform/${asset}"
+          done
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 
@@ -470,7 +475,7 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             expected_label_args=()
             if [[ "${name}" == registry-relay ]]; then
               expected_label_args+=(
@@ -496,7 +501,7 @@ jobs:
           printf '%s' "${GH_TOKEN}" \
             | oras login "${REGISTRY}" \
                 --username "${GITHUB_ACTOR}" --password-stdin
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             package="${name}-candidate"
             test "$(
               gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
@@ -589,7 +594,7 @@ jobs:
               exit 1
             fi
           }
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
@@ -639,10 +644,6 @@ jobs:
             echo "Exported PostgreSQL rootfs contains a forbidden special file" >&2
             exit 1
           fi
-          python3 products/notary/scripts/check_advisory_baselines.py \
-            grype candidate/security/grype/registry-notary.grype.json \
-            --syft-report candidate/security/syft/registry-notary.syft.json \
-            --subject registry-notary-image
           python3 crates/registry-relay/scripts/check_advisory_baselines.py \
             grype candidate/security/grype/registry-relay.grype.json \
             --syft-report candidate/security/syft/registry-relay.syft.json \
@@ -657,7 +658,6 @@ jobs:
             schema_version: "registry-stack.advisory-verdict.v2",
             verdict: "passed",
             subjects: [
-              "registry-notary-image",
               "registry-relay-image",
               "postgresql-runtime"
             ]
@@ -680,7 +680,22 @@ jobs:
           installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
           cp crates/registryctl/install.sh "candidate/bundle-root/${installer}"
           chmod 0755 "candidate/bundle-root/${installer}"
-          for name in registry-notary registry-relay; do
+          evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
+          awk -v version="${{ needs.validate.outputs.tag }}" '
+            $0 == "default_version=\"\"" {
+              print "default_version=\"" version "\""
+              rendered = 1
+              next
+            }
+            { print }
+            END { if (!rendered) exit 1 }
+          ' crates/registry-evidencectl/install.sh \
+            > "candidate/bundle-root/${evidencectl_installer}"
+          chmod 0755 "candidate/bundle-root/${evidencectl_installer}"
+          cp "candidate/bundle-root/${evidencectl_installer}" \
+            candidate/bundle-root/evidencectl-install.sh
+          chmod 0755 candidate/bundle-root/evidencectl-install.sh
+          for name in registry-relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
@@ -689,7 +704,6 @@ jobs:
           release/scripts/registry-release render-registryctl-image-lock \
             "${{ needs.validate.outputs.manifest }}" \
             --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
-            --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
             --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.validate.outputs.source_sha }}" \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
@@ -702,7 +716,7 @@ jobs:
             "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
             -C candidate/security \
               images image-sbom syft grype advisory-verdict.json
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             cp "candidate/security/grype/${name}.grype.json" \
               candidate/bundle-root/
           done
@@ -727,8 +741,6 @@ jobs:
                 "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
               --relay-image-index \
                 "${RUNNER_TEMP}/registry-relay.index.json" \
-              --notary-image-index \
-                "${RUNNER_TEMP}/registry-notary.index.json" \
               --postgresql-image-index \
                 "${RUNNER_TEMP}/postgresql.index.json" \
               --output "${RUNNER_TEMP}/registry-release-lock.payload.json"
@@ -773,7 +785,7 @@ jobs:
                 done | jq -s .
           )"
           images="$(
-            for name in registry-notary registry-relay; do
+            for name in registry-relay; do
               candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
               digest="${candidate_ref##*@}"
               jq -n \
@@ -785,7 +797,7 @@ jobs:
             done | jq -s .
           )"
           scans="$(
-            for name in registry-notary registry-relay; do
+            for name in registry-relay; do
               file="candidate/bundle-root/${name}.grype.json"
               jq -n \
                 --arg image "${name}" \

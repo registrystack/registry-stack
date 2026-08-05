@@ -23,4 +23,4 @@ interactions:
         limit: 2
         offset: 0
     respond: { timeout: 10s }
-expect: { error: source.deadline_exceeded, outputs: {}, claims: {} }
+expect: { error: source.deadline_exceeded, outputs: {} }

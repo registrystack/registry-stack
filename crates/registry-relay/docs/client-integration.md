@@ -13,7 +13,7 @@ is disabled for demos or controlled tooling.
 sequenceDiagram
   participant Client as Application client
   participant Relay as Registry Relay
-  participant Notary as Registry Notary
+  participant Evidence as Registry Evidence
 
   Client->>Relay: Authenticated discovery (OpenAPI, metadata, schemas)
   Relay-->>Client: Scoped views (ETag, 304 if unchanged)
@@ -23,16 +23,16 @@ sequenceDiagram
     Client->>Relay: Retry idempotent GET with jittered backoff
   end
   Relay-->>Client: Entity records (opaque next_cursor)
-  opt claim or evidence verification needed
+  opt a signed assertion is needed
     Client->>Relay: Discover evidence offering
-    Relay-->>Client: access.kind registry-notary endpoint
-    Client->>Notary: Follow Registry Notary client docs
+    Relay-->>Client: access.kind registry-evidence endpoint
+    Client->>Evidence: Request the assertion from that endpoint
   end
 ```
 
 *The typical client lifecycle: authenticated discovery, scoped reads with
-conservative retries, and handoff to Registry Notary for verification or
-credential issuance. Each step is detailed in the sections that follow.*
+conservative retries, and handoff to Registry Evidence when the caller needs a
+signed answer. Each step is detailed in the sections that follow.*
 
 ## Connect to an existing deployment
 
@@ -75,7 +75,8 @@ Before a client is allowed to consume Relay data, confirm:
 - The client handles RFC 9457 Problem Details instead of parsing text messages.
 - The client treats cursors and `ETags` as opaque values.
 - Logs redact bearer tokens, API keys, query values for sensitive fields, raw
-  row bodies, credential bodies from Notary workflows, and Problem Details `detail`.
+  row bodies, assertions received from an Evidence deployment, and Problem
+  Details `detail`.
 
 ## OpenFn workflows
 
@@ -89,8 +90,8 @@ evidence offering discovery:
 ```
 
 Use the adaptor when the workflow is authorized to read Relay data directly.
-Use Registry Notary when the workflow needs a governed trust decision or a
-certified value claim. The [OpenFn Relay guide](openfn-relay-adaptor-guide.md)
+Call Registry Evidence instead when the workflow needs a signed answer it can
+verify later. The [OpenFn Relay guide](openfn-relay-adaptor-guide.md)
 shows the lab-backed workflow shape and guardrails.
 
 ## Authentication
@@ -250,11 +251,11 @@ Use conservative retries:
 Relay is read-only for registry data, but retries still create extra audit
 events and may repeat costly source reads.
 
-## Registry Notary handoff
+## Registry Evidence handoff
 
-Relay publishes evidence offering metadata for discovery and delegates all claim
-and evidence verification to Registry Notary. Notary also owns credential
-issuance. The only evidence offering routes
+Relay publishes evidence offering metadata for discovery. It makes no assertion
+about a subject and signs nothing; a client that needs one asks the Evidence
+deployment the offering advertises. The only evidence offering routes
 in Relay are:
 
 ```http
@@ -271,26 +272,26 @@ issue verification receipts, or disclose row data. There is no
 sequenceDiagram
   participant Client as Service client
   participant Relay as Registry Relay
-  participant Notary as Registry Notary
+  participant Evidence as Registry Evidence
 
   Client->>Relay: GET /metadata/evidence-offerings
-  Relay-->>Client: Offering metadata with access.kind registry-notary
-  Client->>Notary: Submit claim or evidence to the advertised endpoint
-  Notary-->>Client: Verification result or credential
+  Relay-->>Client: Offering metadata with access.kind registry-evidence
+  Client->>Evidence: Request an assertion from the advertised endpoint
+  Evidence-->>Client: Signed minimum-disclosure assertion
 ```
 
-*The discovery and verification boundary. Relay publishes evidence offering
-metadata that points to a Notary; the client submits the claim or evidence to
-that Notary, which performs verification. Relay makes no verification decision.*
+*The discovery and assertion boundary. Relay publishes evidence offering
+metadata that points to an Evidence deployment; the client requests the
+assertion from that deployment. Relay makes no assertion decision.*
 
-When a client needs to verify claims or evidence:
+When a client needs a signed assertion:
 
 1. Fetch `GET /metadata/evidence-offerings` (or the single-offering route by id)
    to discover available offerings.
-2. Read the `access.kind: registry-notary` field and the advertised Notary
-   endpoint or discovery URL.
-3. Follow Registry Notary's client documentation for request shape, claim
-   semantics, presentation, result verification, and credential issuance.
+2. Read the `access.kind: registry-evidence` field, the advertised
+   `endpoint_url`, and the `discovery_url` that resolves the issuer's keys.
+3. Follow Registry Evidence's client documentation for request shape, acceptance
+   semantics, response encoding, and assertion verification.
 
 A discovery response looks like this (one offering shown; host names are
 illustrative):
@@ -302,7 +303,7 @@ illustrative):
       "id": "benefits_person_evidence",
       "title": "Benefits person status evidence",
       "iri": "https://demo.example.gov/evidence-offerings/benefits-person",
-      "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
+      "description": "Evidence assertion for submitted benefits person eligibility status and role facts.",
       "dataset_id": "benefits_casework",
       "entity": "person",
       "evidence_type": {
@@ -328,11 +329,11 @@ illustrative):
       "information_concepts": [],
       "verification_request_schema_url": "https://relay.demo.example.gov/metadata/schema/benefits_casework/person/schema.json",
       "access": {
-        "kind": "registry-notary",
+        "kind": "registry-evidence",
         "ruleset": "benefits-person-v1",
-        "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
-        "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
-        "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1"
+        "endpoint_url": "https://benefits-evidence.demo.example.gov",
+        "discovery_url": "https://benefits-evidence.demo.example.gov/.well-known/evidence/jwks.json",
+        "conforms_to": "registry.assertion-evidence/v1"
       }
     }
   ]
@@ -340,22 +341,19 @@ illustrative):
 ```
 
 The `access` object is what drives the handoff: `kind` is always
-`registry-notary` in V1 (Relay does not verify the claim or evidence represented
-by this offering), `ruleset` names the Notary ruleset that governs verification
-for this offering, `endpoint_url` is
-where claims or evidence are submitted, `discovery_url` is the Notary
-well-known document for resolving endpoint details (either URL may be null
-when the other is present), and `conforms_to` identifies the evidence contract
-the offering follows.
+`registry-evidence` in V1 (Relay does not answer the evidence request
+represented by this offering), `ruleset` names the evaluation profile ruleset
+that governs the assertion for this offering, `endpoint_url` is where the
+assertion is requested, `discovery_url` resolves the issuer keys a relying party
+needs to verify the response, and `conforms_to` identifies the response profile
+the offering follows. Both URLs are required and must be HTTPS.
 
 The `evidence_verification` scope is available as a distinct label for
 standards adapters and integrations that need evidence-oriented access separate
 from row reads. It does not grant metadata, rows, aggregates, admin reload, or a
-Relay-local verification endpoint.
+Relay-local assertion endpoint.
 
-Use Registry Notary's documentation as the source of truth for verification
-semantics, claim request bodies, result interpretation, credential issuance,
-client retries, and verifier behavior:
+Use Registry Evidence's documentation as the source of truth for request bodies,
+acceptance semantics, response interpretation, and verification behavior:
 
-- [Registry Notary client SDK guide](https://docs.registrystack.org/products/registry-notary/client-sdk-guide/)
-- [Registry Notary documentation](https://docs.registrystack.org/products/registry-notary/)
+- [Registry Evidence API reference](https://docs.registrystack.org/dev/reference/apis/registry-evidence/)

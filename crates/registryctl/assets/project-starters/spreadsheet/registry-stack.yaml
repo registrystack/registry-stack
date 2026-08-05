@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: spreadsheet
-  release: 0.16.3
-  content_digest: sha256:4b9bb158081c28aecf41fb8edc4b354834b316da4ebfaec5aa61173753195b9b
+  release: 0.17.0
+  content_digest: sha256:c435b97fb247502094168de231dc2248ce57c145fec8bad9a5f8fbce841c071d
 
 registry:
   id: fictional-public-works-registry
@@ -39,21 +39,12 @@ services:
       standards: { ogc_features: false, sp_dci: false }
 
   public-works-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
-    subject_type: project
     purpose: public-works-case-management
     legal_basis: public-service-delivery
     consent: not_required
-    access: { scopes: ["evidence:projects:read"] }
     consultations:
       project:
         integration: project-record-snapshot
         input: { project_id: request.target.identifiers.project_id }
-    claims:
-      project-record-exists:
-        cel: project.matched
-        disclosure: predicate
-      project-status-accepted:
-        cel: 'project.matched && project.status == "active"'
-        disclosure: predicate

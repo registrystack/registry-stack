@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a redaction-safe Registry Stack upgrade exercise record."""
+"""Validate a historical Notary-era Registry Stack upgrade exercise record."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from conformance_candidate import CandidateError, load_candidate  # noqa: E402
 
 
 SCHEMA = "registry-stack.upgrade-exercise/v1"
+POST_NOTARY_VERSION = "v0.17.0"
 SOLMARA_REPOSITORY = "registrystack/solmara-lab"
 STACK_REPOSITORY = "registrystack/registry-stack"
 CONFIG_SCHEMAS = {
@@ -233,6 +234,22 @@ def version_order(
         else:
             identifiers.append((1, identifier))
     return core_order, tuple(identifiers)
+
+
+def reject_post_notary_v1_target(value: Any) -> None:
+    if not isinstance(value, dict):
+        return
+    version = value.get("version")
+    if (
+        isinstance(version, str)
+        and VERSION.fullmatch(version) is not None
+        and version_order(version) >= version_order(POST_NOTARY_VERSION)
+    ):
+        raise ExerciseError(
+            f"{SCHEMA} is a historical Notary-era contract and accepts only "
+            f"target_release.version values before {POST_NOTARY_VERSION}; "
+            "post-Notary upgrades require a successor contract"
+        )
 
 
 def validate_config_schemas(
@@ -734,6 +751,7 @@ def validate_record(
         raise ExerciseError("--template accepts only a template record")
     bounded_string(record["exercise_id"], "exercise_id", SLUG, template=template)
     bounded_string(record["recorded_at"], "recorded_at", TIMESTAMP, template=template)
+    reject_post_notary_v1_target(record["target_release"])
     validate_release(record["source_release"], "source_release", template=template)
     validate_release(record["target_release"], "target_release", template=template)
     if not template and version_order(record["target_release"]["version"]) <= version_order(

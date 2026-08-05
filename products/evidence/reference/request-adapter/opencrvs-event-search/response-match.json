@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "trackingId": "EVT-SYNTHETIC-001",
+      "type": "birth",
+      "status": "REGISTERED",
+      "dateOfEvent": "2015-04-03",
+      "declaration": {
+        "mother.personReference": "PERSON-SYNTHETIC-A",
+        "father.personReference": "PERSON-SYNTHETIC-B",
+        "unrelated.field": "SOURCE-UNRELATED-CANARY"
+      }
+    }
+  ],
+  "total": 1
+}

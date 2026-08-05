@@ -1,0 +1,150 @@
+fixture: registry.evidence.reference.opencrvs-adult-status/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: opencrvs-tracking-id-v1
+      values: {tracking_id: TRACKING-SYNTHETIC-001}
+  derivationSelectorInputs:
+    subject:
+      profile: opencrvs-tracking-id-v1
+      values: {tracking_id: TRACKING-SYNTHETIC-001}
+  expectedRequestParts:
+    query: []
+    body:
+      query:
+        type: and
+        clauses:
+          - eventType: birth
+            status:
+              type: exact
+              term: REGISTERED
+            trackingId:
+              type: exact
+              term: TRACKING-SYNTHETIC-001
+      limit: 2
+      offset: 0
+  expectedTransport:
+    path: /events/search
+    fixedHeaders:
+      - name: Accept
+        value: application/json
+cases:
+  - id: positive
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          dateOfEvent: "2000-01-01"
+          declaration: {unrelated: SOURCE-UNRELATED-CANARY}
+    expected:
+      lookup: match
+      value: true
+      derivationRuns: true
+      signed: true
+  - id: negative-false-is-success
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          dateOfEvent: "2010-01-01"
+    expected:
+      lookup: match
+      value: false
+      derivationRuns: true
+      signed: true
+  - id: boundary-on
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+          dateOfEvent: "2008-08-02"
+    expected:
+      lookup: match
+      value: true
+      derivationRuns: true
+      signed: true
+  - id: missing-fact
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-001
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+  - id: no-match
+    response:
+      total: 0
+      results: []
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+  - id: ambiguous
+    response:
+      total: 2
+      results:
+        - type: birth
+          status: REGISTERED
+        - type: birth
+          status: REGISTERED
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+  - id: fractional-total
+    response:
+      total: 0.5
+      results: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+  - id: wrong-status
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: DECLARED
+          dateOfEvent: "2000-01-01"
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+  - id: returned-subject-mismatch
+    response:
+      total: 1
+      results:
+        - type: birth
+          status: REGISTERED
+          trackingId: TRACKING-SYNTHETIC-OTHER
+          dateOfEvent: "2000-01-01"
+    expected:
+      lookup: match
+      error: derivation_input_error
+      derivationRuns: true
+      signed: false
+  - id: source-failure
+    sourceFailure: timeout
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
+privacyExpectation:
+  evidenceContains: [urn:gov:example:concept:adult-status]
+  evidenceExcludes: [date_of_birth, tracking_id, opencrvs-tracking-id-v1]
+  diagnosticsExclude: [TRACKING-SYNTHETIC-001, "2000-01-01", SOURCE-UNRELATED-CANARY]

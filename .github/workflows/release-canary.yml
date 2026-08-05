@@ -56,7 +56,6 @@ jobs:
           printf 'canary docs\n' > canary/bundle-root/registry-docs-${tag}.tar.gz
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          notary_ref="ghcr.io/registrystack/registry-notary-candidate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           relay_ref="ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
           printf '%s\n' "${postgresql_ref}" \
@@ -84,7 +83,6 @@ jobs:
                 }
               }' > "${evidence_root}/grype/${name}.grype.json"
           }
-          write_image_reports registry-notary "${notary_ref}"
           write_image_reports registry-relay "${relay_ref}"
           write_image_reports postgresql "${postgresql_ref}"
           postgresql_digest="${postgresql_ref##*@}"
@@ -106,15 +104,12 @@ jobs:
             schema_version:"registry-stack.advisory-verdict.v2",
             verdict:"passed",
             subjects:[
-              "registry-notary-image",
               "registry-relay-image",
               "postgresql-runtime"
             ]
           }' > "${evidence_root}/advisory-verdict.json"
           cp "${evidence_root}/grype/registry-relay.grype.json" \
             canary/bundle-root/security/registry-relay.grype.json
-          cp "${evidence_root}/grype/registry-notary.grype.json" \
-            canary/bundle-root/security/registry-notary.grype.json
           cp "${evidence_root}/advisory-verdict.json" \
             canary/bundle-root/security/advisory-verdict.json
           evidence_name="registry-stack-${tag}-security-evidence.tar.gz"
@@ -127,7 +122,6 @@ jobs:
           sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
           evidence_sha="$(sha256sum "canary/bundle-root/${evidence_name}" | awk '{print $1}')"
           relay_scan_sha="$(sha256sum canary/bundle-root/security/registry-relay.grype.json | awk '{print $1}')"
-          notary_scan_sha="$(sha256sum canary/bundle-root/security/registry-notary.grype.json | awk '{print $1}')"
           advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
           payload_size="$(stat -c %s canary/bundle-root/registryctl-${tag}-linux-amd64)"
           docs_size="$(stat -c %s canary/bundle-root/registry-docs-${tag}.tar.gz)"
@@ -159,7 +153,6 @@ jobs:
             --arg evidence_sha "${evidence_sha}" \
             --argjson evidence_size "${evidence_size}" \
             --arg relay_scan_sha "${relay_scan_sha}" \
-            --arg notary_scan_sha "${notary_scan_sha}" \
             --arg advisory_sha "${advisory_sha}" \
             --arg bundle_sha "${bundle_sha}" \
             --argjson bundle_size "${bundle_size}" \
@@ -210,14 +203,6 @@ jobs:
               ],
               images: [
                 {
-                  name: "registry-notary",
-                  candidate_ref:
-                    "ghcr.io/registrystack/registry-notary-candidate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                  digest:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                  final_ref: ("ghcr.io/registrystack/registry-notary:" + $tag)
-                },
-                {
                   name: "registry-relay",
                   candidate_ref:
                     "ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -235,12 +220,6 @@ jobs:
                 sha256: $sbom_sha
               },
               scans: [
-                {
-                  image: "registry-notary",
-                  name: "security/registry-notary.grype.json",
-                  sha256: $notary_scan_sha,
-                  status: "passed"
-                },
                 {
                   image: "registry-relay",
                   name: "security/registry-relay.grype.json",
@@ -305,7 +284,6 @@ jobs:
           python3 release/scripts/release_candidate.py verify-canary \
             --metadata canary/trusted-canary-run.json \
             --workflow-revision "${workflow_revision}"
-          python3 products/notary/tests/advisory_baseline_check_test.py
           python3 crates/registry-relay/tests/advisory_baseline_check_test.py
           jq -n \
             --arg tag "${tag}" \

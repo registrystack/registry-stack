@@ -18,9 +18,17 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
 
 pub const DEPLOYMENT_PLAN_SCHEMA_ID: &str = "io.registrystack.deployment_plan";
-pub const DEPLOYMENT_PLAN_SCHEMA_VERSION: &str = "1.0";
+/// Version `2.0` because the Registry Notary retirement removed the `Notary`
+/// product lane and its five initialization actions from the required plan
+/// shape. The plan is read back from a transferred package under
+/// `deny_unknown_fields`, so the declared version has to move with the shape it
+/// names.
+pub const DEPLOYMENT_PLAN_SCHEMA_VERSION: &str = "2.0";
 pub const DEPLOYMENT_BINDING_SCHEMA_ID: &str = "io.registrystack.deployment_binding";
-pub const DEPLOYMENT_BINDING_SCHEMA_VERSION: &str = "1.0";
+/// Version `2.0` for the same reason as [`DEPLOYMENT_PLAN_SCHEMA_VERSION`]: the
+/// retirement removed `ports.notary` and three `secret_files` ids from the
+/// binding an operator owns and edits on disk.
+pub const DEPLOYMENT_BINDING_SCHEMA_VERSION: &str = "2.0";
 pub const DEPLOYMENT_MANIFEST_SCHEMA_ID: &str = "io.registrystack.deployment_manifest";
 pub const DEPLOYMENT_MANIFEST_SCHEMA_VERSION: &str = "1.0";
 pub const DEPLOYMENT_OWNERSHIP_REPORT_SCHEMA_ID: &str =
@@ -35,23 +43,17 @@ const SECRET_CONSUMERS_SCHEMA: &str = "registry.project.secret-consumers.v1";
 
 const RELAY_PUBLIC: &str = "relay-public";
 const RELAY_CONSULTATION: &str = "relay-consultation";
-const NOTARY: &str = "notary";
 const POSTGRESQL: &str = "postgresql-state-plane";
 const RELAY_PUBLIC_ACTIONS: &str = "relay-public-actions";
 const RELAY_CONSULTATION_ACTIONS: &str = "relay-consultation-actions";
-const NOTARY_ACTIONS: &str = "notary-actions";
 const POSTGRESQL_ACTIONS: &str = "postgresql-actions";
 
 const SERVICE_RELAY_PUBLIC: &str = "registry-relay-public";
 const SERVICE_RELAY_CONSULTATION: &str = "registry-relay-consultation";
-const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
 const SECRET_STAGER_SUFFIX: &str = "-stage-secrets";
 const NETWORK_RUNTIME: &str = "registry-runtime";
-pub(crate) const OPERATOR_FILE_IDS: [&str; 9] = [
-    "notary-environment",
-    "notary-relay-workload-credential",
-    "notary-signing-key",
+pub(crate) const OPERATOR_FILE_IDS: [&str; 6] = [
     "postgresql-admin-password",
     "postgresql-bootstrap-environment",
     "postgresql-tls-certificate",
@@ -66,23 +68,18 @@ const BOUNDED_LOG_DRIVER: &str = "local";
 const BOUNDED_LOG_MAX_SIZE: &str = "10m";
 const BOUNDED_LOG_MAX_FILES: &str = "3";
 
-const INITIALIZATION_SERVICES: [&str; 16] = [
+const INITIALIZATION_SERVICES: [&str; 11] = [
     SERVICE_POSTGRESQL_BOOTSTRAP,
     "registry-relay-public-prepare-state",
     "registry-relay-consultation-prepare-state",
-    "registry-notary-prepare-state",
     "registry-relay-public-initialize",
     "registry-relay-consultation-initialize",
-    "registry-notary-initialize",
     "registry-relay-public-preview-state",
     "registry-relay-consultation-preview-state",
-    "registry-notary-preview-state",
     "registry-relay-public-accept-state",
     "registry-relay-consultation-accept-state",
-    "registry-notary-accept-state",
     "registry-relay-public-verify-state",
     "registry-relay-consultation-verify-state",
-    "registry-notary-verify-state",
 ];
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -126,8 +123,6 @@ impl<'de> Deserialize<'de> for ImageIdentityV1 {
 pub struct ManagedTopologyImagesV1 {
     pub relay: ImageIdentityV1,
     pub relay_platform: OciPlatformV1,
-    pub notary: ImageIdentityV1,
-    pub notary_platform: OciPlatformV1,
     pub postgresql_state_plane: ImageIdentityV1,
     pub postgresql_state_plane_platform: OciPlatformV1,
 }
@@ -137,7 +132,6 @@ pub struct ManagedTopologyImagesV1 {
 pub enum ProductLaneV1 {
     RelayPublic,
     RelayConsultation,
-    Notary,
 }
 
 impl ProductLaneV1 {
@@ -145,7 +139,6 @@ impl ProductLaneV1 {
         match lane {
             ApprovedLaneV1::RelayPublic => Self::RelayPublic,
             ApprovedLaneV1::RelayConsultation => Self::RelayConsultation,
-            ApprovedLaneV1::Notary => Self::Notary,
         }
     }
 
@@ -153,7 +146,6 @@ impl ProductLaneV1 {
         match self {
             Self::RelayPublic => RELAY_PUBLIC,
             Self::RelayConsultation => RELAY_CONSULTATION,
-            Self::Notary => NOTARY,
         }
     }
 
@@ -161,7 +153,6 @@ impl ProductLaneV1 {
         match self {
             Self::RelayPublic => SERVICE_RELAY_PUBLIC,
             Self::RelayConsultation => SERVICE_RELAY_CONSULTATION,
-            Self::Notary => SERVICE_NOTARY,
         }
     }
 }
@@ -398,28 +389,6 @@ impl DeploymentPlanV1 {
                     vec![POSTGRESQL],
                     "relay-consultation-health",
                 ),
-                product(
-                    ProductLaneV1::Notary,
-                    images.notary.clone(),
-                    images.notary_platform,
-                    vec![
-                        MountRoleV1::Bundle,
-                        MountRoleV1::Anchor,
-                        MountRoleV1::AntiRollbackState,
-                        MountRoleV1::Secret,
-                        MountRoleV1::Audit,
-                    ],
-                    vec!["notary-relay-workload-credential", "notary-signing-key"],
-                    vec!["notary-anti-rollback", "notary-audit"],
-                    vec![
-                        EndpointClassV1::PublicApplication,
-                        EndpointClassV1::Administration,
-                        EndpointClassV1::Posture,
-                    ],
-                    vec!["runtime"],
-                    vec![RELAY_CONSULTATION, POSTGRESQL],
-                    "notary-health",
-                ),
                 DeploymentWorkloadV1::Supporting(SupportingWorkloadV1 {
                     id: POSTGRESQL.to_string(),
                     recipe: SupportingWorkloadRecipeV1::PostgresqlStatePlane,
@@ -452,11 +421,6 @@ impl DeploymentPlanV1 {
                     RuntimeActionV1::PrepareStateStore,
                 ),
                 initialization(
-                    "prepare-notary-state",
-                    NOTARY,
-                    RuntimeActionV1::PrepareStateStore,
-                ),
-                initialization(
                     "initialize-relay-public",
                     RELAY_PUBLIC,
                     RuntimeActionV1::InitializeState,
@@ -464,11 +428,6 @@ impl DeploymentPlanV1 {
                 initialization(
                     "initialize-relay-consultation",
                     RELAY_CONSULTATION,
-                    RuntimeActionV1::InitializeState,
-                ),
-                initialization(
-                    "initialize-notary",
-                    NOTARY,
                     RuntimeActionV1::InitializeState,
                 ),
                 initialization(
@@ -482,11 +441,6 @@ impl DeploymentPlanV1 {
                     RuntimeActionV1::PreviewState,
                 ),
                 initialization(
-                    "preview-notary-state",
-                    NOTARY,
-                    RuntimeActionV1::PreviewState,
-                ),
-                initialization(
                     "accept-relay-public-state",
                     RELAY_PUBLIC,
                     RuntimeActionV1::AcceptState,
@@ -496,7 +450,6 @@ impl DeploymentPlanV1 {
                     RELAY_CONSULTATION,
                     RuntimeActionV1::AcceptState,
                 ),
-                initialization("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
                 initialization(
                     "verify-relay-public-state",
                     RELAY_PUBLIC,
@@ -507,12 +460,11 @@ impl DeploymentPlanV1 {
                     RELAY_CONSULTATION,
                     RuntimeActionV1::VerifyState,
                 ),
-                initialization("verify-notary-state", NOTARY, RuntimeActionV1::VerifyState),
             ],
             recovery_consistency_groups: vec![
                 WorkloadGroupV1 {
                     id: "consultation-state".to_string(),
-                    members: strings(vec![RELAY_CONSULTATION, NOTARY, POSTGRESQL]),
+                    members: strings(vec![RELAY_CONSULTATION, POSTGRESQL]),
                 },
                 WorkloadGroupV1 {
                     id: "relay-public-state".to_string(),
@@ -526,10 +478,6 @@ impl DeploymentPlanV1 {
                 ),
                 exposure(
                     EndpointClassV1::PrivateApplication,
-                    EndpointExposureV1::PrivateNetworkOnly,
-                ),
-                exposure(
-                    EndpointClassV1::Administration,
                     EndpointExposureV1::PrivateNetworkOnly,
                 ),
                 exposure(
@@ -555,9 +503,9 @@ impl DeploymentPlanV1 {
             .iter()
             .map(DeploymentWorkloadV1::id)
             .collect();
-        let expected_ids = BTreeSet::from([RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, POSTGRESQL]);
+        let expected_ids = BTreeSet::from([RELAY_PUBLIC, RELAY_CONSULTATION, POSTGRESQL]);
         if ids != expected_ids || ids.len() != self.workloads.len() {
-            bail!("DeploymentPlanV1 must contain the complete closed four-workload topology");
+            bail!("DeploymentPlanV1 must contain the complete closed three-workload topology");
         }
         for workload in &self.workloads {
             if workload
@@ -607,11 +555,6 @@ impl DeploymentPlanV1 {
                 RuntimeActionV1::PrepareStateStore,
             ),
             (
-                "prepare-notary-state",
-                NOTARY,
-                RuntimeActionV1::PrepareStateStore,
-            ),
-            (
                 "initialize-relay-public",
                 RELAY_PUBLIC,
                 RuntimeActionV1::InitializeState,
@@ -619,11 +562,6 @@ impl DeploymentPlanV1 {
             (
                 "initialize-relay-consultation",
                 RELAY_CONSULTATION,
-                RuntimeActionV1::InitializeState,
-            ),
-            (
-                "initialize-notary",
-                NOTARY,
                 RuntimeActionV1::InitializeState,
             ),
             (
@@ -637,11 +575,6 @@ impl DeploymentPlanV1 {
                 RuntimeActionV1::PreviewState,
             ),
             (
-                "preview-notary-state",
-                NOTARY,
-                RuntimeActionV1::PreviewState,
-            ),
-            (
                 "accept-relay-public-state",
                 RELAY_PUBLIC,
                 RuntimeActionV1::AcceptState,
@@ -651,7 +584,6 @@ impl DeploymentPlanV1 {
                 RELAY_CONSULTATION,
                 RuntimeActionV1::AcceptState,
             ),
-            ("accept-notary-state", NOTARY, RuntimeActionV1::AcceptState),
             (
                 "verify-relay-public-state",
                 RELAY_PUBLIC,
@@ -662,7 +594,6 @@ impl DeploymentPlanV1 {
                 RELAY_CONSULTATION,
                 RuntimeActionV1::VerifyState,
             ),
-            ("verify-notary-state", NOTARY, RuntimeActionV1::VerifyState),
         ];
         if self.initialization_actions.len() != expected_initialization.len()
             || !self
@@ -679,7 +610,7 @@ impl DeploymentPlanV1 {
             != [
                 WorkloadGroupV1 {
                     id: "consultation-state".to_string(),
-                    members: strings(vec![RELAY_CONSULTATION, NOTARY, POSTGRESQL]),
+                    members: strings(vec![RELAY_CONSULTATION, POSTGRESQL]),
                 },
                 WorkloadGroupV1 {
                     id: "relay-public-state".to_string(),
@@ -704,10 +635,6 @@ impl DeploymentPlanV1 {
                 EndpointExposureV1::PrivateNetworkOnly,
             ),
             (
-                EndpointClassV1::Administration,
-                EndpointExposureV1::PrivateNetworkOnly,
-            ),
-            (
                 EndpointClassV1::Posture,
                 EndpointExposureV1::PrivateNetworkOnly,
             ),
@@ -723,8 +650,6 @@ impl DeploymentPlanV1 {
         let expected = Self::managed_single_node(&ManagedTopologyImagesV1 {
             relay: relay_public.image_identity.clone(),
             relay_platform: relay_public.image_platform,
-            notary: self.product(ProductLaneV1::Notary)?.image_identity.clone(),
-            notary_platform: self.product(ProductLaneV1::Notary)?.image_platform,
             postgresql_state_plane: self
                 .supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?
                 .image_identity
@@ -768,7 +693,6 @@ impl DeploymentPlanV1 {
 #[serde(deny_unknown_fields)]
 pub struct LoopbackPortsV1 {
     pub relay_public: u16,
-    pub notary: u16,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -795,10 +719,7 @@ impl DeploymentBindingV1 {
             package_id: package_id.into(),
             environment: environment.into(),
             loopback_address: "127.0.0.1".to_string(),
-            ports: LoopbackPortsV1 {
-                relay_public: 4242,
-                notary: 4255,
-            },
+            ports: LoopbackPortsV1 { relay_public: 4242 },
             secret_files: OPERATOR_FILE_IDS
                 .into_iter()
                 .map(|id| (id.to_string(), format!("operator/secrets/{id}")))
@@ -823,9 +744,8 @@ impl DeploymentBindingV1 {
         if self.loopback_address != "127.0.0.1" && self.loopback_address != "::1" {
             bail!("managed host publishing must use an explicit loopback address");
         }
-        let ports = [self.ports.relay_public, self.ports.notary];
-        if ports.contains(&0) || ports.iter().collect::<BTreeSet<_>>().len() != ports.len() {
-            bail!("managed loopback ports must be non-zero and distinct");
+        if self.ports.relay_public == 0 {
+            bail!("managed loopback port must be non-zero");
         }
         if self.restart_policy != "unless-stopped" || self.logging_policy != "local-bounded" {
             bail!("deployment binding selects an unsupported managed policy");
@@ -882,7 +802,6 @@ pub struct LockedPostgresqlRuntimeV1 {
 pub struct LockedRuntimeMappingV1 {
     pub relay_public: LockedProductRuntimeV1,
     pub relay_consultation: LockedProductRuntimeV1,
-    pub notary: LockedProductRuntimeV1,
     pub postgresql_state_plane: LockedPostgresqlRuntimeV1,
     pub operator_files: Vec<LockedOperatorFileV1>,
 }
@@ -940,19 +859,6 @@ impl LockedRuntimeMappingV1 {
                 "consultation Relay health",
                 &self.relay_consultation.health_probe,
             ),
-            ("Notary serve", &self.notary.serve.command),
-            (
-                "Notary prepare_state_store",
-                &self.notary.prepare_state_store.command,
-            ),
-            (
-                "Notary initialize_state",
-                &self.notary.initialize_state.command,
-            ),
-            ("Notary preview_state", &self.notary.preview_state.command),
-            ("Notary accept_state", &self.notary.accept_state.command),
-            ("Notary verify_state", &self.notary.verify_state.command),
-            ("Notary health", &self.notary.health_probe),
             (
                 "PostgreSQL state-plane recipe",
                 &self.postgresql_state_plane.serve.command,
@@ -977,7 +883,6 @@ impl LockedRuntimeMappingV1 {
         match lane {
             ProductLaneV1::RelayPublic => &self.relay_public,
             ProductLaneV1::RelayConsultation => &self.relay_consultation,
-            ProductLaneV1::Notary => &self.notary,
         }
     }
 
@@ -985,7 +890,6 @@ impl LockedRuntimeMappingV1 {
         Self {
             relay_public: LockedProductRuntimeV1::from_verified(value.relay_public()),
             relay_consultation: LockedProductRuntimeV1::from_verified(value.relay_consultation()),
-            notary: LockedProductRuntimeV1::from_verified(value.notary()),
             postgresql_state_plane: LockedPostgresqlRuntimeV1::from_verified(
                 value.postgresql_state_plane(),
             ),
@@ -1080,7 +984,6 @@ fn operator_file_inventory(
     for (lane, product) in [
         ("relay-public", &runtime.relay_public),
         ("relay-consultation", &runtime.relay_consultation),
-        ("notary", &runtime.notary),
     ] {
         for (action_name, action) in [
             ("serve", &product.serve),
@@ -1156,8 +1059,8 @@ fn operator_file_inventory(
 fn signed_environment_keys(
     lanes: &[VerifiedLanePackageSourceV1],
 ) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    if lanes.len() != 3 {
-        bail!("deployment requires exactly three signed product lanes");
+    if lanes.len() != 2 {
+        bail!("deployment requires exactly two signed product lanes");
     }
     let mut keys = BTreeMap::new();
     for lane in lanes {
@@ -1166,10 +1069,7 @@ fn signed_environment_keys(
             .context("failed to read signed secret-consumer descriptor")?;
         let descriptor: SecretConsumerDescriptorV1 = serde_json::from_slice(&bytes)
             .context("signed secret-consumer descriptor is not strict JSON")?;
-        let expected_product = match lane.lane {
-            ProductLaneV1::RelayPublic | ProductLaneV1::RelayConsultation => "registry-relay",
-            ProductLaneV1::Notary => "registry-notary",
-        };
+        let expected_product = "registry-relay";
         if descriptor.schema != SECRET_CONSUMERS_SCHEMA
             || descriptor.product != expected_product
             || descriptor.consumers.len() > 256
@@ -1286,31 +1186,6 @@ fn validate_managed_bundle_compatibility(lanes: &[VerifiedLanePackageSourceV1]) 
                 if has_file_dataset {
                     bail!(
                         "managed deployment cannot package a project-local file dataset; bind an operator-managed source before signing"
-                    );
-                }
-            }
-            ProductLaneV1::Notary => {
-                let path = lane.bundle_dir.join("config/notary.yaml");
-                let config: Value =
-                    serde_norway::from_slice(&read_bounded(&path, MAX_PORTABLE_DOCUMENT_BYTES)?)
-                        .context("failed to parse managed Notary config")?;
-                let Some(base_url) = config
-                    .pointer("/evidence/relay/base_url")
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
-                let origin = url::Url::parse(base_url)
-                    .context("managed Notary Relay base URL is invalid")?;
-                if origin.scheme() == "http"
-                    && (!matches!(origin.host(), Some(url::Host::Domain(_)))
-                        || config
-                            .pointer("/evidence/relay/allow_insecure_private_network")
-                            .and_then(Value::as_bool)
-                            != Some(true))
-                {
-                    bail!(
-                        "managed deployment requires HTTPS or an explicitly enabled private-service HTTP Notary-to-Relay origin; loopback is not shared across workloads"
                     );
                 }
             }
@@ -1642,8 +1517,6 @@ fn deployment_authority(
     let plan = DeploymentPlanV1::managed_single_node(&ManagedTopologyImagesV1 {
         relay: ImageIdentityV1::parse(images.relay())?,
         relay_platform: images.relay_platform(),
-        notary: ImageIdentityV1::parse(images.notary())?,
-        notary_platform: images.notary_platform(),
         postgresql_state_plane: ImageIdentityV1::parse(images.postgresql_state_plane())?,
         postgresql_state_plane_platform: images.postgresql_state_plane_platform(),
     });
@@ -2622,7 +2495,6 @@ fn render_ordinary_model(
 ) -> Result<Value> {
     let relay_public = plan.product(ProductLaneV1::RelayPublic)?;
     let relay_consultation = plan.product(ProductLaneV1::RelayConsultation)?;
-    let notary = plan.product(ProductLaneV1::Notary)?;
     let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
 
     let mut services = Map::new();
@@ -2688,33 +2560,12 @@ fn render_ordinary_model(
             ),
         )?,
     );
-    services.insert(
-        SERVICE_NOTARY.to_string(),
-        product_service(
-            notary,
-            runtime.product(ProductLaneV1::Notary),
-            binding,
-            bundle_source(lanes, ProductLaneV1::Notary)?,
-            json!({NETWORK_RUNTIME: {}}),
-            action_dependency_map(
-                &[
-                    (SERVICE_POSTGRESQL, "service_healthy"),
-                    (SERVICE_RELAY_CONSULTATION, "service_healthy"),
-                ],
-                &runtime.notary.serve,
-                NOTARY,
-            ),
-        )?,
-    );
-
     let mut volumes = Map::from_iter([
         durable_volume(binding, "postgresql-data"),
         durable_volume(binding, "relay-public-state"),
         durable_volume(binding, "relay-public-audit"),
         durable_volume(binding, "relay-consultation-state"),
         durable_volume(binding, "relay-consultation-audit"),
-        durable_volume(binding, "notary-state"),
-        durable_volume(binding, "notary-audit"),
     ]);
     volumes.extend(secret_stage_volumes(
         serving_secret_stage_groups(runtime),
@@ -2817,7 +2668,6 @@ fn render_initialization_model(
         let lane = match action.workload.as_str() {
             RELAY_PUBLIC => ProductLaneV1::RelayPublic,
             RELAY_CONSULTATION => ProductLaneV1::RelayConsultation,
-            NOTARY => ProductLaneV1::Notary,
             _ => bail!("initialization action targets an unknown product workload"),
         };
         let product = plan.product(lane)?;
@@ -2853,7 +2703,7 @@ fn render_initialization_model(
             (
                 ProductLaneV1::RelayConsultation,
                 RuntimeActionV1::PrepareStateStore | RuntimeActionV1::InitializeState
-            ) | (ProductLaneV1::Notary, RuntimeActionV1::PrepareStateStore)
+            )
         );
         let dependencies = action_dependency_map(
             if requires_postgresql {
@@ -2949,7 +2799,6 @@ fn product_service(
     )?;
     let published_port = match lane {
         ProductLaneV1::RelayPublic => Some((binding.ports.relay_public, 8080)),
-        ProductLaneV1::Notary => Some((binding.ports.notary, 8081)),
         ProductLaneV1::RelayConsultation => None,
     };
     if let Some((host, container)) = published_port {
@@ -3083,7 +2932,6 @@ fn serving_secret_stage_groups(
                 &runtime.relay_consultation.serve,
             )],
         ),
-        (NOTARY, vec![("notary-serve", &runtime.notary.serve)]),
         (
             "postgresql",
             vec![("postgresql-serve", &runtime.postgresql_state_plane.serve)],
@@ -3137,16 +2985,6 @@ fn action_secret_stage_groups(
             ],
         ),
         (
-            NOTARY_ACTIONS,
-            vec![
-                ("notary-prepare", &runtime.notary.prepare_state_store),
-                ("notary-initialize", &runtime.notary.initialize_state),
-                ("notary-preview", &runtime.notary.preview_state),
-                ("notary-accept", &runtime.notary.accept_state),
-                ("notary-verify", &runtime.notary.verify_state),
-            ],
-        ),
-        (
             POSTGRESQL_ACTIONS,
             vec![(
                 "postgresql-bootstrap",
@@ -3160,7 +2998,6 @@ fn action_secret_stage_owner(lane: ProductLaneV1) -> &'static str {
     match lane {
         ProductLaneV1::RelayPublic => RELAY_PUBLIC_ACTIONS,
         ProductLaneV1::RelayConsultation => RELAY_CONSULTATION_ACTIONS,
-        ProductLaneV1::Notary => NOTARY_ACTIONS,
     }
 }
 
@@ -3477,7 +3314,6 @@ fn validate_hard_effective_model(
     for (lane, service_name) in [
         (ProductLaneV1::RelayPublic, SERVICE_RELAY_PUBLIC),
         (ProductLaneV1::RelayConsultation, SERVICE_RELAY_CONSULTATION),
-        (ProductLaneV1::Notary, SERVICE_NOTARY),
     ] {
         let Some(service) = actual_services.get(service_name) else {
             violations.push(format!("ordinary effective model omits {service_name}"));
@@ -3639,7 +3475,6 @@ fn validate_hard_effective_model(
     for (service_name, expected_networks) in [
         (SERVICE_RELAY_PUBLIC, json!({NETWORK_RUNTIME: {}})),
         (SERVICE_RELAY_CONSULTATION, json!({NETWORK_RUNTIME: {}})),
-        (SERVICE_NOTARY, json!({NETWORK_RUNTIME: {}})),
         (SERVICE_POSTGRESQL, json!({NETWORK_RUNTIME: {}})),
     ] {
         if let Some(service) = actual_services.get(service_name) {
@@ -3711,11 +3546,7 @@ fn initialization_with_effective_ordinary(
     let mut expected = canonical_initialization.clone();
     let expected_services = expected.get_mut("services")?.as_object_mut()?;
     let ordinary_services = effective_ordinary.get("services")?.as_object()?;
-    for service_name in [
-        SERVICE_RELAY_PUBLIC,
-        SERVICE_RELAY_CONSULTATION,
-        SERVICE_NOTARY,
-    ] {
+    for service_name in [SERVICE_RELAY_PUBLIC, SERVICE_RELAY_CONSULTATION] {
         expected_services.insert(
             service_name.to_string(),
             ordinary_services.get(service_name)?.clone(),
@@ -4117,7 +3948,6 @@ fn normalized_lane_mut(
     match lane {
         ApprovedLaneV1::RelayPublic => &mut approved_set.lanes.relay_public,
         ApprovedLaneV1::RelayConsultation => &mut approved_set.lanes.relay_consultation,
-        ApprovedLaneV1::Notary => &mut approved_set.lanes.notary,
     }
 }
 
@@ -4472,17 +4302,11 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let serving_secret_staging_commands = staging_commands(
-        compose_ordinary,
-        &[RELAY_CONSULTATION, NOTARY, "postgresql"],
-    );
+    let serving_secret_staging_commands =
+        staging_commands(compose_ordinary, &[RELAY_CONSULTATION, "postgresql"]);
     let initialization_secret_staging_commands = staging_commands(
         &compose_actions,
-        &[
-            RELAY_CONSULTATION_ACTIONS,
-            NOTARY_ACTIONS,
-            POSTGRESQL_ACTIONS,
-        ],
+        &[RELAY_CONSULTATION_ACTIONS, POSTGRESQL_ACTIONS],
     );
     let operator_files = inventory
         .files
@@ -4517,11 +4341,11 @@ fn runbook(package_name: &str, inventory: &DeploymentOperatorFileInventoryV1) ->
 Package: `{package_name}`\n\n\
 Record the approved-set digest and generated closure root printed by `registryctl deploy generate` outside this package. After transfer, run `registryctl deploy verify --package . --expected-closure-sha256 <recorded-sha256>` and compare both externally recorded values before any initialization.\n\n\
 ## Required operator files\n\n\
-The signed inventory is also recorded at `generated/operator-files.v1.json`. Environment requirements below come directly from the hash-covered product `descriptors/secret-consumers.json`; Registryctl does not infer product semantics. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package . --check-operator-files`. Registryctl checks only structural isolation, mode, owner, and consumer assignment; Relay and Notary remain the semantic authorities for their environment and secret values. Do not create placeholders or print file values.\n\n\
+The signed inventory is also recorded at `generated/operator-files.v1.json`. Environment requirements below come directly from the hash-covered product `descriptors/secret-consumers.json`; Registryctl does not infer product semantics. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package . --check-operator-files`. Registryctl checks only structural isolation, mode, owner, and consumer assignment; Relay remains the semantic authority for its environment and secret values. Do not create placeholders or print file values.\n\n\
 | Path | Consumers and targets | Format | Required environment keys | Mode | Allowed owners |\n\
 |---|---|---|---|---|---|\n\
 {operator_files}\n\n\
-Obtain environment values from the owning secret manager and identity provider. Obtain private keys from the owning key custodian. Certificates and keys must be matching PEM material for their named service; the PostgreSQL certificate chain must validate `registry-postgres`, because bootstrap uses TLS `verify-full`. The Notary signing file must be a private JWK accepted by the signing provider in the signed Notary config. The Notary-to-Relay file must be a compact JWT issued under the signed consultation Relay workload contract, including its exact issuer, audience, client/principal binding, scope, and expiry. Inspect those value-free requirements in each copied signed bundle's `config/` and `descriptors/secret-consumers.json`; never edit them. Product startup or preparation performs the semantic checks and fails closed before its protected action.\n\n\
+Obtain environment values from the owning secret manager and identity provider. Obtain private keys from the owning key custodian. Certificates and keys must be matching PEM material for their named service; the PostgreSQL certificate chain must validate `registry-postgres`, because bootstrap uses TLS `verify-full`. Inspect those value-free requirements in each copied signed bundle's `config/` and `descriptors/secret-consumers.json`; never edit them. Product startup or preparation performs the semantic checks and fails closed before its protected action.\n\n\
 ## Compose project context\n\n\
 The generated package is standalone by default. Set `REGISTRY_STACK_COMPOSE_PROJECT` once and use the same value for every stage, preview, stop, accept, verify, and start command:\n\n\
 ```sh\n\
@@ -4535,13 +4359,10 @@ When a parent Compose application includes `generated/compose.yaml`, set this va
 {compose_actions} run --rm registry-postgres-bootstrap\n\
 {compose_actions} run --rm registry-relay-public-prepare-state\n\
 {compose_actions} run --rm registry-relay-consultation-prepare-state\n\
-{compose_actions} run --rm registry-notary-prepare-state\n\
 {compose_actions} run --rm registry-relay-public-initialize\n\
 {compose_actions} run --rm registry-relay-consultation-initialize\n\
-{compose_actions} run --rm registry-notary-initialize\n\
 {compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
-{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {serving_secret_staging_commands}\n\
 {compose_ordinary} up --detach --wait --wait-timeout 120\n\
 {compose_ordinary} ps\n\
@@ -4552,14 +4373,13 @@ Selecting `compose.initialize.yaml` is the only supported way to initialize an e
 {compose_ordinary} config --no-interpolate --no-env-resolution --quiet\n\
 {compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
-{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {serving_secret_staging_commands}\n\
 {compose_ordinary} up --detach --wait --wait-timeout 120\n\
 {compose_ordinary} ps\n\
 {compose_ordinary} down\n\
 ```\n\n\
 ## Product or image update\n\n\
-Copy the intact current package to the candidate path and regenerate that copy in place. The candidate must retain the exact current `generated/` closure as `generated.previous/` and preserve every operator-owned file. Before shutdown, verify both packages against their externally recorded closure digests and approved sets, validate both effective Compose models, and run all three current read-only state checks:\n\n\
+Copy the intact current package to the candidate path and regenerate that copy in place. The candidate must retain the exact current `generated/` closure as `generated.previous/` and preserve every operator-owned file. Before shutdown, verify both packages against their externally recorded closure digests and approved sets, validate both effective Compose models, and run both current read-only state checks:\n\n\
 ```sh\n\
 CURRENT_PACKAGE=\"<path-to-current-package>\"\n\
 CURRENT_APPROVED_SET=\"<path-to-current-approved-set.v1.json>\"\n\
@@ -4572,31 +4392,26 @@ registryctl deploy verify --package \"$CANDIDATE_PACKAGE\" --approved-set \"$CAN
 (cd \"$CURRENT_PACKAGE\" && {compose_ordinary} config --no-interpolate --no-env-resolution --quiet)\n\
 (cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-relay-public-verify-state)\n\
 (cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state)\n\
-(cd \"$CURRENT_PACKAGE\" && {compose_actions} run --rm --no-deps registry-notary-verify-state)\n\
 (cd \"$CANDIDATE_PACKAGE\" && {compose_actions} config --no-interpolate --no-env-resolution --quiet)\n\
 ```\n\n\
 These package checks verify every locked bundle, anchor, deployment file, and operator-file boundary. Keep all current services running while previewing every candidate lane. Do not stop any service or accept any lane unless every preview succeeds. Run the following block from the candidate package root:\n\n\
 ```sh\n\
 {compose_actions} run --rm --no-deps registry-relay-public-preview-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-preview-state\n\
-{compose_actions} run --rm --no-deps registry-notary-preview-state\n\
 {compose_ordinary} stop\n\
 {compose_actions} run --rm --no-deps registry-relay-public-accept-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-accept-state\n\
-{compose_actions} run --rm --no-deps registry-notary-accept-state\n\
 {compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
-{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {serving_secret_staging_commands}\n\
 {compose_ordinary} up --detach --wait --wait-timeout 120\n\
 {compose_actions} run --rm --no-deps registry-relay-public-verify-state\n\
 {compose_actions} run --rm --no-deps registry-relay-consultation-verify-state\n\
-{compose_actions} run --rm --no-deps registry-notary-verify-state\n\
 {compose_ordinary} ps\n\
 ```\n\n\
-Each `accept_state` action uses the locked audit-before-mutation path. The manual abort boundary is the first successful acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
+Each `accept_state` action uses the locked audit-before-mutation path. The manual abort boundary is the first successful acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start and verify PostgreSQL before starting the consultation Relay. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
 ## State recovery\n\n\
-Quiesce the complete `relay-public-state` or `consultation-state` recovery consistency group before snapshot or restore. A coherent backup includes the lane anti-rollback and audit state, PostgreSQL data where declared, this package, approved set, bundle, anchor, instance, stream, and accepted sequence identities. After restoring the exact lane, instance, and stream, run the three read-only `verify_state` commands above before ordinary startup. Partial or older recovery must be manually aborted.\n\n\
+Quiesce the complete `relay-public-state` or `consultation-state` recovery consistency group before snapshot or restore. A coherent backup includes the lane anti-rollback and audit state, PostgreSQL data where declared, this package, approved set, bundle, anchor, instance, stream, and accepted sequence identities. After restoring the exact lane, instance, and stream, run both read-only `verify_state` commands above before ordinary startup. Partial or older recovery must be manually aborted.\n\n\
 If no coherent backup exists, provision a new instance identity, review and sign every affected lane, generate a new package, and follow first installation. Reinitializing the same identity is not recovery and is unsupported. Rollback is unsupported.\n\n\
 ## Operations\n\n\
 Use `docker compose ... ps` for value-free health and `docker compose ... logs <registry-service>` for product-separated logs. Metrics, administration, and posture are not host-published. Resolve a documented readiness latch before using the product-owned clear action. Preserve signed audit retention policy, and treat storage exhaustion as a fail-closed incident requiring a coherent recovery-group snapshot or restore.\n\
@@ -4609,8 +4424,6 @@ fn operator_file_format(format: LockedOperatorFileFormatV1) -> &'static str {
         LockedOperatorFileFormatV1::Dotenv => "dotenv",
         LockedOperatorFileFormatV1::PemCertificate => "pem_certificate",
         LockedOperatorFileFormatV1::PemPrivateKey => "pem_private_key",
-        LockedOperatorFileFormatV1::JsonWebKey => "json_web_key",
-        LockedOperatorFileFormatV1::CompactJwt => "compact_jwt",
         LockedOperatorFileFormatV1::Opaque => "opaque",
     }
 }

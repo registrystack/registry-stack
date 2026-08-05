@@ -2,7 +2,6 @@ use registry_config_report::{
     redact_config_value, ConfigDiagnosticReport, ConfigExplanation, ConfigExplanationDocument,
     ConfigHashes, ConfigValueClassification, RedactedConfig, RegistryctlValidationReport,
     RequiredEnvStatus, RequiredEnvVar, CONFIG_EXPLANATION_FIXTURE_V1, CONFIG_EXPLANATION_SCHEMA_V1,
-    NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1, NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
     PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, REDACTED_VALUE, REDACTION_INPUT_FIXTURE_V1,
     REGISTRYCTL_VALIDATION_FIXTURE_V1, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1,
     REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1, RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
@@ -128,8 +127,6 @@ fn product_diagnostic_schema_validates_canonical_product_fixtures() {
     for fixture in [
         RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
         RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
     ] {
         assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &parse(fixture));
     }
@@ -154,16 +151,20 @@ fn product_diagnostic_schema_rejects_wrong_schema_unknown_status_and_bad_hash() 
 
 #[test]
 fn product_diagnostic_schema_accepts_optional_declared_audit_shipping() {
-    // Canonical fixtures carry the declared audit shipping state the products'
-    // doctor reports emit; the strict schema accepts it.
-    let report = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
-    assert_eq!(report["audit_shipping"]["sink_type"], "file");
+    // The canonical fixture carries the declared audit shipping state the
+    // products' doctor reports emit; the strict schema accepts it.
+    let report = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    assert_eq!(report["audit_shipping"]["sink_type"], "stdout");
     assert_eq!(report["audit_shipping"]["shipping_target_configured"], true);
-    assert_eq!(
-        report["audit_shipping"]["shipping_target"],
-        "declared_external"
-    );
+    assert_eq!(report["audit_shipping"]["shipping_target"], "stdout");
     assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &report);
+
+    // A local sink that declares off-host shipping is the other accepted
+    // declared state.
+    let mut declared_external = report.clone();
+    declared_external["audit_shipping"]["sink_type"] = json!("file");
+    declared_external["audit_shipping"]["shipping_target"] = json!("declared_external");
+    assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &declared_external);
 
     // The section is optional: a report may omit it (e.g. when config is
     // unavailable) and still validate.
@@ -197,9 +198,7 @@ fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
     // validate under the strict schema.
     for fixture in [
         RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
         RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
     ] {
         let report = parse(fixture);
         assert!(report["audit_shipping"].get("shipping_health").is_some());
@@ -210,7 +209,7 @@ fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
     }
 
     // An observed health plus timestamp validates.
-    let mut with_health = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    let mut with_health = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
     with_health["audit_shipping"]["shipping_health"] = json!("stale");
     with_health["audit_shipping"]["shipping_observed_at"] = json!("2026-06-19T23:00:00Z");
     assert_valid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &with_health);
@@ -231,7 +230,7 @@ fn product_diagnostic_schema_accepts_observed_audit_shipping_fields() {
 
     // Even alongside the new observed fields, unknown fields inside
     // audit_shipping still fail.
-    let mut unknown = parse(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
+    let mut unknown = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
     unknown["audit_shipping"]["backlog_depth"] = json!(3);
     assert_invalid(PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1, &unknown);
 }
@@ -288,8 +287,6 @@ fn registryctl_schema_rejects_lossy_embedded_product_report() {
 fn serde_types_round_trip_canonical_fixtures() {
     round_trip::<ConfigDiagnosticReport>(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
     round_trip::<ConfigDiagnosticReport>(RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1);
-    round_trip::<ConfigDiagnosticReport>(NOTARY_DIAGNOSTIC_OK_FIXTURE_V1);
-    round_trip::<ConfigDiagnosticReport>(NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1);
     let _: ConfigExplanation = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     let _: ConfigExplanationDocument = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     round_trip::<RegistryctlValidationReport>(REGISTRYCTL_VALIDATION_FIXTURE_V1);
@@ -387,8 +384,6 @@ fn diagnostic_report_round_trip_preserves_audit_shipping_section() {
     for fixture in [
         RELAY_DIAGNOSTIC_OK_FIXTURE_V1,
         RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_OK_FIXTURE_V1,
-        NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1,
     ] {
         let original = parse(fixture);
         let decoded: ConfigDiagnosticReport = decode(fixture);

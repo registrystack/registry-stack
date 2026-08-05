@@ -1,0 +1,219 @@
+{
+  "$comment": "Problem members are a closed safe shape. No request, authority, source, script, supported-value, subject-binding, candidate, or credential detail is returned.",
+  "$id": "https://registrystack.org/schemas/evidence/problem-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "code": {
+          "const": "malformed_request"
+        },
+        "status": {
+          "const": 400
+        },
+        "title": {
+          "const": "Request is not valid"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/malformed_request"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "invalid_selector"
+        },
+        "status": {
+          "const": 400
+        },
+        "title": {
+          "const": "Request is not valid"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/invalid_selector"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "authentication_failed"
+        },
+        "status": {
+          "const": 401
+        },
+        "title": {
+          "const": "Authentication failed"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/authentication_failed"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "not_authorized"
+        },
+        "status": {
+          "const": 403
+        },
+        "title": {
+          "const": "Request is not authorized"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/not_authorized"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "response_format_not_acceptable"
+        },
+        "status": {
+          "const": 406
+        },
+        "title": {
+          "const": "Requested response format is not acceptable"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "evidence_not_available"
+        },
+        "status": {
+          "const": 422
+        },
+        "title": {
+          "const": "Evidence could not be produced"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/evidence_not_available"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "rate_limited"
+        },
+        "status": {
+          "const": 429
+        },
+        "title": {
+          "const": "Request rate exceeded"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/rate_limited"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "dependency_unavailable"
+        },
+        "status": {
+          "const": 503
+        },
+        "title": {
+          "const": "Service temporarily unavailable"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/dependency_unavailable"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
+          "const": "service_unavailable"
+        },
+        "status": {
+          "const": 503
+        },
+        "title": {
+          "const": "Service temporarily unavailable"
+        },
+        "type": {
+          "const": "https://registrystack.org/problems/evidence/service_unavailable"
+        }
+      }
+    }
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "malformed_request",
+        "invalid_selector",
+        "authentication_failed",
+        "not_authorized",
+        "response_format_not_acceptable",
+        "evidence_not_available",
+        "rate_limited",
+        "dependency_unavailable",
+        "service_unavailable"
+      ],
+      "type": "string"
+    },
+    "operation": {
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        400,
+        401,
+        403,
+        406,
+        422,
+        429,
+        503
+      ],
+      "type": "integer"
+    },
+    "title": {
+      "enum": [
+        "Request is not valid",
+        "Authentication failed",
+        "Request is not authorized",
+        "Requested response format is not acceptable",
+        "Evidence could not be produced",
+        "Request rate exceeded",
+        "Service temporarily unavailable"
+      ],
+      "type": "string"
+    },
+    "type": {
+      "enum": [
+        "https://registrystack.org/problems/evidence/malformed_request",
+        "https://registrystack.org/problems/evidence/invalid_selector",
+        "https://registrystack.org/problems/evidence/authentication_failed",
+        "https://registrystack.org/problems/evidence/not_authorized",
+        "https://registrystack.org/problems/evidence/response_format_not_acceptable",
+        "https://registrystack.org/problems/evidence/evidence_not_available",
+        "https://registrystack.org/problems/evidence/rate_limited",
+        "https://registrystack.org/problems/evidence/dependency_unavailable",
+        "https://registrystack.org/problems/evidence/service_unavailable"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "status",
+    "code",
+    "operation"
+  ],
+  "title": "Evidence public problem Version 1",
+  "type": "object"
+}

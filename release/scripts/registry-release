@@ -22,6 +22,7 @@ from registryctl_image_lock import (
     PLATFORM as RELEASE_IMAGE_LOCK_PLATFORM,
     PRODUCT_IMAGE_REPOSITORIES,
     SCHEMA_V2 as RELEASE_IMAGE_LOCK_SCHEMA_V2,
+    SCHEMA_V3 as RELEASE_IMAGE_LOCK_SCHEMA_V3,
     read_reviewed_postgresql_image_ref,
     schema_for_release_version,
     validate_images,
@@ -38,6 +39,7 @@ SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
 EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
+NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
@@ -49,8 +51,19 @@ EXACT_ARTIFACT_INVENTORY = {
     "registryctl-image-lock",
     "registry-docs",
 }
+POST_NOTARY_ARTIFACT_INVENTORY = EXACT_ARTIFACT_INVENTORY - {
+    "registry-notary",
+    "registry-notary-cel-worker",
+}
 OPTIONAL_EXACT_ARTIFACTS = {
     "registryctl-installer",
+    # The Evidence toolset joins the release channel as optional artifacts
+    # until the first release ships it end to end; then these move into the
+    # exact inventory at a minimum version, like registryctl-installer did.
+    "evidence",
+    "evidencectl",
+    "mint",
+    "evidencectl-installer",
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CURRENT_DOCS_VERSION = "main source (unreleased)"
@@ -128,9 +141,14 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
         and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
     ):
         artifact_names = set(artifacts)
-        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
+        expected_inventory = (
+            POST_NOTARY_ARTIFACT_INVENTORY
+            if parsed_version >= NOTARY_RETIREMENT_MINIMUM_VERSION
+            else EXACT_ARTIFACT_INVENTORY
+        )
+        missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(
-            artifact_names - EXACT_ARTIFACT_INVENTORY - OPTIONAL_EXACT_ARTIFACTS
+            artifact_names - expected_inventory - OPTIONAL_EXACT_ARTIFACTS
         )
         if missing or unexpected:
             details = []
@@ -213,7 +231,7 @@ def read_release_image_digest(path: Path, image_name: str) -> str:
 def render_registryctl_image_lock(
     manifest_path: Path,
     relay_digest_path: Path,
-    notary_digest_path: Path,
+    notary_digest_path: Path | None,
     postgresql_ref_path: Path | None,
     tag_target: str,
     source_sha: str | None,
@@ -266,16 +284,29 @@ def render_registryctl_image_lock(
             raise ValueError(f"image lock output must be a regular file path: {output}")
 
         relay_digest = read_release_image_digest(relay_digest_path, "registry-relay")
-        notary_digest = read_release_image_digest(notary_digest_path, "registry-notary")
         schema_version = schema_for_release_version(version)
-        images = {
-            "registry-relay": relay_digest,
-            "registry-notary": notary_digest,
-        }
-        if schema_version == RELEASE_IMAGE_LOCK_SCHEMA_V2:
+        images = {"registry-relay": relay_digest}
+        if schema_version != RELEASE_IMAGE_LOCK_SCHEMA_V3:
+            if notary_digest_path is None:
+                raise ValueError(
+                    "historical registryctl release image locks require --notary-digest"
+                )
+            images["registry-notary"] = read_release_image_digest(
+                notary_digest_path,
+                "registry-notary",
+            )
+        elif notary_digest_path is not None:
+            raise ValueError(
+                "registryctl release image lock v3 does not accept --notary-digest"
+            )
+        if schema_version in {
+            RELEASE_IMAGE_LOCK_SCHEMA_V2,
+            RELEASE_IMAGE_LOCK_SCHEMA_V3,
+        }:
             if postgresql_ref_path is None:
                 raise ValueError(
-                    "registryctl release image lock v2 requires --postgresql-ref-file"
+                    "registryctl release image lock v2 or later requires "
+                    "--postgresql-ref-file"
                 )
             images["postgresql"] = read_reviewed_postgresql_image_ref(
                 postgresql_ref_path
@@ -411,17 +442,22 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registryctl-{tag}-linux-amd64",
         f"registry-manifest-{tag}-linux-amd64",
         f"registry-relay-{tag}-linux-amd64",
-        f"registry-notary-{tag}-linux-amd64",
         "SHA256SUMS",
     ]
+    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
+        binary_names.append(f"registry-notary-{tag}-linux-amd64")
     optional_binary_names = [
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
     ]
-    worker_binary_names = [
-        f"registry-relay-rhai-worker-{tag}-linux-amd64",
-        f"registry-notary-cel-worker-{tag}-linux-amd64",
-    ]
+    for evidence_binary in ("evidence", "evidencectl", "mint"):
+        for platform_label in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            optional_binary_names.append(f"{evidence_binary}-{tag}-{platform_label}")
+    worker_binary_names = [f"registry-relay-rhai-worker-{tag}-linux-amd64"]
+    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
+        worker_binary_names.append(
+            f"registry-notary-cel-worker-{tag}-linux-amd64"
+        )
     if parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION:
         binary_names.extend(worker_binary_names)
     else:
@@ -436,10 +472,9 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         required_release_file_names.append(image_lock_name)
     else:
         optional_release_file_names.append(image_lock_name)
-    image_names = [
-        "registry-notary",
-        "registry-relay",
-    ]
+    image_names = ["registry-relay"]
+    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
+        image_names.append("registry-notary")
 
     staged_optional: list[str] = []
     staged_release_files: list[str] = []
@@ -1103,6 +1138,7 @@ def render_capsule(
         expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
         expected_docs_archive_name = f"registry-docs-v{version}.tar.gz"
         expected_installer_name = f"registryctl-v{version}-install.sh"
+        expected_evidencectl_installer_name = f"evidencectl-v{version}-install.sh"
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
@@ -1117,6 +1153,10 @@ def render_capsule(
             if path.name.startswith("registryctl-v") and path.name.endswith("-install.sh") and path.name != expected_installer_name:
                 raise ValueError(
                     f"unexpected registryctl installer filename {path.name}; expected {expected_installer_name}"
+                )
+            if path.name.startswith("evidencectl-v") and path.name.endswith("-install.sh") and path.name != expected_evidencectl_installer_name:
+                raise ValueError(
+                    f"unexpected evidencectl installer filename {path.name}; expected {expected_evidencectl_installer_name}"
                 )
             file_sha256 = verified_binary_sha256(path, checksums)
             sbom = binary_sbom_dir / f"{path.name}.spdx.json"
@@ -1144,6 +1184,9 @@ def render_capsule(
                 release_files.append(file_evidence)
             elif path.name == expected_installer_name:
                 file_evidence["kind"] = "registryctl-installer"
+                release_files.append(file_evidence)
+            elif path.name == expected_evidencectl_installer_name:
+                file_evidence["kind"] = "evidencectl-installer"
                 release_files.append(file_evidence)
             else:
                 binaries.append(file_evidence)
@@ -3342,7 +3385,7 @@ def main() -> int:
     image_lock_parser = subparsers.add_parser("render-registryctl-image-lock")
     image_lock_parser.add_argument("manifest", type=Path)
     image_lock_parser.add_argument("--relay-digest", type=Path, required=True)
-    image_lock_parser.add_argument("--notary-digest", type=Path, required=True)
+    image_lock_parser.add_argument("--notary-digest", type=Path)
     image_lock_parser.add_argument("--postgresql-ref-file", type=Path)
     image_lock_parser.add_argument("--tag-target", required=True)
     image_lock_parser.add_argument("--source-sha")

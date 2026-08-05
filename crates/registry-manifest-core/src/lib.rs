@@ -19,7 +19,8 @@ const JSON_SCHEMA_DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/s
 const EU_DATA_THEME_SCHEME: &str = "http://publications.europa.eu/resource/authority/data-theme";
 const EUROVOC_THEME_SCHEME: &str = "http://eurovoc.europa.eu/100141";
 const EU_LOCATION_IRI: &str = "http://publications.europa.eu/resource/authority/country/EUR";
-const REGISTRY_NOTARY_FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
+/// The single evidence-offering access kind this layer validates in depth.
+pub const REGISTRY_EVIDENCE_ACCESS_KIND: &str = "registry-evidence";
 const CATALOG_SCHEMA_VERSION: &str = "registry-manifest-catalog/v1";
 const EVIDENCE_OFFERINGS_SCHEMA_VERSION: &str = "registry-manifest-evidence-offerings/v1";
 const EVIDENCE_OFFERING_SCHEMA_VERSION: &str = "registry-manifest-evidence-offering/v1";
@@ -368,8 +369,6 @@ pub struct MetadataManifest {
     pub vocabularies: BTreeMap<String, String>,
     #[serde(default)]
     pub profiles: Vec<ProfileClaim>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub federation: Option<FederationManifest>,
     #[serde(default)]
     pub evaluation_profiles: Vec<EvaluationProfileManifest>,
     #[serde(default)]
@@ -433,8 +432,6 @@ struct MetadataManifestFields {
     #[serde(default)]
     profiles: Vec<ProfileClaim>,
     #[serde(default)]
-    federation: Option<FederationManifest>,
-    #[serde(default)]
     evaluation_profiles: Vec<EvaluationProfileManifest>,
     #[serde(default)]
     ecosystem_bindings: Vec<EcosystemBindingManifest>,
@@ -463,7 +460,6 @@ impl From<MetadataManifestFields> for MetadataManifest {
             catalog: fields.catalog,
             vocabularies: fields.vocabularies,
             profiles: fields.profiles,
-            federation: fields.federation,
             evaluation_profiles: fields.evaluation_profiles,
             ecosystem_bindings: fields.ecosystem_bindings,
             requirements: fields.requirements,
@@ -546,17 +542,6 @@ pub struct ApplicationProfile {
 pub struct ProfileClaim {
     pub id: String,
     pub version: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct FederationManifest {
-    pub node_id: String,
-    pub issuer: String,
-    pub jwks_uri: String,
-    pub federation_api: String,
-    #[serde(default)]
-    pub supported_protocol_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1261,8 +1246,6 @@ pub struct CompiledMetadataInner {
     pub datasets: BTreeMap<String, CompiledDataset>,
     pub codelists: BTreeMap<String, CompiledCodelist>,
     pub profiles: Vec<ProfileClaim>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub federation: Option<FederationManifest>,
     pub evaluation_profiles: Vec<EvaluationProfileManifest>,
     pub ecosystem_bindings: Vec<EcosystemBindingManifest>,
 }
@@ -1692,10 +1675,6 @@ impl CompiledMetadata {
         &self.inner.profiles
     }
 
-    pub fn federation(&self) -> Option<&FederationManifest> {
-        self.inner.federation.as_ref()
-    }
-
     pub fn evaluation_profiles(&self) -> &[EvaluationProfileManifest] {
         &self.inner.evaluation_profiles
     }
@@ -1785,7 +1764,6 @@ impl CompiledMetadata {
                 datasets,
                 codelists,
                 profiles: self.inner.profiles.clone(),
-                federation: self.inner.federation.clone(),
                 evaluation_profiles: self.inner.evaluation_profiles.clone(),
                 ecosystem_bindings: self.inner.ecosystem_bindings.clone(),
             }),
@@ -1812,87 +1790,6 @@ impl ValidationError {
         Self {
             path: path.into(),
             message: message.into(),
-        }
-    }
-}
-
-fn validate_federation(federation: Option<&FederationManifest>, errors: &mut Vec<ValidationError>) {
-    let Some(federation) = federation else {
-        return;
-    };
-
-    validate_non_empty(&federation.node_id, "federation.node_id", errors);
-    validate_https_url(&federation.issuer, "federation.issuer", errors);
-    validate_https_url(&federation.jwks_uri, "federation.jwks_uri", errors);
-    validate_https_url(
-        &federation.federation_api,
-        "federation.federation_api",
-        errors,
-    );
-    if let Some(issuer_host) = https_url_host(&federation.issuer) {
-        validate_federation_endpoint_host(
-            &federation.jwks_uri,
-            "federation.jwks_uri",
-            &issuer_host,
-            errors,
-        );
-        validate_federation_endpoint_host(
-            &federation.federation_api,
-            "federation.federation_api",
-            &issuer_host,
-            errors,
-        );
-    }
-    if !federation
-        .supported_protocol_versions
-        .iter()
-        .any(|version| version == REGISTRY_NOTARY_FEDERATION_PROTOCOL)
-    {
-        errors.push(ValidationError::new(
-            "federation.supported_protocol_versions",
-            format!(
-                "supported protocol versions must include {REGISTRY_NOTARY_FEDERATION_PROTOCOL}"
-            ),
-        ));
-    }
-    for (index, version) in federation.supported_protocol_versions.iter().enumerate() {
-        validate_non_empty(
-            version,
-            format!("federation.supported_protocol_versions[{index}]"),
-            errors,
-        );
-    }
-
-    match did_web_host(&federation.node_id) {
-        Some(did_web_host) => {
-            if url_host(&federation.issuer)
-                .is_some_and(|issuer_host| !did_web_host.eq_ignore_ascii_case(issuer_host.as_str()))
-            {
-                errors.push(ValidationError::new(
-                    "federation.node_id",
-                    "DID:web node id must bind to federation issuer host",
-                ));
-            }
-        }
-        None => errors.push(ValidationError::new(
-            "federation.node_id",
-            "federation node id must be a did:web identifier",
-        )),
-    }
-}
-
-fn validate_federation_endpoint_host(
-    value: &str,
-    path: impl Into<String>,
-    issuer_host: &str,
-    errors: &mut Vec<ValidationError>,
-) {
-    if let Some(endpoint_host) = https_url_host(value) {
-        if !issuer_host.eq_ignore_ascii_case(&endpoint_host) {
-            errors.push(ValidationError::new(
-                path,
-                "federation endpoint host must bind to federation issuer host",
-            ));
         }
     }
 }
@@ -2538,7 +2435,6 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         }
     }
 
-    validate_federation(manifest.federation.as_ref(), &mut errors);
     let evaluation_profile_rulesets = validate_evaluation_profiles(manifest, &mut errors);
     validate_ecosystem_bindings(manifest, &mut errors);
     let requirement_ids = validate_requirements(manifest, &mut errors);
@@ -2579,20 +2475,6 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
                 &mut errors,
             );
         }
-    }
-
-    if manifest.federation.is_none()
-        && manifest.datasets.iter().any(|dataset| {
-            dataset
-                .evidence_offerings
-                .iter()
-                .any(|offering| offering.access.kind == "registry-notary")
-        })
-    {
-        errors.push(ValidationError::new(
-            "federation",
-            "registry-notary access requires a top-level federation block",
-        ));
     }
 
     let mut dataset_ids = BTreeSet::new();
@@ -2824,7 +2706,6 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             datasets,
             codelists,
             profiles: manifest.profiles.clone(),
-            federation: manifest.federation.clone(),
             evaluation_profiles: manifest.evaluation_profiles.clone(),
             ecosystem_bindings: manifest.ecosystem_bindings.clone(),
         }),
@@ -2872,9 +2753,6 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let evidence_offerings = compiled.evidence_offerings().collect::<Vec<_>>();
     if !evidence_offerings.is_empty() {
         catalog["evidence_offerings"] = json!(evidence_offerings);
-    }
-    if let Some(federation) = compiled.federation() {
-        catalog["federation"] = json!(federation);
     }
     if !compiled.evaluation_profiles().is_empty() {
         catalog["evaluation_profiles"] = json!(compiled.evaluation_profiles());
@@ -4328,7 +4206,7 @@ fn validate_evidence_offerings(
                 "access kind must not be empty",
             ));
         }
-        if offering.access.conforms_to.as_deref() != Some(REGISTRY_NOTARY_FEDERATION_PROTOCOL) {
+        if offering.access.kind != REGISTRY_EVIDENCE_ACCESS_KIND {
             validate_optional_uri(
                 offering.access.conforms_to.as_deref(),
                 format!("{offering_path}.access.conforms_to"),
@@ -4336,8 +4214,8 @@ fn validate_evidence_offerings(
                 errors,
             );
         }
-        if offering.access.kind == "registry-notary" {
-            validate_registry_notary_access(
+        if offering.access.kind == REGISTRY_EVIDENCE_ACCESS_KIND {
+            validate_registry_evidence_access(
                 offering,
                 &offering_path,
                 evaluation_profile_rulesets,
@@ -4375,17 +4253,25 @@ fn validate_evidence_offerings(
     }
 }
 
-fn validate_registry_notary_access(
+/// Validates the one access kind this layer knows how to check.
+///
+/// The offering vocabulary itself is portable and product-neutral. Only the
+/// `registry-evidence` kind carries endpoint expectations here, because it
+/// names a service whose shape this repository defines: an evidence endpoint
+/// and the discovery document a relying party reads to verify what that
+/// endpoint returns. Every other kind is left to the runtime that consumes it.
+fn validate_registry_evidence_access(
     offering: &EvidenceOfferingManifest,
     offering_path: &str,
     evaluation_profile_rulesets: &BTreeSet<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if offering.access.conforms_to.as_deref() != Some(REGISTRY_NOTARY_FEDERATION_PROTOCOL) {
-        errors.push(ValidationError::new(
+    match offering.access.conforms_to.as_deref() {
+        Some(conforms_to) if !conforms_to.trim().is_empty() => {}
+        _ => errors.push(ValidationError::new(
             format!("{offering_path}.access.conforms_to"),
-            format!("registry-notary access must conform to {REGISTRY_NOTARY_FEDERATION_PROTOCOL}"),
-        ));
+            "registry-evidence access must declare the response profile it conforms to",
+        )),
     }
     match offering.access.endpoint_url.as_deref() {
         Some(endpoint_url) => validate_https_url(
@@ -4395,7 +4281,7 @@ fn validate_registry_notary_access(
         ),
         None => errors.push(ValidationError::new(
             format!("{offering_path}.access.endpoint_url"),
-            "registry-notary access must declare an HTTPS endpoint URL",
+            "registry-evidence access must declare an HTTPS endpoint URL",
         )),
     }
     match offering.access.discovery_url.as_deref() {
@@ -4406,7 +4292,7 @@ fn validate_registry_notary_access(
         ),
         None => errors.push(ValidationError::new(
             format!("{offering_path}.access.discovery_url"),
-            "registry-notary access must declare an HTTPS discovery URL",
+            "registry-evidence access must declare an HTTPS discovery URL",
         )),
     }
     if !offering.access.ruleset.trim().is_empty()
@@ -4414,7 +4300,7 @@ fn validate_registry_notary_access(
     {
         errors.push(ValidationError::new(
             format!("{offering_path}.access.ruleset"),
-            "registry-notary access.ruleset must reference a known evaluation profile ruleset",
+            "registry-evidence access.ruleset must reference a known evaluation profile ruleset",
         ));
     }
 }
@@ -6729,15 +6615,8 @@ fn https_url_host(value: &str) -> Option<String> {
         .and_then(url_host_after_scheme)
 }
 
-fn url_host(value: &str) -> Option<String> {
-    value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-        .and_then(url_host_after_scheme)
-}
-
-// Returns the full authority (host plus port when present), lower-cased, so that
-// did:web bindings can match the issuer URL on origin boundary, not just host.
+// Returns the full authority (host plus port when present), lower-cased, so a
+// comparison lands on the origin boundary rather than the bare host.
 fn url_host_after_scheme(remainder: &str) -> Option<String> {
     let authority = remainder
         .split(['/', '?', '#'])
@@ -6747,22 +6626,6 @@ fn url_host_after_scheme(remainder: &str) -> Option<String> {
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
-}
-
-fn did_web_host(node_id: &str) -> Option<String> {
-    node_id
-        .strip_prefix("did:web:")
-        .and_then(|method_id| method_id.split(':').next())
-        .filter(|host| !host.is_empty())
-        .map(|host| {
-            host.replace("%3A", ":")
-                .replace("%3a", ":")
-                .replace("%5B", "[")
-                .replace("%5b", "[")
-                .replace("%5D", "]")
-                .replace("%5d", "]")
-                .to_ascii_lowercase()
-        })
 }
 
 fn validate_dataset_public_service_id(

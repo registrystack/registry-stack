@@ -1,0 +1,3 @@
+id: urn:example:fixture:scheme:time-bucket
+version: '1'
+codes: [within-window, at-limit]

@@ -1,0 +1,27 @@
+type: object
+additionalProperties: false
+required:
+  - program
+  - organisationUnit
+  - providerFields
+  - pageSize
+  - page
+  - totalPages
+  - dateOfBirthAttribute
+properties:
+  program:
+    type: string
+    minLength: 1
+    maxLength: 128
+  organisationUnit:
+    type: string
+    minLength: 1
+    maxLength: 128
+  providerFields: {const: "trackedEntity,attributes[attribute,value]"}
+  pageSize: {const: "2"}
+  page: {const: "1"}
+  totalPages: {const: "true"}
+  dateOfBirthAttribute:
+    type: string
+    minLength: 1
+    maxLength: 128

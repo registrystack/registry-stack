@@ -43,7 +43,6 @@ def create_payload(output: Path) -> None:
         image_identities = {}
         for name, repository, digest_character in [
             ("relay", "example.invalid/registrystack/registry-relay", "d"),
-            ("notary", "example.invalid/registrystack/registry-notary", "e"),
             ("postgresql", "example.invalid/registrystack/postgresql", "f"),
         ]:
             index_path = root / f"{name}.index.json"
@@ -80,7 +79,6 @@ def create_payload(output: Path) -> None:
                     "tag_target": TAG_TARGET,
                     "images": {
                         "registry-relay": image_identities["relay"],
-                        "registry-notary": image_identities["notary"],
                         "postgresql": image_identities["postgresql"],
                     },
                 },
@@ -100,7 +98,6 @@ def create_payload(output: Path) -> None:
                     asset_dir=assets,
                     image_lock=image_lock,
                     relay_image_index=image_indexes["relay"],
-                    notary_image_index=image_indexes["notary"],
                     postgresql_image_index=image_indexes["postgresql"],
                     output=output,
                 )

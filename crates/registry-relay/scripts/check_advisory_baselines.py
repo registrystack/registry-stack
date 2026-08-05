@@ -458,32 +458,36 @@ def validate_v2_baseline(data: dict[str, Any]) -> None:
             fail("v2 reviewed finding expires_at must not precede reviewed_at")
 
 
+def validate_v3_baseline(data: dict[str, Any]) -> None:
+    if set(data) != V3_TOP_LEVEL_FIELDS:
+        fail("v3 baseline must have the exact top-level field set")
+    nonblank(data.get("service"), "baseline service")
+    validate_policies(data.get("policies"))
+    exceptions = data.get("exceptions")
+    if not isinstance(exceptions, list):
+        fail("v3 baseline exceptions must be a list")
+    seen: set[tuple[str, str, str]] = set()
+    for exception in exceptions:
+        validate_v3_exception(exception)
+        key = exception_key(exception)
+        if key in seen:
+            fail(f"duplicate advisory exception identity: {' '.join(key)}")
+        seen.add(key)
+
+
 def load_baseline(path: Path) -> dict[str, Any]:
     data = load_json(path)
     if not isinstance(data, dict):
         fail("baseline must be a JSON object")
     version = data.get("version")
     if version == 3:
-        if set(data) != V3_TOP_LEVEL_FIELDS:
-            fail("v3 baseline must have the exact top-level field set")
-        nonblank(data.get("service"), "baseline service")
-        validate_policies(data.get("policies"))
-        exceptions = data.get("exceptions")
-        if not isinstance(exceptions, list):
-            fail("v3 baseline exceptions must be a list")
-        seen: set[tuple[str, str, str]] = set()
-        for exception in exceptions:
-            validate_v3_exception(exception)
-            key = exception_key(exception)
-            if key in seen:
-                fail(f"duplicate advisory exception identity: {' '.join(key)}")
-            seen.add(key)
-        return data
-    if version == 2:
+        validate_v3_baseline(data)
+    elif version == 2:
         validate_policies(data.get("policies"))
         validate_v2_baseline(data)
-        return data
-    fail(f"unsupported baseline version: {version}")
+    else:
+        fail(f"unsupported baseline version: {version}")
+    return data
 
 
 def exception_key(exception: dict[str, Any]) -> tuple[str, str, str]:

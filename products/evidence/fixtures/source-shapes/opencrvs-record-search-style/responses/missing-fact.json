@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "trackingId": "TRACKING-CANARY-0003",
+      "type": "birth",
+      "status": "REGISTERED",
+      "declaration": {
+        "child.name": {"firstname": "Synthetic", "surname": "MissingDate"}
+      }
+    }
+  ],
+  "total": 1
+}

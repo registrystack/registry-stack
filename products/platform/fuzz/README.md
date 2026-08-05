@@ -9,8 +9,6 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 
 - `authcommon_parsers` — bearer token and API key fingerprint parsing
   (`registry-platform-authcommon`).
-- `oid4vci_request_and_proof` — OID4VCI credential/token request and
-  proof-of-possession JWT parsing (`registry-platform-oid4vci`).
 - `sdjwt_holder_proof` — SD-JWT holder-proof JWT verification
   (`registry-platform-sdjwt`).
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).

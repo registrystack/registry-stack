@@ -1,22 +1,21 @@
 ---
 title: Connect your own data through Relay
-description: Adapt a Registry Stack project to an institution-owned source while keeping every claim consultation-backed and product authority separate.
+description: Adapt a Registry Stack project to an institution-owned source while keeping every answer consultation-backed and product authority separate.
 status: draft
 draft: true
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
 Use this guide to replace a synthetic development source with institution-owned data while
-keeping source access in Registry Relay and every Registry Notary claim rooted in exactly one
-Relay consultation.
+keeping source access in Registry Relay and every served answer rooted in exactly one Relay
+consultation.
 
 ## When to use this
 
@@ -31,10 +30,10 @@ Registryctl does not infer source authority, identity mappings, or disclosure po
 
 You need:
 
-- A project created with `registryctl init <directory> --template http`
+- A project created through [Connect an existing HTTP registry](../author-registry-project/)
 - A source-owner-approved non-production endpoint
 - A stable subject identifier and exact mapping from the request to one consultation input
-- The smallest typed output required by each claim
+- The smallest typed output required by each caller
 - Synthetic observations for match, no match, and every meaningful failure
 - Secret references for the selected environment, with values kept outside authored files
 
@@ -60,30 +59,35 @@ redirects, source calls, and source audit.
 Rhai receives no credential, token, token response, filesystem, process, or arbitrary network
 authority.
 
-## Keep every claim consultation-backed
+## Keep every answer consultation-backed
 
-Each evidence service must map the request to exactly one Relay consultation before declaring
-claims:
+A consultation service maps the request to exactly one Relay consultation, and that consultation
+derives from exactly one declared integration:
 
 ```yaml
-consultations:
-  record:
-    integration: reviewed-record
-    input:
-      record_id: request.target.identifiers.registry_record_id
-claims:
-  record-exists:
-    cel: record.matched
-    disclosure: predicate
-  reviewed-status:
-    output: record.status
-    disclosure: value
+services:
+  record-verification:
+    kind: consultation_api
+    version: 1
+    purpose: record-verification
+    legal_basis: public-service-delivery
+    consent: not_required
+    consultations:
+      record:
+        integration: reviewed-record
+        input:
+          record_id: request.target.identifiers.registry_record_id
 ```
 
-The consultation name `record` is the only root used by these claims.
-Do not add source-free, self-attested, delegated-attestation, or caller-defined fallback claim
-paths.
-If a claim has no reviewed source, keep it out of the Registry Stack evidence service.
+The consultation name `record` is the only root the service can answer from, and the minimized
+outputs declared by `reviewed-record` are the only values it returns.
+Do not add a source-free, self-attested, delegated-attestation, or caller-defined fallback path.
+If an answer has no reviewed source, keep it out of the service.
+
+A caller that needs a signed, minimum-disclosure assertion rather than a protected read calls
+[Evidence](../../products/registry-evidence/) directly.
+Evidence can consume this Relay-protected API through its ordinary fixed HTTP source contract; it
+does not inherit Relay's authorization or policy model.
 
 ## Prove the source contract offline
 
@@ -128,9 +132,9 @@ registryctl check --explain
 ```
 
 Review source destinations, secret consumers, request authority, subject binding, output types,
-limits, claims, and disclosure.
-The redacted plan must keep source authority in consultation Relay and claim evaluation in
-Notary.
+and limits.
+The redacted plan must keep source authority, the reviewed script, and the minimized outputs in
+consultation Relay.
 
 ## Exercise the disposable product path
 
@@ -143,8 +147,8 @@ registryctl dev down
 ```
 
 The denial scenario must perform no token or source call.
-The authorized scenario must perform only the declared bounded calls and report only minimized
-claim identifiers.
+The authorized scenario must perform only the declared bounded calls and return only the declared
+consultation outputs.
 This development trust, credential, and state material is disposable and cannot be promoted.
 
 Testing an operator-bound non-production source requires explicit source-owner authorization.
@@ -159,18 +163,19 @@ Build deterministic unsigned lane inputs:
 registryctl build
 ```
 
-Keep `relay-public`, `relay-consultation`, and `notary` separate.
-The consultation Relay lane owns the source contract.
-Notary owns claims and disclosure but receives no direct source credential or origin.
+Keep `relay-public` and `relay-consultation` separate.
+The consultation Relay lane owns the source contract, the credential references, and the source
+origin.
+The public Relay lane serves callers and receives neither.
 
 Independent product owners review and sign the affected lanes, then the operator assembles the
 approved set.
 Use [Run the generated single-node Compose package](../../operate/single-node-compose-behind-proxy/)
 for the governed deployment handoff.
 
-Do not add a direct source connection to Registry Notary. A combined Registry Stack project
-compiles the source integration and consultation into Relay, then compiles Notary claims against
-the pinned Relay contract. A Notary-only project may contain no claims.
+Do not add a second direct source connection anywhere else in the project. A Registry Stack
+project compiles the source integration and its consultation into the consultation Relay lane,
+and every other lane reads the pinned Relay contract instead of the source.
 
 Follow [Author an HTTP Registry Stack project](../author-registry-project/) to run offline fixtures,
 inspect the redacted plan, and build separate unsigned product inputs. Package, sign, verify, and
@@ -185,7 +190,7 @@ An application Compose file or include graph remains operator-owned.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | A source call is rejected before dispatch | The request is outside the reviewed method, path, or budget. | Correct the adapter or narrowly change the authored source authority. |
-| A claim lacks a consultation root | The claim has no Registry Stack evidence source. | Add one exact Relay consultation or remove the claim. |
+| A service lacks a consultation root | The service has no reviewed source behind it. | Add one exact Relay consultation or remove the service. |
 | A secret appears in an authored or generated file | A secret value crossed its ownership boundary. | Stop, remove the exposed material, rotate it, and report the failure through the security process. |
 | A fixture passes but the live source differs | Synthetic and interoperability evidence have been confused. | Keep the version `unverified` and run a separately authorized compatibility review. |
 | The generated Compose package cannot express an operator need | The orchestration change is outside the binding schema. | Keep the verified package intact and compose it into a separate operator-owned application. |
@@ -194,5 +199,5 @@ An application Compose file or include graph remains operator-owned.
 
 - [Build and run an HTTP registry project](../author-registry-project/) for the bounded HTTP
   authoring path.
-- [Compare and approve an evidence change](../../operate/advanced/compare-and-reapprove-source-change/)
+- [Compare and approve a source change](../../operate/advanced/compare-and-reapprove-source-change/)
   when changing a governed deployment.

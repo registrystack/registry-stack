@@ -1,0 +1,560 @@
+#![cfg(unix)]
+
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    path::Path,
+    process::{Command, Output},
+};
+
+use registry_platform_crypto::{PrivateJwk, PublicJwk};
+
+fn evidencectl() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+}
+
+fn mode_of(path: &Path) -> u32 {
+    fs::metadata(path)
+        .unwrap_or_else(|error| panic!("stat {}: {error}", path.display()))
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+fn stdout_of(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("utf8 stdout")
+}
+
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8(output.stderr.clone()).expect("utf8 stderr")
+}
+
+/// Asserts neither captured stream contains `needle`, e.g. private key
+/// material that must never reach the terminal or logs.
+fn assert_output_excludes(output: &Output, needle: &str) {
+    let stdout = stdout_of(output);
+    let stderr = stderr_of(output);
+    assert!(
+        !stdout.contains(needle),
+        "stdout leaked secret material: {stdout}"
+    );
+    assert!(
+        !stderr.contains(needle),
+        "stderr leaked secret material: {stderr}"
+    );
+}
+
+#[test]
+fn signing_writes_private_and_public_jwk_with_expected_modes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(
+        output.status.success(),
+        "keygen signing failed: {}",
+        stderr_of(&output)
+    );
+
+    assert_eq!(mode_of(&out_dir), 0o700, "out-dir mode");
+
+    let private_path = out_dir.join("signing-ed25519-private-jwk");
+    let public_path = out_dir.join("signing-ed25519-public.jwk.json");
+    assert_eq!(mode_of(&private_path), 0o600, "private file mode");
+    assert_eq!(mode_of(&public_path), 0o644, "public file mode");
+
+    let private_contents = fs::read_to_string(&private_path).expect("read private jwk");
+    let public_contents = fs::read_to_string(&public_path).expect("read public jwk");
+
+    let private = PrivateJwk::parse(&private_contents).expect("private JWK parses");
+    let public = PublicJwk::parse(&public_contents).expect("public JWK parses");
+
+    let expected_kid = public.jkt().expect("thumbprint");
+    assert_eq!(private.kid.as_deref(), Some(expected_kid.as_str()));
+    assert_eq!(public.kid.as_deref(), Some(expected_kid.as_str()));
+
+    // The "d" value must never appear on stdout or stderr.
+    let d_value = private.d.clone().expect("private JWK has d");
+    assert_output_excludes(&output, &d_value);
+}
+
+#[test]
+fn signing_kid_override_replaces_the_default_thumbprint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .args(["--kid", "custom-kid-1"])
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let private_contents =
+        fs::read_to_string(out_dir.join("signing-ed25519-private-jwk")).expect("read private jwk");
+    let public_contents = fs::read_to_string(out_dir.join("signing-ed25519-public.jwk.json"))
+        .expect("read public jwk");
+
+    let private = PrivateJwk::parse(&private_contents).expect("private JWK parses");
+    let public = PublicJwk::parse(&public_contents).expect("public JWK parses");
+    assert_eq!(private.kid.as_deref(), Some("custom-kid-1"));
+    assert_eq!(public.kid.as_deref(), Some("custom-kid-1"));
+
+    let d_value = private.d.clone().expect("private JWK has d");
+    assert_output_excludes(&output, &d_value);
+}
+
+#[test]
+fn signing_rejects_an_empty_or_whitespace_only_kid() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .args(["--kid", "   "])
+        .output()
+        .expect("run evidencectl");
+    assert!(
+        !output.status.success(),
+        "a whitespace-only --kid must be refused"
+    );
+    assert!(
+        !out_dir.join("signing-ed25519-private-jwk").exists(),
+        "no key material should be generated for a refused --kid"
+    );
+}
+
+#[test]
+fn signing_public_out_overrides_the_default_public_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+    let public_out = dir.path().join("elsewhere").join("signing-public.json");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .arg("--public-out")
+        .arg(&public_out)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert!(public_out.is_file());
+    assert!(!out_dir.join("signing-ed25519-public.jwk.json").exists());
+    assert_eq!(mode_of(&public_out), 0o644);
+}
+
+#[test]
+fn holder_writes_private_and_public_jwk_with_holder_filenames() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("holder-keys");
+
+    let output = evidencectl()
+        .args(["keygen", "holder", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let private_path = out_dir.join("holder-ed25519-private-jwk");
+    let public_path = out_dir.join("holder-ed25519-public.jwk.json");
+    assert_eq!(mode_of(&private_path), 0o600);
+    assert_eq!(mode_of(&public_path), 0o644);
+
+    let private_contents = fs::read_to_string(&private_path).expect("read private jwk");
+    let public_contents = fs::read_to_string(&public_path).expect("read public jwk");
+    let private = PrivateJwk::parse(&private_contents).expect("private JWK parses");
+    let public = PublicJwk::parse(&public_contents).expect("public JWK parses");
+    assert_eq!(private.kid, public.kid);
+
+    let d_value = private.d.clone().expect("private JWK has d");
+    assert_output_excludes(&output, &d_value);
+}
+
+#[test]
+fn secret_writes_exactly_32_raw_bytes_with_owner_only_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("secrets").join("audit-hmac-key");
+
+    let output = evidencectl()
+        .args(["keygen", "secret", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(mode_of(out.parent().unwrap()), 0o700, "parent dir mode");
+    assert_eq!(mode_of(&out), 0o600, "secret file mode");
+
+    let bytes = fs::read(&out).expect("read secret");
+    assert_eq!(bytes.len(), 32);
+}
+
+#[test]
+fn secret_invocations_generate_independent_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.key");
+    let second = dir.path().join("second.key");
+
+    for out in [&first, &second] {
+        let output = evidencectl()
+            .args(["keygen", "secret", "--out"])
+            .arg(out)
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+    }
+
+    let first_bytes = fs::read(&first).expect("read first secret");
+    let second_bytes = fs::read(&second).expect("read second secret");
+    assert_eq!(first_bytes.len(), 32);
+    assert_eq!(second_bytes.len(), 32);
+    assert_ne!(first_bytes, second_bytes);
+}
+
+/// The Evidence runtime rejects any file-provided secret containing a NUL
+/// byte, and a uniform 32-byte draw carries one about 11.8% of the time. A
+/// generated secret must therefore never contain one, or roughly one project
+/// in five fails at `evidence serve` long after `evidence check` passed.
+#[test]
+fn secret_never_contains_a_nul_byte() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // 64 draws leave under one chance in 3000 of a run where every unfixed
+    // draw happened to be NUL-free.
+    for index in 0..64 {
+        let out = dir.path().join(format!("secret-{index}.key"));
+        let output = evidencectl()
+            .args(["keygen", "secret", "--out"])
+            .arg(&out)
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+
+        let bytes = fs::read(&out).expect("read secret");
+        assert_eq!(bytes.len(), 32);
+        assert!(
+            !bytes.contains(&0),
+            "draw {index} contains a NUL byte the runtime rejects"
+        );
+    }
+}
+
+#[test]
+fn signing_refuses_overwrite_without_force_then_succeeds_with_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+
+    let first = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(first.status.success(), "{}", stderr_of(&first));
+
+    let private_path = out_dir.join("signing-ed25519-private-jwk");
+    let original_private = fs::read_to_string(&private_path).expect("read private jwk");
+
+    let second = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(
+        !second.status.success(),
+        "second run without --force unexpectedly succeeded"
+    );
+    let unchanged = fs::read_to_string(&private_path).expect("read private jwk");
+    assert_eq!(
+        original_private, unchanged,
+        "file must be untouched on refusal"
+    );
+
+    let third = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .arg("--force")
+        .output()
+        .expect("run evidencectl");
+    assert!(third.status.success(), "{}", stderr_of(&third));
+    assert_eq!(
+        mode_of(&private_path),
+        0o600,
+        "mode preserved across --force"
+    );
+
+    let regenerated = fs::read_to_string(&private_path).expect("read private jwk");
+    assert_ne!(
+        original_private, regenerated,
+        "--force must regenerate key material"
+    );
+}
+
+#[test]
+fn secret_refuses_overwrite_without_force_then_succeeds_with_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("secret.key");
+
+    let first = evidencectl()
+        .args(["keygen", "secret", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(first.status.success(), "{}", stderr_of(&first));
+    let original = fs::read(&out).expect("read secret");
+
+    let second = evidencectl()
+        .args(["keygen", "secret", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(!second.status.success());
+    assert_eq!(fs::read(&out).expect("read secret"), original);
+
+    let third = evidencectl()
+        .args(["keygen", "secret", "--out"])
+        .arg(&out)
+        .arg("--force")
+        .output()
+        .expect("run evidencectl");
+    assert!(third.status.success(), "{}", stderr_of(&third));
+    assert_eq!(mode_of(&out), 0o600);
+    assert_ne!(fs::read(&out).expect("read secret"), original);
+}
+
+#[test]
+fn signing_batch_abort_leaves_the_private_file_unwritten() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+    fs::create_dir(&out_dir).expect("create out-dir");
+
+    // Pre-create only the public target; the private target must never be
+    // written once the batch is refused.
+    fs::write(out_dir.join("signing-ed25519-public.jwk.json"), b"stale").expect("seed public file");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(!output.status.success(), "batch should have been refused");
+    assert!(
+        !out_dir.join("signing-ed25519-private-jwk").exists(),
+        "private key must not be written when the batch aborts"
+    );
+    let public_contents =
+        fs::read(out_dir.join("signing-ed25519-public.jwk.json")).expect("read public file");
+    assert_eq!(
+        public_contents, b"stale",
+        "pre-existing public file must be untouched"
+    );
+}
+
+#[test]
+fn secret_leaves_a_pre_existing_parent_directorys_mode_untouched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let parent = dir.path().join("secrets");
+    fs::create_dir(&parent).expect("create parent dir");
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("loosen parent mode");
+
+    let out = parent.join("audit-hmac-key");
+    let output = evidencectl()
+        .args(["keygen", "secret", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(
+        mode_of(&parent),
+        0o755,
+        "a parent directory this invocation did not create must keep its own mode"
+    );
+}
+
+#[test]
+fn signing_out_dir_mode_is_normalized_to_0700_when_pre_created_looser() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+    fs::create_dir(&out_dir).expect("create out-dir");
+    fs::set_permissions(&out_dir, fs::Permissions::from_mode(0o755)).expect("loosen out-dir mode");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(
+        mode_of(&out_dir),
+        0o700,
+        "a pre-existing out-dir must be normalized to owner-only"
+    );
+}
+
+#[test]
+fn signing_force_replaces_a_symlinked_private_path_without_writing_through_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+    fs::create_dir(&out_dir).expect("create out-dir");
+
+    let target = dir.path().join("attacker-target");
+    fs::write(&target, b"untouched").expect("seed symlink target");
+
+    let private_path = out_dir.join("signing-ed25519-private-jwk");
+    symlink(&target, &private_path).expect("create symlink at the private path");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .arg("--force")
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let metadata = fs::symlink_metadata(&private_path).expect("stat private path");
+    assert!(
+        metadata.file_type().is_file(),
+        "the symlink must be replaced by a regular file"
+    );
+    assert!(!metadata.file_type().is_symlink());
+
+    let target_contents = fs::read(&target).expect("read symlink target");
+    assert_eq!(
+        target_contents, b"untouched",
+        "the symlink's former target must never be written through"
+    );
+}
+
+#[test]
+fn signing_error_names_the_offending_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+    fs::create_dir(&out_dir).expect("create out-dir");
+    fs::write(out_dir.join("signing-ed25519-private-jwk"), b"stale").expect("seed private file");
+
+    let output = evidencectl()
+        .args(["keygen", "signing", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("run evidencectl");
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("signing-ed25519-private-jwk"),
+        "error should name the offending path: {stderr}"
+    );
+}
+
+/// A bearer token ends up in an HTTP header, where the raw bytes `keygen
+/// secret` writes are not valid. `keygen token` must therefore emit only
+/// characters a header value accepts, with no trailing newline: the runtime
+/// reads the file whole and would carry one into the header.
+#[test]
+fn token_writes_a_header_safe_value_with_owner_only_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("secrets").join("source-bearer-token");
+
+    let output = evidencectl()
+        .args(["keygen", "token", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(mode_of(out.parent().unwrap()), 0o700, "parent dir mode");
+    assert_eq!(mode_of(&out), 0o600, "token file mode");
+
+    let token = fs::read_to_string(&out).expect("read token");
+    assert_eq!(token.len(), 43, "token: {token}");
+    assert!(
+        token
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'),
+        "token carries a character an HTTP header value rejects: {token}"
+    );
+
+    // The generated credential is as secret as any private key, and this tool
+    // never prints those either.
+    assert_output_excludes(&output, &token);
+}
+
+#[test]
+fn token_invocations_generate_independent_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = dir.path().join("first.token");
+    let second = dir.path().join("second.token");
+
+    for out in [&first, &second] {
+        let output = evidencectl()
+            .args(["keygen", "token", "--out"])
+            .arg(out)
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+    }
+
+    assert_ne!(
+        fs::read_to_string(&first).expect("read first token"),
+        fs::read_to_string(&second).expect("read second token")
+    );
+}
+
+#[test]
+fn token_refuses_overwrite_without_force_then_succeeds_with_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("source-bearer-token");
+    fs::write(&out, b"already here").expect("seed token");
+
+    let refused = evidencectl()
+        .args(["keygen", "token", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(!refused.status.success());
+    assert_eq!(
+        fs::read_to_string(&out).expect("read token"),
+        "already here",
+        "a refused run must leave the existing token alone"
+    );
+
+    let forced = evidencectl()
+        .args(["keygen", "token", "--force", "--out"])
+        .arg(&out)
+        .output()
+        .expect("run evidencectl");
+    assert!(forced.status.success(), "{}", stderr_of(&forced));
+    assert_ne!(
+        fs::read_to_string(&out).expect("read token"),
+        "already here"
+    );
+}
+
+/// `keygen secret` is the obvious tool for the one secret every scaffolded
+/// bundle needs, and it is the wrong one. Its own help has to say so, because
+/// the alternative is discovering it at the first live request.
+#[test]
+fn secret_help_says_it_does_not_make_bearer_tokens() {
+    let output = evidencectl()
+        .args(["keygen", "secret", "--help"])
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let help = stdout_of(&output);
+    assert!(
+        help.contains("keygen token"),
+        "keygen secret's help never points at the token generator:\n{help}"
+    );
+}

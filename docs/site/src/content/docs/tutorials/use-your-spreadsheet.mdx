@@ -1,13 +1,12 @@
 ---
 title: Use your own spreadsheet
-description: Replace the sample workbook with a reviewed derivative and rebuild the protected Registry Relay and Registry Notary inputs.
+description: Replace the sample workbook with a reviewed derivative and rebuild the protected Registry Relay inputs.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -16,14 +15,15 @@ standards_referenced: []
 Use a reviewed non-personal workbook after the
 [spreadsheet first run](../publish-spreadsheet-secured-registry-api/) works.
 Registryctl validates the workbook against explicit authored schema, access,
-and evidence decisions.
+and consultation decisions.
 
 ## When to use this
 
 Use this path when the institution starts from an XLSX workbook or a reviewed
 XLSX derivative of another source.
 The 1.0 path deliberately supports a regular table with one header row.
-It does not infer relationships, formulas, access policy, or evidence meaning.
+It does not infer relationships, formulas, access policy, or the meaning of a
+record.
 
 Start with the maintained four-column shape to get a working result:
 
@@ -32,10 +32,10 @@ Start with the maintained four-column shape to get a working result:
 | `project_id` | Stable, unique record key |
 | `district_code` | Example protected registry field |
 | `sector` | Example protected registry field |
-| `status` | Bounded input to the sample evidence rule |
+| `status` | Bounded input to the sample consultation output |
 
 For a different schema, edit the entity definition, workbook mapping, records
-projection, snapshot output, claims, and fixtures together.
+projection, snapshot output, and fixtures together.
 The [project configuration reference](../../reference/project-configuration/)
 lists those fields.
 
@@ -133,32 +133,37 @@ It must also appear in this projection.
 The required `project_id` filter is bound to authenticated caller identity.
 A caller-supplied query value does not replace that binding.
 
-## Review the evidence meaning
+## Review the consultation meaning
 
-The same project declares two predicate claims:
+The same project declares one consultation service over the same snapshot:
 
 ```yaml
-    claims:
-      project-record-exists:
-        cel: project.matched
-        disclosure: predicate
-      project-status-accepted:
-        cel: 'project.matched && project.status == "active"'
-        disclosure: predicate
+  public-works-verification:
+    kind: consultation_api
+    version: 1
+    purpose: public-works-case-management
+    legal_basis: public-service-delivery
+    consent: not_required
+    consultations:
+      project:
+        integration: project-record-snapshot
+        input: { project_id: request.target.identifiers.project_id }
 ```
 
-Keep `project-record-exists` only when this bounded registry lookup has the
+Keep `public-works-verification` only when this bounded registry lookup has the
 meaning your institution intends.
-Rename or replace `project-status-accepted` when `active` does not express the
-reviewed policy.
-The sample claim is not a legal eligibility decision.
+Rename the service and its `purpose` when `public-works-case-management` does
+not express the reviewed policy.
+The consultation returns the integration's declared minimized outputs. It is
+not a legal eligibility decision.
 
 Update the synthetic fixtures under
-`integrations/project-record-snapshot/fixtures/` whenever the claim meaning
-changes.
+`integrations/project-record-snapshot/fixtures/` whenever the consultation
+meaning changes.
 Fixtures contain invented observations and expected results.
 Do not copy whole workbook rows into them. The selected smoke fixture below
-uses only one reviewed identifier and the evidence-relevant `status` value.
+uses only one reviewed identifier and the `status` value the consultation
+returns.
 
 ## Select one reviewed smoke row
 
@@ -197,14 +202,6 @@ Then replace
 ```yaml
 name: match
 classification: synthetic
-request:
-  target:
-    type: Project
-    identifiers: [{ scheme: project_id, value: pw_001 }]
-  claims: [project-record-exists, project-status-accepted]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-works-case-management
 input: { project_id: pw_001 }
 interactions:
   - expect: { method: GET, path: /snapshot }
@@ -212,25 +209,14 @@ interactions:
 expect:
   outcome: match
   outputs: { status: active }
-  claims:
-    project-record-exists: true
-    project-status-accepted: true
 ```
 
-with a synthetic observation matching only the selector and evidence meaning
-you intend to exercise:
+with a synthetic observation matching only the selector and the outcome you
+intend to exercise:
 
 ```yaml
 name: match
 classification: synthetic
-request:
-  target:
-    type: Project
-    identifiers: [{ scheme: project_id, value: institution_001 }]
-  claims: [project-record-exists, project-status-accepted]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-works-case-management
 input: { project_id: institution_001 }
 interactions:
   - expect: { method: GET, path: /snapshot }
@@ -238,15 +224,12 @@ interactions:
 expect:
   outcome: match
   outputs: { status: active }
-  claims:
-    project-record-exists: true
-    project-status-accepted: true
 ```
 
 Keep `development.default_fixture: match`. The fixture remains synthetic; the
 local snapshot smoke check separately confirms that the selected reviewed row
-is reachable through Relay and that Notary returns only the two predicate
-claims.
+is reachable through Relay and that the consultation returns only the declared
+`status` output.
 
 ## Validate the workbook and authored policy
 
@@ -260,15 +243,15 @@ A passing unchanged fixture set reports:
 
 ```text
 Registry Stack test: passed for fictional-public-works-registry.
-Fixtures: 8.
+Fixtures: 3.
 Next: registryctl dev
 ```
 
-This proves the authored evidence semantics against synthetic observations.
-It does not prove facts about the workbook.
+This proves the authored consultation semantics against synthetic
+observations. It does not prove facts about the workbook.
 
 Validate the actual workbook mapping, every selected row, the records policy,
-and the evidence configuration:
+and the consultation configuration:
 
 ```sh
 registryctl check --explain
@@ -278,13 +261,13 @@ A valid project begins with:
 
 ```text
 Registry Stack check: valid for fictional-public-works-registry.
-Fixtures: 8.
+Fixtures: 3.
 Explanation: registry.project.explanation.v1
 ```
 
 The explanation redacts workbook-sensitive and internal authored values.
 Use the named diagnostic path to correct a header, type, duplicate key, row
-limit, projection, or claim error.
+limit, projection, or consultation error.
 
 ## Run the local product boundaries
 
@@ -302,12 +285,13 @@ development plan. Registryctl does not start the synthetic HTTP source or
 generate source credentials for this mode.
 
 The smoke result reports one live authorization denial and one authorized
-result with minimized claim identifiers. It exercises Relay and Notary against
-the copied workbook using the reviewed request and expected claim shape. A
-local workbook has no request counter, so smoke reports source effects as
-`unobserved`; the derived offline security fixture verifies the
-authorization-before-source contract. If smoke fails, recheck the selected
-row, `match_principal`, `match.yaml`, and evidence rule together.
+result with `minimized_claim_ids=none`, because this project releases no
+attributes. It exercises both Relay lanes against the copied workbook using
+the reviewed request and expected output shape. A local workbook has no
+request counter, so smoke reports source effects as `unobserved`; the derived
+offline security fixture verifies the authorization-before-source contract. If
+smoke fails, recheck the selected row, `match_principal`, and `match.yaml`
+together.
 
 ## Build reviewable inputs
 
@@ -320,7 +304,7 @@ registryctl build
 Registryctl reports:
 
 ```text
-Built unsigned signing inputs for relay-public, relay-consultation, notary.
+Built unsigned signing inputs for relay-public, relay-consultation.
 Build output: .registry-stack/build/local
 Next: bind an operator-managed source in a separate governed environment and rerun registryctl test; do not sign this file-backed build
 ```
@@ -337,13 +321,13 @@ source before starting governed approval.
 Before handoff, confirm:
 
 - `registryctl test` passes with synthetic fixtures that express the reviewed
-  evidence meaning.
+  consultation meaning.
 - `registryctl check --explain` validates the copied workbook and names no
   diagnostic violations.
 - `registryctl dev smoke` records a live denial and minimized authorized
   output against the selected reviewed case; the derived fixture supplies the
   authorization-before-source evidence that a local file cannot count.
-- `registryctl build` emits all three unsigned product lanes.
+- `registryctl build` emits both unsigned product lanes.
 - If the project is under version control, its status does not include
   `.registry-stack/` or an unapproved workbook.
 
@@ -355,5 +339,5 @@ Before handoff, confirm:
 | Duplicate primary key | Two rows share `project_id`. | Resolve the source identity problem. Registry Stack does not choose a duplicate. |
 | Formula or external reference diagnostic | The selected worksheet contains computed or linked cells. | Replace them with reviewed static values. |
 | Unexpected field appears in Relay output | The field remains in `api.projection`. | Remove it and obtain review before rebuilding. |
-| Fixture passes but workbook check fails | Fixtures test authored evidence semantics, while `check` also validates the workbook mapping and rows. | Correct the workbook or authored mapping without copying sensitive workbook values into fixtures. |
-| Workbook check passes but smoke fails | The selected smoke request or expected claims no longer match the reviewed workbook case. | Update the development request fixture and expected claim shape to describe one non-sensitive reviewed example without copying unrelated rows. |
+| Fixture passes but workbook check fails | Fixtures test authored consultation semantics, while `check` also validates the workbook mapping and rows. | Correct the workbook or authored mapping without copying sensitive workbook values into fixtures. |
+| Workbook check passes but smoke fails | The selected smoke request or expected outputs no longer match the reviewed workbook case. | Update the development request fixture and expected output shape to describe one non-sensitive reviewed example without copying unrelated rows. |

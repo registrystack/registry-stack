@@ -1,0 +1,36 @@
+type: object
+additionalProperties: false
+required:
+  - selectorRole
+  - eventType
+  - registeredStatus
+  - resultLimit
+  - resultOffset
+  - parentReferenceFields
+  - minimumParentReferences
+  - maximumParentReferences
+  - parentReferenceNamespace
+  - relationshipSetContract
+  - relationshipSetComplete
+  - absentConfiguredFieldMeansNoRegisteredParent
+properties:
+  selectorRole: {const: child}
+  eventType: {const: birth}
+  registeredStatus: {const: REGISTERED}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}
+  parentReferenceFields:
+    type: array
+    minItems: 1
+    maxItems: 2
+    uniqueItems: true
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  minimumParentReferences: {const: 1}
+  maximumParentReferences: {const: 2}
+  parentReferenceNamespace: {const: urn:gov:example:opencrvs:person}
+  relationshipSetContract: {const: urn:gov:example:opencrvs:registered-parent-set:v1}
+  relationshipSetComplete: {const: true}
+  absentConfiguredFieldMeansNoRegisteredParent: {const: true}

@@ -27,12 +27,6 @@ pub const RELAY_DIAGNOSTIC_OK_FIXTURE_V1: &str =
 pub const RELAY_DIAGNOSTIC_ERROR_FIXTURE_V1: &str =
     include_str!("../fixtures/diagnostics/registry-relay.error.json");
 
-pub const NOTARY_DIAGNOSTIC_OK_FIXTURE_V1: &str =
-    include_str!("../fixtures/diagnostics/registry-notary.ok.json");
-
-pub const NOTARY_DIAGNOSTIC_ERROR_FIXTURE_V1: &str =
-    include_str!("../fixtures/diagnostics/registry-notary.error.json");
-
 pub const CONFIG_EXPLANATION_FIXTURE_V1: &str =
     include_str!("../fixtures/explanations/registry-relay.explanation.json");
 

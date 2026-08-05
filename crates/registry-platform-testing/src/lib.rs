@@ -20,13 +20,8 @@ use base64::Engine;
 use jsonwebtoken::Algorithm;
 use registry_platform_audit::{verify_chain, AuditChainHasher, AuditEnvelope};
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
-use registry_platform_oid4vci::{CREDENTIAL_SIGNING_ALG_EDDSA, PROOF_JWT_TYPE};
-use registry_platform_replay::{
-    ReplayInsertOutcome, ReplayKey, ReplayScope, ReplayStore, ReplayStoreError,
-};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
-use time::OffsetDateTime;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use wiremock::{
     matchers::{method, path},
@@ -34,15 +29,6 @@ use wiremock::{
 };
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
-pub const FEDERATION_PROTOCOL: &str = "registry-notary-federation/v0.1";
-pub const FEDERATION_REQUEST_JWT_TYPE: &str = "registry-notary-request+jwt";
-pub const FEDERATION_RESPONSE_JWT_TYPE: &str = "registry-notary-response+jwt";
-pub const FEDERATION_EVALUATE_ACTION: &str = "evaluate";
-pub const FEDERATION_REQUEST_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6";
-pub const FEDERATION_RESPONSE_FIXTURE_JTI: &str = "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7";
-pub const FEDERATION_FIXTURE_PROFILE: &str = "disability_status_predicate";
-pub const FEDERATION_FIXTURE_PURPOSE: &str =
-    "https://purpose.example.gov/social-protection/service-delivery";
 
 #[derive(Debug)]
 pub struct MockIdp {
@@ -268,104 +254,6 @@ pub fn jwks_from_signing_provider(signer: &dyn SigningProvider) -> Value {
     json!({ "keys": [signer.public_jwk()] })
 }
 
-#[must_use]
-pub fn federation_request_fixture_claims(
-    issuer: &str,
-    subject_node_id: &str,
-    audience_node_id: &str,
-    now_unix_seconds: i64,
-) -> Value {
-    json!({
-        "iss": issuer,
-        "sub": subject_node_id,
-        "aud": audience_node_id,
-        "iat": now_unix_seconds,
-        "nbf": now_unix_seconds,
-        "exp": now_unix_seconds + 300,
-        "jti": FEDERATION_REQUEST_FIXTURE_JTI,
-        "protocol": FEDERATION_PROTOCOL,
-        "action": FEDERATION_EVALUATE_ACTION,
-        "profile": FEDERATION_FIXTURE_PROFILE,
-        "purpose": FEDERATION_FIXTURE_PURPOSE,
-        "request": {
-            "subject": {
-                "id": "example-subject-id",
-                "id_type": "national_id",
-            },
-            "claims": ["disability_status"],
-        },
-    })
-}
-
-#[must_use]
-pub fn federation_response_fixture_claims(
-    issuer: &str,
-    subject_node_id: &str,
-    audience_node_id: &str,
-    request_jti: &str,
-    now_unix_seconds: i64,
-) -> Value {
-    json!({
-        "iss": issuer,
-        "sub": subject_node_id,
-        "aud": audience_node_id,
-        "iat": now_unix_seconds,
-        "nbf": now_unix_seconds,
-        "exp": now_unix_seconds + 600,
-        "jti": FEDERATION_RESPONSE_FIXTURE_JTI,
-        "request_jti": request_jti,
-        "protocol": FEDERATION_PROTOCOL,
-        "action": FEDERATION_EVALUATE_ACTION,
-        "profile": FEDERATION_FIXTURE_PROFILE,
-        "result": {
-            "evaluation_id": "eval_01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6",
-            "subject_ref": {
-                "hash": "hmac-sha256:fixture",
-                "id_type": "national_id",
-            },
-            "claims": {
-                "disability_status": {
-                    "satisfied": true,
-                    "disclosure": "predicate",
-                },
-            },
-        },
-    })
-}
-
-#[must_use]
-pub fn sign_openid4vci_proof_jwt(
-    private_jwk: &str,
-    audience: &str,
-    nonce: Option<&str>,
-    now_unix_seconds: i64,
-) -> String {
-    let holder = PrivateJwk::parse(private_jwk).expect("fixture holder JWK parses");
-    let holder_id = registry_platform_crypto::did_jwk_from_public_jwk(&holder.public())
-        .expect("fixture holder public JWK encodes as did:jwk");
-    let mut claims = Map::new();
-    claims.insert("iss".to_string(), Value::String(holder_id));
-    claims.insert("aud".to_string(), Value::String(audience.to_string()));
-    claims.insert("iat".to_string(), json!(now_unix_seconds));
-    claims.insert("exp".to_string(), json!(now_unix_seconds + 60));
-    if let Some(nonce) = nonce {
-        claims.insert("nonce".to_string(), Value::String(nonce.to_string()));
-    }
-
-    let header = json!({
-        "alg": CREDENTIAL_SIGNING_ALG_EDDSA,
-        "typ": PROOF_JWT_TYPE,
-        "jwk": holder.public(),
-    });
-    let signing_input = format!(
-        "{}.{}",
-        encode_json(&header),
-        encode_json(&Value::Object(claims))
-    );
-    let signature = sign(signing_input.as_bytes(), &holder).expect("fixture holder signs proof");
-    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
-}
-
 fn normalize_claims(issuer: &str, claims: Value) -> Value {
     let now = now_unix_seconds();
     let mut claims = match claims {
@@ -571,34 +459,6 @@ fn json_value_contains(value: &Value, needle: &str) -> bool {
     }
 }
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ReplayAssertionError {
-    #[error("first replay insert did not succeed; got {0:?}")]
-    FirstInsert(ReplayInsertOutcome),
-    #[error("duplicate replay insert was not rejected; got {0:?}")]
-    DuplicateInsert(ReplayInsertOutcome),
-    #[error("replay store failed: {0}")]
-    Store(#[from] ReplayStoreError),
-}
-
-pub async fn assert_replay_duplicate_rejected(
-    store: &dyn ReplayStore,
-    scope: &ReplayScope,
-    key: &ReplayKey,
-    expires_at: OffsetDateTime,
-) -> Result<(), ReplayAssertionError> {
-    match store.insert_once(scope, key, expires_at).await? {
-        ReplayInsertOutcome::Inserted => {}
-        outcome => return Err(ReplayAssertionError::FirstInsert(outcome)),
-    }
-
-    match store.insert_once(scope, key, expires_at).await? {
-        ReplayInsertOutcome::AlreadySeen => Ok(()),
-        outcome => Err(ReplayAssertionError::DuplicateInsert(outcome)),
-    }
-}
-
 #[must_use]
 pub fn oidc_verifier_config(
     issuer: String,
@@ -624,6 +484,7 @@ pub fn oidc_verifier_config(
 mod tests {
     use std::sync::Mutex;
 
+    use super::*;
     use async_trait::async_trait;
     use jsonwebtoken::decode_header;
     use registry_platform_audit::{AuditError, AuditSink, ChainState};
@@ -633,9 +494,6 @@ mod tests {
         fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
         TokenVerifier,
     };
-    use registry_platform_replay::{InMemoryReplayStore, ReplayKey, ReplayScope};
-
-    use super::*;
 
     #[test]
     fn ed25519_fixture_signs_and_verifies() {
@@ -658,95 +516,22 @@ mod tests {
     #[tokio::test]
     async fn provider_backed_jwt_fixture_signs_with_provider_kid_and_jwks() {
         let signer = fixtures::ed25519_signer();
+        let typ = "registry-platform-testing+jwt";
         let token = sign_ed25519_compact_jwt_with_provider(
             &signer,
-            FEDERATION_REQUEST_JWT_TYPE,
-            federation_request_fixture_claims(
-                "https://agency-a.example.gov",
-                "did:web:agency-a.example.gov",
-                "did:web:agency-b.example.gov",
-                now_unix_seconds(),
-            ),
+            typ,
+            json!({ "sub": "fixture-subject" }),
         )
         .await;
 
         let header = decode_header(&token).expect("header decodes");
         assert_eq!(header.kid.as_deref(), Some(signer.key_id()));
-        assert_eq!(header.typ.as_deref(), Some(FEDERATION_REQUEST_JWT_TYPE));
+        assert_eq!(header.typ.as_deref(), Some(typ));
 
         let jwks = jwks_from_signing_provider(&signer);
         let keys = jwks["keys"].as_array().expect("jwks keys");
         assert_eq!(keys[0]["kid"], signer.key_id());
         assert!(keys[0].get("d").is_none());
-    }
-
-    #[tokio::test]
-    async fn federation_request_jwt_signs_verifies_and_tampering_fails() {
-        let (private, _) = fixtures::ed25519_pair();
-        let issuer = "https://agency-a.example.gov";
-        let audience = "did:web:agency-b.example.gov";
-        let subject = "did:web:agency-a.example.gov";
-        let now = now_unix_seconds();
-        let claims = federation_request_fixture_claims(issuer, subject, audience, now);
-        let token = sign_ed25519_compact_jwt_with_key(
-            &private,
-            FEDERATION_REQUEST_JWT_TYPE,
-            "registry-platform-testing-ed25519-1",
-            claims,
-        );
-
-        let header = decode_header(&token).expect("header decodes");
-        assert_eq!(header.typ.as_deref(), Some(FEDERATION_REQUEST_JWT_TYPE));
-        assert_eq!(
-            jwt_claims(&token)["jti"],
-            Value::String(FEDERATION_REQUEST_FIXTURE_JTI.to_string())
-        );
-
-        let jwks = jwks_from_private_jwk(&private);
-        let upstream = MockHttpUpstream::start().await;
-        upstream
-            .expect("GET", "/jwks")
-            .respond_json(200, jwks)
-            .await;
-        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
-            format!("{}/jwks", upstream.url()),
-            JwksFetcherConfig {
-                cache_ttl: Duration::from_secs(60),
-                negative_cache_ttl: Duration::from_millis(1),
-                refresh_cooldown: Duration::from_millis(1),
-                max_doc_bytes: 16 * 1024,
-                request_timeout: Duration::from_secs(5),
-            },
-            FetchUrlPolicy::dev(),
-        ));
-        let verifier = TokenVerifier::new(
-            registry_platform_oidc::TokenVerifierConfig {
-                issuer: issuer.to_string(),
-                audiences: vec![audience.to_string()],
-                allowed_algorithms: vec![Algorithm::EdDSA],
-                allowed_typ: vec![FEDERATION_REQUEST_JWT_TYPE.to_string()],
-                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
-                allowed_userinfo_typ: vec!["JWT".to_string()],
-                userinfo_requires_exp: true,
-                scope_claim: "scope".to_string(),
-                scope_separator: ' ',
-                scope_map: None,
-                allowed_clients: Vec::new(),
-                leeway: Duration::from_secs(60),
-            },
-            fetcher,
-        );
-
-        let verified = verifier.verify(&token).await.expect("request verifies");
-        assert_eq!(verified.claims.iss.as_deref(), Some(issuer));
-        assert_eq!(verified.claims.sub.as_deref(), Some(subject));
-        assert_eq!(
-            verified.claims.extra["jti"],
-            Value::String(FEDERATION_REQUEST_FIXTURE_JTI.to_string())
-        );
-
-        let tampered = tamper_payload_claim(&token, "purpose", json!("https://attacker.test"));
-        assert!(verifier.verify(&tampered).await.is_err());
     }
 
     #[tokio::test]
@@ -773,6 +558,7 @@ mod tests {
                 refresh_cooldown: Duration::from_millis(1),
                 max_doc_bytes: 16 * 1024,
                 request_timeout: Duration::from_secs(5),
+                outage_tolerance: Duration::from_secs(900),
             },
             FetchUrlPolicy::dev(),
         ));
@@ -906,39 +692,6 @@ mod tests {
         .expect("retained suffix verifies");
         assert_eq!(verification.start_prev_hash, Some(first.record_hash));
         assert_eq!(verification.last_hash, Some(second.record_hash));
-    }
-
-    #[tokio::test]
-    async fn replay_duplicate_assertion_checks_store_behavior() {
-        let store = InMemoryReplayStore::new();
-        let scope =
-            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
-        let key = ReplayKey::new("nonce-1").expect("valid key");
-        let expires_at = OffsetDateTime::now_utc() + Duration::from_secs(60);
-
-        assert_replay_duplicate_rejected(&store, &scope, &key, expires_at)
-            .await
-            .expect("duplicate rejection asserted");
-    }
-
-    fn jwt_claims(token: &str) -> Value {
-        let payload = token
-            .split('.')
-            .nth(1)
-            .expect("compact JWT has a payload segment");
-        let payload = URL_SAFE_NO_PAD
-            .decode(payload)
-            .expect("payload is base64url");
-        serde_json::from_slice(&payload).expect("payload is JSON")
-    }
-
-    fn tamper_payload_claim(token: &str, claim: &str, value: Value) -> String {
-        let mut parts = token.split('.').map(str::to_string).collect::<Vec<_>>();
-        assert_eq!(parts.len(), 3, "compact JWT has three segments");
-        let mut claims = jwt_claims(token);
-        claims[claim] = value;
-        parts[1] = encode_json(&claims);
-        parts.join(".")
     }
 
     #[derive(Default)]

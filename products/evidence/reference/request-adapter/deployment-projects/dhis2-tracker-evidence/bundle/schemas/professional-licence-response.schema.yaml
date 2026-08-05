@@ -1,0 +1,105 @@
+# Shape of the projected tracker response, checked before extraction runs.
+# The prepared request asks for page 1 of size 2, so the pager echo is a
+# constant here rather than a comparison the script has to repeat. Whether the
+# page count agrees with the total stays with the script: that is arithmetic
+# between fields, not a shape.
+type: object
+additionalProperties: false
+required: [pager, trackedEntities]
+properties:
+  pager:
+    type: object
+    additionalProperties: false
+    required: [page, pageSize, total, pageCount]
+    properties:
+      page:
+        type: integer
+        const: 1
+      pageSize:
+        type: integer
+        const: 2
+      total:
+        type: integer
+        minimum: 0
+        maximum: 1000000
+      pageCount:
+        type: integer
+        minimum: 0
+        maximum: 1000000
+  trackedEntities:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      # No projected leaf can be required of every record. Projection drops a
+      # leaf the record did not carry, and an ambiguous page is decided from
+      # the pager before any record is read, so a record on that page need not
+      # be complete. attributes and enrollments are not listed either, for a
+      # different reason: projection rejects a record missing an intermediate
+      # its children hang from, so saying so here would only repeat the
+      # projection.
+      required: []
+      properties:
+        trackedEntity:
+          type: string
+          minLength: 1
+          maxLength: 64
+        attributes:
+          # A closed schema must bound every array. This ceiling is a shape
+          # limit on one tracked entity's attribute list, well above what the
+          # programme records, not a statement about which attributes matter.
+          type: array
+          minItems: 0
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [attribute, value]
+            properties:
+              attribute:
+                type: string
+                minLength: 1
+                maxLength: 64
+              value:
+                type: string
+                maxLength: 512
+        enrollments:
+          type: array
+          minItems: 0
+          maxItems: 16
+          items:
+            type: object
+            additionalProperties: false
+            # The projection selects program and status for every enrollment,
+            # so an enrollment returned without either is a source shape this
+            # adapter does not understand. events is optional: an enrollment
+            # that recorded none is the case the restriction reading covers.
+            required: [program, status]
+            properties:
+              program:
+                type: string
+                minLength: 1
+                maxLength: 64
+              status:
+                type: string
+                minLength: 1
+                maxLength: 64
+              events:
+                type: array
+                minItems: 0
+                maxItems: 64
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [programStage, status]
+                  properties:
+                    programStage:
+                      type: string
+                      minLength: 1
+                      maxLength: 64
+                    status:
+                      type: string
+                      minLength: 1
+                      maxLength: 64

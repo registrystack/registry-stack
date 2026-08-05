@@ -19,4 +19,4 @@ interactions:
               id: patient-other
               birthDate: 2016-09-03
               name: [{ family: Different, given: [Person] }]
-expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }
+expect: { error: failure.subject_mismatch, outputs: {} }

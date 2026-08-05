@@ -10,4 +10,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims: { person-record-exists: false, person-active: null }

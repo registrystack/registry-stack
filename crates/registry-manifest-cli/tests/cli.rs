@@ -204,28 +204,25 @@ fn validate_prints_source_digest_and_rejects_runtime_only_keys() {
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(stdout.contains("source_manifest_digest: sha256:"));
 
-    let federation = dir.join("federation.yaml");
+    let endpoints = dir.join("endpoints.yaml");
     write_minimal_manifest(
-        &federation,
+        &endpoints,
         r#"
-federation:
-  node_id: did:web:registry.example.test
-  issuer: https://registry.example.test
-  jwks_uri: https://registry.example.test/.well-known/jwks.json
-  federation_api: https://registry.example.test/federation
-  supported_protocol_versions:
-    - registry-notary-federation/v0.1
+data_services:
+  - id: person_api
+    title: Person API
+    endpoint_url: https://registry.example.test/v1/person
 datasets: []
 "#,
     );
     let output = Command::new(bin())
         .arg("validate")
-        .arg(&federation)
+        .arg(&endpoints)
         .output()
         .expect("run cli");
     assert!(
         output.status.success(),
-        "federation jwks_uri should be source metadata, stderr: {}",
+        "a declared endpoint URL should be source metadata, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

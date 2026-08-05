@@ -1,0 +1,206 @@
+---
+title: See Evidence refuse unsafe requests
+description: Cross the HTTP boundary with an unauthorized request, then prove that a modified assertion cannot be trusted.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
+You will reuse that project to observe two boundaries: Evidence denies a purpose the provider did
+not authorize, and the verifier rejects a response changed after signing.
+
+<QuickstartMeta
+  outcome="Two unsafe changes are refused without producing trusted evidence."
+  time="About 10 minutes"
+  level="Local development with synthetic data"
+  prerequisites={[
+    'The adult-status project after completing the governed-value tutorial',
+    'The registry.py source from the first Evidence tutorial',
+    'Python 3 and curl',
+  ]}
+/>
+
+## Restart the local boundary
+
+In the terminal that owns the Python registry, return to the `first-evidence-assertion` directory
+and start the source:
+
+```sh
+python3 registry.py
+```
+
+In another terminal, enter the existing project and start a fresh local generation:
+
+```sh
+cd adult-status
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+## Prepare one authorized request
+
+Prepare a normal age-bracket request. This records the exact verification expectations before any
+response exists:
+
+```sh
+evidencectl request prepare age-bracket \
+  --purpose service-path-selection \
+  --subject person_id=person-123 \
+  --name refusal-check
+```
+
+The provider authorized `service-path-selection`. Preparation also obtained short-lived local
+authorization for that exact authority path.
+
+## Change the purpose after preparation
+
+Copy the request, then change only its purpose:
+
+```sh
+cp .evidence/requests/refusal-check/request.json unauthorized-request.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path("unauthorized-request.json")
+request = json.loads(path.read_text())
+request["purpose"] = "age-check"
+path.write_text(json.dumps(request))
+PY
+```
+
+The retained authorization does not grant `age-check` for this requirement. Send the changed
+request across the same HTTP boundary:
+
+```sh
+curl --silent --show-error \
+  --config .evidence/requests/refusal-check/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @unauthorized-request.json \
+  --output unauthorized-response.json \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 403
+```
+
+Inspect the public problem:
+
+```sh
+python3 -m json.tool unauthorized-response.json
+```
+
+The response identifies only the closed `not_authorized` problem and an opaque operation ID. It
+does not reveal source facts, selector values, grants, or credentials. The registry terminal shows
+no new `GET /people/person-123` because authorization failed before source access.
+
+## Obtain and verify the authorized response
+
+Now send the unchanged prepared request:
+
+```sh
+curl --silent --show-error \
+  --config .evidence/requests/refusal-check/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/refusal-check/request.json \
+  --output authorized-response.jws.json
+```
+
+Verify it against the expectations retained during preparation:
+
+```sh
+evidencectl verify authorized-response.jws.json \
+  --context .evidence/requests/refusal-check/verification.json \
+  --output authorized-response.verified.json
+```
+
+```text
+VERIFIED
+```
+
+This is the control case. The authorized, unchanged response is trusted.
+
+## Change the signed response
+
+Copy the flattened JWS and change one character in its signed payload:
+
+```sh
+cp authorized-response.jws.json tampered-response.jws.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path("tampered-response.jws.json")
+document = json.loads(path.read_text())
+payload = document["payload"]
+document["payload"] = ("A" if payload[0] != "A" else "B") + payload[1:]
+path.write_text(json.dumps(document))
+PY
+```
+
+Try to verify the changed response:
+
+```sh
+if evidencectl verify tampered-response.jws.json \
+  --context .evidence/requests/refusal-check/verification.json \
+  --output tampered-response.verified.json
+then
+  echo 'unexpected verification success' >&2
+  exit 1
+fi
+test ! -e tampered-response.verified.json
+echo 'TAMPER REFUSED'
+```
+
+```text
+evidencectl: Evidence response verification failed
+TAMPER REFUSED
+```
+
+Verification fails without publishing a trusted payload. Your application must make decisions
+only from the verifier output, never from an unverified response body.
+
+## Clean up
+
+Stop the local services:
+
+```sh
+evidencectl dev stop
+```
+
+Return to the registry terminal and press `Ctrl+C`.
+
+## What you proved
+
+- A valid access token does not widen the provider's authorized purpose.
+- Authorization failure happens before the protected source is called.
+- A signed response cannot be changed without invalidating its signature.
+- Only verified output is safe for an application to consume.
+
+## Next
+
+- [Connect an institution source](../connect-an-institution-source/)
+- [Configure Evidence](../../configure/evidence/)
+- [Review the Evidence security model](../../security/evidence/)

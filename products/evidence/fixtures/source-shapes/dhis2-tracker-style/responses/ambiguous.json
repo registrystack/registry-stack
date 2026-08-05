@@ -1,0 +1,18 @@
+{
+  "pager": {
+    "page": 1,
+    "pageSize": 2,
+    "total": 2,
+    "pageCount": 1
+  },
+  "trackedEntities": [
+    {
+      "trackedEntity": "C0000000001",
+      "attributes": [{"attribute": "ATTR-STATUS", "value": "C-A"}]
+    },
+    {
+      "trackedEntity": "C0000000001",
+      "attributes": [{"attribute": "ATTR-STATUS", "value": "C-B"}]
+    }
+  ]
+}

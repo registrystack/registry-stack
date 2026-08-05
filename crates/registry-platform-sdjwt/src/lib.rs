@@ -76,7 +76,12 @@ impl SdJwtIssuer {
         }
 
         let mut digests = Vec::with_capacity(input.disclosures.len());
-        let mut disclosures = Vec::with_capacity(input.disclosures.len());
+        let nested_count = input
+            .object_disclosures
+            .iter()
+            .map(|object| object.fields.len())
+            .sum::<usize>();
+        let mut disclosures = Vec::with_capacity(input.disclosures.len() + nested_count);
         for disclosure in input.disclosures {
             let issued = issue_disclosure(&disclosure.name, disclosure.value)?;
             digests.push(issued.digest);
@@ -87,6 +92,21 @@ impl SdJwtIssuer {
             "_sd".to_string(),
             Value::Array(digests.into_iter().map(Value::String).collect()),
         );
+        for object in input.object_disclosures {
+            let mut object_digests = Vec::with_capacity(object.fields.len());
+            for disclosure in object.fields {
+                let issued = issue_disclosure(&disclosure.name, disclosure.value)?;
+                object_digests.push(issued.digest);
+                disclosures.push(issued.encoded);
+            }
+            sort_sd_digests(&mut object_digests);
+            payload.insert(
+                object.name,
+                json!({
+                    "_sd": object_digests,
+                }),
+            );
+        }
 
         let header = json!({
             "alg": signing_algorithm_jwa(self.signer.algorithm()),
@@ -131,6 +151,15 @@ pub struct Disclosure {
     pub value: Value,
 }
 
+/// One always-visible object container whose direct properties are separately
+/// disclosable. Nested property values remain atomic; recursive disclosure is
+/// deliberately outside this bounded helper.
+#[derive(Clone, Debug)]
+pub struct ObjectDisclosure {
+    pub name: String,
+    pub fields: Vec<Disclosure>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SdJwtIssuanceInput {
     pub iss: String,
@@ -143,6 +172,7 @@ pub struct SdJwtIssuanceInput {
     pub public_claims: BTreeMap<String, Value>,
     pub cnf: Option<HolderConfirmation>,
     pub disclosures: Vec<Disclosure>,
+    pub object_disclosures: Vec<ObjectDisclosure>,
 }
 
 impl SdJwtIssuanceInput {
@@ -175,6 +205,24 @@ impl SdJwtIssuanceInput {
                 return Err(SdJwtError::InvalidInput);
             }
         }
+        for object in &self.object_disclosures {
+            if invalid_disclosure_name(&object.name)
+                || self.public_claims.contains_key(&object.name)
+                || !names.insert(object.name.as_str())
+                || object.fields.is_empty()
+                || object.fields.len() > 64
+            {
+                return Err(SdJwtError::InvalidInput);
+            }
+            let mut fields = BTreeSet::new();
+            for disclosure in &object.fields {
+                if invalid_object_property_name(&disclosure.name)
+                    || !fields.insert(disclosure.name.as_str())
+                {
+                    return Err(SdJwtError::InvalidInput);
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -195,6 +243,14 @@ fn invalid_disclosure_name(value: &str) -> bool {
 
 fn invalid_public_claim_name(value: &str) -> bool {
     invalid_disclosure_name(value)
+}
+
+fn invalid_object_property_name(value: &str) -> bool {
+    value.is_empty()
+        || value.len() > 128
+        || value == "_sd"
+        || value == "..."
+        || value.chars().any(char::is_control)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -546,6 +602,7 @@ mod tests {
                     name: "claim-a".to_string(),
                     value: json!({"ok": true}),
                 }],
+                object_disclosures: Vec::new(),
             })
             .await
             .expect("issues");
@@ -776,6 +833,53 @@ mod tests {
         disclosure_digests.sort_unstable();
 
         assert_eq!(sd, disclosure_digests);
+    }
+
+    #[tokio::test]
+    async fn object_properties_are_independent_nested_disclosures() {
+        let issuer =
+            SdJwtIssuer::from_jwk(PrivateJwk::parse(RAW_JWK).expect("jwk")).expect("issuer builds");
+        let signed = issuer
+            .issue(SdJwtIssuanceInput {
+                object_disclosures: vec![ObjectDisclosure {
+                    name: "birthCertificate".to_string(),
+                    fields: vec![
+                        Disclosure {
+                            name: "givenName".to_string(),
+                            value: json!("John"),
+                        },
+                        Disclosure {
+                            name: "placeOfBirth".to_string(),
+                            value: json!({"city": "Dusseldorf", "country": "DE"}),
+                        },
+                    ],
+                }],
+                ..issue_input(None)
+            })
+            .await
+            .expect("issues");
+
+        let payload = jwt_payload(&signed.jwt);
+        assert_eq!(payload["_sd"], json!([]));
+        let nested = payload["birthCertificate"]["_sd"]
+            .as_array()
+            .expect("nested digest array");
+        assert_eq!(nested.len(), 2);
+        let names = signed
+            .jwt
+            .split('~')
+            .skip(1)
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| {
+                let decoded = URL_SAFE_NO_PAD.decode(segment).expect("disclosure decodes");
+                let disclosure: Value = serde_json::from_slice(&decoded).expect("disclosure JSON");
+                disclosure[1].as_str().expect("claim name").to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from(["givenName".to_string(), "placeOfBirth".to_string()])
+        );
     }
 
     #[tokio::test]
@@ -1073,6 +1177,7 @@ mod tests {
             public_claims: BTreeMap::new(),
             cnf,
             disclosures: Vec::new(),
+            object_disclosures: Vec::new(),
         }
     }
 

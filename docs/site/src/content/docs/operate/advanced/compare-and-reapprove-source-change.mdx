@@ -1,19 +1,18 @@
 ---
-title: Compare and approve an evidence change
-description: Test an evidence change, identify affected product lanes, assemble the next approved set, and regenerate the deployment package.
+title: Compare and approve a source change
+description: Test a Relay source or consultation change, identify affected product lanes, assemble the next approved set, and regenerate the deployment package.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-30"
+last_reviewed: "2026-08-04"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure to add or change an integration, consultation, claim, credential profile,
+Use this procedure to add or change an integration, consultation, attribute release profile,
 environment, or fixture in an existing governed Registry Stack deployment.
 
 ## When to use this
@@ -21,13 +20,14 @@ environment, or fixture in an existing governed Registry Stack deployment.
 Use this flow after a product baseline has been approved and deployed.
 It preserves unchanged product lanes and identifies the lanes that need new review and signatures.
 
-A typical new external evidence integration changes:
-
-- `relay-consultation`, which owns source access and minimized consultation output
-- `notary`, which owns claims, disclosure, rendering, issuance, and signing
+A typical new external source integration changes `relay-consultation`, which owns source access
+and minimized consultation output.
 
 `relay-public` changes only when the public records surface or its materialization also changes.
 Registryctl computes the affected set from the reviewed authored and generated closures.
+
+A project has exactly two product lanes, `relay-public` and `relay-consultation`, and no signing,
+assembly, or deployment step accepts any other lane name.
 
 ## Ownership and trust boundary
 
@@ -71,11 +71,10 @@ Resolve a stale or invalid result before combining that condition with an eviden
 Edit the smallest authored surface that expresses the new contract:
 
 1. Update the integration and its wholly synthetic fixtures.
-2. Update the evidence service consultation, claims, disclosure, or credential profile when
-   Notary behavior changes.
+2. Update the consultation and its attribute release profiles when the minimized output changes.
 3. Update the environment only for deployment-specific source origins, secret references, trust,
    and resource bindings.
-4. Keep consumer eligibility, ranking, workflow, and action policy outside the evidence service.
+4. Keep consumer eligibility, ranking, workflow, and action policy outside the deployment.
 
 Do not widen an origin, method, path wildcard, credential, output, source-call count, byte limit,
 or deadline merely to make a fixture pass.
@@ -100,8 +99,8 @@ Validate the complete effective plan:
 registryctl check --explain
 ```
 
-Review the source authority, secret consumers, input mapping, outputs, claims, disclosure, and
-bounds.
+Review the source authority, secret consumers, input mapping, outputs, attribute release
+profiles, and bounds.
 
 Compare with the approved set:
 
@@ -136,7 +135,7 @@ and reviewed closure.
 ## Sign each affected lane
 
 The owning signer signs each affected lane into a new digest-specific directory.
-For a typical consultation and claim change:
+For a typical consultation change:
 
 ```sh
 registryctl trust bundle sign \
@@ -146,13 +145,6 @@ registryctl trust bundle sign \
   --key file:./keys/relay-consultation.private.jwk \
   --against ./approved-set.v1.json \
   --output-dir ./approved/relay-consultation-next
-registryctl trust bundle sign \
-  --lane notary \
-  --input ./.registry-stack/build/production/signing-inputs/notary \
-  --anchor ./trust/notary.anchor.json \
-  --key file:./keys/notary.private.jwk \
-  --against ./approved-set.v1.json \
-  --output-dir ./approved/notary-next
 ```
 
 Use an explicitly supported key locator.
@@ -170,7 +162,6 @@ Assemble the replacements with verified unchanged lanes:
 registryctl trust approved-set assemble \
   --from ./approved-set.v1.json \
   --relay-consultation ./approved/relay-consultation-next \
-  --notary ./approved/notary-next \
   --output-file ./approved-set.next.v1.json
 ```
 
@@ -217,7 +208,8 @@ Do not automatically roll back to an older sequence.
 
 The runbook stops externally reachable dependents before a potentially incompatible private-lane
 change, starts and verifies affected dependencies, then resumes dependents.
-A mixed consultation Relay and Notary contract must fail before source access.
+A consultation Relay whose accepted configuration disagrees with the package must fail before
+source access.
 
 ## Verify the result
 
@@ -227,7 +219,7 @@ After the update:
 2. Run each product-owned `verify_state` action from the generated runbook.
 3. Check value-free health and readiness.
 4. Exercise an authorized synthetic evaluation with an operator-owned request file.
-5. Confirm the changed claim and minimized output without recording source values.
+5. Confirm the changed attribute release and minimized output without recording source values.
 6. Confirm the operator-owned application and include graph remain separate from the package.
 
 Remove `generated.previous/` only when the generated runbook says the new acceptance is complete.
@@ -281,7 +273,7 @@ Its package result does not extend to application services or the include graph.
 Stop the update and involve the owning product and security reviewers when:
 
 - Authorization denial performs token or source work
-- A mixed Relay and Notary interface reaches source access
+- A cross-lane interface mismatch reaches source access
 - A secret or private key appears in retained output
 - Product state reports an unexpected lane identity, sequence, anchor, or configuration hash
 - Package verification reports `invalid`

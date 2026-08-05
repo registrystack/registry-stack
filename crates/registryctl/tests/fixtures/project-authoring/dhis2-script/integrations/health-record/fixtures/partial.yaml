@@ -35,16 +35,3 @@ expect:
     bcg_birth_dose_recorded: false
     opv_birth_dose_recorded: null
     measles_dose_recorded: true
-  claims:
-    tracked-entity-first-name: null
-    tracked-entity-last-name: null
-    child-program-active: false
-    child-age-band: null
-    programme-code: DEMO_CHILD_PROGRAM
-    reconciliation-reference: redacted
-    maternal-postnatal-care-active: null
-    child-health-visit-recorded: null
-    tb-program-active: null
-    bcg-birth-dose-recorded: false
-    opv-birth-dose-recorded: null
-    measles-dose-recorded: true

@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [requestedFields]
+properties:
+  requestedFields:
+    const: [result]

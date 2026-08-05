@@ -212,7 +212,8 @@ notary-three-parties [stale WITNESS name fixed], relay-two-rooms [feature-gate l
 1 REJECTED with evidence (notary-disclosure-lens drew a fourth disclosure mode the docs deny),
 9 retired. In-use fixes: evidence-transports pre-rename routes, claim-model connector/rule kinds
 (+ page alt), country-evidence-mesh unanchored AI panel removed. New diagrams: solmara-lab-topology
-(first-run tutorial), registry-relay-or-notary (when-to-use), registry-trust-boundaries
+(first-run tutorial), registry-relay-or-notary (when-to-use; deleted with the Notary
+retirement on 2026-08-03 and not replaced), registry-trust-boundaries
 (threat-model, Tier-C deltas recorded), mermaid adapter chains on the FHIR and DHIS2 tutorials.
 check-svg-a11y.mjs expected list realigned (13 in-use files). Dark-mode contrast issue filed as
 registry-stack#291. Spec-page mermaid deliberately left as mermaid (drift-resistant).

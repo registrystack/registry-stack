@@ -1,0 +1,88 @@
+version: 1
+assuranceProfile: evidence-grade
+service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+issuer: {id: urn:example:fixture:issuer:authority}
+authentication:
+  kind: oidc-access-token
+  issuer: https://identity.invalid
+  audiences: [evidence-fixture]
+  tokenTypes: [at+jwt]
+  algorithms: [EdDSA]
+  jwksUri: https://identity.invalid/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+signing:
+  format: flattened-jws-json
+  algorithm: EdDSA
+  activeKeyId: fixture-key-2026-01
+  activeKeyRef: secret:file/signing-key
+  retiredPublicJwkFiles: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 86400
+  verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
+selectorProfiles:
+  person-demographics-v1:
+    maximumAggregateBytes: 420
+    fields:
+      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      birth_date: {type: date}
+sources:
+  source-a:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: POST
+      path: /v1/facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
+      prepareScript: adapters/source-a-prepare.rhai
+      adapterParameters: {requestedFields: [date_of_birth], resultLimit: 2}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/total, /date_of_birth]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/source-a.rhai
+    factSchema: schemas/facts.schema.yaml
+authorityProfiles:
+  statutory-caseworker-v1:
+    kind: statutory
+    requesterTags: [fixture-agency]
+    grants:
+      - requirement: urn:example:fixture:requirement:adult-status:v1
+        purpose: fixture-eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]
+requirements:
+  - id: urn:example:fixture:requirement:adult-status:v1
+    kind: criterion
+    source: source-a
+    purposes: [fixture-eligibility]
+    subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}]
+    referenceFrameworks: [urn:example:fixture:framework:adult-status:v1]
+    evidenceType: urn:example:fixture:evidence-type:adult-status:v1
+    observationTimezone: Asia/Bangkok
+    validitySeconds: 86400
+    derivation: {script: derivations/adult-status.rhai, parameters: {minimum_age_years: 18}}
+    concepts: [{id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:adult-status]}
+    existenceDisclosure: collapse-unresolved

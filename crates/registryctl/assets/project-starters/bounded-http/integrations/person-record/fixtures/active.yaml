@@ -1,13 +1,5 @@
 name: active-person
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: registry_person_id, value: AB-123456 }]
-  claims: [person-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-service-person-verification
 input: { person_id: AB-123456 }
 interactions:
   - expect:
@@ -18,4 +10,3 @@ interactions:
 expect:
   outcome: match
   outputs: { active: true }
-  claims: { person-record-exists: true, person-active: true }

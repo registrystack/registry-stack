@@ -6,8 +6,9 @@ owner: registry-docs
 source_repos:
   - registry-platform
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-19"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-03"
 doc_type: specification
 doc_id: RS-OP-POSTURE
 category: normative
@@ -24,11 +25,14 @@ audience:
   - maintainer
 ---
 
-This document defines the operations posture observation that Registry Relay and Registry Notary
-return from their protected admin surfaces. It gives operators and tooling authors one stable,
+This document defines the operations posture observation that Registry Relay returns from its
+protected admin surface. It gives operators and tooling authors one stable,
 versioned document for observing build, runtime, configuration, deployment, audit, and
 component-specific status without treating that observation as an authorization decision or a
 source of secrets.
+The `registry.ops.posture.v1` contract is frozen and still models a second component,
+`registry-notary`, which is retired. Section 1 states which components produce a posture document
+today.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
@@ -48,16 +52,28 @@ semantic producer validation, and evolution rules that JSON Schema alone does no
 | 0.1.2 | 2026-07-20 | draft | Replaced waiver reason text with validated operator references and optional summaries before the 1.0 schema freeze. |
 | 0.1.3 | 2026-07-23 | draft | Reserved credential-shaped waiver-reference prefixes before the 1.0 schema freeze. |
 | 0.1.4 | 2026-07-24 | draft | Separated portable waiver-schema checks from contextual semantic validation before the 1.0 schema freeze. |
+| 0.1.5 | 2026-08-03 | draft | Recorded that Registry Notary is retired and that no supported deployment produces a `registry-notary` document, while the frozen v1 shape and the consumer validation path for one are unchanged. Stated that Evidence and Registry Mint expose no posture endpoint. |
 
 ## 1. Scope and surface
 
 This specification covers a point-in-time operations observation returned by
 `GET /admin/v1/posture`.
-Registry Relay and Registry Notary expose that route on their protected admin surfaces, not in
+Registry Relay exposes that route on its protected admin surface, not in
 the public Registry Relay API document.
 The product route and authorization details remain with the
-[Registry Relay API reference](../../reference/apis/registry-relay/) and the
-[Registry Notary API reference](../../reference/apis/registry-notary/).
+[Registry Relay API reference](../../reference/apis/registry-relay/).
+
+Registry Relay is the only producer of a posture document in a supported deployment. The v1
+contract also models a second, retired component: no supported deployment emits a
+`registry-notary` document, and the shape is kept only so a consumer can still validate one it
+has retained.
+
+Evidence and Registry Mint expose no `/admin/v1/posture` route and emit no posture document. An
+operator observes an Evidence process through its unauthenticated liveness and readiness probes
+and, where the deployment enables it, through the optional metrics listener that Evidence binds
+to a private address and that serves only `GET /metrics`. Registry Mint likewise exposes liveness
+and readiness probes only. Neither service is in scope for the requirements in this
+specification.
 
 This specification does not define deployment configuration, profile-gate policy, audit
 retention, or a new authorization scope.
@@ -73,8 +89,9 @@ The root object and named nested objects use `additionalProperties: false`, exce
 explicitly modeled maps.
 `standards_artifacts` accepts producer-selected artifact labels, while each artifact-reference
 value has the closed shape defined by the schema.
-`notary.signing_keys.readiness` accepts signing-key identifiers, while each value is one of the
-defined readiness states.
+The second modeled map, `notary.signing_keys.readiness`, accepts signing-key identifiers with one
+of the defined readiness states as each value. It belongs to the retired component's section and
+no supported producer emits it.
 
 REQ-OP-POSTURE-001: A producer MUST emit a JSON object that validates against
 `registry.ops.posture.v1`.
@@ -91,19 +108,21 @@ than silently guessing the disclosure class.
 
 ### Component rules
 
-`component` is exactly one of `registry-relay` and `registry-notary`.
+`component` is exactly one of `registry-relay` and `registry-notary`, the retired component.
 The component selects one, and only one, component section.
 
 | `component` value | Required section | Forbidden section |
 | --- | --- | --- |
-| `registry-relay` | `relay` | `notary` |
-| `registry-notary` | `notary` | `relay` |
+| `registry-relay` | `relay` | `notary`, the section of the retired component |
+| `registry-notary`, retired | `notary` | `relay` |
 
 REQ-OP-POSTURE-003: A `registry-relay` document MUST contain `relay` and MUST NOT contain
 `notary`.
 A `registry-notary` document MUST contain `notary` and MUST NOT contain `relay`.
 A consumer MUST reject a document that does not satisfy this pairing, even when the shared
 envelope itself appears complete.
+No supported deployment produces the second document; the pairing rule stays part of the frozen v1
+contract so a consumer can still validate a retained one.
 
 The shared sections state the following categories of observation:
 
@@ -119,8 +138,9 @@ The shared sections state the following categories of observation:
 
 The `relay` section reports configured surface counts, metadata-manifest state, adapter state, and
 restricted per-resource refresh health.
-The `notary` section reports claim and credential-profile counts plus state, credential-status,
-federation, OID4VCI, and optional subject-access observations.
+The `notary` section belonged to the retired component and reported claim and credential-profile
+counts plus state, credential-status, federation, OID4VCI, and optional subject-access
+observations. It remains modeled by the frozen v1 schema and is never emitted.
 
 ### Deployment waiver metadata
 
@@ -155,8 +175,10 @@ remain non-waivable.
 ## 3. Examples
 
 The schema-valid [Registry Relay default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-relay.posture.valid.json)
-and [Registry Notary default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-notary.posture.valid.json)
-show the default projection for each component.
+shows the default projection a supported producer emits.
+The checked-in `registry-notary.posture.valid.json` example shows the default projection for the
+retired component; it is kept as a fixture for the frozen v1 shape, not as a deployment an adopter
+can run.
 The [restricted-tier fixture](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/fixtures/posture/restricted-posture.valid.json)
 shows fields that are valid but intentionally absent from the default projection.
 The checked-in `registry-relay.restricted-posture.valid.json` fixture shows the Relay refresh-health
@@ -184,7 +206,7 @@ The default projection includes operational status, counts, selected digests, fi
 and severities, and non-secret audit-shipping observations.
 It excludes values that can reveal topology or operational free text, including instance URLs,
 build revisions and features, trusted roots, artifact URLs, waiver references and summaries,
-signing-key details, and Notary federation identities or peers.
+signing-key details, and the federation identities and peers of the retired component.
 The checked-in sensitive fixture proves that the projection excludes credentials, private keys,
 source URLs, subject identifiers, raw rows, claim values, and the restricted topology fields.
 The default tier also excludes `relay.refresh_health`, including its dataset and resource
@@ -286,14 +308,18 @@ filter are shipped in Registry Platform and exercised by contract tests.
 - The checked-in restricted Relay posture fixture and Registry Relay admin tests validate
   per-resource last-good state, tier filtering, and the live producer shape (Sections 4 and 6).
 - The [Registry Relay admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-relay/src/api/admin.rs)
-  and [Registry Notary admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-notary-server/src/api/admin.rs)
-  select the requested tier and return the shared posture document (Sections 1, 4, and 6).
+  selects the requested tier and returns the shared posture document (Sections 1, 4, and 6). It is
+  the only producer this specification recognizes.
+- The Evidence and Registry Mint routers (`crates/registry-evidence/src/server.rs` and
+  `crates/registry-mint/src/server.rs`) expose liveness and readiness probes and no posture route,
+  which Section 1 states.
 
 ## Next
 
 - [Harden a production deployment](../../security/hardening-checklist/) explains how an operator
   uses posture findings while preparing a deployment.
 - [Registry Relay protocol](../rs-pr-relay/) defines the Relay admin-surface boundary.
-- [Registry Notary protocol](../rs-pr-notary/) defines Registry Notary's protected service surface.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) defines the Evidence service surface, which carries no
+  posture endpoint.
 - [RS-SEC-G](../rs-sec-g/) defines the security model and the operator boundary this observation
   helps inspect.

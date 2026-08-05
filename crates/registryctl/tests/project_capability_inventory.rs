@@ -71,15 +71,7 @@ fn compiled_input() -> CapabilityInventoryInput {
             SupportEvidence::LinkedCrate,
         ),
         (
-            SupportComponent::RegistryNotaryProduct,
-            SupportEvidence::LinkedCrate,
-        ),
-        (
             SupportComponent::RegistryRelayValidator,
-            SupportEvidence::LinkedProductValidator,
-        ),
-        (
-            SupportComponent::RegistryNotaryValidator,
             SupportEvidence::LinkedProductValidator,
         ),
         (
@@ -88,10 +80,6 @@ fn compiled_input() -> CapabilityInventoryInput {
         ),
         (
             SupportComponent::RegistryRelayConfigSchema,
-            SupportEvidence::EmbeddedSchema,
-        ),
-        (
-            SupportComponent::RegistryNotaryConfigSchema,
             SupportEvidence::EmbeddedSchema,
         ),
         (
@@ -110,18 +98,13 @@ fn compiled_input() -> CapabilityInventoryInput {
             SupportEvidence::ExplicitlyMissing,
         )
         .expect("missing worker records");
-    for image in [
-        SupportComponent::RegistryRelayImage,
-        SupportComponent::RegistryNotaryImage,
-    ] {
-        input
-            .record_support(
-                image,
-                SupportState::NotEvaluated,
-                SupportEvidence::NoEvidence,
-            )
-            .expect("image remains not evaluated");
-    }
+    input
+        .record_support(
+            SupportComponent::RegistryRelayImage,
+            SupportState::NotEvaluated,
+            SupportEvidence::NoEvidence,
+        )
+        .expect("Relay image remains not evaluated");
     input
 }
 
@@ -132,7 +115,6 @@ fn canonical_input() -> CapabilityInventoryInput {
         CapabilityId::SourceScript,
         CapabilityId::SourceSnapshot,
         CapabilityId::RegistryRelayProduct,
-        CapabilityId::RegistryNotaryProduct,
     ] {
         input
             .record_project_declaration(capability)
@@ -142,7 +124,6 @@ fn canonical_input() -> CapabilityInventoryInput {
         CapabilityId::SourceHttp,
         CapabilityId::SourceScript,
         CapabilityId::RegistryRelayProduct,
-        CapabilityId::RegistryNotaryProduct,
     ] {
         input
             .record_environment_enablement(capability)
@@ -154,7 +135,6 @@ fn canonical_input() -> CapabilityInventoryInput {
             CapabilityUsageCounts {
                 services: 1,
                 consultations: 1,
-                claims: 0,
             },
         ),
         (
@@ -162,7 +142,6 @@ fn canonical_input() -> CapabilityInventoryInput {
             CapabilityUsageCounts {
                 services: 0,
                 consultations: 1,
-                claims: 1,
             },
         ),
         (
@@ -170,7 +149,6 @@ fn canonical_input() -> CapabilityInventoryInput {
             CapabilityUsageCounts {
                 services: 0,
                 consultations: 1,
-                claims: 1,
             },
         ),
         (
@@ -178,7 +156,6 @@ fn canonical_input() -> CapabilityInventoryInput {
             CapabilityUsageCounts {
                 services: 0,
                 consultations: 1,
-                claims: 1,
             },
         ),
         (
@@ -186,15 +163,6 @@ fn canonical_input() -> CapabilityInventoryInput {
             CapabilityUsageCounts {
                 services: 1,
                 consultations: 2,
-                claims: 0,
-            },
-        ),
-        (
-            CapabilityId::RegistryNotaryProduct,
-            CapabilityUsageCounts {
-                services: 0,
-                consultations: 0,
-                claims: 1,
             },
         ),
     ] {
@@ -251,7 +219,7 @@ fn pure_builder_is_deterministic_and_matches_the_canonical_fixture() {
 
 #[test]
 fn schema_and_typed_ingress_require_every_closed_inventory_row_exactly_once() {
-    for (collection, duplicate_index) in [("capabilities", 11), ("support", 13)] {
+    for (collection, duplicate_index) in [("capabilities", 8), ("support", 9)] {
         let mut duplicate = parse(FIXTURE);
         let first = duplicate[collection][0].clone();
         duplicate[collection][duplicate_index] = first;
@@ -328,7 +296,6 @@ fn installed_declared_enabled_used_missing_and_inactive_states_stay_distinct() {
             CapabilityUsageCounts {
                 services: 0,
                 consultations: 1,
-                claims: 0,
             },
         )
         .expect("script usage records");
@@ -366,7 +333,6 @@ fn builder_fails_closed_on_inconsistent_or_duplicate_evidence() {
             CapabilityUsageCounts {
                 services: 0,
                 consultations: 1,
-                claims: 0,
             },
         )
         .expect("usage records");
@@ -400,7 +366,53 @@ fn builder_fails_closed_on_inconsistent_or_duplicate_evidence() {
 }
 
 #[test]
-fn image_and_runtime_activation_claims_cannot_be_inferred_from_static_input() {
+fn unsupported_source_usage_is_reported_with_missing_support() {
+    let mut input = CapabilityInventoryInput::new();
+    input
+        .record_installed_capability(
+            CapabilityId::SourceSnapshot,
+            InstalledCapabilityState::Unsupported,
+            InstalledCapabilityEvidence::ExplicitlyUnsupported,
+        )
+        .expect("unsupported source evidence records");
+    input
+        .record_project_declaration(CapabilityId::SourceSnapshot)
+        .expect("unsupported source declaration records");
+    input
+        .record_environment_enablement(CapabilityId::SourceSnapshot)
+        .expect("unsupported source enablement records");
+    input
+        .record_usage(
+            CapabilityId::SourceSnapshot,
+            CapabilityUsageCounts {
+                services: 1,
+                consultations: 0,
+            },
+        )
+        .expect("unsupported source usage records");
+
+    let report = build_capability_inventory(input).expect("inventory builds");
+    let source = report
+        .capabilities
+        .iter()
+        .find(|record| record.capability == CapabilityId::SourceSnapshot)
+        .expect("snapshot source capability is inventoried");
+    assert_eq!(
+        source.installed_release,
+        InstalledCapabilityState::Unsupported
+    );
+    assert_eq!(
+        source.installed_evidence,
+        InstalledCapabilityEvidence::ExplicitlyUnsupported
+    );
+    assert_eq!(
+        source.disposition,
+        CapabilityDisposition::UsedWithMissingSupport
+    );
+}
+
+#[test]
+fn image_and_runtime_activation_cannot_be_inferred_from_static_input() {
     let mut input = CapabilityInventoryInput::new();
     assert_eq!(
         input.record_support(
@@ -424,14 +436,15 @@ fn image_and_runtime_activation_claims_cannot_be_inferred_from_static_input() {
         report.runtime_activation,
         RuntimeActivationEvaluation::NotEvaluated
     );
-    for image in report
+    let images = report
         .support
         .iter()
         .filter(|assessment| assessment.kind == SupportKind::Image)
-    {
-        assert_eq!(image.state, SupportState::NotEvaluated);
-        assert_eq!(image.evidence, SupportEvidence::NoEvidence);
-    }
+        .collect::<Vec<_>>();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].component, SupportComponent::RegistryRelayImage);
+    assert_eq!(images[0].state, SupportState::NotEvaluated);
+    assert_eq!(images[0].evidence, SupportEvidence::NoEvidence);
 }
 
 #[test]
@@ -443,7 +456,6 @@ fn usage_bound_is_total_and_overflow_safe() {
             CapabilityUsageCounts {
                 services: MAX_CAPABILITY_USAGE_COUNT,
                 consultations: 0,
-                claims: 0,
             },
         )
         .expect("exact maximum records");
@@ -455,7 +467,6 @@ fn usage_bound_is_total_and_overflow_safe() {
             CapabilityUsageCounts {
                 services: MAX_CAPABILITY_USAGE_COUNT,
                 consultations: 1,
-                claims: 0,
             },
         ),
         Err(CapabilityInventoryError::UsageCountOutOfRange)
@@ -468,7 +479,6 @@ fn usage_bound_is_total_and_overflow_safe() {
             CapabilityUsageCounts {
                 services: u32::MAX,
                 consultations: u32::MAX,
-                claims: u32::MAX,
             },
         ),
         Err(CapabilityInventoryError::UsageCountOutOfRange)
@@ -486,9 +496,8 @@ fn usage_bound_is_total_and_overflow_safe() {
 
     let mut aggregate_too_large = parse(FIXTURE);
     aggregate_too_large["capabilities"][0]["used_by"] = json!({
-        "services": 500_000,
+        "services": 500_001,
         "consultations": 500_000,
-        "claims": 1,
         "total": MAX_CAPABILITY_USAGE_COUNT
     });
     assert_schema_valid(&aggregate_too_large);
@@ -528,7 +537,6 @@ fn relay_product_usage_requires_relay_product_support() {
             CapabilityUsageCounts {
                 services: 1,
                 consultations: 0,
-                claims: 0,
             },
         )
         .expect("Relay product usage records");
@@ -568,7 +576,7 @@ fn schema_and_dto_reject_country_value_carriers() {
         ("/capabilities/1", "path", "/COUNTRY/PATH/SENTINEL"),
         ("/support/0", "secret_name", "COUNTRY_SECRET_NAME_SENTINEL"),
         (
-            "/support/12",
+            "/support/9",
             "runtime_observation",
             "COUNTRY_RUNTIME_SENTINEL",
         ),
@@ -596,14 +604,14 @@ fn schema_rejects_image_availability_runtime_activation_and_open_enums() {
     assert_schema_invalid(&runtime);
 
     let mut image = parse(FIXTURE);
-    image["support"][12]["state"] = json!("available");
-    image["support"][12]["evidence"] = json!("release_metadata");
+    image["support"][9]["state"] = json!("available");
+    image["support"][9]["evidence"] = json!("release_metadata");
     assert_schema_invalid(&image);
 
     let mut disguised_image = parse(FIXTURE);
-    disguised_image["support"][12]["kind"] = json!("worker");
-    disguised_image["support"][12]["state"] = json!("available");
-    disguised_image["support"][12]["evidence"] = json!("release_metadata");
+    disguised_image["support"][9]["kind"] = json!("worker");
+    disguised_image["support"][9]["state"] = json!("available");
+    disguised_image["support"][9]["evidence"] = json!("release_metadata");
     assert_schema_invalid(&disguised_image);
     assert!(
         serde_json::from_value::<ProjectCapabilityInventoryReportV1>(disguised_image).is_err(),
@@ -611,8 +619,8 @@ fn schema_rejects_image_availability_runtime_activation_and_open_enums() {
     );
 
     let mut claimed_missing_image = parse(FIXTURE);
-    claimed_missing_image["support"][12]["state"] = json!("missing");
-    claimed_missing_image["support"][12]["evidence"] = json!("explicitly_missing");
+    claimed_missing_image["support"][9]["state"] = json!("missing");
+    claimed_missing_image["support"][9]["evidence"] = json!("explicitly_missing");
     claimed_missing_image["missing_support"]
         .as_array_mut()
         .expect("missing support is an array")

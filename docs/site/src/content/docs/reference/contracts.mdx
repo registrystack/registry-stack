@@ -8,8 +8,7 @@ source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-  - registry-notary
-last_reviewed: "2026-06-21"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -30,7 +29,6 @@ A contract is a machine-readable surface that integrators can depend on:
 - **Shared crate API**: Rust library surface consumed by registry services for common behavior.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
 - **Static publication bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
-- **Capability query envelope**: the JSON structure returned by `/.well-known/evidence-service` describing a Notary instance's claim catalog and capabilities.
 
 Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and config behavior belong to the consuming service.
 
@@ -71,11 +69,11 @@ Stable machine identifiers for the registry stack resolve at `https://id.registr
 ### Credential contract ownership
 
 Registry Relay no longer issues signed response credentials and no longer serves the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
-Registry Notary owns credential issuance, credential status, issuer metadata, and public verification keys.
-Use the Registry Notary OpenAPI contract and capability discovery document for credential workflows.
+[Evidence](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
+Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in the table above.
 
 The removed Relay routes are not production contracts for 1.0.
-Clients that need signed credentials must follow an evidence offering to a Registry Notary or another configured evidence service.
+A client that needs a signed, minimum-disclosure answer calls Evidence directly instead of following a Relay evidence offering.
 
 ### JSON-LD namespaces
 

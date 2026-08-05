@@ -1,0 +1,257 @@
+---
+title: Evaluate Evidence
+description: A cost accounting of running Evidence, what it needs to start, what it does not depend on, how it deploys today, and what operating it demands, for someone deciding whether to commit to it.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+This page is for someone sizing up Evidence before committing infrastructure,
+security review, and operational capacity to it. It assumes the fit question
+from [When Registry Stack fits](../when-to-use/) is already settled and asks
+the next one: what does running it actually cost.
+
+## Runtime footprint
+
+Evidence is one crate, `registry-evidence`, and one binary, `evidence`
+(`crates/registry-evidence/Cargo.toml`). There is no separate control plane,
+worker process, or sidecar: one process serves one operator-controlled trust
+domain (`products/evidence/README.md`).
+
+At startup the process reads two inputs, both mounted read-only: a closed
+operator `runtime.yaml` that binds one listener, bundle directory, secret
+root, audit destination, and local TLS trust files; and an immutable,
+reviewed evidence bundle directory holding the deployment's YAML, Rhai
+scripts, schemas, codelists, and fixtures. Neither input may be writable to
+the service process; startup and readiness fail when either is incomplete,
+inconsistent, or mutable (`products/evidence/OPERATOR-CONTRACT.md`).
+
+It also needs key material on local disk before it can start: an Ed25519
+signing key whose `kid` matches `signing.activeKeyId`, plus two independently
+generated raw secrets of at least 32 bytes, one for the audit hash chain and
+one for subject-binding pseudonyms. All three live under an owner-only (mode
+`0700`) secret root, each file mode `0600`
+(`products/evidence/OPERATOR-CONTRACT.md`).
+
+The runtime requires a complete deployment layout like this:
+
+```text
+project_root/
+  bundle/                 governed, reviewed, mounted read-only
+    evidence.yaml         the deployment contract
+    adapters/             request preparation and fact extraction (Rhai)
+    derivations/          requirement derivation (Rhai)
+    schemas/              closed adapter-parameter, response, and fact schemas
+    fixtures/             synthetic acceptance cases
+  runtime.yaml            process-local paths and listener, not governed
+  secrets/                key material, created empty with mode 0700
+  audit/                  audit records written by the service
+```
+
+`evidencectl new <dir> --openapi <file-or-url> --profile local` starts an editable authoring
+workspace. It retains the OpenAPI document and creates directories for reusable selector and
+source objects, source scripts and schemas, questions, and derivations. `--generate-keys` adds
+disposable owner-only local keys. `evidencectl source suggest --project <dir>` drafts one source
+from the retained contract, and `evidencectl dev` compiles complete authoring objects into the
+private local runtime layout shown here (`crates/registry-evidencectl/src/scaffold.rs`,
+`crates/registry-evidencectl/src/authoring.rs`).
+
+## Dependencies
+
+Evidence does not run against a database. `products/evidence/OPERATOR-CONTRACT.md`
+states it directly: "Evidence Version 1 has no application database and
+persists no selector, source, evidence, or response data." The one place
+Evidence writes durable state is the audit trail, and that is a keyed JSONL
+hash chain on local storage, not a database table. The module that implements
+it says so in its own header comment: "Fail-closed native Evidence audit with
+a durable keyed JSONL chain" (`crates/registry-evidence/src/audit.rs`). An
+external durable audit service may own that storage instead, but nothing in
+the runtime requires a database engine to reach it.
+
+The same boundary excludes a message broker and workers; `products/evidence/README.md`
+lists both among what Version 1 does not include. `products/evidence/CONCEPT.md`
+states the infrastructure implication for the native deployment target
+directly: "It does not require Kubernetes, a message broker, a database, OPA,
+or a service mesh."
+
+Two dependencies remain real, even though neither ships with Evidence:
+
+- An identity provider. Evidence verifies bearer tokens against one
+  configured OIDC issuer; it does not issue tokens itself. Where no identity
+  provider exists, Registry Mint fills that gap: it "issues the access
+  tokens a resource server such as Evidence verifies, for deployments with no
+  identity provider." The dependency runs one way: "Mint's tests drive
+  Evidence's authenticator; Evidence does not depend on Mint" (root
+  `AGENTS.md`).
+- The authoritative source system each requirement calls. Evidence executes
+  one fixed, bounded HTTP JSON request per source and never fans out to
+  additional systems; it depends on that source answering within its
+  configured timeout and concurrency limit, not on any data store Evidence
+  itself owns.
+
+## Deployment options today
+
+Build the toolset from source with
+`cargo build --release --locked -p registry-evidence -p registry-evidencectl -p registry-mint`,
+or, for a tagged release that publishes it, install reproducible bare
+binaries through the pinned installer script
+(`products/evidence/README.md`).
+
+Container images exist for both `evidence` and its companion `mint` token
+issuer. `docker/Dockerfile` builds them as distroless images
+(`gcr.io/distroless/cc-debian13:nonroot`, user `65532`, no shell, no package
+tools) from one multi-stage file that uses cargo-chef so dependency
+compilation caches independently per binary. Neither image declares a Docker
+`HEALTHCHECK`, because distroless has no shell or `curl` and neither binary
+has a healthcheck subcommand; the orchestrator probes `GET /health` over HTTP
+instead (`docker/README.md`).
+
+These images are explicitly not release evidence. The released Relay image
+comes from a separate, byte-reproducible path (`release/docker/`, built
+outside Docker); if Mint or Evidence images become release artifacts, they
+will follow that path, not this one.
+
+An operator may use Docker Compose as an adapter for an approved candidate,
+but Compose is not generated by `evidencectl build`. The adapter mounts the
+reviewed bundle unchanged, then mounts a separate container runtime, secret
+root, and persistent audit volume. It binds Evidence to a private
+Compose-network address and puts operator-controlled TLS in front. Only the
+runtime revision changes when container paths or listener bindings change;
+the bundle revision remains the assertion `configurationRevision`.
+The [Evidence candidate Compose guide](../../tutorials/integrate-evidence-candidate-with-docker-compose/)
+covers that shape. Registry Mint remains optional when the deployment has no
+suitable OIDC issuer.
+
+## Operational burden
+
+### Keys
+
+`evidencectl keygen` generates the signing key and the two HMAC secrets;
+nothing about generation happens automatically on deploy. Rotation is the
+operator's job too: a deployment keeps one active signing key at a time and
+must retain every retired public key in the published JWKS for at least the
+maximum assertion validity plus allowed clock skew, or a verifier holding an
+older cached assertion will fail to check it
+(`products/evidence/OPERATOR-CONTRACT.md`).
+
+### Deployment inputs
+
+Both `runtime.yaml` and the bundle directory must be non-writable before
+Evidence will start; a read-only mount is preferred. An operator can remove
+write bits with `chmod -R a-w bundle` and `chmod 444 runtime.yaml` before
+running `evidence check`. Editing either input means restoring write access,
+making the change, removing write access again, and rerunning the check
+(`products/evidence/OPERATOR-CONTRACT.md`). There is no hot reload, override
+layer, or runtime mutation API.
+
+### Audit trail
+
+The audit sink takes an exclusive OS advisory lock on its path at startup,
+so exactly one Evidence process may write a given audit path at a time;
+scaling horizontally means N processes with N distinct audit paths, run
+active/passive rather than active/active. Segment rotation
+(`auditStorage.maximumFileBytes`) happens online with no operator action, but
+retention, backup, restore, and chain verification stay entirely the
+operator's responsibility: nothing in the runtime deletes or compacts a
+sealed segment. `evidence verify-audit` is the out-of-band command for
+proving sealed history was not tampered with, and the operator contract
+documents specific rollback hazards in detail, most notably that renaming or
+replacing the active segment incorrectly can silently fork the chain
+(`products/evidence/OPERATOR-CONTRACT.md`).
+
+### Readiness and liveness are different questions
+
+`GET /health` is liveness only. `GET /ready` is the gate that "fails closed
+while any required secret or source credential is absent"
+(`docker/compose/README.md`); it rechecks the subject-binding key, the
+signing provider, the pinned audit sink, and every source credential,
+including a bounded OAuth client-credentials bootstrap where that
+authentication kind is configured. Neither check sends a request to a source
+or probes a source data endpoint (`products/evidence/OPERATOR-CONTRACT.md`).
+Route traffic on `/ready`, not `/health`.
+
+Telemetry is opt-in: leaving `metricsListener` unset in `runtime.yaml` serves
+none of it, and setting it only opens a second, private-address-only
+listener (`products/evidence/OPERATOR-CONTRACT.md`).
+
+## Performance posture
+
+`products/evidence/PERFORMANCE.md` states its own scope plainly: nothing in
+it is a Version 1 contract. There is no throughput commitment to evaluate
+against, only kept measurements.
+
+The cost that shapes throughput comes from durability, not from the HTTP or
+scripting layers. Evidence must durably accept the access-attempt audit
+record before reading a source and the disclosure-release record before
+returning a response, so every successful request pays two durable audit
+appends. The audit sink commits appends in groups: writes that arrive while
+a disk barrier is in flight form the next batch, and one sync covers the
+whole batch, while every append still resolves only after the barrier that
+covers its own bytes (`crates/registry-evidence/src/audit.rs`).
+
+The measurement kept in `products/evidence/OPERATOR-CONTRACT.md` under
+"Measured throughput" sustained 7057 requests per second at 128 concurrent
+requests with zero non-2xx responses and a 17.89 ms p50, on an Apple M5 Max
+under macOS, with every request running token verification, rate limiting,
+request preparation, one source call, extraction, signing, and both durable
+audit appends. Because the sink batches only what overlaps, a deployment
+offering little concurrency sees lower rates; the before-group-commit
+baseline in `PERFORMANCE.md` (122 to 161 requests per second at 32
+concurrent with one barrier per append) shows the floor that behavior
+approaches.
+
+Both files call the macOS figures conservative in one direction and
+unproven in the other: on macOS the sync call issues `F_FULLFSYNC`, a true
+device write barrier, while the same call on Linux is an ordinary `fsync`.
+`PERFORMANCE.md` says to re-measure on the target Linux host before quoting
+production numbers.
+
+{/* TODO[evidence]: no Linux-host throughput measurement is committed to the
+repository yet; re-measure on the target host before using a number for a
+production sizing decision. */}
+
+A second lever works without any tuning: because the audit sink takes an
+exclusive lock per path, N processes with N distinct audit paths give N
+times the throughput. The sustained-rate measurement reproduces with
+`cargo test --release -p registry-evidence --lib -- --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second`.
+
+## Support window and stability
+
+Registry Stack overall is pre-1.0: "APIs and deployment contracts may
+change" (root `AGENTS.md`). Evidence does not carry a separate, more
+permissive statement.
+
+Within that, Evidence's Version 1 assertion contract is treated as
+implemented rather than exploratory. `products/evidence/README.md` gives its
+status as "implemented Version 1 contracts, runtime, reference deployments,
+and reproducible Evidence-specific verification gates," and
+`products/evidence/OPERATOR-CONTRACT.md` carries the matching "Implemented
+Version 1 operator contract" status. Four assertion cases, adult status,
+residence region, professional licence status, and legal-parent
+relationship, are coequal acceptance definitions; the product is not
+considered implemented while only a subset of them passes
+(`products/evidence/AGENTS.md`).
+
+What stays explicitly out of scope remains so until a separately approved
+profile changes it: document evidence, credential-lifecycle features beyond
+the SD-JWT VC serialization, multi-source fulfillment, the delegated-agent
+grant profile, a public or federated catalog, and OOTS execution are all
+named non-goals rather than roadmap items (`products/evidence/CONCEPT.md`).
+`products/evidence/OPERATOR-CONTRACT.md` closes on the same note: "Future
+profiles require a separately approved concept and plan."
+
+{/* TODO[evidence]: no published versioning or backward-compatibility policy
+(for instance, how a future Version 2 would relate to Version 1 deployments)
+was found in the cited files; confirm with product owners before promising
+upgrade continuity. */}
+
+## Next
+
+- [When Registry Stack fits](../when-to-use/)
+- [Configure Evidence](../../configure/evidence/)
+- [Evidence API reference](../../reference/apis/registry-evidence/)

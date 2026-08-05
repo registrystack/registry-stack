@@ -1,0 +1,110 @@
+---
+title: Registry Evidence API
+description: "Narrative context for the Registry Evidence OpenAPI reference: authentication, response formats, the frozen Version 1 contract, and documented limitations."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-03"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+  - sd-jwt-vc
+  - cccev
+---
+
+[Open the Registry Evidence API operations](../evidence/)
+
+The generated API reference linked above is the **authoritative route reference**. It is built from
+Evidence's generated OpenAPI document, synced from the
+[`registry-stack`](https://github.com/registrystack/registry-stack) monorepo at the commit pinned in
+`src/data/repo-docs.yaml`. This page carries the context the specification does not: what the
+service asserts, how authentication works, which response formats exist, and what stays out of
+scope.
+
+For exact routes and schemas, read the generated API reference. For deployment and operator
+duties, see the [Registry Evidence product documentation](../../../products/registry-evidence/).
+
+## What the API is
+
+Evidence is a minimum-disclosure assertion service. Given an authenticated requester, an
+authorized purpose, a predefined requirement, and the configured selector data an authoritative
+provider needs, `POST /v1/evidence` returns the smallest sufficient JSON assertion in an
+authorized response format. `GET /v1/evidence-definitions` is an authenticated, requester-scoped
+description of the complete request shapes the deployed bundle already authorizes; it is not a
+public catalog. The remaining routes are operational: `GET /health`, `GET /ready`,
+`GET /openapi.json`, the signing keys at `GET /.well-known/evidence/jwks.json`, and JWT VC issuer
+metadata at `GET /.well-known/jwt-vc-issuer`.
+
+The assertion is the product's CCCEV-aligned domain object, expressed as a documented Evidence
+JSON profile rather than RDF or XML (`products/evidence/CONCEPT.md`). The Version 1 contract is
+frozen: the two versioned operations and their envelopes are the complete evidence surface.
+
+## Source of truth
+
+The OpenAPI document is a generated artifact committed at
+`products/evidence/generated/registry-evidence.openapi.json`. Regenerate it into a separate
+directory with:
+
+```sh
+cargo run -p registry-evidence --example evidence-contracts -- --output "<directory>"
+```
+
+Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which
+regenerates the contracts and fails on any byte difference from the committed artifacts, so the
+committed document cannot drift from the code. The docs build then pulls the committed document at
+the pinned ref (`scripts/fetch-openapi.mjs`) and renders it as the generated operations pages.
+
+A running Evidence service publishes the same document at `GET /openapi.json` with media type
+`application/openapi+json`. The route requires no authentication and reaches no dependency; the
+handler in `crates/registry-evidence/src/server.rs` takes no credential, and the unit test
+`the_served_openapi_document_is_the_generated_release_artifact` in
+`crates/registry-evidence/src/contracts.rs` pins the served bytes to the generated artifact.
+
+## Authentication
+
+The two evidence routes require exactly one `Authorization` header containing one Bearer token.
+Evidence verifies OIDC access tokens against one reviewed profile: exactly one trusted issuer with
+exact audience, token type, and algorithm allowlists, and one configured principal claim with no
+`client_id`, `azp`, header, or request fallback (`products/evidence/OPERATOR-CONTRACT.md`). There
+is no API-key mode. The operational routes take no credential and reveal no deployment
+definitions or entitlements.
+
+## Response formats
+
+Version 1 governs three response formats; signed flattened JWS is the mandatory default:
+
+- `application/jose+json`: the signed flattened JWS, the default and the durable-verification
+  format.
+- `application/vnd.registrystack.evidence-unsigned+json`: a visibly unsigned JSON envelope that a
+  governed authority grant must explicitly permit. It is transport-authenticated convenience data,
+  not later-verifiable evidence, and never a fallback from signing failure.
+- `application/dc+sd-jwt`: the same assertion serialized as an SD-JWT VC under the frozen profile
+  in `products/evidence/contracts/sd-jwt-vc-profile.yaml`. Values use one root disclosure by
+  default. A governed structured value can instead disclose each direct field independently.
+  Enabling the format adds a serialization, not a credential lifecycle.
+
+## What the specification does not cover
+
+- Deployment definitions: the generated document describes the generic operations, envelopes,
+  media types, and safe problems. It contains no deployment's requirement definitions or
+  entitlements; those are discovered through the authenticated `GET /v1/evidence-definitions`
+  route.
+- Credential lifecycle: there is no OID4VCI, credential offer, status list, holder proof, or
+  wallet interaction. The SD-JWT VC response format is a second encoding of one response.
+- Wallet interoperability and presentation: outside the Version 1 boundary
+  (`products/evidence/SD-JWT-VC-DEMO.md`).
+
+## Behavior the schema cannot express
+
+- Audit durability: the access record is durably accepted before source access, and the
+  disclosure-release record is durably accepted before the response bytes reach the caller
+  (`products/evidence/contracts/security-invariant-matrix.yaml`; the measured cost is recorded in
+  `products/evidence/PERFORMANCE.md`).
+
+:::caution
+Because release is gated on durable audit acceptance, an unavailable audit store surfaces as
+request failure, not as a silently unaudited response. Monitor the audit store as part of the
+operational runbook.
+:::

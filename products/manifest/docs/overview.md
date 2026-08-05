@@ -2,8 +2,8 @@
 
 Registry Manifest is a portable Rust workspace that takes one `metadata.yaml` file and
 derives every standards-facing artifact other systems need to find, understand, and connect
-to a registry. It can also publish public Registry Notary federation metadata that helps
-partners configure static-peer delegated evaluation.
+to a registry. It can also publish public evidence-offering metadata that helps partners find
+the service that answers an evidence request.
 It does not serve HTTP, does not talk to databases, and does not handle credentials.
 You can run it on a laptop, in a CI pipeline, or in a static hosting workflow with no
 server required.
@@ -29,8 +29,7 @@ No renderer makes network calls or reads files beyond the manifest input.
 | Evidence offerings collection JSON | `evidence-offerings` |
 | Single evidence offering JSON | `evidence-offering` |
 
-Federation metadata appears inside the catalog and evidence-offering JSON outputs. It is not a
-separate render format. Codelists are emitted as embedded SKOS-shaped nodes inside the SHACL
+Codelists are emitted as embedded SKOS-shaped nodes inside the SHACL
 and DCAT/BRegDCAT-shaped linked-data outputs; there is not yet a standalone SKOS artifact.
 
 Not yet implemented: GovStack Digital Registries Building Block (DR BB), Social
@@ -62,8 +61,8 @@ If you need runtime metadata served over HTTP with per-caller scoping and author
 that is Registry Relay's job.
 Relay uses Registry Manifest's renderers internally.
 Metadata manifests and pure renderers live in this workspace; HTTP publication, runtime
-source binding, authentication, authorization, and audit behavior live in Registry Relay
-or Registry Notary.
+source binding, authentication, authorization, and audit behavior live in the runtime that
+serves them.
 
 ## A minimal manifest
 
@@ -105,9 +104,9 @@ forms: []
 ```
 
 A manifest must not contain runtime bindings such as source file paths, table names,
-database scopes, backend credentials, peer allowlists, federation signing keys, replay stores,
+database scopes, backend credentials, caller allowlists, signing keys, replay stores,
 or pairwise subject hash secrets.
-Those live in Registry Relay or Registry Notary configuration; the manifest is portable and
+Those live in runtime configuration; the manifest is portable and
 runtime-independent.
 
 A full working example is at
@@ -117,7 +116,7 @@ A full working example is at
 
 The top-level struct is `MetadataManifest`, which groups catalog, dataset,
 entity, service, form, evidence offering, dataset policy, requirement, evidence
-type, codelist, federation, evaluation profile, and ecosystem binding metadata.
+type, codelist, evaluation profile, and ecosystem binding metadata.
 Full field-by-field documentation is in [Registry Manifest reference](./reference.md).
 
 Grouped evidence is explicit.
@@ -125,14 +124,12 @@ An `evidence_type_lists` entry under a requirement is one option group; all evid
 in that list are required together.
 Multiple lists on the same requirement are alternatives.
 
-Federated evaluation metadata is explicit too.
-The top-level `federation` block advertises the publishing Notary node id, issuer, JWKS URL,
-federation API URL, and supported protocol versions.
-The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to Notary
+Evaluation metadata is explicit too.
+The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to public
 claim ids and subject id types.
-A `registry-notary` evidence offering must reference one of those ruleset ids through
-`access.ruleset`.
-Registry Manifest validates that link, but Registry Notary still decides which peers may call it.
+An evidence offering references one of those ruleset ids through `access.ruleset`.
+Registry Manifest validates that link, but the service that answers the offering still
+decides who may call it.
 
 ## Validation
 
@@ -149,9 +146,10 @@ before any rendering occurs:
 6. Validates per-dataset entities, fields, relationships, identifiers, codelists,
    cardinality strings, and ODRL policy terms.
 7. Validates evidence-offering references.
-8. Validates Registry Notary federation metadata when `registry-notary` access is declared:
-   HTTPS URLs, `did:web` issuer binding, protocol version, unique evaluation profile ids, unique
-   rulesets, and `access.ruleset` references.
+8. Validates evaluation profile metadata: unique evaluation profile ids, unique rulesets, and
+   `access.ruleset` references. When an offering declares `registry-evidence` access, also
+   validates that it names a response profile in `conforms_to` and HTTPS endpoint and
+   discovery URLs.
 9. Rejects runtime-only keys such as source paths, table names, scopes, backend bindings,
    visibility rules, and capability declarations.
 

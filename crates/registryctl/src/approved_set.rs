@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fixed three-lane approved baseline set assembly.
+//! Fixed two-lane Relay approved baseline set assembly.
 //!
 //! This module deliberately does not make an approved set a signature or an
 //! activation authority. Product-specific verification remains responsible
 //! for constructing [`VerifiedApprovedLaneV1`]. Assembly then proves that all
-//! three independently verified lanes form one compatible governed set.
+//! two independently verified lanes form one compatible governed set.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -24,7 +24,13 @@ use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use serde::{Deserialize, Serialize};
 
 pub const APPROVED_BASELINE_SET_SCHEMA_ID: &str = "registry.stack.approved_baseline_set";
-pub const APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "1.0";
+pub const APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "2.0";
+/// The schema version issued while Registry Notary was still a governed lane.
+///
+/// Documents at this version bind a Notary lane and cross-lane interface
+/// digests that this reader no longer verifies. They are refused by name so an
+/// operator reads the retirement rather than an unknown-field decoding error.
+const PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION: &str = "1.0";
 pub const MAX_APPROVED_BASELINE_SET_BYTES: u64 = 1024 * 1024;
 const MAX_PORTABLE_LOCATOR_BYTES: usize = 1024;
 const MAX_ANCHOR_TRANSITIONS: usize = 64;
@@ -35,18 +41,15 @@ pub enum ApprovedLaneV1 {
     RelayPublic,
     #[serde(rename = "relay-consultation")]
     RelayConsultation,
-    #[serde(rename = "notary")]
-    Notary,
 }
 
 impl ApprovedLaneV1 {
-    pub const ALL: [Self; 3] = [Self::RelayPublic, Self::RelayConsultation, Self::Notary];
+    pub const ALL: [Self; 2] = [Self::RelayPublic, Self::RelayConsultation];
 
     pub const fn acceptance_lane(self) -> ProductAcceptanceLaneV1 {
         match self {
             Self::RelayPublic => ProductAcceptanceLaneV1::RelayPublic,
             Self::RelayConsultation => ProductAcceptanceLaneV1::RelayConsultation,
-            Self::Notary => ProductAcceptanceLaneV1::Notary,
         }
     }
 
@@ -55,15 +58,14 @@ impl ApprovedLaneV1 {
             Self::RelayPublic | Self::RelayConsultation => {
                 ProductAcceptanceProductV1::RegistryRelay
             }
-            Self::Notary => ProductAcceptanceProductV1::RegistryNotary,
         }
     }
 
-    pub const fn from_acceptance_lane(lane: ProductAcceptanceLaneV1) -> Self {
+    pub fn try_from_acceptance_lane(lane: ProductAcceptanceLaneV1) -> Result<Self> {
         match lane {
-            ProductAcceptanceLaneV1::RelayPublic => Self::RelayPublic,
-            ProductAcceptanceLaneV1::RelayConsultation => Self::RelayConsultation,
-            ProductAcceptanceLaneV1::Notary => Self::Notary,
+            ProductAcceptanceLaneV1::RelayPublic => Ok(Self::RelayPublic),
+            ProductAcceptanceLaneV1::RelayConsultation => Ok(Self::RelayConsultation),
+            _ => bail!("acceptance lane is not supported by registryctl"),
         }
     }
 
@@ -71,7 +73,6 @@ impl ApprovedLaneV1 {
         match self {
             Self::RelayPublic => "relay",
             Self::RelayConsultation => "relay_consultation",
-            Self::Notary => "notary",
         }
     }
 }
@@ -81,7 +82,6 @@ impl fmt::Display for ApprovedLaneV1 {
         formatter.write_str(match self {
             Self::RelayPublic => "relay-public",
             Self::RelayConsultation => "relay-consultation",
-            Self::Notary => "notary",
         })
     }
 }
@@ -189,40 +189,15 @@ impl ApprovedLaneLocatorsV1 {
     }
 }
 
-/// The only cross-lane product contract in the 1.0 governed topology.
-///
-/// The value is the canonical digest of the complete consultation contract
-/// closure exposed by consultation Relay and pinned by Notary. Projects with
-/// no consultations use `None` in both lanes.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CrossLaneInterfaceDigestsV1 {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consultation_relay_notary: Option<String>,
-}
-
-impl CrossLaneInterfaceDigestsV1 {
-    fn validate_for_lane(&self, lane: ApprovedLaneV1) -> Result<()> {
-        if let Some(digest) = &self.consultation_relay_notary {
-            validate_sha256_digest(digest, "cross-lane interface digest")?;
-            if lane == ApprovedLaneV1::RelayPublic {
-                bail!("relay-public cannot bind the consultation Relay and Notary interface");
-            }
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewedLaneBindingV1 {
     pub lane_scoped_reviewed_input_digest: String,
     pub signing_input_closure_digest: String,
-    pub interfaces: CrossLaneInterfaceDigestsV1,
 }
 
 impl ReviewedLaneBindingV1 {
-    fn validate_for_lane(&self, lane: ApprovedLaneV1) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         validate_sha256_digest(
             &self.lane_scoped_reviewed_input_digest,
             "lane-scoped reviewed-input digest",
@@ -231,7 +206,7 @@ impl ReviewedLaneBindingV1 {
             &self.signing_input_closure_digest,
             "signing-input closure digest",
         )?;
-        self.interfaces.validate_for_lane(lane)
+        Ok(())
     }
 }
 
@@ -244,7 +219,6 @@ pub struct ApprovedLaneEntryV1 {
     pub anchor_digest: String,
     pub lane_scoped_reviewed_input_digest: String,
     pub signing_input_closure_digest: String,
-    pub interfaces: CrossLaneInterfaceDigestsV1,
 }
 
 impl ApprovedLaneEntryV1 {
@@ -252,16 +226,15 @@ impl ApprovedLaneEntryV1 {
         ReviewedLaneBindingV1 {
             lane_scoped_reviewed_input_digest: self.lane_scoped_reviewed_input_digest.clone(),
             signing_input_closure_digest: self.signing_input_closure_digest.clone(),
-            interfaces: self.interfaces.clone(),
         }
     }
 
-    fn validate_for_lane(&self, lane: ApprovedLaneV1) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         self.locators.validate()?;
         validate_sha256_digest(&self.signed_manifest_digest, "signed manifest digest")?;
         validate_sha256_digest(&self.bundle_digest, "bundle digest")?;
         validate_sha256_digest(&self.anchor_digest, "anchor digest")?;
-        self.reviewed_binding().validate_for_lane(lane)
+        self.reviewed_binding().validate()
     }
 }
 
@@ -272,7 +245,6 @@ pub struct ApprovedBaselineLanesV1 {
     pub relay_public: ApprovedLaneEntryV1,
     #[serde(rename = "relay-consultation")]
     pub relay_consultation: ApprovedLaneEntryV1,
-    pub notary: ApprovedLaneEntryV1,
 }
 
 impl ApprovedBaselineLanesV1 {
@@ -280,38 +252,27 @@ impl ApprovedBaselineLanesV1 {
         match lane {
             ApprovedLaneV1::RelayPublic => &self.relay_public,
             ApprovedLaneV1::RelayConsultation => &self.relay_consultation,
-            ApprovedLaneV1::Notary => &self.notary,
         }
     }
 
     fn validate(&self) -> Result<()> {
         for lane in ApprovedLaneV1::ALL {
-            self.get(lane).validate_for_lane(lane)?;
-        }
-
-        let consultation = self
-            .relay_consultation
-            .interfaces
-            .consultation_relay_notary
-            .as_deref();
-        let notary = self.notary.interfaces.consultation_relay_notary.as_deref();
-        if consultation != notary {
-            bail!("consultation Relay and Notary interface digests do not match");
+            self.get(lane).validate()?;
         }
 
         let bundle_locators =
             ApprovedLaneV1::ALL.map(|lane| self.get(lane).locators.bundle.as_str());
-        if bundle_locators.into_iter().collect::<BTreeSet<_>>().len() != 3 {
+        if bundle_locators.into_iter().collect::<BTreeSet<_>>().len() != 2 {
             bail!("approved set contains a duplicated lane bundle locator");
         }
         let manifest_locators =
             ApprovedLaneV1::ALL.map(|lane| self.get(lane).locators.signed_manifest.as_str());
-        if manifest_locators.into_iter().collect::<BTreeSet<_>>().len() != 3 {
+        if manifest_locators.into_iter().collect::<BTreeSet<_>>().len() != 2 {
             bail!("approved set contains a duplicated lane manifest locator");
         }
         let anchor_locators =
             ApprovedLaneV1::ALL.map(|lane| self.get(lane).locators.anchor.as_str());
-        if anchor_locators.into_iter().collect::<BTreeSet<_>>().len() != 3 {
+        if anchor_locators.into_iter().collect::<BTreeSet<_>>().len() != 2 {
             bail!("approved set contains a duplicated lane anchor locator");
         }
         Ok(())
@@ -330,6 +291,9 @@ impl ApprovedBaselineSetV1 {
     pub fn validate(&self) -> Result<()> {
         if self.schema_id != APPROVED_BASELINE_SET_SCHEMA_ID {
             bail!("approved-set schema_id is unsupported");
+        }
+        if self.schema_version == PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION {
+            return Err(pre_notary_retirement_approved_set_error());
         }
         if self.schema_version != APPROVED_BASELINE_SET_SCHEMA_VERSION {
             bail!("approved-set schema_version is unsupported");
@@ -395,7 +359,7 @@ impl VerifiedApprovedLaneV1 {
         if let Some(previous) = &previous_config_hash {
             validate_sha256_digest(previous, "verified lane previous configuration hash")?;
         }
-        entry.validate_for_lane(lane)?;
+        entry.validate()?;
         let terminal_anchor_digest = entry.anchor_digest.clone();
         Ok(Self {
             lane,
@@ -479,7 +443,6 @@ impl VerifiedApprovedLaneV1 {
 pub struct InitialApprovedSetInputs {
     pub relay_public: PathBuf,
     pub relay_consultation: PathBuf,
-    pub notary: PathBuf,
 }
 
 impl InitialApprovedSetInputs {
@@ -487,7 +450,6 @@ impl InitialApprovedSetInputs {
         match lane {
             ApprovedLaneV1::RelayPublic => &self.relay_public,
             ApprovedLaneV1::RelayConsultation => &self.relay_consultation,
-            ApprovedLaneV1::Notary => &self.notary,
         }
     }
 }
@@ -496,7 +458,6 @@ impl InitialApprovedSetInputs {
 pub struct AffectedLaneReplacements {
     pub relay_public: Option<PathBuf>,
     pub relay_consultation: Option<PathBuf>,
-    pub notary: Option<PathBuf>,
 }
 
 impl AffectedLaneReplacements {
@@ -504,7 +465,6 @@ impl AffectedLaneReplacements {
         match lane {
             ApprovedLaneV1::RelayPublic => self.relay_public.as_deref(),
             ApprovedLaneV1::RelayConsultation => self.relay_consultation.as_deref(),
-            ApprovedLaneV1::Notary => self.notary.as_deref(),
         }
     }
 }
@@ -519,7 +479,6 @@ impl AffectedLaneReplacements {
 pub struct ReviewedBuildUpdateV1 {
     pub relay_public: Option<ReviewedLaneBindingV1>,
     pub relay_consultation: Option<ReviewedLaneBindingV1>,
-    pub notary: Option<ReviewedLaneBindingV1>,
 }
 
 impl ReviewedBuildUpdateV1 {
@@ -534,14 +493,13 @@ impl ReviewedBuildUpdateV1 {
         match lane {
             ApprovedLaneV1::RelayPublic => self.relay_public.as_ref(),
             ApprovedLaneV1::RelayConsultation => self.relay_consultation.as_ref(),
-            ApprovedLaneV1::Notary => self.notary.as_ref(),
         }
     }
 
     pub(crate) fn validate_bindings(&self) -> Result<()> {
         for lane in ApprovedLaneV1::ALL {
             if let Some(binding) = self.get(lane) {
-                binding.validate_for_lane(lane)?;
+                binding.validate()?;
             }
         }
         Ok(())
@@ -586,7 +544,6 @@ pub struct ApprovedSetAssembleOptions {
     pub preceding_set: Option<PathBuf>,
     pub relay_public: Option<PathBuf>,
     pub relay_consultation: Option<PathBuf>,
-    pub notary: Option<PathBuf>,
     pub output_file: PathBuf,
 }
 
@@ -595,7 +552,6 @@ impl ApprovedSetAssembleOptions {
         match lane {
             ApprovedLaneV1::RelayPublic => self.relay_public.as_deref(),
             ApprovedLaneV1::RelayConsultation => self.relay_consultation.as_deref(),
-            ApprovedLaneV1::Notary => self.notary.as_deref(),
         }
     }
 }
@@ -640,7 +596,6 @@ pub fn assemble_approved_set(
         let replacements = AffectedLaneReplacements {
             relay_public: options.relay_public.clone(),
             relay_consultation: options.relay_consultation.clone(),
-            notary: options.notary.clone(),
         };
         return assemble_updated_approved_set(
             preceding_file,
@@ -679,7 +634,6 @@ pub fn assemble_approved_set(
             .relay_consultation
             .clone()
             .expect("all lanes checked"),
-        notary: options.notary.clone().expect("all lanes checked"),
     };
     assemble_initial_approved_set(&inputs, &options.output_file, |request| {
         let lane = request.lane;
@@ -697,7 +651,7 @@ pub fn assemble_initial_approved_set(
     mut verify: impl FnMut(LaneVerificationRequestV1) -> Result<VerifiedApprovedLaneV1>,
 ) -> Result<ApprovedSetAssemblyReportV1> {
     validate_absent_output_file(output_file)?;
-    let mut verified = Vec::with_capacity(3);
+    let mut verified = Vec::with_capacity(2);
     for lane in ApprovedLaneV1::ALL {
         let request = LaneVerificationRequestV1 {
             lane,
@@ -745,7 +699,7 @@ pub fn assemble_updated_approved_set(
     }
 
     let preceding = load_approved_baseline_set_document(preceding_set_file)?;
-    let mut verified_preceding = Vec::with_capacity(3);
+    let mut verified_preceding = Vec::with_capacity(2);
     for lane in ApprovedLaneV1::ALL {
         let entry = preceding.lanes.get(lane).clone();
         let request = LaneVerificationRequestV1 {
@@ -765,7 +719,7 @@ pub fn assemble_updated_approved_set(
     }
     validate_identity_set(&verified_preceding)?;
 
-    let mut final_lanes = Vec::with_capacity(3);
+    let mut final_lanes = Vec::with_capacity(2);
     for lane in ApprovedLaneV1::ALL {
         let preceding_lane = verified_for(&verified_preceding, lane);
         if let (Some(expected), Some(directory)) =
@@ -842,7 +796,7 @@ pub(crate) fn load_approved_baseline_set_with_root(
     let approved_set = load_approved_baseline_set_document(path)?;
     let canonical_root =
         fs::canonicalize(closure_root).context("failed to resolve approved-set closure root")?;
-    let mut verified = Vec::with_capacity(3);
+    let mut verified = Vec::with_capacity(2);
     for lane in ApprovedLaneV1::ALL {
         verified.push(verify_lane_request(
             LaneVerificationRequestV1 {
@@ -863,10 +817,50 @@ fn load_approved_baseline_set_document(path: &Path) -> Result<ApprovedBaselineSe
     let bytes = read_bounded_regular_file_no_follow(path, MAX_APPROVED_BASELINE_SET_BYTES)
         .context("failed to read bounded approved-set input")?;
     let value = parse_json_strict(&bytes).context("approved set is not strict JSON")?;
+    reject_pre_notary_retirement_approved_set(&value)?;
     let approved_set: ApprovedBaselineSetV1 =
         serde_json::from_value(value).context("approved set does not match its closed schema")?;
     approved_set.validate()?;
     Ok(approved_set)
+}
+
+/// Refuses an approved set issued before Registry Notary was retired.
+///
+/// The removed lane entry `interfaces` field carried a SHA-256 interface digest
+/// this reader verified on load. Decoding such a document now would either fail
+/// as an unknown field or, if the field were tolerated, honor a signed approval
+/// whose integrity claim is no longer enforced. Both retired shapes are named
+/// here so the refusal states the remedy instead.
+fn reject_pre_notary_retirement_approved_set(value: &serde_json::Value) -> Result<()> {
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        == Some(PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION)
+    {
+        return Err(pre_notary_retirement_approved_set_error());
+    }
+    let Some(lanes) = value.get("lanes").and_then(serde_json::Value::as_object) else {
+        return Ok(());
+    };
+    if lanes.contains_key("notary")
+        || lanes
+            .values()
+            .any(|entry| entry.get("interfaces").is_some())
+    {
+        return Err(pre_notary_retirement_approved_set_error());
+    }
+    Ok(())
+}
+
+fn pre_notary_retirement_approved_set_error() -> anyhow::Error {
+    anyhow!(
+        "approved set predates the Registry Notary retirement: Registry Notary is retired, so a \
+         schema version {PRE_NOTARY_RETIREMENT_APPROVED_BASELINE_SET_SCHEMA_VERSION} approved \
+         set, its notary lane, and the cross-lane interface digests it binds are no longer \
+         verified; this reader refuses the document rather than honor an approval whose \
+         integrity claim is no longer enforced, so re-approve the baseline to issue a schema \
+         version {APPROVED_BASELINE_SET_SCHEMA_VERSION} approved set"
+    )
 }
 
 #[cfg(test)]
@@ -1046,7 +1040,6 @@ pub(crate) fn verify_lane_request(
         anchor_digest,
         lane_scoped_reviewed_input_digest: reviewed.lane_scoped_reviewed_input_digest,
         signing_input_closure_digest: reviewed.signing_input_closure_digest,
-        interfaces: reviewed.interfaces,
     };
     if expected_entry
         .as_ref()
@@ -1210,31 +1203,9 @@ fn reviewed_binding_from_verified_bundle(
         bail!("signed lane manifest bundle_id does not match its exact input closure");
     }
 
-    let review = read_manifest_payload(bundle, manifest, "approval/review.json")?;
-    let review =
-        parse_json_strict(&review).context("signed lane review record is not strict JSON")?;
-    let consultations = review
-        .get("consultations")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| anyhow!("signed lane review record lacks consultations"))?;
-    let interface = if consultations.is_empty() {
-        None
-    } else {
-        Some(sha256_uri(
-            &canonicalize_json(&serde_json::Value::Object(consultations.clone()))
-                .context("failed to canonicalize consultation interface")?,
-        ))
-    };
-    let interfaces = match lane {
-        ApprovedLaneV1::RelayPublic => CrossLaneInterfaceDigestsV1::default(),
-        ApprovedLaneV1::RelayConsultation | ApprovedLaneV1::Notary => CrossLaneInterfaceDigestsV1 {
-            consultation_relay_notary: interface,
-        },
-    };
     Ok(ReviewedLaneBindingV1 {
         lane_scoped_reviewed_input_digest: lane_digest,
         signing_input_closure_digest,
-        interfaces,
     })
 }
 
@@ -1311,7 +1282,6 @@ fn set_from_verified(verified: &[VerifiedApprovedLaneV1]) -> Result<ApprovedBase
             relay_consultation: verified_for(verified, ApprovedLaneV1::RelayConsultation)
                 .entry
                 .clone(),
-            notary: verified_for(verified, ApprovedLaneV1::Notary).entry.clone(),
         },
     };
     approved_set.validate()?;
@@ -1342,12 +1312,12 @@ fn validate_verifier_lane(
         .acceptance_identity
         .validate()
         .context("verified lane acceptance identity is invalid")?;
-    verified.entry.validate_for_lane(selected)
+    verified.entry.validate()
 }
 
 fn validate_identity_set(verified: &[VerifiedApprovedLaneV1]) -> Result<()> {
-    if verified.len() != 3 {
-        bail!("approved set requires exactly three independently verified lanes");
+    if verified.len() != 2 {
+        bail!("approved set requires exactly two independently verified Relay lanes");
     }
     let lanes = verified
         .iter()
@@ -1473,6 +1443,16 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     #[test]
+    fn non_relay_acceptance_lane_fails_without_panicking() {
+        let error = ApprovedLaneV1::try_from_acceptance_lane(ProductAcceptanceLaneV1::Notary)
+            .expect_err("the retired acceptance lane must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "acceptance lane is not supported by registryctl"
+        );
+    }
+
+    #[test]
     fn portable_artifact_resolution_rejects_intermediate_symlink_escape() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let root = temporary.path().join("package");
@@ -1492,11 +1472,11 @@ mod tests {
     fn portable_artifact_resolution_uses_the_verifier_selected_closure_root() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let generated = temporary.path().join("generated");
-        let artifact = generated.join("bundles/notary/manifest-digest");
+        let artifact = generated.join("bundles/relay-public/manifest-digest");
         fs::create_dir_all(&artifact).expect("package artifact");
         fs::create_dir_all(generated.join("inputs")).expect("nested set directory");
 
-        let locator = PortableArtifactLocator::new("bundles/notary/manifest-digest")
+        let locator = PortableArtifactLocator::new("bundles/relay-public/manifest-digest")
             .expect("normalized package locator");
         assert_eq!(
             resolve_portable_artifact(&generated, &locator).expect("selected root resolves"),

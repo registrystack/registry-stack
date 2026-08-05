@@ -8,9 +8,9 @@ coverage:
         flags:
           - platform
         informational: true
-      notary-postgres:
+      relay-postgres:
         flags:
-          - notary-postgres
+          - relay-postgres
         informational: true
     patch:
       default: off
@@ -18,9 +18,9 @@ coverage:
         flags:
           - platform
         informational: true
-      notary-postgres:
+      relay-postgres:
         flags:
-          - notary-postgres
+          - relay-postgres
         informational: true
 
 flags:
@@ -28,23 +28,9 @@ flags:
     paths:
       - "crates/registry-platform-*/**"
     carryforward: true
-  notary-postgres:
-    paths:
-      - "crates/registry-notary/"
-      - "crates/registry-notary-server/"
-    carryforward: true
   manifest-unit:
     paths:
       - "crates/registry-manifest-*/**"
-    carryforward: true
-  notary-unit:
-    paths:
-      - "crates/registry-notary*/**"
-      - "products/notary/xtask/**"
-    carryforward: true
-  notary-cel:
-    paths:
-      - "crates/registry-notary*/**"
     carryforward: true
   relay-unit:
     paths:

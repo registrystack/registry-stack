@@ -1,0 +1,65 @@
+# Focused executable OpenCRVS adapter fragment. For a deployable governed
+# bundle and runtime binding, use deployment-projects/opencrvs-family-evidence/.
+transport: http-json
+baseUrl: https://events.opencrvs.example.invalid
+posture: record-transformed
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://auth.opencrvs.example.invalid/token
+  clientIdRef: secret:file/events-client-id
+  clientSecretRef: secret:file/events-client-secret
+  scope: recordsearch
+  # The token endpoint accepts client credentials in the request body, so
+  # they never reach a URL that a proxy or ingress may log. The evidence-data
+  # request still uses Authorization: Bearer.
+  credentialPlacement: form-body
+  maximumCacheSeconds: 300
+  # OpenCRVS returns only access_token and token_type. RFC 6749 section
+  # 5.1 permits the omission, so the assumed lifetime is stated here and
+  # still clamped by maximumCacheSeconds.
+  assumedLifetimeSeconds: 600
+request:
+  method: POST
+  path: /events/search
+  fixedHeaders:
+    - {name: Accept, value: application/json}
+  selectorInputs:
+    - role: child
+      alternatives:
+        - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+  prepareScript: prepare.rhai
+  adapterParameters:
+    eventType: birth
+    registeredStatus: REGISTERED
+    resultLimit: 2
+    resultOffset: 0
+    parentReferenceFields: [mother.personReference, father.personReference]
+    minimumParentReferences: 1
+    maximumParentReferences: 2
+    parentReferenceNamespace: urn:gov:example:opencrvs:person
+    relationshipSetContract: urn:gov:example:opencrvs:registered-parent-set:v1
+    relationshipSetComplete: true
+    absentConfiguredFieldMeansNoRegisteredParent: true
+  adapterParametersSchema: parameters.schema.yaml
+  preparationLimits:
+    query: forbidden
+    jsonBody: required
+    maximumJsonDepth: 16
+    maximumCollectionItems: 128
+    maximumStringBytes: 1024
+    maximumNormalizedBytes: 16384
+  # Client-side allowlist, not provider-side EventIndex field selection.
+  projection:
+    - /total
+    - /results/*/type
+    - /results/*/status
+    - /results/*/trackingId
+    - /results/*/declaration/mother.personReference
+    - /results/*/declaration/father.personReference
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 262144
+  concurrencyLimit: 4
+responseSchema: response.schema.yaml
+extractScript: extract.rhai
+factSchema: facts.schema.yaml

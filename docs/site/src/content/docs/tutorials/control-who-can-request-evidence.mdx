@@ -1,0 +1,419 @@
+---
+title: Control who can request Evidence
+description: Define access policies, add a client without restarting Evidence, and observe allowed and refused access.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
+You will give two applications different access to that Evidence service, add one while the service
+is running, and prove that a valid access token does not let its client ask every configured
+question.
+
+<QuickstartMeta
+  outcome="Two applications receive different policies, with live onboarding, refusal, and revocation."
+  time="About 15 minutes"
+  level="Local development with synthetic data"
+  prerequisites={[
+    'The completed governed-value tutorial',
+    'Its adult-status project and registry.py',
+    'Python 3',
+    'A shell with curl',
+  ]}
+/>
+
+## Understand what you are controlling
+
+This tutorial manages access for machine applications, not accounts for people.
+
+Registry Mint authenticates each application from its own key and issues a short-lived access
+token. Evidence then checks whether the application's access policy includes the configured
+question. These are separate decisions:
+
+| Decision | Example | Owner |
+| --- | --- | --- |
+| Which application is calling? | `age-checker` | Registry Mint client registration |
+| What may it ask? | The `age-checks` policy includes `adult-status` | Evidence access policy |
+| May Evidence read its source? | `GET /people/{person_id}` | Evidence source configuration |
+| May a consumer trust the result? | Expected issuer, audience, and signing key | Consumer verification policy |
+
+The first two rows are the access-management boundary you will configure. Source credentials and
+consumer trust remain independent.
+
+Access policies are part of Evidence's immutable governed configuration. Client membership is
+part of Registry Mint's reloadable registry:
+
+| Change | Runtime effect |
+| --- | --- |
+| Add or revoke a client | Registry Mint receives a reload request; Evidence does not restart |
+| Add a question or change an access policy | Start a new Evidence generation |
+
+A client change affects tokens issued after Registry Mint reloads. A token issued before a client
+is revoked remains valid for up to 300 seconds.
+
+## Restart the registry
+
+In one terminal, return to the working directory from the first tutorial and start the synthetic
+registry:
+
+```sh
+python3 registry.py
+```
+
+Leave the registry running. In another terminal, enter the project containing both questions:
+
+```sh
+cd adult-status
+```
+
+The project has these two governed questions:
+
+| Question | Declared purpose | Answer |
+| --- | --- | --- |
+| `adult-status` | `age-check` | Boolean adult status |
+| `age-bracket` | `service-path-selection` | One reviewed age bracket |
+
+An access policy names one or more questions. Each question already fixes its purpose, subject
+shape, source, and possible answers, so you do not repeat those fields in the policy.
+
+## Define two access policies
+
+Define a policy for each service task:
+
+```sh
+evidencectl access policy add age-checks --question adult-status
+evidencectl access policy add service-routing --question age-bracket
+```
+
+```text
+Added access policy age-checks for adult-status.
+Added access policy service-routing for age-bracket.
+```
+
+Review the governed policies before starting Evidence:
+
+```sh
+evidencectl access policy list
+```
+
+```text
+POLICY           QUESTIONS
+age-checks       adult-status
+service-routing  age-bracket
+```
+
+The commands write the reviewable policy documents to `access/policies/age-checks.yaml` and
+`access/policies/service-routing.yaml`.
+Many clients can share one policy. A client can also belong to several policies when their question
+sets do not overlap. `evidencectl` rejects overlapping policy assignments because they would make
+the access decision ambiguous. Adding a question to either policy later changes the governed
+authorization boundary and requires a new Evidence generation.
+
+## Register the first local application
+
+Register `age-checker` under the `age-checks` policy:
+
+```sh
+evidencectl access client add age-checker \
+  --policy age-checks \
+  --generate-local-key
+```
+
+```text
+Added client age-checker with policy age-checks.
+```
+
+`--generate-local-key` keeps this tutorial self-contained. The private key represents the
+application's identity and remains owner-only at
+`.evidence/clients/age-checker/private.jwk`. The reviewable registration at
+`access/clients/age-checker.yaml` contains the policy membership and public key, never the private
+key.
+
+## Start the protected service
+
+Compile the questions and both access policies, then start Evidence and Registry Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+Registry Mint recognizes `age-checker`. Evidence has both access policies available, even though
+no client belongs to `service-routing` yet.
+
+## Make an allowed request
+
+Prepare an adult-status request as `age-checker`:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --client age-checker \
+  --name age-checker-allowed
+```
+
+Preparation signs a one-time client assertion with the local application key, exchanges it for a
+short-lived access token, and writes the request and verification expectations before any source
+access occurs.
+
+Send the request across the Evidence HTTP boundary:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/age-checker-allowed/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/age-checker-allowed/request.json \
+  --output age-checker-allowed.jws.json \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 200
+```
+
+Verify the response before reading it:
+
+```sh
+evidencectl verify age-checker-allowed.jws.json \
+  --context .evidence/requests/age-checker-allowed/verification.json \
+  --output age-checker-allowed.verified.json
+```
+
+```text
+VERIFIED
+```
+
+The application was authenticated, its `age-checks` policy matched the request, and Evidence
+called the registry only after both checks passed.
+
+## Add an application without restarting
+
+Keep Evidence and Registry Mint running. Register `service-router` under the existing
+`service-routing` policy:
+
+```sh
+evidencectl access client add service-router \
+  --policy service-routing \
+  --generate-local-key
+```
+
+```text
+Added client service-router with policy service-routing.
+Registry Mint reload requested.
+```
+
+The command writes the public registration to `access/clients/service-router.yaml`, keeps the
+private key under `.evidence/clients/`, and asks Registry Mint to reload its complete client
+registry. The message confirms that the reload was requested, not that Registry Mint accepted the
+new registry. The next token exchange provides that functional proof. Evidence does not restart
+because both access policies were already part of its governed configuration.
+
+Review the active client assignments:
+
+```sh
+evidencectl access client list
+```
+
+```text
+CLIENT          STATUS  POLICIES
+age-checker     active  age-checks
+service-router  active  service-routing
+```
+
+## Try a question the application was not granted
+
+Prepare an age-bracket request using the same `age-checker` identity:
+
+```sh
+evidencectl request prepare age-bracket \
+  --purpose service-path-selection \
+  --subject person_id=person-456 \
+  --client age-checker \
+  --name age-checker-refused
+```
+
+The command can prepare the request because `age-bracket` is a valid project question and
+`age-checker` is a registered client. The Evidence service, not the request-building tool, makes
+the authorization decision.
+
+Send the request:
+
+```sh
+curl --silent --show-error \
+  --config .evidence/requests/age-checker-refused/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/age-checker-refused/request.json \
+  --output age-checker-refused.json \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 403
+```
+
+Inspect the safe problem response:
+
+```sh
+python3 -m json.tool age-checker-refused.json
+```
+
+```json
+{
+  "type": "https://registrystack.org/problems/evidence/not_authorized",
+  "title": "Request is not authorized",
+  "status": 403,
+  "code": "not_authorized",
+  "operation": "<opaque-operation-id>"
+}
+```
+
+The access token is valid, but the client's `age-checks` policy does not authorize the
+`age-bracket` question. The registry terminal shows no new `GET /people/person-456`, because
+Evidence refuses the request before source access. The response does not reveal which application,
+question, or policy caused the refusal.
+
+## Use the application assigned the policy
+
+Prepare the same age-bracket question as `service-router`:
+
+```sh
+evidencectl request prepare age-bracket \
+  --purpose service-path-selection \
+  --subject person_id=person-456 \
+  --client service-router \
+  --name service-router-allowed
+```
+
+Send and verify the response:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/service-router-allowed/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/service-router-allowed/request.json \
+  --output service-router-allowed.jws.json \
+  --write-out 'HTTP %{http_code}\n'
+
+evidencectl verify service-router-allowed.jws.json \
+  --context .evidence/requests/service-router-allowed/verification.json \
+  --output service-router-allowed.verified.json
+```
+
+```text
+HTTP 200
+VERIFIED
+```
+
+The question, purpose, and subject are unchanged. Changing only the authenticated application
+changes the access decision because `service-router` belongs to the required policy.
+
+## Revoke an application
+
+Stop issuing new access tokens to `age-checker`:
+
+```sh
+evidencectl access client revoke age-checker
+```
+
+```text
+Revoked client age-checker.
+Registry Mint reload requested.
+```
+
+The command updates `access/clients/age-checker.yaml` and requests another Registry Mint reload
+without restarting Evidence. Revocation cannot erase a stateless access token already issued to
+the application. That token remains valid for up to 300 seconds.
+
+Try to prepare a fresh request as the revoked client:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --client age-checker \
+  --name age-checker-revoked
+```
+
+```text
+evidencectl: unknown or revoked active client age-checker
+```
+
+`evidencectl` rejects an unknown or revoked named client locally, before contacting Registry Mint
+or publishing request artifacts. `service-router` remains registered and keeps its
+`service-routing` membership.
+
+## Inspect the final audit operation
+
+Stop the local services before reading their completed audit chain:
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
+DISCLOSURE RELEASED age_bracket
+```
+
+The audit distinguishes requester pseudonyms without writing client identifiers, tokens, subject
+selectors, or returned values. The earlier authorization refusal is not retained in the durable
+Evidence audit. Evidence currently returns that refusal before appending an access-attempt event.
+The revoked-client preparation also has no Evidence audit event because no HTTP request was sent.
+
+## Clean up
+
+Remove the stopped generated runtime while preserving the editable questions, access policy, and
+request artifacts:
+
+```sh
+evidencectl dev clean
+```
+
+Return to the registry terminal and press `Ctrl+C`.
+
+## What you proved
+
+- Authentication identifies the calling application but grants no question by itself.
+- Many applications can share a governed access policy without client-specific Evidence config.
+- A client added while the services run can obtain a token without restarting Evidence or
+  Registry Mint.
+- Each application receives only the questions included in its assigned policies.
+- Evidence refuses unauthorized questions before reading the source.
+- Revoking a local client requests a Registry Mint reload and prevents new local request
+  preparation.
+- Client membership changes affect new tokens while existing tokens remain valid for up to 300
+  seconds.
+- Adding a question or changing an access policy requires a new Evidence generation.
+- Source authentication and consumer trust remain separate from caller access.
+
+## Next
+
+- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Configure Registry Mint](../../configure/mint/)
+- [Request an access token from application code](../../configure/request-an-access-token/)
+- [Manage Evidence verifier trust](../manage-evidence-verifier-trust/)

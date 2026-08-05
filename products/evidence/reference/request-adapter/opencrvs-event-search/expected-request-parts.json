@@ -1,0 +1,17 @@
+{
+  "query": [],
+  "body": {
+    "query": {
+      "type": "and",
+      "clauses": [
+        {
+          "eventType": "birth",
+          "status": {"type": "exact", "term": "REGISTERED"},
+          "trackingId": {"type": "exact", "term": "EVT-SYNTHETIC-001"}
+        }
+      ]
+    },
+    "limit": 2,
+    "offset": 0
+  }
+}

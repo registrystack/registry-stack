@@ -1,0 +1,120 @@
+---
+title: Rotate Evidence signing keys
+description: Stage a new Evidence signing key, publish an overlap set through the runtime JWKS endpoint, and retire the old key after consumers can verify both generations.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Use this procedure after [Build and deploy an Evidence project](../build-and-deploy-evidence-project/).
+Coordinate the rotation with consumers through
+[Manage Evidence verifier trust](../manage-evidence-verifier-trust/) before activation. Evidence
+signs with one active Ed25519 key. Rotation is a reviewed, startup-only configuration change. There
+is no hot-rotation endpoint or standby-key field. Publishing a new public key makes it discoverable;
+it does not make independently operated consumers trust it.
+
+## Stage a new keypair
+
+Generate the replacement in a new owner-only staging directory on the host responsible for key
+custody:
+
+```sh
+evidencectl keygen signing \
+  --out-dir "<owner-only-staging-directory>" \
+  --kid "<new-production-kid>"
+```
+
+The command writes a private and public JWK without printing private bytes. Provision the private
+JWK into the deployment's secret root under a new logical filename. Keep the public JWK
+as a separately approved distribution artifact for consumers. The active public key does not need
+to be copied into the closed bundle because Evidence derives it from the active private JWK.
+
+Do not overwrite the active private key in place. A candidate revision must be complete and
+checkable before it becomes active.
+
+## Build the overlap revision
+
+In the candidate `bundle/evidence.yaml`, point the active fields at the replacement. Copy the old
+public JWK into the bundle, then reference it as a retired artifact:
+
+```yaml
+signing:
+  format: flattened-jws-json
+  algorithm: EdDSA
+  activeKeyId: <new-production-kid>
+  activeKeyRef: secret:file/<new-private-key-name>
+  retiredPublicJwkFiles:
+    - keys/<old-production-kid>.public.jwk.json
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 86400
+  verifierClockSkewSeconds: 30
+```
+
+`activeKeyId` must exactly match the private JWK's `kid`. Each retired file contains public material
+only. Evidence assembles its JWKS endpoint from the active private key's public half and the
+configured retired public files. You do not publish a separate operator-built JWKS beside it.
+
+## Validate and coordinate consumer approval
+
+Run the project fixtures and `evidence check` against the candidate revision:
+
+```sh
+evidencectl fixtures run --project "<evidence-project>"
+evidence check --runtime "<evidence-project>/runtime.yaml"
+```
+
+Give consumers the new public key, `kid`, provider identity, activation window, and overlap period
+through your governed onboarding channel. Consumers are expected to add the new key to a candidate
+pinned trust set and prove both an old-key and a new-key synthetic response before accepting the
+change.
+
+The [verifier trust procedure](../manage-evidence-verifier-trust/) covers that independent side of
+the rotation.
+
+## Activate and observe
+
+Deploy the exact checked revision and restart Evidence. Confirm readiness, then inspect the public
+endpoint:
+
+```sh
+curl --fail --silent --show-error \
+  "https://<evidence-host>/.well-known/evidence/jwks.json"
+```
+
+The JWKS contains the new active public key and the old retired public key, with no private
+members. Send one authorized synthetic request and verify its `kid` with the consumer's approved
+overlap set.
+
+Missing, unreadable, or mismatched signing material fails closed. Evidence never falls back to an
+unsigned success.
+
+## Retire the old public key
+
+Keep the old public key published for at least:
+
+```text
+maximumAssertionValiditySeconds + verifierClockSkewSeconds
+```
+
+Count from the last instant the old private key could have signed. Retain it longer when consumers
+must re-verify historical decisions.
+
+Remove the retired public file and its `retiredPublicJwkFiles` entry only in a later reviewed bundle
+revision. Run fixtures and `evidence check` again, coordinate consumer removal, deploy, and confirm
+the JWKS no longer carries the old key.
+
+Removing a verification key is not selective assertion revocation. Evidence has no credential
+status or revocation lifecycle. It only changes which signatures a current trust set can verify.
+
+## Related guidance
+
+- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
+- [Evidence security model](../../security/evidence/)
+- [Configure Evidence](../../configure/evidence/)

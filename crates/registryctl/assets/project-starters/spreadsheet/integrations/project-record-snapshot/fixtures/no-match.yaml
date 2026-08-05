@@ -7,6 +7,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims:
-    project-record-exists: false
-    project-status-accepted: false

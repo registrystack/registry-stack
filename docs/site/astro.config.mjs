@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 // llms.txt `details` block so it can never drift from the header the per-page
 // .md endpoint prepends (src/pages/[...slug].md.ts).
 import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
+import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
@@ -101,6 +102,13 @@ function generatedProduct(label) {
   if (!group) throw new Error(`generated sidebar group "${label}" not found`);
   return group;
 }
+
+// A product absent from this docset's generated sidebar (a product newer than
+// an archived docset) yields no group instead of failing the build.
+/** @param {string} label */
+function optionalGeneratedProduct(label) {
+  return productSidebar.find((/** @type {{ label: string }} */ entry) => entry.label === label) ?? null;
+}
 const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
@@ -118,6 +126,7 @@ export default defineConfig({
   // internal redirects map the retired /projects/* and /capabilities/* routes
   // to their new homes so old links and search results keep resolving.
   redirects: {
+    ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/start/quickstart/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
@@ -131,32 +140,22 @@ export default defineConfig({
     '/journeys/bounded-http/': internalRedirect('/tutorials/author-registry-project/'),
     '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/configure-project-script-adapter/'),
     '/journeys/exact-snapshot/': internalRedirect('/configure/'),
-    '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/verify-claim-registry-api/'),
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
     '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
-    // Retired hosted and Solmara Lab tutorials now land on a chooser that
-    // distinguishes those flows from the supported local beginner path.
+    // The retired hosted lab tutorial lands on a chooser that distinguishes
+    // that flow from the supported local beginner path. Solmara Lab keeps its
+    // own route: it is where the two doors are shown working together.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
-    '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/quickstart/'),
+    '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
-    '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
     // Retired advanced tutorials land on current task, explanation, or
     // reference entry points.
-    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/tutorials/configure-project-api-key-authentication/': internalRedirect('/configure/'),
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
     '/tutorials/deploy-standalone-with-own-data/': internalRedirect('/operate/'),
-    '/tutorials/move-notary-to-production-signing/': internalRedirect('/operate/'),
-    '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/explanation/integration-patterns/'),
-    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
-    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
-    '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -189,19 +188,12 @@ export default defineConfig({
     '/projects/registry-relay/run-locally/': internalRedirect('/products/registry-relay/'),
     '/projects/registry-relay/authorize-callers/': internalRedirect('/products/registry-relay/client-integration/'),
     '/projects/registry-relay/reference/': internalRedirect('/products/registry-relay/configuration/'),
-    '/projects/registry-notary/': internalRedirect('/products/registry-notary/'),
-    '/projects/registry-notary/run-locally/': internalRedirect('/products/registry-notary/'),
-    '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
-    '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
-    // The target exists only in the current docset; archives redirect to the latest page.
-    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/explanation/integration-patterns/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
     '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
     // The API reference moved from static Redoc HTML to native, theme-aware,
     // searchable pages. Keep the old shareable links working.
     '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
-    '/api/registry-notary.html': internalRedirect('/reference/apis/notary/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -216,7 +208,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: Registry Relay and Registry Notary, the runtime services that publish registry metadata, serve protected registry data, and issue evidence credentials.',
+      description: 'Documentation for Registry Stack: Registry Relay and Evidence, the runtime services that publish protected registry data and answer bounded questions with signed, minimum-disclosure assertions.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -231,7 +223,7 @@ export default defineConfig({
         // Released archives carry their machine-readable corpus into the
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
-          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
+          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Evidence.',
           details: DISCOVERY_HEADER,
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
@@ -251,9 +243,9 @@ export default defineConfig({
             sidebar: { label: 'Relay API operations', collapsed: true },
           },
           {
-            base: 'reference/apis/notary',
-            schema: './openapi/registry-notary.openapi.json',
-            sidebar: { label: 'Notary API operations', collapsed: true },
+            base: 'reference/apis/evidence',
+            schema: './openapi/registry-evidence.openapi.json',
+            sidebar: { label: 'Evidence API operations', collapsed: true },
           },
         ]),
       ],
@@ -292,21 +284,47 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
-            { label: 'Expose spreadsheet evidence', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
-            { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
+            { label: 'Evaluate Evidence', slug: 'start/evaluate-evidence' },
+          ],
+        },
+        {
+          label: 'Answer with Evidence',
+          items: [
+            { label: 'Overview', slug: 'start/evidence-quickstart' },
+            { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
+            { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
+            { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
+            { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+            { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
+            { label: 'Request a birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
+            { label: 'Issue DHIS2 immunization evidence', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+            { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
+            { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },
+            { label: 'Prove a project', slug: 'tutorials/prove-an-evidence-project' },
+            { label: 'Build and deploy a project', slug: 'tutorials/build-and-deploy-evidence-project' },
+            { label: 'Issue access tokens with Mint', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
+            { label: 'Integrate a candidate with Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+            { label: 'Verify as a consumer', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+            { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+            { label: 'Request SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
+            { label: 'Configure Evidence', slug: 'configure/evidence' },
+            { label: 'Configure Registry Mint', slug: 'configure/mint' },
+            { label: 'Request a token from your own code', slug: 'configure/request-an-access-token' },
+            { label: 'Rotate signing keys', slug: 'tutorials/move-evidence-to-production-signing' },
+            { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
+            { label: 'See it over a Relay API', slug: 'tutorials/first-run-with-solmara-lab' },
           ],
         },
         {
           label: 'Connect an existing registry',
           items: [
             { label: 'Overview', slug: 'configure' },
+            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
             { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
             { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
             { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
-            { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
             { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
@@ -322,7 +340,7 @@ export default defineConfig({
               label: 'Advanced',
               collapsed: true,
               items: [
-                { label: 'Approve an evidence change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
+                { label: 'Approve a source change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
               ],
             },
           ],
@@ -332,6 +350,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'security' },
+            { label: 'Evidence security model', slug: 'security/evidence' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
             { label: 'Release trust', slug: 'security/openssf-evidence' },
@@ -345,6 +364,7 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Project configuration', slug: 'reference/project-configuration' },
+            { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
             { label: 'registryctl CLI', slug: 'reference/registryctl' },
             {
               label: 'API reference',
@@ -352,12 +372,14 @@ export default defineConfig({
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
                 { label: 'Relay (narrative)', slug: 'reference/apis/registry-relay' },
-                { label: 'Notary (narrative)', slug: 'reference/apis/registry-notary' },
+                { label: 'Evidence (narrative)', slug: 'reference/apis/registry-evidence' },
                 // Generated operation pages for each schema (theme-aware, searchable).
                 ...openAPISidebarGroups,
               ],
             },
             { label: 'Errors and status codes', slug: 'reference/errors' },
+            { label: 'Evidence problems', slug: 'reference/evidence-problems' },
+            { label: 'Registry Mint', slug: 'reference/mint' },
             {
               label: 'Diagnostic catalogs',
               collapsed: true,
@@ -378,15 +400,24 @@ export default defineConfig({
                   items: generatedProduct('Relay').items,
                 },
                 {
-                  label: 'Registry Notary',
-                  collapsed: true,
-                  items: generatedProduct('Notary').items,
-                },
-                {
                   label: 'Registry Manifest',
                   collapsed: true,
                   items: generatedProduct('Manifest').items,
                 },
+                // Evidence entered the product docset after every archived
+                // docset was sealed, so its group is optional: absent when an
+                // archived docset's generated sidebar has no Evidence product.
+                // generate-sidebar.test.mjs pins its presence for the current
+                // docset, keeping the loud-failure property there.
+                ...(optionalGeneratedProduct('Evidence')
+                  ? [
+                      {
+                        label: 'Registry Evidence',
+                        collapsed: true,
+                        items: generatedProduct('Evidence').items,
+                      },
+                    ]
+                  : []),
               ],
             },
             { label: 'Contracts', slug: 'reference/contracts' },
@@ -403,7 +434,6 @@ export default defineConfig({
                 { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
                 { label: 'Records stay home', slug: 'explanation/records-stay-home' },
                 { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
-                { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
                 { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
                 { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
                 { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
@@ -419,11 +449,10 @@ export default defineConfig({
                 { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
                 { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
                 { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
+                { label: 'RS-PR-EVIDENCE · Evidence protocol', slug: 'spec/rs-pr-evidence' },
                 { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
                 { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
                 { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
-                { label: 'RS-DM-CLAIM · Claim definition model', slug: 'spec/rs-dm-claim' },
                 { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
               ],
             },

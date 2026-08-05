@@ -43,8 +43,8 @@ jobs:
       rust_packages: ${{ steps.filter.outputs.rust_packages }}
       platform: ${{ steps.filter.outputs.platform }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
-      notary_contracts: ${{ steps.filter.outputs.notary_contracts }}
       relay_contracts: ${{ steps.filter.outputs.relay_contracts }}
+      evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       project_authoring: ${{ steps.filter.outputs.project_authoring }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -52,6 +52,7 @@ jobs:
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       editors: ${{ steps.filter.outputs.editors }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
+      evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -116,19 +117,16 @@ jobs:
           set -euo pipefail
           "${RUNNER_TEMP}/bin/actionlint"
 
-      - name: Check advisory checker copies
-        run: python3 release/scripts/check_advisory_checker_copies.py
-
       - name: Test advisory baseline checkers
-        run: |
-          python3 -m unittest products/notary/tests/advisory_baseline_check_test.py
-          python3 -m unittest crates/registry-relay/tests/advisory_baseline_check_test.py
-
-      - name: Test advisory checker copy guard
-        run: python3 -m unittest release/scripts/test_check_advisory_checker_copies.py
+        run: python3 -m unittest crates/registry-relay/tests/advisory_baseline_check_test.py
 
       - name: Check Debian 13 image contract
         run: python3 release/scripts/check-debian13-images.py
+
+      - name: Test Mint demonstration support scripts
+        run: |
+          python3 -m unittest discover \
+            --start-directory crates/registry-mint/demo/support
 
   secrets:
     name: Secret scan
@@ -273,7 +271,6 @@ jobs:
       matrix:
         target:
           - authcommon_parsers
-          - oid4vci_request_and_proof
           - sdjwt_holder_proof
           - sdjwt_issuance
     steps:
@@ -437,17 +434,16 @@ jobs:
           df -h /
           du -sh target 2>/dev/null || true
 
-  notary-contracts:
-    name: Notary API contracts
+  evidence-contracts:
+    name: Evidence contracts and source neutrality
     needs: changes
-    if: needs.changes.outputs.notary_contracts == 'true'
+    if: needs.changes.outputs.evidence_contracts == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          fetch-depth: 0
           persist-credentials: false
           submodules: false
 
@@ -458,37 +454,11 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install just
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
-        with:
-          tool: just@1.51.0
+      - name: Reproduce Evidence generated contracts
+        run: products/evidence/scripts/check-contracts.sh
 
-      - name: Install pinned oasdiff
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/bin"
-          curl --fail --silent --show-error --location \
-            --output "${RUNNER_TEMP}/oasdiff.tar.gz" \
-            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
-          echo "${OASDIFF_LINUX_X64_SHA256}  ${RUNNER_TEMP}/oasdiff.tar.gz" | sha256sum -c -
-          tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}/bin" oasdiff
-          chmod +x "${RUNNER_TEMP}/bin/oasdiff"
-          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
-
-      - name: Notary OpenAPI baseline
-        working-directory: products/notary
-        run: just openapi-check
-
-      - name: Notary OpenAPI contract
-        working-directory: products/notary
-        env:
-          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-        run: just openapi-contract
-
-      - name: Notary exposure check
-        working-directory: products/notary
-        run: just exposure-check
+      - name: Enforce Evidence source-product neutrality
+        run: products/evidence/scripts/check-source-neutrality.sh
 
   relay-contracts:
     name: Relay API contracts
@@ -552,7 +522,7 @@ jobs:
       - rust-policy
       - rust-quality
       - rust-tests
-      - notary-contracts
+      - evidence-contracts
       - relay-contracts
     runs-on: ubuntu-24.04
     env:
@@ -711,14 +681,8 @@ jobs:
       - name: Test OpenID conformance runner
         run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
 
-      - name: Test external integration evidence runner
-        run: python3 -m unittest release/scripts/test_integration_e2_runner.py
-
       - name: Test conformance candidate binding
         run: python3 -m unittest release/scripts/test_conformance_candidate.py
-
-      - name: Validate external integration evidence packet
-        run: python3 release/scripts/integration-e2-runner.py validate
 
       - name: Test Relay OIDC smoke
         run: python3 -m unittest release/scripts/test_relay_oidc_smoke.py
@@ -957,6 +921,82 @@ jobs:
             target/registryctl-tutorial-source \
             2>/dev/null || true
 
+  evidence-tutorials:
+    name: Evidence tutorials from source
+    needs: changes
+    if: needs.changes.outputs.evidence_tutorial == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Assert amd64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the tutorial gate helpers
+        working-directory: docs/site
+        run: npm run test:tutorial:evidence
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:evidence:dry-run
+
+      - name: Build the Evidence toolset under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
+            cargo build --locked --profile ci \
+            -p registry-evidence -p registry-evidencectl -p registry-mint
+
+      - name: Test the exact local Evidence lifecycle
+        shell: bash
+        env:
+          EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
+          MINT_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/mint
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
+            cargo test --locked --profile ci \
+            -p registry-evidencectl --test dev_lifecycle -- \
+            --ignored --test-threads=1
+
+      - name: Execute the Evidence tutorials in a clean container
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The image is the repository's pinned release-builder digest, used
+          # here only as a clean Debian userland: the gate exercises a shell
+          # and coreutils, and the toolset binaries are mounted in prebuilt.
+          docker run --rm \
+            --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
+            --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
+            --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
+            rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
+            bash /work/docs/site/scripts/check-evidence-tutorials.sh
+
   docs:
     name: Docs checks
     needs: changes
@@ -1130,6 +1170,7 @@ jobs:
       - release-tool
       - release-source-proof
       - registryctl-tutorials
+      - evidence-tutorials
       - docs
       - editor-extensions
     runs-on: ubuntu-24.04

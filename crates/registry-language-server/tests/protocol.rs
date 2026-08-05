@@ -21,12 +21,9 @@ integrations:
   people: { file: integrations/people/integration.yaml }
 services:
   check:
+    kind: consultation_api
     consultations:
       lookup: { integration: people }
-    claims:
-      active: { output: lookup.active }
-    credential_profiles:
-      status: { claims: [active, missing] }
 "#,
     )
     .unwrap();
@@ -162,7 +159,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             "result": null
         }),
     );
-    let mut published_missing_reference = false;
+    let mut published_manifest_diagnostics = false;
     for _ in 0..3 {
         let notification = receive(&mut stdout);
         if notification.get("method").and_then(Value::as_str)
@@ -170,22 +167,13 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             && notification.pointer("/params/uri").and_then(Value::as_str)
                 == Some(manifest_uri.as_str())
         {
-            published_missing_reference = notification
+            published_manifest_diagnostics = notification
                 .pointer("/params/diagnostics")
                 .and_then(Value::as_array)
-                .is_some_and(|diagnostics| {
-                    diagnostics.iter().any(|diagnostic| {
-                        diagnostic
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .is_some_and(|message| {
-                                message.contains("Unknown claim reference 'missing'")
-                            })
-                    })
-                });
+                .is_some_and(Vec::is_empty);
         }
     }
-    assert!(published_missing_reference);
+    assert!(published_manifest_diagnostics);
 
     send(
         &mut stdin,
@@ -195,7 +183,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             "method": "textDocument/definition",
             "params": {
                 "textDocument": { "uri": manifest_uri },
-                "position": { "line": 7, "character": 31 }
+                "position": { "line": 8, "character": 31 }
             }
         }),
     );
@@ -233,13 +221,13 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             "jsonrpc": "2.0",
             "id": 4,
             "method": "workspace/symbol",
-            "params": { "query": "active" }
+            "params": { "query": "lookup" }
         }),
     );
     let symbols = receive_response(&mut stdout, 4);
     assert_eq!(
         symbols.pointer("/result/0/name").and_then(Value::as_str),
-        Some("active")
+        Some("lookup")
     );
 
     let changed_manifest = fs::read_to_string(&manifest_path)

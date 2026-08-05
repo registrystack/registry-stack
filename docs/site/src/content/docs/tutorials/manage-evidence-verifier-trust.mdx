@@ -1,0 +1,90 @@
+---
+title: Manage Evidence verifier trust
+description: Pin provider identity and public keys independently, then approve signing-key rotation without trusting the response being verified.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: how-to
+persona:
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+A valid signature proves control of a private key. Your consumer still decides which provider,
+issuer, key set, algorithm, audience, requirement, and configuration revision it trusts.
+
+Keep that decision outside the Evidence response. Discovery helps you find candidate metadata; it
+does not make the candidate trusted.
+
+## Establish trust before the first request
+
+Through your organization's provider-onboarding process, verify and retain:
+
+- the legal issuer and technical provider identifiers;
+- the expected Evidence service and JWKS endpoints;
+- the Ed25519 public keys and their `kid` values;
+- the audience that identifies your relying party;
+- the requirements, evidence types, purposes, concepts, and configuration revisions you accept;
+- the maximum assertion lifetime and clock skew your decisions allow.
+
+Fetch `/.well-known/evidence/jwks.json` only as a candidate. Compare it through an authenticated,
+independent channel or approved configuration change, then store the accepted JWKS as a versioned
+file. Verification must not follow key URLs supplied by a response.
+
+## Assemble a candidate trust set
+
+When the provider announces a new public key, build a new file without overwriting the active one:
+
+```sh
+evidencectl jwks \
+  --out trusted-issuer-keys.next.json \
+  provider-new-public.jwk.json \
+  provider-retiring-public.jwk.json
+```
+
+Pass public JWK files only. The command rejects private key members, conflicting keys with the same
+`kid`, and an existing output path.
+
+During the overlap window, the candidate set contains the new key and each retiring key that may
+still have a valid assertion in circulation. The provider must retain retiring public keys for
+at least its maximum assertion validity plus verifier clock skew. Your retention policy may be
+longer when historical re-verification requires it.
+
+## Prove the rotation before accepting it
+
+Use representative stored responses and the policies retained for them:
+
+```sh
+evidence verify \
+  --jws response-signed-with-retiring-key.json \
+  --jwks trusted-issuer-keys.next.json \
+  --policy retained-policy.json \
+  --at "<original-decision-instant>"
+```
+
+After the provider begins signing with the new key, verify a synthetic response through the same
+procedure. Confirm that an unknown key still fails and that the candidate changes only the key set,
+not issuer, provider, audience, purpose, requirement, concept, or configuration expectations.
+
+Approve and atomically activate the candidate through your normal configuration process. Keep the
+previous trust file and approval record for rollback and audit.
+
+## Retire the old key deliberately
+
+Remove a retiring key from current verification only after:
+
+1. the provider's maximum assertion lifetime plus accepted clock skew has elapsed since its last
+   possible use;
+2. no current transaction can legitimately return an assertion signed by it;
+3. historical records retain the exact trust set needed to re-verify earlier decisions;
+4. rollback procedures no longer require the old signing generation.
+
+Never make verification fetch a missing key automatically. An unknown `kid` is a trust-change
+signal and must fail closed until your organization approves the change.
+
+Provider operators use [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
+for the other side of this rotation. Consumers remain independent and do not inherit trust merely
+because the provider published a key.

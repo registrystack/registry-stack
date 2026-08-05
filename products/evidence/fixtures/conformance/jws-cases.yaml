@@ -1,0 +1,27 @@
+fixture: registry.evidence.jws-cases/v1
+protected_header:
+  exact_json: '{"alg":"EdDSA","kid":"fixture-key-2026-01","typ":"evidence+jws","cty":"application/evidence+json"}'
+  base64url_padding: prohibited
+cases:
+  - {id: adult-boolean, request: golden/adult-request.json, payload: golden/adult-evidence.json}
+  - {id: residence-controlled-code, request: golden/residence-request.json, payload: golden/residence-evidence.json}
+  - {id: licence-boolean-and-category, request: golden/licence-request.json, payload: golden/licence-evidence.json}
+  - {id: relationship-role-bound-boolean, request: golden/relationship-request.json, payload: golden/relationship-evidence.json}
+signing_procedure:
+  key_source: core-owned fixture SigningProvider; no private key bytes in YAML or repository snapshots
+  payload: For signing-profile tests, sign the exact referenced fixture file bytes including the final line feed; the runtime signs its own core-produced bytes exactly once without canonicalization or reserialization.
+  output_members: [protected, payload, signature]
+  output_header_member: prohibited
+  verification: Resolve fixture-key-2026-01 from the harness-pinned public fixture key and verify before parsing payload.
+negative:
+  - mutate one protected-header byte
+  - mutate one payload byte
+  - remove signature
+  - add an unprotected header
+  - add jku, x5u, jwk, x5c, crit, or b64
+  - unknown kid
+  - algorithm mismatch
+  - signed payload violates the Evidence JSON Schema
+  - duplicate evidence object beside payload
+  - signing-provider failure
+expected_failure: no evidence release; safe service_unavailable where failure is runtime

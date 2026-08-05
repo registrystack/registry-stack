@@ -155,7 +155,10 @@ test('product group labels drop the shared "Registry" prefix', () => {
     labels.every((l) => !/^Registry\b/.test(l)),
     `no group label should start with "Registry": ${labels.join(', ')}`,
   );
-  assert.ok(labels.includes('Relay') && labels.includes('Notary'), labels.join(', '));
+  assert.ok(
+    labels.includes('Relay') && labels.includes('Evidence') && !labels.includes('Notary'),
+    labels.join(', '),
+  );
 });
 
 test('the real manifest yields one group per product with every doc present exactly once', async () => {

@@ -1,46 +1,35 @@
 [workspace]
 members = [
     "crates/registry-config-report",
+    "crates/registry-evidence",
+    "crates/registry-evidencectl",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
-    "crates/registry-platform-cache",
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
-    "crates/registry-platform-oid4vci",
     "crates/registry-platform-oidc",
     "crates/registry-platform-ops",
     "crates/registry-platform-pdp",
-    "crates/registry-platform-replay",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
-    "crates/registry-notary-core",
-    "crates/registry-notary-client",
-    "crates/registry-notary-server",
-    "crates/registry-notary",
-    "crates/registry-notary-worker-harness",
+    "crates/registry-mint",
     "crates/registry-relay",
     "crates/registry-language-server",
     "crates/registryctl",
-    "products/notary/xtask",
 ]
 exclude = [
-    # Parked until Assisted Access or the delegation profile work supplies a
-    # release-surface consumer (#298). Keep the source in git, but out of
-    # workspace CI.
-    "crates/registry-platform-sts",
     "products/platform/fuzz",
-    "products/notary/fuzz",
     "products/manifest/fuzz",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.16.3"
+version = "0.17.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -51,29 +40,24 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-registry-config-report = { path = "crates/registry-config-report", version = "0.16.3" }
-registry-language-server = { path = "crates/registry-language-server", version = "0.16.3" }
-registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.16.3" }
-registry-notary-client = { path = "crates/registry-notary-client", version = "0.16.3" }
-registry-notary-core = { path = "crates/registry-notary-core", version = "0.16.3" }
-registry-relay = { path = "crates/registry-relay", version = "0.16.3" }
-registry-notary-server = { path = "crates/registry-notary-server", version = "0.16.3", default-features = false }
-registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness", version = "0.16.3" }
-registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.16.3" }
-registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.16.3" }
-registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.16.3" }
-registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.16.3" }
-registry-platform-config = { path = "crates/registry-platform-config", version = "0.16.3" }
-registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.16.3" }
-registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.16.3" }
-registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.16.3" }
-registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci", version = "0.16.3" }
-registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.16.3" }
-registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.16.3" }
-registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.16.3" }
-registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.16.3" }
-registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.16.3" }
-registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.16.3" }
+registry-config-report = { path = "crates/registry-config-report", version = "0.17.0" }
+registry-evidence = { path = "crates/registry-evidence", version = "0.17.0" }
+registry-language-server = { path = "crates/registry-language-server", version = "0.17.0" }
+registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.17.0" }
+registry-mint = { path = "crates/registry-mint", version = "0.17.0" }
+registry-relay = { path = "crates/registry-relay", version = "0.17.0" }
+registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.17.0" }
+registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.17.0" }
+registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.17.0" }
+registry-platform-config = { path = "crates/registry-platform-config", version = "0.17.0" }
+registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.17.0" }
+registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.17.0" }
+registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.17.0" }
+registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.17.0" }
+registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.17.0" }
+registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.17.0" }
+registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.17.0" }
+registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.17.0" }
 
 crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
 crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
@@ -90,13 +74,12 @@ bytes = { version = "1" }
 calamine = { version = "0.36" }
 cel = { version = "0.13" }
 chrono = { version = "0.4" }
+chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }
 crc32fast = { version = "1.4" }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
-cryptoki = { version = "0.12" }
 csv = { version = "1" }
 datafusion = { version = "53.1" }
-deadpool = { version = "0.12.3", default-features = false, features = ["managed", "rt_tokio_1"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
@@ -112,6 +95,7 @@ http = { version = "1" }
 humantime-serde = { version = "1" }
 hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+inquire = { version = "0.9.4" }
 insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
 jsonschema = { version = "0.18", features = ["draft202012"] }
@@ -125,11 +109,10 @@ proptest = { version = "1" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
-rhai = { version = "1.25.1", features = ["sync", "serde"] }
+rhai = { version = "=1.25.1", features = ["sync", "serde"] }
 rustix = { version = "1", features = ["fs", "process"] }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }
-secrecy = { version = "0.10" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "=1.2.1" }
@@ -138,6 +121,7 @@ serde_path_to_error = { version = "0.1" }
 serde-saphyr = { version = "0.0.26" }
 serde_yaml_ng = { version = "0.10.0" }
 sha2 = { version = "0.11" }
+signal-hook = { version = "0.3" }
 subtle = { version = "2" }
 tempfile = { version = "3" }
 thiserror = { version = "2" }

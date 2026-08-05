@@ -21,6 +21,23 @@ ROOT = SCRIPT.parents[2]
 
 
 class RegistryReleaseLockTests(unittest.TestCase):
+    def test_schema_version_matches_the_post_retirement_shape(self) -> None:
+        # The Registry Notary retirement removed the Notary image, runtime
+        # recipe, and config-schema members from the signed payload. Both
+        # published schemas and the producer have to name the shape they
+        # actually describe, so version 1.0 cannot keep standing for both.
+        self.assertEqual(release_lock.SCHEMA_VERSION, "2.0")
+        for schema_file in (
+            "release/registry-release-lock.v1.schema.json",
+            "release/registry-release-lock-payload.v1.schema.json",
+        ):
+            schema = json.loads((ROOT / schema_file).read_text(encoding="utf-8"))
+            self.assertEqual(
+                schema["properties"]["schema_version"]["const"],
+                release_lock.SCHEMA_VERSION,
+                schema_file,
+            )
+
     def test_create_payload_generates_complete_closed_example(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -52,7 +69,6 @@ class RegistryReleaseLockTests(unittest.TestCase):
             application_digests = {}
             for name, repository, value in [
                 ("relay", "ghcr.io/registrystack/registry-relay", "d"),
-                ("notary", "ghcr.io/registrystack/registry-notary", "e"),
                 ("postgresql", "docker.io/library/postgres", "f"),
             ]:
                 application_digest = f"sha256:{value * 64}"
@@ -91,7 +107,6 @@ class RegistryReleaseLockTests(unittest.TestCase):
                         "tag_target": tag_target,
                         "images": {
                             "registry-relay": image_identities["relay"],
-                            "registry-notary": image_identities["notary"],
                             "postgresql": image_identities["postgresql"],
                         },
                     }
@@ -111,7 +126,6 @@ class RegistryReleaseLockTests(unittest.TestCase):
                             asset_dir=assets,
                             image_lock=image_lock,
                             relay_image_index=image_indexes["relay"],
-                            notary_image_index=image_indexes["notary"],
                             postgresql_image_index=image_indexes["postgresql"],
                             output=output,
                         )
@@ -141,7 +155,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(payload["images"]),
-                {"relay", "notary", "postgresql_state_plane"},
+                {"relay", "postgresql_state_plane"},
             )
             self.assertEqual(
                 set(payload["images"]),
@@ -160,14 +174,20 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                payload["images"]["notary"]["platforms"][0]["manifest_digest"],
-                application_digests["notary"],
-            )
-            self.assertEqual(
                 payload["images"]["postgresql_state_plane"]["platforms"][0][
                     "manifest_digest"
                 ],
                 application_digests["postgresql"],
+            )
+            self.assertEqual(
+                set(payload["supported_contracts"]),
+                {
+                    "config_bundle_schema",
+                    "config_signature_schema",
+                    "trust_anchor_schema",
+                    "anchor_transition_schema",
+                    "relay_config_schema",
+                },
             )
             self.assertEqual(
                 set(schema["properties"]["runtime"]["required"]),
@@ -179,6 +199,15 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 set(schema["properties"]["runtime"]["required"]).issubset(
                     payload["runtime"]
                 )
+            )
+            self.assertEqual(
+                set(payload["runtime"]),
+                {
+                    "relay_public",
+                    "relay_consultation",
+                    "postgresql_state_plane",
+                    "operator_files",
+                },
             )
             self.assertEqual(
                 set(payload["runtime"]),
@@ -262,19 +291,10 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     "preparation": ["postgresql-tls-certificate"],
                     "serve": ["postgresql-tls-certificate"],
                 },
-                "notary": {
-                    "preparation": ["postgresql-tls-certificate"],
-                    "serve": [
-                        "postgresql-tls-certificate",
-                        "notary-relay-workload-credential",
-                        "notary-signing-key",
-                    ],
-                },
             }
             for lane, product in [
                 ("relay-public", "registry-relay"),
                 ("relay-consultation", "registry-relay"),
-                ("notary", "registry-notary"),
             ]:
                 recipe = payload["runtime"][lane.replace("-", "_")]
                 prefix = ["product-action"]
@@ -421,7 +441,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 hashlib.sha256(
                     postgresql["bootstrap"]["command"][2].encode()
                 ).hexdigest(),
-                "cbad443afb9700702df52be6513cf8afd95b97747d75a0a417df4fd079a2e79c",
+                "02515ab47034a241554bc13f616de00c14b42a36139d6d07a1a53e52c6c28f0e",
             )
             bootstrap_file = next(
                 file
@@ -435,15 +455,12 @@ class RegistryReleaseLockTests(unittest.TestCase):
             product_environment_ids = {
                 "relay-public-environment",
                 "relay-consultation-environment",
-                "notary-environment",
             }
             operator_files = payload["runtime"]["operator_files"]
             self.assertEqual(
                 {file["id"] for file in operator_files},
                 product_environment_ids
                 | {
-                    "notary-signing-key",
-                    "notary-relay-workload-credential",
                     "postgresql-tls-certificate",
                     "postgresql-tls-private-key",
                     "postgresql-admin-password",

@@ -4,9 +4,8 @@ description: Decide whether Registry Stack matches the access problem your insti
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
-  - registry-notary
-last_reviewed: "2026-06-20"
+  - registry-stack
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -31,11 +30,27 @@ system that owns the data.
 
 | Caller needs | Use | Result |
 | --- | --- | --- |
-| Selected records or fields | Registry Relay | A protected, read-only API response |
-| A bounded answer or status | Registry Notary | A claim result without the source record |
+| To read specific data | Registry Relay | A protected, read-only API response |
+| To learn only a fact | Evidence | A signed assertion carrying the answer, not the source record |
 
-The two products can work together. Registry Relay obtains a limited source
-result, and Registry Notary evaluates a reviewed claim over that result.
+Registry Relay and Evidence can work together: an institution publishes
+records through Registry Relay, and Evidence answers a bounded question over
+those same records by treating the Relay API as a fixed HTTP source. Registry
+Mint issues the short-lived access tokens either service needs when a
+deployment has no identity provider; see the
+[Registry Mint reference](../../reference/mint/).
+[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) runs
+that combination on a laptop if you would rather see it than read about it.
+
+### Who does what
+
+- The assertion provider is an institution that answers requests with signed
+  facts through Evidence.
+- The data publisher is an institution that exposes records through Registry
+  Relay.
+- The consumer or verifier is a relying service that calls either door and
+  verifies the answers it receives.
+- The operator is whoever runs the deployment.
 
 ## Registry Stack is not the right tool when
 
@@ -66,5 +81,6 @@ approval.
 
 - [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
 - [Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+- [Evaluate Evidence](../evaluate-evidence/)
 - [Read the architecture overview](../../explanation/architecture/)
 - [Review the security boundaries](../../security/)

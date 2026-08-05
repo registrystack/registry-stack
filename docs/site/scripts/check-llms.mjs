@@ -11,6 +11,7 @@ import { readFile, access, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import { isGeneratedApiDir } from '../src/lib/generated-api-bases.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const distDir = process.env.DOCS_DIST_DIR
@@ -289,13 +290,7 @@ if (await exists(archFile)) {
 // starlight-openapi injects the API reference operation pages as virtual routes
 // (not docs content-collection entries), so they have no per-page .md twin. They
 // are excluded from the llms corpus (reference/apis/** in astro.config.mjs) and
-// from this coverage check. Matches the generated bases reference/apis/relay and
-// reference/apis/notary, but NOT the hand-authored narrative pages
-// reference/apis/registry-relay / registry-notary, which keep their .md.
-const generatedApiBases = ['reference/apis/relay', 'reference/apis/notary'];
-const isGeneratedApiPage = (dir) =>
-  generatedApiBases.some((b) => dir === b || dir.startsWith(`${b}/`));
-
+// from this coverage check.
 const pageDirs = await findPageDirs();
 let covered = 0;
 let skipped = 0;
@@ -304,7 +299,7 @@ for (const dir of pageDirs) {
     skipped += 1;
     continue;
   }
-  if (isGeneratedApiPage(dir)) {
+  if (isGeneratedApiDir(dir)) {
     skipped += 1; // plugin-generated API route, no backing .md by design
     continue;
   }

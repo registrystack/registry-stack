@@ -355,6 +355,42 @@ fn semantic_precision_requires_a_field_address_only_for_field_precision() {
 }
 
 #[test]
+fn semantic_impact_preserves_source_route_changes_and_both_relay_lanes() {
+    let mut impact = parse(PROJECT_SEMANTIC_IMPACT_FIXTURE);
+    impact["changes"][0]["affected_subjects"] = json!([
+        {
+            "kind": "integration",
+            "id": "person-record"
+        },
+        {
+            "kind": "consultation",
+            "id": "person-service.person-route"
+        },
+        {
+            "kind": "product_input",
+            "id": "registry-relay.consultation.config"
+        }
+    ]);
+    for requirement in ["signing", "activation", "restart"] {
+        impact["changes"][0]["requirements"][requirement] =
+            json!(["relay-public", "relay-consultation"]);
+    }
+
+    assert_valid(PROJECT_SEMANTIC_IMPACT_SCHEMA, &impact);
+    let decoded: ProjectSemanticImpactReportV1 =
+        serde_json::from_value(impact.clone()).expect("two-lane Relay impact decodes");
+    assert_eq!(
+        serde_json::to_value(decoded).expect("two-lane Relay impact re-encodes"),
+        impact
+    );
+
+    let mut duplicate_lane = impact;
+    duplicate_lane["changes"][0]["requirements"]["signing"] =
+        json!(["relay-public", "relay-public"]);
+    assert_invalid(PROJECT_SEMANTIC_IMPACT_SCHEMA, &duplicate_lane);
+}
+
+#[test]
 fn dimension_only_projection_preserves_the_legacy_byte_shape() {
     let impact: ProjectSemanticImpactReportV1 =
         serde_json::from_str(PROJECT_SEMANTIC_IMPACT_FIXTURE).expect("impact fixture decodes");
@@ -376,6 +412,22 @@ fn dimension_only_projection_preserves_the_legacy_byte_shape() {
         .expect("single compatibility record serializes"),
         r#"{"dimension":"integration"}"#
     );
+}
+
+#[test]
+fn artifact_integrity_digests_are_strict_lowercase_sha256() {
+    for invalid in [
+        "sha256:abcd",
+        "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        assert!(Sha256Digest::new(invalid).is_err());
+
+        let mut manifest = parse(PROJECT_ARTIFACT_MANIFEST_FIXTURE);
+        manifest["artifacts"][0]["digest"] = json!(invalid);
+        assert_invalid(PROJECT_ARTIFACT_MANIFEST_SCHEMA, &manifest);
+        assert_typed_invalid::<ProjectArtifactManifestV1>(manifest);
+    }
 }
 
 #[test]

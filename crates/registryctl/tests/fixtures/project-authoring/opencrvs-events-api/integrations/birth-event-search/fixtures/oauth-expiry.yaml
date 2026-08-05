@@ -14,4 +14,4 @@ interactions:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: Bearer
         expires_in: 300
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }

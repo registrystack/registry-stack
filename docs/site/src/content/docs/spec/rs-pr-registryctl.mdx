@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-20"
+last_reviewed: "2026-08-03"
 doc_type: specification
 doc_id: RS-PR-REGISTRYCTL
 category: normative
@@ -128,7 +128,7 @@ Directly authored non-secret values MAY appear only when a user selects
 `--show-authored-values` in local human output.
 
 REQ-PR-REGISTRYCTL-010: `build` MUST publish a deterministic complete unit of unsigned signing
-inputs for the closed lanes `relay-public`, `relay-consultation`, and `notary`.
+inputs for the closed lanes `relay-public` and `relay-consultation`.
 It MUST NOT sign, assemble, deploy, activate, or contact an authored source.
 
 REQ-PR-REGISTRYCTL-011: `dev` MUST use the installed release lock and exact digest-locked images,
@@ -153,9 +153,9 @@ REQ-PR-REGISTRYCTL-014: Anchor creation and rotation MUST preserve product-lane 
 Rotation MUST create a next anchor and authenticated transition without editing the current anchor.
 
 REQ-PR-REGISTRYCTL-015: Initial approved-set assembly MUST accept exactly the independently
-verified `relay-public`, `relay-consultation`, and `notary` lanes.
+verified `relay-public` and `relay-consultation` lanes.
 An update MUST bind to the preceding approved set and replace every affected lane.
-The approved set MUST remain a handoff record, not a fourth signature or activation authority.
+The approved set MUST remain a handoff record, not a third signature or activation authority.
 
 ## 6. Machine-readable reports
 
@@ -193,7 +193,7 @@ additional properties, or reuse a schema version for a different shape.
 Registryctl owns the generated closure.
 The operator owns the binding, secret and certificate inputs, and any parent application.
 
-REQ-PR-REGISTRYCTL-022: `deploy generate` MUST consume one verified three-lane approved set and the
+REQ-PR-REGISTRYCTL-022: `deploy generate` MUST consume one verified two-lane approved set and the
 installed signed release lock.
 It MUST NOT sign bundles, create production secrets, initialize product state, start a product, or
 activate a deployment.
@@ -263,10 +263,11 @@ Documentation MUST NOT present an unstable path or human-readable value as an au
 
 ## 10. Authorization and evidence boundaries
 
-REQ-PR-REGISTRYCTL-030: Registryctl MUST reject a Notary claim that does not derive from exactly one
-declared Registry Relay consultation.
-Caller-provided, OpenID Connect (OIDC), and authorization-details data MUST NOT be compiled as claim
-evidence.
+REQ-PR-REGISTRYCTL-030: Registryctl MUST reject a declared consultation that does not derive from
+exactly one declared integration, and MUST reject typed consultation input that does not bind that
+integration's input set exactly and injectively.
+An attribute-release claim MUST declare exactly one of `source_field` or `expression`, so a released
+value derives from the authorized source read and never from caller-supplied data.
 
 REQ-PR-REGISTRYCTL-031: Development source access MUST preserve authorization-before-source.
 The denial scenario MUST reach no token endpoint and no authored source.
@@ -311,15 +312,12 @@ tests.
 - `crates/registryctl/src/deployment.rs` and `tests/deployment_seams.rs` pin package ownership,
   closure integrity, package-only verification, operator-file isolation, and safe regeneration.
 - Trust, approved-set, and project-authoring compiler tests pin lane identity, anchor verification,
-  three-lane assembly, and the Registry Relay evidence boundary.
+  two-lane assembly, and the Registry Relay evidence boundary.
 
 ## Next
 
 - [Registryctl CLI reference](../../reference/registryctl/) lists supported commands and flags.
-- [Cut over a pre-1.0 project](../../start/pre-1.0-cutover/) maps removed commands to the 1.0
-  workflow.
 - [API stability and versioning](../../reference/api-stability/) defines the stack-wide 1.0
   compatibility policy.
 - [RS-PR-RELAY](../rs-pr-relay/) specifies the Registry Relay protocol that compiled project inputs
   configure.
-- [RS-PR-NOTARY](../rs-pr-notary/) specifies the Registry Notary evaluation and issuance protocol.

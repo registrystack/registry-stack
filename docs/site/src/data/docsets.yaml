@@ -16,10 +16,10 @@ docsets:
       registry-relay:
         version: main source (unreleased)
         ref: HEAD
-      registry-notary:
+      registry-manifest:
         version: main source (unreleased)
         ref: HEAD
-      registry-manifest:
+      registry-evidence:
         version: main source (unreleased)
         ref: HEAD
   - id: v0.16.3

@@ -25,3 +25,20 @@ GET /v1/datasets/{dataset_id}/measures/{item_id} added the new path request para
 # One-time accepted diff for issue #362 on 2026-07-20: remove the inert
 # provenance.consent member from the pre-1.0 consultation result.
 POST /v1/consultations/{profile_id}/execute added `subschema #1, subschema #2, subschema #3` to the response body `oneOf` list for the response status `200`
+
+# One-time accepted diff on 2026-08-04: drop format: uri from an evidence
+# offering's access.conforms_to. The member no longer holds a URI. Retargeting
+# the offering from Notary to Evidence made conforms_to name a response
+# profile, `registry.assertion-evidence/v1`, so that the portable manifest
+# layer stays independent of any one product's contract version. The manifest
+# core validates it as present and non-blank for kind registry-evidence and as
+# a URI for every other kind, and Relay refuses at startup to serve an offering
+# of any other kind, so every value this route can return is a profile
+# identifier. Keeping the annotation would have declared a constraint the
+# server's own legitimate values fail.
+#
+# A line has to reproduce oasdiff's own rendering of the error, backticks and
+# all, and that rendering changes between oasdiff releases. Write these against
+# the version CI pins in OASDIFF_VERSION, not whatever is on your PATH.
+GET /metadata/evidence-offerings the `evidence_offerings/items/access/conforms_to` response's property `format` changed from `uri` to `none` for status `200`
+GET /metadata/evidence-offerings/{offering_id} the `access/conforms_to` response's property `format` changed from `uri` to `none` for status `200`

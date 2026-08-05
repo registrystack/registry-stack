@@ -1,0 +1,7 @@
+type: object
+additionalProperties: false
+required: [licence_state, valid_from, valid_until]
+properties:
+  licence_state: {type: string, minLength: 1, maxLength: 32}
+  valid_from: {type: string, format: date}
+  valid_until: {type: string, format: date}

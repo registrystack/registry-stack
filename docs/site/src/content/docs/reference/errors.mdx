@@ -1,26 +1,26 @@
 ---
 title: Error and status code reference
-description: RFC 9457 problem codes returned by Registry Notary and Registry Relay, with their meaning and usual cause.
+description: RFC 9457 problem codes returned by Registry Relay, with their meaning and usual cause, and where the Evidence and Registry Mint error contracts are documented.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-notary
   - registry-relay
-  - registry-platform
-last_reviewed: "2026-07-19"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Registry Notary and Registry Relay return errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The tables below list every `code` value, the message the source attaches to it, and the usual cause.
+Registry Relay returns errors as RFC 9457 problem details with the media type `application/problem+json`. Each problem carries a stable string in the `code` extension member alongside the standard `type`, `title`, `status`, and `detail` fields. The table below lists every `code` value, the message the source attaches to it, and the usual cause.
 
 Registry-owned problem type URIs use `https://id.registrystack.org/problems/...`.
 Client code must branch on the stable `code` extension and the response `status`, not by parsing `type` URI paths.
 The `type` URI identifies and documents the problem type.
 
-The HTTP status is omitted from the Registry Notary and Registry Relay tables because a code can
-map differently by product and operation.
+The HTTP status is omitted from the Registry Relay table because a code can
+map differently by operation.
 Within a stable major release line, each existing product and operation keeps its released
 code-to-status mapping.
 Treat the standard `status` field of the problem response as authoritative for the request, and
@@ -28,107 +28,33 @@ use `code` for the stack-wide meaning.
 The additive compatibility gate uses this reference as the error-code registry and the committed
 OpenAPI documents for operation mappings they enumerate.
 
-## Shared platform
+## Evidence
 
-Shared Registry Platform HTTP middleware can return platform-scoped problem types before a request reaches Registry Notary or Registry Relay application code.
+Evidence has its own closed problem set, documented at
+[Evidence problem types](../evidence-problems/). That page is the single place the set is written
+down, because the set is frozen in `products/evidence/contracts/problem-contract.yaml` and CI
+byte-diffs the generated schema against it; a second copy of the table here would drift without a
+gate to catch it.
 
-| Type path | Meaning | Usual cause |
-| --- | --- | --- |
-| `registry-platform/request/body-too-large` | payload too large | The request body exceeds the configured limit. |
+Two structural differences are worth knowing before reading the Evidence page. Evidence problem
+type URIs are `https://registrystack.org/problems/evidence/<code>` rather than the
+`https://id.registrystack.org/problems/...` form used elsewhere in the stack. And an Evidence
+problem body carries exactly five members (`type`, `title`, `status`, `code`, and `operation`,
+the request's ULID), with no `detail` member and no other extension, so the failure never carries
+subject data or source diagnostics back to the caller.
 
-## Registry Notary
+Evidence answers with one of that closed set for every failure, including transport-level ones: a
+request body over the configured limit is refused as `malformed_request` rather than with a
+shared-middleware problem type (`crates/registry-evidence/src/server.rs`).
 
-Registry Notary returns the codes in the table below from its evidence taxonomy. Several distinct internal conditions intentionally collapse to one public code so that the public response does not disclose more than the caller is entitled to know. The audit record can carry a more specific code than the public response.
+## Registry Mint
 
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `evidence.server_disabled` | evidence server is disabled | The evidence surface is turned off in configuration. |
-| `claim.not_found` | claim was not found | The requested claim id is not configured. |
-| `claim.version_not_found` | claim version was not found | The requested claim version does not exist. |
-| `claim.operation_unsupported` | claim operation is unsupported | The requested operation is not supported for the claim. |
-| `request.invalid` | evidence request is invalid | The request body or parameters failed validation. |
-| `consultation.invalid_request` | registry-backed consultation request is invalid | A registry-backed batch or consultation input failed validation before Relay was called. |
-| `claim.disclosure_not_allowed` | requested disclosure is not allowed | The requested disclosure level is not permitted for the claim. |
-| `purpose.not_allowed` | purpose is not allowed | The requested purpose is not permitted for the claim. |
-| `profile.unsupported` | evidence request profile is unsupported | The requested evidence profile is not supported. |
-| `evidence.not_available` | evidence is not available | The pinned consultation produced no usable evidence or a required proof was not established. |
-| `batch.too_large` | batch request is too large | The batch request exceeds the configured item limit. |
-| `evaluation.not_found` | evaluation was not found | The referenced evaluation id does not exist. |
-| `evaluation.binding_mismatch` | evaluation binding mismatch | The referenced evaluation does not match the requested binding. |
-| `evaluation.quota_exceeded` | machine evaluation quota was exceeded | The authenticated machine principal exceeded the configured evaluation subject budget. |
-| `claim.format_not_supported` | format is unsupported | The requested response format is not supported. |
-| `credential.issuer_not_configured` | credential issuer is not configured | Credential issuance was requested but no issuer is configured. |
-| `credential.holder_proof_required` | holder proof is required | Credential issuance requires a holder proof that was not supplied. |
-| `credential.holder_proof_replay` | holder proof has already been used | The supplied holder proof was already consumed. |
-| `credential.issuance_failed` | credential issuance failed | The credential could not be issued for an internal reason. |
-| `claim.rule_evaluation_failed` | claim rule evaluation failed | A configured claim rule could not be evaluated. |
-| `idempotency.conflict` | idempotency key was reused with a different request | The idempotency key was reused with a different request body. |
-| `auth.purpose_required` | required purpose is missing | The request omits a required purpose. |
-| `auth.missing_credential` | authentication credential is missing | No authentication credential was provided. |
-| `auth.multiple_credentials` | multiple authentication credentials were provided | More than one authentication credential was provided. |
-| `auth.scope_denied` | required scope is missing | The caller's scopes do not include the required scope. |
-| `subject_access.denied` | subject access is denied | A subject-bound or delegated request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
-| `subject_access.rate_limited` | subject access is rate limited | Too many subject-access requests were made in the configured window. |
-
-Policy decision denials surface a stable `pdp.*` code carried through from the shared Policy Decision Point, for example `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, or `pdp.evidence_stale`. The same `pdp.*` codes are listed under [Registry Relay policy](#policy).
-
-The codes above are the evidence-evaluation taxonomy. The Notary server also returns the operational codes below from its federation, credential-status, configuration, admin, readiness, and request-handling surfaces.
-
-### Federation
-
-`federation.*` codes from the server-to-server federation surface. Federation problems use URN `type` URIs of the form `urn:registry-notary:problem:federation:<suffix>` rather than the `https://` types used by the evidence taxonomy. The exception is `federation.stale_claim_result`: it is not a problem response but a signed evaluation result (HTTP 200, `application/jwt`) that carries the code in its signed body.
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `federation.invalid_request` | federation request is invalid | A federation JSON or JWT request failed validation. |
-| `federation.invalid_token` | federation token is invalid | A federation request is missing valid authentication or its token failed verification. |
-| `federation.forbidden` | federation request is forbidden | A known federation peer was denied by local policy. |
-| `federation.unsupported_media_type` | federation media type is unsupported | The federation request used a content type the surface does not accept. |
-| `federation.payload_too_large` | federation payload is too large | The federation request body exceeds the configured limit. |
-| `federation.replay` | federation request was replayed | A federation `jti` or nonce was already used. |
-| `federation.server_error` | federation server error | The federation request could not be served for an internal reason. |
-| `federation.disabled` | federation is disabled | The federation surface is turned off in configuration. |
-| `federation.stale_claim_result` | federation claim result is stale | The local claim result is older than policy allows; returned in a signed response body. |
-
-### Credential status
-
-`credential_status.*` codes for credential status reads and transitions.
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `credential_status.not_found` | credential status was not found | The requested credential status record does not exist. |
-| `credential_status.invalid_status` | credential status is invalid | The requested credential status value is not valid. |
-| `credential_status.invalid_transition` | credential status transition is invalid | The requested status transition is not permitted. |
-| `credential_status.disabled` | credential status is disabled | The credential status surface is turned off for this deployment. |
-| `credential_status.unavailable` | credential status is unavailable | Credential status could not be checked at this time. |
-
-### Administration and configuration
-
-`registry.admin.*` codes for admin surfaces. These are returned to admin callers, not to data-plane clients.
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `registry.admin.capability.not_supported` | registry admin capability is not supported | The requested registry administration capability is not supported. |
-| `registry.admin.posture.invalid_tier` | registry admin posture tier is invalid | The requested posture tier is not a recognized value. |
-
-### Readiness and posture
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `readiness.not_ready` | service is not ready | The service is not ready to serve traffic. |
-| `posture.filter_failed` | posture filter failed | A posture report filter could not be evaluated. |
-| `posture.unavailable` | posture state is unavailable | Posture state could not be read at this time. |
-
-### Request handling
-
-`request.*` and `audit.*` transport-level codes.
-
-| Code | Meaning | Usual cause |
-| --- | --- | --- |
-| `request.uri_too_long` | request uri is too long | The request URI exceeds the configured limit. |
-| `audit.write_failed` | audit write failed | An audit record could not be written. |
-
-The Notary OpenAPI document also uses three generic umbrella problem types as status-keyed examples: `request.conflict` (409), `request.too_large` (413), and `format.unsupported` (406). These are illustrative placeholders: runtime responses use the specific codes above, such as `idempotency.conflict`, `batch.too_large`, and `claim.format_not_supported`. One 413 is an exception: an oversized HTTP request body is rejected by the shared body-limit middleware with problem `type` `https://id.registrystack.org/problems/registry-platform/request/body-too-large` and no `code` extension.
+Registry Mint is an OAuth 2.0 token endpoint, so it does not use RFC 9457 at all. Every error
+response body is the OAuth form `{"error": "<code>"}` over four codes (`invalid_request`,
+`unsupported_grant_type`, `invalid_client`, and `server_error`), transcribed with their statuses
+and causes in the [Registry Mint reference](../mint/). The one to know before reading it:
+every client authentication failure collapses to `invalid_client`, so the endpoint cannot be used
+to probe which client ids are registered.
 
 ## Registry Relay
 
@@ -338,18 +264,19 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 | `runtime.binding.filter_missing` | runtime filter missing from metadata | A runtime filter binding is absent from the metadata manifest. |
 | `runtime.binding.scope_missing` | runtime scope missing or invalid | A runtime scope is missing or uses an unsupported shape. |
 | `runtime.binding.relationship_missing` | runtime relationship missing from metadata | A runtime relationship binding is absent from the metadata manifest. |
-| `runtime.binding.unsupported_evidence_offering` | runtime evidence offering kind is unsupported | An evidence offering is not an external Registry Notary offering. |
+| `runtime.binding.unsupported_evidence_offering` | runtime evidence offering kind is unsupported | The offering's `access.kind` is not the one value the startup validator accepts, `registry-notary`. Nothing maintained sits behind that access kind, so a new deployment should not declare an evidence offering at all. |
 | `runtime.binding.ecosystem_binding_missing` | runtime ecosystem binding missing from metadata | The configured ecosystem binding selector is absent from the metadata manifest. |
 | `runtime.binding.ecosystem_binding_invalid` | runtime ecosystem binding is invalid | The ecosystem binding does not reference a governed-evidence binding with policy identity and ODRL enforcement. |
 
 ## Source
 
-The codes above are transcribed from the error taxonomies in the owning crates.
+The Registry Relay codes above are transcribed from the error taxonomy in the owning crate.
 For the v0.13.0 source definitions, read the
-[Registry Notary `EvidenceError` taxonomy](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registry-notary-core/src/error.rs)
-and the
 [Registry Relay error taxonomy](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registry-relay/src/error.rs).
+The startup-only runtime binding codes are raised by `crates/registry-relay/src/config/validate.rs`.
 
-The Notary server-layer codes (federation, credential status, configuration, admin, readiness, posture, and request handling) are defined in the `registry-notary-server` crate, principally `src/federation/errors.rs`, `src/federation/mod.rs`, and `src/api.rs`.
+The codes this page points at rather than repeating are transcribed on their own pages from
+`crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml`
+(Evidence) and `crates/registry-mint/src/error.rs` (Registry Mint).
 The release compatibility gate compares this registry to its base reference and verifies that every
 listed code remains anchored in Rust or OpenAPI source.

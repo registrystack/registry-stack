@@ -1,0 +1,469 @@
+---
+title: Get your first Evidence assertion
+description: Run a local registry and verify a signed adult-status answer without copying the source record.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Evidence reads an authorized source record, answers a preconfigured question, and signs only the
+governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
+person's name or date of birth.
+
+<QuickstartMeta
+  outcome="A verified assertion containing an adult-status answer, but not the source record."
+  time="About 15 minutes"
+  level="Local development with synthetic data"
+  prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
+/>
+
+## Understand the flow
+
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
+sequenceDiagram
+    participant C as Tutorial caller
+    participant E as Evidence
+    participant R as Tutorial registry
+
+    C->>E: Authorized request<br/>adult-status, person_id=person-123
+    E->>R: GET /people/person-123
+    R-->>E: person_id, name, date_of_birth
+    E->>E: Extract date_of_birth<br/>Derive and sign is_adult: true
+    E-->>C: Signed assertion with is_adult: true<br/>and an opaque subject binding
+    Note over C,E: The assertion contains no person_id,<br/>name, or date_of_birth
+```
+
+Before the request, Registry Mint gives the tutorial caller short-lived local authorization.
+Evidence and the registry process the identifier and date of birth to answer the question, but the
+released assertion contains only the governed answer and an opaque subject binding.
+
+## Install Evidence
+
+Install the latest Evidence toolset:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+evidencectl --version
+```
+
+The installer provides `evidencectl` and the local Evidence and Registry Mint runtimes used later
+in the tutorial.
+
+## Start a small registry
+
+Create a working directory:
+
+```sh
+mkdir first-evidence-assertion
+cd first-evidence-assertion
+```
+
+Open `registry.py` in your editor and add this server:
+
+```python
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlsplit
+
+PEOPLE = {
+    "person-123": {
+        "person_id": "person-123",
+        "name": "Amina Example",
+        "date_of_birth": "2000-01-01",
+    },
+    "person-456": {
+        "person_id": "person-456",
+        "name": "Mateo Example",
+        "date_of_birth": "2012-05-20",
+    },
+    "person-789": {
+        "person_id": "person-789",
+        "name": "Noor Example",
+        "date_of_birth": "1988-11-03",
+    },
+}
+OPENAPI = {
+    "openapi": "3.1.0",
+    "info": {"title": "Tutorial registry", "version": "1.0.0"},
+    "servers": [{"url": "http://127.0.0.1:8000"}],
+    "paths": {"/people/{person_id}": {"get": {
+        "operationId": "getPerson",
+        "parameters": [{"name": "person_id", "in": "path", "required": True,
+                        "schema": {"type": "string"}}],
+        "responses": {"200": {
+            "description": "A person record",
+            "content": {"application/json": {
+                "schema": {
+                    "type": "object",
+                    "required": ["person_id", "name", "date_of_birth"],
+                    "properties": {
+                        "person_id": {"type": "string", "minLength": 1, "maxLength": 64},
+                        "name": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "date_of_birth": {
+                            "type": "string", "format": "date",
+                            "minLength": 10, "maxLength": 10,
+                        },
+                    },
+                },
+            }},
+        }},
+    }}},
+}
+
+class Registry(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = unquote(urlsplit(self.path).path)
+        if path == "/openapi.json":
+            return self.send_json(OPENAPI)
+        people_prefix = "/people/"
+        if path.startswith(people_prefix):
+            person = PEOPLE.get(path[len(people_prefix):])
+            if person is not None:
+                return self.send_json(person)
+        self.send_error(404)
+
+    def send_json(self, value):
+        body = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+print("Registry listening on http://127.0.0.1:8000", flush=True)
+ThreadingHTTPServer(("127.0.0.1", 8000), Registry).serve_forever()
+```
+
+You do not need to understand every line of the server. Three details connect it to Evidence:
+
+- `/people/{person_id}` returns a complete person record.
+- `/openapi.json` describes that endpoint and its response.
+- `getPerson` is the OpenAPI operation that the Evidence question will select.
+
+In one terminal, start the registry and leave it running:
+
+```sh
+python3 registry.py
+```
+
+The server publishes its OpenAPI description at `/openapi.json` and three synthetic records:
+`person-123`, `person-456`, and `person-789`.
+The records include both adults and a child, but this tutorial will request an assertion only for
+`person-123`.
+
+In another terminal, return to `first-evidence-assertion` and inspect the source record:
+
+```sh
+curl -s http://127.0.0.1:8000/people/person-123 | python3 -m json.tool
+```
+
+```json
+{
+  "person_id": "person-123",
+  "name": "Amina Example",
+  "date_of_birth": "2000-01-01"
+}
+```
+
+The registry returns an identifier, a name, and a date of birth. The verified assertion will contain
+none of those source values.
+
+## Create the Evidence project
+
+Create a local project from the registry's OpenAPI description:
+
+```sh
+evidencectl new adult-status \
+  --openapi http://127.0.0.1:8000/openapi.json \
+  --profile local \
+  --generate-keys
+cd adult-status
+```
+
+`--profile local` creates a loopback-only development project, not a production deployment.
+`--generate-keys` creates owner-only local keys for signing, subject binding, and audit integrity.
+OpenAPI describes the source, but you still decide the question and what the answer may disclose.
+
+The new project separates those decisions from the retained API description:
+
+```text
+adult-status/
+├── source.openapi.yaml
+├── selectors/
+├── sources/
+├── adapters/
+├── schemas/
+├── questions/
+├── derivations/
+└── secrets/
+```
+
+This first question uses the compact OpenAPI form, so you will add only a question and its
+derivation. Later institution integrations use the reusable source, selector, adapter, and schema
+directories.
+
+### `questions/adult-status.yaml`
+
+Open `questions/adult-status.yaml` in your editor and add the question definition:
+
+```yaml
+id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: is_adult
+    type: boolean
+derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+```
+
+The definition closes four decisions:
+
+- `subject` says that `person_id` selects the person in `/people/{person_id}`.
+- `source` selects `getPerson` and allows only `date_of_birth` to reach the derivation. It does not
+  change the complete record returned by the registry.
+- `answers` declares one permitted result, a boolean named `is_adult`.
+- `disclosure` is the explicit release boundary. It must name exactly the answers returned by the
+  derivation.
+
+`combine: exactly-one` rejects a missing or repeated `date_of_birth`. `collectionBounds: {}` is
+empty because this fact does not traverse a collection. The request purpose must be `age-check`,
+matching the purpose declared here.
+
+### `derivations/adult-status.rhai`
+
+Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
+scripting language Evidence uses for requirement-specific derivations:
+
+```rhai
+fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    let adult_on = add_calendar_years(born, 18);
+    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
+}
+```
+
+The derivation performs four operations:
+
+1. Require and parse the selected date of birth.
+2. Calculate the eighteenth birthday using calendar arithmetic.
+3. Compare it with `context.legal_local_date`, which Evidence derives from the observation instant
+   in the configured timezone.
+4. Return a map containing exactly the declared `is_adult` answer.
+
+Evidence validates the returned name and boolean form before signing.
+
+Start Evidence and Registry Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+This command starts Evidence and Mint only. The Python registry remains the process you started in
+the first terminal.
+
+## Request an assertion
+
+Prepare the request, local access, and verification expectations:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --name first-assertion
+```
+
+Preparation asks the local Mint for short-lived authorization and records the verification
+expectations before a response exists. It does not send the request to Evidence or contact the
+registry. It creates exactly these owner-only artifacts:
+
+```text
+Prepared request: .evidence/requests/first-assertion/request.json
+Prepared verification context: .evidence/requests/first-assertion/verification.json
+Prepared authorization: .evidence/requests/first-assertion/authorization.curl
+```
+
+The artifacts have separate responsibilities:
+
+- `request.json` contains the question, purpose, fresh request nonce, and `person-123` selector.
+- `verification.json` records what a valid response must satisfy before the response exists.
+- `authorization.curl` contains only the short-lived local authorization header.
+
+Send the request yourself:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/first-assertion/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/first-assertion/request.json \
+  --output assertion.jws.json \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 200
+```
+
+`curl` called Evidence, Evidence called the registry, and the HTTP response is a signed flattened
+JSON Web Signature (JWS). A successful HTTP response is not yet a trusted assertion.
+
+## Verify before reading
+
+Verify the response against the expectations recorded before the request. Verification checks the
+signature and exact issuer, question, purpose, audience, request nonce, subject binding, answer
+shape, and validity period:
+
+```sh
+evidencectl verify assertion.jws.json \
+  --context .evidence/requests/first-assertion/verification.json \
+  --output verified.json
+```
+
+```text
+VERIFIED
+```
+
+Only after the command prints `VERIFIED`, inspect the verified payload:
+
+```sh
+python3 -m json.tool verified.json
+```
+
+The verified document contains generated identifiers, timestamps, and a pseudonymous subject
+binding. The fields relevant to this question look like this excerpt:
+
+```json
+{
+  "assuranceProfile": "local",
+  "purpose": "age-check",
+  "subjects": [
+    {
+      "binding": "urn:evidence:subject:v1_…",
+      "role": "person"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+      "value": true
+    }
+  ],
+  "supportsRequirement": "urn:registrystack:evidence:local:requirement:adult-status"
+}
+```
+
+`supportsRequirement` names the requirement that the question you authored under `questions/`
+compiles to, which is the unit the deployed configuration and the audit record.
+
+The verified payload does not include `person_id`, `name`, or `date_of_birth`. The assertion
+answers the authored question without becoming another copy of the registry record.
+
+The owner-only `request.json` still records that this transaction concerned `person-123`, while
+`verification.json` records the expected opaque subject binding and request nonce. Retain those
+files with the signed response when you need to [verify Evidence later as a
+consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
+assertion alone.
+
+## Stop the local services
+
+Stop Evidence and Mint before reading the completed audit chain:
+
+```sh
+evidencectl dev stop
+```
+
+```text
+Local Evidence stopped
+```
+
+## Inspect the audit entry
+
+Verify the completed audit chain and show its last operation:
+
+```sh
+evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
+DISCLOSURE RELEASED is_adult
+```
+
+The requester value changes on each fresh project. The view identifies the question, purpose,
+requester pseudonym, authorization decision, and disclosed concept. It does not repeat the source
+record or access token.
+
+## Clean up
+
+Remove the stopped local generation, including the sealed bundle that Evidence used:
+
+```sh
+evidencectl dev clean
+```
+
+```text
+Removed stopped local Evidence state
+```
+
+This preserves your editable questions, derivations, keys, and request artifacts. It removes
+`.evidence/dev`, whose runtime files are deliberately read-only while a generation exists. Run
+`dev stop` and then `dev clean` instead of changing those permissions by hand. The command refuses
+to remove a running or unrecognized generation.
+
+Return to the first terminal and press `Ctrl+C` to stop the registry.
+
+Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
+continue, you can remove the complete directory with ordinary file commands.
+
+## If local ports are already in use
+
+Choose two different unused ports when you start the local services:
+
+```sh
+evidencectl dev --detach --evidence-port 8180 --mint-port 8181
+```
+
+Evidence uses the selected ports consistently in its runtime, Mint authorization, readiness
+checks, and generated request artifacts. Send the assertion request to the selected Evidence port,
+such as `http://127.0.0.1:8180/v1/evidence`.
+
+The development profile binds both services to loopback in the environment where the command
+runs. If that environment is a Docker container, run the tutorial's `curl` commands in the same
+container. Use the operator deployment configuration when the service must listen beyond
+loopback.
+
+## Next
+
+- [Return a governed value](../return-a-governed-value/)
+- [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
+- [Review the Evidence overview](../../start/evidence-quickstart/)
+- [Evaluate Evidence's operating requirements](../../start/evaluate-evidence/)

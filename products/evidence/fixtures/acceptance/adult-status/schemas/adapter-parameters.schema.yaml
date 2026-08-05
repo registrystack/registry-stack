@@ -1,0 +1,7 @@
+type: object
+additionalProperties: false
+required: [requestedFields, resultLimit]
+properties:
+  requestedFields:
+    const: [date_of_birth]
+  resultLimit: {const: 2}

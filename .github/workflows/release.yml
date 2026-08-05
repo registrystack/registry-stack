@@ -795,7 +795,7 @@ jobs:
           PY
           )"
           mkdir -p "${RUNNER_TEMP}/release-image-indexes"
-          for name in registry-notary registry-relay; do
+          for name in registry-relay; do
             index_digest="$(jq -er --arg name "${name}" \
               '.images[] | select(.name == $name) | .digest
                | select(test("^sha256:[0-9a-f]{64}$"))' "${candidate}")"
@@ -817,7 +817,6 @@ jobs:
           release/scripts/registry-release render-registryctl-image-lock \
             "${release_manifest}" \
             --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
-            --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
             --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.verify.outputs.source_sha }}" \
             --source-sha "${{ needs.verify.outputs.workflow_revision }}" \

@@ -1,0 +1,113 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/assertion-evidence-v1.json
+title: Evidence assertion payload Version 1
+type: object
+additionalProperties: false
+required:
+  - schema
+  - assuranceProfile
+  - requestNonce
+  - id
+  - type
+  - supportsRequirement
+  - isConformantTo
+  - issuedBy
+  - providedBy
+  - issuedAt
+  - observedAt
+  - validUntil
+  - purpose
+  - audience
+  - configurationRevision
+  - subjects
+  - supportedValues
+properties:
+  schema: {const: registry.assertion-evidence/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
+  requestNonce: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+  id: {type: string, format: uri, maxLength: 512}
+  type: {const: Evidence}
+  supportsRequirement: {type: string, format: uri, maxLength: 512}
+  isConformantTo: {type: string, format: uri, maxLength: 512}
+  issuedBy: {type: string, format: uri, maxLength: 512}
+  providedBy: {type: string, format: uri, maxLength: 512}
+  issuedAt: {type: string, format: date-time}
+  observedAt: {type: string, format: date-time}
+  validUntil: {type: string, format: date-time}
+  purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+  audience: {type: string, format: uri, maxLength: 512}
+  configurationRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  subjects:
+    type: array
+    minItems: 1
+    maxItems: 8
+    items: {$ref: '#/$defs/subject-binding'}
+  supportedValues:
+    type: array
+    minItems: 1
+    maxItems: 16
+    items: {$ref: '#/$defs/supported-value'}
+$defs:
+  subject-binding:
+    type: object
+    additionalProperties: false
+    required: [role, binding]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      binding: {type: string, pattern: '^urn:evidence:subject:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$'}
+  supported-value:
+    type: object
+    additionalProperties: false
+    required: [providesValueFor, value]
+    properties:
+      providesValueFor: {type: string, format: uri, maxLength: 512}
+      value: {$ref: '#/$defs/value'}
+  value:
+    anyOf:
+      - {type: boolean}
+      - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - {type: string, minLength: 1, maxLength: 1024}
+      - {$ref: '#/$defs/bucket'}
+      - {$ref: '#/$defs/entity-reference'}
+      - {$ref: '#/$defs/structured'}
+      - type: array
+        minItems: 1
+        maxItems: 64
+        items:
+          anyOf:
+            - {type: string, minLength: 1, maxLength: 1024}
+            - {$ref: '#/$defs/entity-reference'}
+  bucket:
+    type: object
+    additionalProperties: false
+    required: [form, scheme, bucket]
+    properties:
+      form: {enum: [date-bucket, time-bucket]}
+      scheme: {type: string, format: uri, maxLength: 512}
+      bucket: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+  entity-reference:
+    type: object
+    additionalProperties: false
+    required: [form, reference]
+    properties:
+      form: {const: audience-scoped-entity-reference}
+      reference: {type: string, pattern: '^urn:evidence:entity:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$'}
+  structured:
+    type: object
+    additionalProperties: false
+    required: [form, schema, fields]
+    properties:
+      form: {const: reviewed-structured-value}
+      schema: {type: string, format: uri, maxLength: 512}
+      fields: {type: object, minProperties: 1, maxProperties: 16}
+$comment: >-
+  The selected concept declaration closes the exact value form, schema,
+  codelist, precision, cardinality, sizes, structured fields, and uniqueness.
+  A value accepted by this transport schema but not by that declaration is
+  rejected before evidence construction. Subject selector profiles and values
+  never appear in evidence. requestNonce is the exact echo of the caller's
+  request nonce and is covered by the JWS signature in the signed format. It
+  is not part of the audience-scoped subject binding, and its reuse is not
+  rejected; challenge-style transaction binding exists only when the relying
+  party independently retains the original request and requires the expected
+  nonce during verification.

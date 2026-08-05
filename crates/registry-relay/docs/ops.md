@@ -118,17 +118,16 @@ checklist carry a one-line note.
 - [ ] Bearer tokens, raw API keys, raw query values, row bodies, VC-JWTs, and
   unreviewed `detail` text are not logged.
 
-### Metadata and Notary posture
+### Metadata and consultation posture
 
 - [ ] Portable metadata is validated before deployment (`just
   metadata-validate-profiles`). See [Build and release](#build-and-release).
 - [ ] Runtime backend URLs, source paths, scope names, and table ids are absent
   from portable metadata manifests.
 - [ ] Scoped runtime metadata is not placed in shared public caches.
-- [ ] Registry Notary claim evaluation and credential issuance stay outside
-  Relay. Relay holds no issuance signing key. Any Relay-native consultation is
-  activated only from the complete reviewed artifact closure and a dedicated
-  durable state plane.
+- [ ] Claim evaluation and credential issuance stay outside Relay. Relay holds
+  no issuance signing key. Any Relay-native consultation is activated only from
+  the complete reviewed artifact closure and a dedicated durable state plane.
 
 ### Container runtime policy
 
@@ -281,21 +280,22 @@ boot, validates anti-rollback state, and starts from the embedded config. There
 is no admin config apply route and no hot apply. Dataset reload does not reload
 startup `config.yaml`.
 
-## Operating with Registry Notary
+## Operating with a consulting workload
 
-Registry Relay is the protected registry consultation service. Registry Notary
-owns claim evaluation, credential issuance, and attestation. With a maintained
-native consultation profile, Notary sends an authenticated purpose and one
-bounded input to Relay. Relay executes only the profile's hash-pinned minimized
-source plan and returns its closed result envelope after durable completion.
-Relay can also publish metadata evidence offerings that point clients to
-Notary. Native consultation does not move claim evaluation or issuance signing
-keys into Relay.
+Registry Relay is the protected registry consultation service. Claim
+evaluation, credential issuance, and attestation belong to the workload that
+calls it, never to Relay. With a maintained native consultation profile, that
+workload sends an authenticated purpose and one bounded input to Relay. Relay
+executes only the profile's hash-pinned minimized source plan and returns its
+closed result envelope after durable completion. Relay can also publish
+metadata evidence offerings that point clients at an Evidence deployment.
+Native consultation does not move claim evaluation or issuance signing keys
+into Relay.
 
-For a combined Relay and Notary deployment, use OIDC rather than a Relay API
-key. Bind the
+When Relay and its consulting workload are deployed together, use OIDC rather
+than a Relay API key. Bind the
 `consultation.authorized_workload` audience and exact `azp` or `client_id` to the
-Notary service account, grant only the scope pinned by each public contract,
+workload's service account, grant only the scope pinned by each public contract,
 and keep the PostgreSQL URL, pseudonym material, and source credentials behind
 the environment references named by the configuration. Configuration changes,
 artifact changes, and secret generation changes require a restart.
@@ -367,7 +367,7 @@ The maintained DHIS2 profile has an end-to-end deployment checklist in its
 ### Back up and restore native consultation state
 
 The consultation database is Relay correctness state, not a registry source
-database and not Registry Notary state. Relay owns two schemas:
+database and not another product's state. Relay owns two schemas:
 
 - `relay_state_private` contains the durable audit chain, consultation attempts
   and completions, dispatch permits, quota buckets, materialization publication
@@ -378,11 +378,10 @@ database and not Registry Notary state. Relay owns two schemas:
   runtime, keyring-maintenance, and keyring-reader logins receive only the
   function execution grants required for their roles.
 
-Registry Notary owns `registry_notary_private` and `registry_notary_api` in its
-database. Do not point Notary at the Relay schemas, point Relay at the Notary
-schemas, or copy tables between the products. A deployment can use one
-PostgreSQL cluster, but each product retains its own database roles, schema
-ownership, migrations, and recovery decision.
+Both schemas belong to Relay alone. Do not point another product at them, point
+Relay at another product's schemas, or copy tables between products. A
+deployment can use one PostgreSQL cluster, but each product retains its own
+database roles, schema ownership, migrations, and recovery decision.
 
 Treat the following items as one Relay recovery set:
 
@@ -399,16 +398,16 @@ Treat the following items as one Relay recovery set:
   the database active pointer and history, exact generation, and restricted
   content digest.
 
-For a quiesced backup, remove traffic from every Notary that can call this
+For a quiesced backup, remove traffic from every workload that can call this
 Relay, stop the active Relay fence holder, and prevent another Relay process
 from acquiring the fence. Keep the source inputs and ingest cache unchanged,
 then capture them and the transactionally consistent database backup at one
-coordinated recovery point. If Relay and Notary are recovered as one service,
-either keep both products quiesced while every source, cache, and database
+coordinated recovery point. If Relay and a consulting workload are recovered as
+one service, either keep both quiesced while every source, cache, and database
 backup is taken or use a platform snapshot that gives every store one
 coordinated recovery point. Independent live backups can leave the database
-pointer, retained cache generation, source input, or Notary completion out of
-agreement.
+pointer, retained cache generation, source input, or caller-side completion out
+of agreement.
 
 A custom-format `pg_dump` is suitable for a database dedicated to Relay and for
 restoring an empty database in the same PostgreSQL cluster, where the four
@@ -437,7 +436,7 @@ their object identifiers. The state-plane metadata binds those identifiers and
 the restore will fail attestation when they differ.
 
 Restore into an empty, isolated, writable PostgreSQL 16 through 18 primary with
-no Relay or Notary traffic path. Restore the database and exact external
+no Relay or caller traffic path. Restore the database and exact external
 recovery-set items, then rerun `consultation bootstrap-state` with the same
 owner, role connections, lock keys, chain-key epoch, active key, deadline, and
 retention inputs. `installed_or_attested` plus `identical` means the command
@@ -494,10 +493,10 @@ and fix forward unless a release-specific recovery procedure proves otherwise.
 
 For side-by-side local compose stacks, keep the public host ports distinct
 while letting each container use its internal default listener. A common
-convention is Relay on host `18080` mapped to container `8080`, and Notary on
-host `18081` mapped to its container listener. Native local runs usually use
-Relay `127.0.0.1:8080` and Notary `127.0.0.1:8081`; align source `base_url`
-values with the network where Notary runs.
+convention is Relay on host `18080` mapped to container `8080`, and the service
+that calls it on host `18081` mapped to its container listener. Native local
+runs usually use Relay `127.0.0.1:8080` and the caller `127.0.0.1:8081`; align
+source `base_url` values with the network each service runs on.
 
 ## API-key provisioning and rotation
 
@@ -525,7 +524,7 @@ Never log raw keys, fingerprints, or full environment dumps. In issue reports, i
 
 Relay no longer owns response credential issuance, DID hosting, credential schemas, credential contexts, or signing-key rotation. Remove `provenance:` and entity `publicschema:` blocks from Relay config, remove Relay issuance signing secrets from the runtime secret store, and remove probes for `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}`.
 
-Use Registry Notary for credential issuance, evidence verification, issuer metadata, and signing-key operations. Relay should only publish evidence offering metadata that lets clients discover the relevant Notary service.
+A signed answer about a subject comes from a separate service with its own issuer key. Registry Evidence returns signed, minimum-disclosure assertions from fixed requests to authoritative sources, and owns its issuer metadata, verification, and signing-key operations. Relay should only publish evidence offering metadata that lets clients discover that service.
 
 ## Audit sink and rotation
 

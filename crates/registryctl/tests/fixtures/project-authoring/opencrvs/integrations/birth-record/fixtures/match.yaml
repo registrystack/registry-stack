@@ -1,14 +1,5 @@
 name: birth-record-match
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: UIN, value: "0000000001" }]
-  variables: { as_of_date: 2026-01-01 }
-  claims: [birth-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: birth-record-verification
 input: { uin: "0000000001" }
 variables: { as_of_date: 2026-01-01 }
 interactions:
@@ -65,15 +56,3 @@ expect:
     parents:
       - { type: mother, name: Mira Example, identifier: PARENT-0001 }
       - { type: father, name: Noah Example, identifier: PARENT-0002 }
-  claims:
-    birth-record-exists: true
-    date-of-birth: 2018-05-12
-    sex: female
-    child-given-name: Ada
-    child-family-name: Example
-    child-birth-date: 2018-05-12
-    child-place-of-birth: Fictional District
-    parents:
-      - { type: mother, name: Mira Example, identifier: PARENT-0001 }
-      - { type: father, name: Noah Example, identifier: PARENT-0002 }
-    age-band: 5-17

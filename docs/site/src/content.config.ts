@@ -3,6 +3,8 @@ import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 import { z } from 'astro/zod';
 
+import { DOC_PERSONAS } from './lib/doc-personas.mjs';
+
 const registryLegendFrontmatter = z.object({
   // These seven keys are required for every hand-authored page, but they are
   // declared optional here so that virtual pages injected by plugins (the
@@ -51,6 +53,13 @@ const registryLegendFrontmatter = z.object({
   audience: z
     .array(z.enum(['integrator', 'operator', 'maintainer', 'specification editor', 'tooling']))
     .optional(),
+  // Whose tutorial this is, in the deployment roles start/when-to-use.mdx
+  // defines. Optional here for the same reason the seven keys above are;
+  // check-doc-frontmatter.mjs requires it for every `doc_type: tutorial` page.
+  // Distinct from `audience`, which is the specification-reader axis.
+  // The cast only tells Zod the imported list is non-empty, which a plain JS
+  // array cannot state; the values it validates against are the list itself.
+  persona: z.array(z.enum(DOC_PERSONAS as [string, ...string[]])).optional(),
 });
 
 export const collections = {

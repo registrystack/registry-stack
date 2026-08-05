@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultSiteRoot = resolve(import.meta.dirname, '..');
-const cutoverPage = 'src/content/docs/start/pre-1.0-cutover.mdx';
 const sealedHistoryPages = new Set([
   'src/content/docs/changelog.mdx',
 ]);
@@ -73,7 +72,6 @@ export async function findRemovedSurfaces(siteRoot = defaultSiteRoot) {
     if (
       metadata.status !== 'current' ||
       metadata.draft ||
-      siteRelative === cutoverPage ||
       isSealedHistoryPage(siteRelative)
     ) {
       continue;
@@ -108,7 +106,7 @@ export async function checkCurrentDocCutover(siteRoot = defaultSiteRoot) {
     [
       'Removed pre-1.0 surfaces remain in current documentation.',
       ...details,
-      `Put prescriptive historical command mappings only in ${cutoverPage}.`,
+      'Remove prescriptive historical command mappings from current documentation.',
     ].join('\n'),
   );
 }

@@ -15,17 +15,14 @@ SHARDS = {
     "platform": (
         "registry-platform-audit",
         "registry-platform-authcommon",
-        "registry-platform-cache",
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
         "registry-platform-httpsec",
         "registry-platform-httputil",
-        "registry-platform-oid4vci",
         "registry-platform-oidc",
         "registry-platform-ops",
         "registry-platform-pdp",
-        "registry-platform-replay",
         "registry-platform-sdjwt",
         "registry-platform-testing",
     ),
@@ -33,15 +30,9 @@ SHARDS = {
         "registry-manifest-cli",
         "registry-manifest-core",
     ),
-    "notary": (
-        "registry-notary",
-        "registry-notary-client",
-        "registry-notary-core",
-        "registry-notary-server",
-        "registry-notary-worker-harness",
-        "xtask",
-    ),
     "relay": ("registry-relay",),
+    "evidence": ("registry-evidence", "registry-evidencectl"),
+    "mint": ("registry-mint",),
     "developer-tools": (
         "registry-config-report",
         "registry-language-server",
@@ -49,14 +40,40 @@ SHARDS = {
     "registryctl": ("registryctl",),
 }
 
-NOTARY_PACKAGES = frozenset(SHARDS["notary"])
+EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 TUTORIAL_PACKAGES = frozenset(
     package
-    for shard in ("platform", "manifest", "notary", "relay", "registryctl")
+    for shard in ("platform", "manifest", "relay", "registryctl")
     for package in SHARDS[shard]
 ) | {"registry-config-report"}
+
+# Every input the Evidence tutorial gate replays or is built from. The tutorial
+# pages and helper scripts here must stay in step with the gate's own registry
+# and the helpers it invokes, which test_ci_changes.py enforces: a tutorial or
+# helper CI does not watch is one that rots silently.
+EVIDENCE_TUTORIAL_INPUTS = frozenset(
+    {
+        "Cargo.lock",
+        "Cargo.toml",
+        "docs/site/package-lock.json",
+        "docs/site/package.json",
+        "docs/site/scripts/check-evidence-tutorials.sh",
+        "docs/site/scripts/check-evidence-tutorials.test.mjs",
+        "docs/site/scripts/evidence-tutorial-fence.sh",
+        "docs/site/scripts/registryctl-tutorial.mjs",
+        "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+        "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+        "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+        "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
+        "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+    }
+)
+
+# The gate also builds and runs `mint`, because one tutorial serves assertions
+# to a caller holding a real Mint-issued token.
+EVIDENCE_TUTORIAL_PACKAGES = EVIDENCE_PACKAGES | frozenset(SHARDS["mint"])
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -307,8 +324,8 @@ def classify(
             if package is not None:
                 seeds.add(package)
                 continue
-            if path.startswith("products/notary/"):
-                seeds.update(NOTARY_PACKAGES)
+            if path.startswith("products/evidence/"):
+                seeds.update(EVIDENCE_PACKAGES)
             elif path.startswith("products/manifest/"):
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
@@ -387,7 +404,6 @@ def classify(
             "crates/registry-relay/openapi/*",
             "crates/registry-relay/src/api/openapi.rs",
             "crates/registryctl/assets/project-starters/*",
-            "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/*",
             "crates/registryctl/schemas/project-reports/*",
@@ -396,8 +412,6 @@ def classify(
             "crates/registryctl/tests/fixtures/project-reports/*",
             "docs/site/*",
             "products/manifest/docs/*",
-            "products/notary/docs/*",
-            "products/notary/openapi/*",
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
@@ -472,18 +486,13 @@ def classify(
             "docs/site/src/content/docs/tutorials/use-your-spreadsheet.mdx",
             "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
             "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
-            "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
         }
-        or path.startswith("products/notary/")
         for path in paths
     )
     tutorial_source_under_test = any(
         matches(
             path,
-            "crates/registry-notary/src/*",
-            "crates/registry-notary-core/src/*",
-            "crates/registry-notary-server/src/*",
             "crates/registryctl/src/templates/*",
         )
         or path
@@ -501,6 +510,12 @@ def classify(
         or tutorial_infrastructure
         or tutorial_source_under_test
         or bool(affected & TUTORIAL_PACKAGES)
+    )
+
+    evidence_tutorial = (
+        complete
+        or any(path in EVIDENCE_TUTORIAL_INPUTS for path in paths)
+        or bool(affected & EVIDENCE_TUTORIAL_PACKAGES)
     )
 
     matrix = []
@@ -521,8 +536,8 @@ def classify(
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_hygiene": platform_hygiene,
-        "notary_contracts": bool(affected & NOTARY_PACKAGES),
         "relay_contracts": "registry-relay" in affected,
+        "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "project_authoring": "registryctl" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
@@ -530,6 +545,7 @@ def classify(
         "docs_archives": docs_archives,
         "editors": editors,
         "registryctl_tutorial": registryctl_tutorial,
+        "evidence_tutorial": evidence_tutorial,
     }
 
 

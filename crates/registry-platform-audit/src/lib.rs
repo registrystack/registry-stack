@@ -2,6 +2,13 @@
 //! Tamper-evident audit envelopes, async sinks, and redaction helpers.
 
 pub mod pseudonym_keyring;
+#[cfg(unix)]
+mod segmented_jsonl;
+#[cfg(unix)]
+pub use segmented_jsonl::{
+    segmented_audit_paths, verify_segmented_audit_chain, visit_stopped_segmented_audit_chain,
+    DurableSegmentedAuditLog, DurableSegmentedJsonlSink, SegmentedAuditSummary,
+};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -86,7 +93,17 @@ impl AuditEnvelope {
         Self::new_with_hasher(record, prev_hash, &AuditChainHasher::unkeyed_dev_only())
     }
 
-    fn new_with_hasher(
+    /// Build the next envelope in a chain without writing it anywhere.
+    ///
+    /// [`ChainState::append`] is the usual way to extend a chain and should be
+    /// preferred. This exists for a sink that has to own the chain head itself,
+    /// because it advances the head and claims a place in a pending batch under
+    /// one lock so that a durable write can cover many records at once. Callers
+    /// taking that route are responsible for the ordering [`ChainState`] would
+    /// otherwise guarantee: `prev_hash` must be the previous record's
+    /// `record_hash`, and `hasher` must be the same hasher for the chain's
+    /// whole life.
+    pub fn new_with_hasher(
         record: Value,
         prev_hash: Option<[u8; 32]>,
         hasher: &AuditChainHasher,
@@ -232,11 +249,6 @@ impl AuditChainProfile {
         Self::production_from_env(env_var_name)
     }
 
-    /// Registry Notary production audit-chain profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
     /// Explicit test and local-development profile.
     #[must_use]
     pub fn dev_unkeyed() -> Self {
@@ -283,11 +295,6 @@ impl AuditProfile {
 
     /// Registry Relay production audit profile.
     pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
-    /// Registry Notary production audit profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Self::production_from_env(env_var_name)
     }
 
@@ -1001,6 +1008,9 @@ pub enum AuditError {
         expected: OptionalHashHex,
         found: OptionalHashHex,
     },
+    /// A non-destructive segmented chain has a gap inside its retained range.
+    #[error("audit sealed segment {sequence} is archived or missing")]
+    SegmentMissing { sequence: u64 },
 }
 
 /// Display helper for an optional 32-byte hash rendered as lowercase hex (or
@@ -3860,7 +3870,7 @@ mod tests {
     async fn audit_profile_uses_one_secret_for_chain_and_identifier_hashing() {
         let name = "REGISTRY_PLATFORM_AUDIT_PROFILE_TEST_SECRET";
         env::set_var(name, "0123456789abcdef0123456789abcdef");
-        let profile = AuditProfile::registry_notary_from_env(name).expect("profile");
+        let profile = AuditProfile::production_from_env(name).expect("profile");
         env::remove_var(name);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");

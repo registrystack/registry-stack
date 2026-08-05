@@ -1,0 +1,90 @@
+fixture: registry.evidence.audit-events/v1
+synthetic_only: true
+access_attempt:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:access-001
+  occurredAt: '2026-08-02T00:00:00Z'
+  operation: fixture-operation-00000001
+  phase: access-attempt
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: signed
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: authorized
+  durationMilliseconds: 2
+disclosure_release:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:release-001
+  occurredAt: '2026-08-02T00:00:01Z'
+  operation: fixture-operation-00000001
+  phase: disclosure-release
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: signed
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: released
+  disclosedConcepts: [urn:example:fixture:concept:boolean-a]
+  evidenceId: urn:example:fixture:evidence:001
+  signingKeyId: fixture-key-2026-01
+  durationMilliseconds: 12
+unsigned_disclosure_release:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:release-002
+  occurredAt: '2026-08-02T00:00:02Z'
+  operation: fixture-operation-00000001
+  phase: disclosure-release
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: unsigned
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: released
+  disclosedConcepts: [urn:example:fixture:concept:boolean-a]
+  evidenceId: urn:example:fixture:evidence:001
+  durationMilliseconds: 12
+negative:
+  - raw-principal
+  - raw-actor-or-grant
+  - raw-selector-value
+  - separate-field-hash
+  - plain-sha256-subject-hash
+  - base64url-reencoded-audit-hmac
+  - globally-stable-subject-pseudonym
+  - source-or-supported-value
+  - credential-token-or-private-key
+  - candidate-count-score-hint-or-comparison
+  - release-fields-on-access-event
+  - missing-release-fields-on-release-event
+  - signing-key-on-unsigned-release-event
+  - missing-signing-key-on-signed-release-event
+  - request-nonce-in-any-event
+order:
+  access_attempt_durable_before: [credential-resolution, source-access]
+  disclosure_release_durable_after: [signing]
+  disclosure_release_durable_before: [response-release]

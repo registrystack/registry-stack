@@ -42,4 +42,4 @@ interactions:
                     - { field: identifier_value, operator: eq, value: BR-ZZ-0000001 }
                 pagination: { page_size: 2, page_number: 1 }
     respond: { status: 200, body: { file: bodies/ambiguous.json } }
-expect: { outcome: ambiguous, outputs: {}, claims: {} }
+expect: { outcome: ambiguous, outputs: {} }

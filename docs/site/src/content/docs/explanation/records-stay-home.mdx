@@ -5,7 +5,8 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-28"
+  - registry-evidence
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -14,28 +15,39 @@ standards_referenced:
 
 An institution that runs a civil registry, a social-protection database, or a health
 registry already holds the records it needs.
-Registry Stack lets it **answer evidence questions about those records** (*is this person alive?
-is this programme enrollment active?*) and return a result another system can trust, while the
-records themselves are **read where they already live, never written back, and not copied into a
-central exchange**.
+Registry Stack lets it **answer bounded questions about those records** (*is this person an
+adult? does this licence hold? is this person a legal parent of that child?*) and return a
+result another system can trust, while the records themselves are **read where they already
+live, never written back, and not copied into a central exchange**.
 This page explains what that means in practice: what stays inside the institution's
 boundary, what crosses it, and (equally important) what the design does and does not
 guarantee.
 
 ## A question goes in, an answer comes out
 
-The combined Relay and Notary mental model is one sentence: **a scoped evidence question crosses
-into the institution, Relay reads and normalizes the source, Notary returns a governed evidence
-answer, an evidence consumer uses it, and the decision owner remains accountable for what happens
-next.**
+The combined Relay and Evidence mental model is one sentence: **a bounded question crosses
+into the institution, Relay reads and normalizes the source, Evidence returns one signed
+assertion carrying the answer, an evidence consumer uses it, and the decision owner remains
+accountable for what happens next.**
 
-A Notary caller never sends the value it is asking about and never receives the
+An Evidence caller never sends the value it is asking about and never receives the
 underlying record as the answer.
-It sends the id of an *evidence claim* (an atomic, precisely defined evidence statement) and only
-the typed target, requester, or variable inputs that the claim admits.
-It receives one of a few narrow shapes of answer: a yes/no, a single value, a
-machine-readable evaluation result, or a credential the subject can carry in a wallet.
-The source row that the answer was computed from stays behind.
+It sends the identifier of a *predefined requirement* at an exact revision, the purpose it
+acts under, one selector per declared subject role, and a per-request nonce. That is the
+whole request: the schema is closed and rejects anything else
+(`products/evidence/contracts/request.schema.yaml`).
+It receives one signed assertion carrying the values the requirement declares, and nothing
+else (`products/evidence/contracts/evidence.schema.yaml`).
+The source record the answer was computed from stays behind.
+
+Four questions carry equal weight in the Evidence contract, and none of them is the
+canonical one: adult status, residence region, professional licence status, and
+legal-parent relationship. All four run the same path, and none is a built-in type or a
+special route (`products/evidence/README.md`, `products/evidence/CONCEPT.md`). The
+legal-parent question shows the shape most plainly: the caller already holds a reference to
+a child and a reference to a candidate parent, and asks whether the relationship holds. The
+answer is one boolean. The register's list of that child's parents never travels
+(`products/evidence/fixtures/acceptance/legal-parent-relationship/`).
 
 ## The boundary
 
@@ -44,46 +56,45 @@ flowchart LR
     subgraph inst["Institution: data stays here"]
         src[("Source registry\nCSV · XLSX · Parquet · PostgreSQL")]
         relay["Registry Relay\nprotected read API"]
-        notary["Registry Notary\nevaluate · disclose · issue"]
+        evidence["Evidence\nevaluate · minimize · sign"]
         key>"Signing key\n(private half never leaves)"]
         audit[("Audit log")]
         src -- read in place --> relay
-        relay -- governed read --> notary
-        notary -. records .-> audit
-        key -. signs .-> notary
+        relay -- one fixed protected read --> evidence
+        evidence -. records .-> audit
+        key -. signs .-> evidence
     end
     caller["Caller / evidence consumer"]
-    holder(["Subject / wallet"])
-    caller == "request: claim id + subject inputs + scope" ==> notary
-    notary == "evidence: yes/no · value · evaluation result" ==> caller
-    notary == "issued credential" ==> holder
+    caller == "request: requirement + purpose + subject selectors" ==> evidence
+    evidence == "signed assertion: declared values only" ==> caller
     caller == "scoped record read" ==> relay
     relay == "authorized source records" ==> caller
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
     classDef outside fill:#f7f7f7,stroke:#777,stroke-dasharray:3 3;
-    class src,relay,notary,key,audit inside;
-    class caller,holder outside;
+    class src,relay,evidence,key,audit inside;
+    class caller outside;
 ```
 
 *Two governed surfaces can cross the boundary.* Registry Relay turns an existing file or
 database table into a read-only, access-controlled API without replacing the source.
 Its scoped record routes can return source records to authorized callers that hold the
 dataset's row-read permission.
-Registry Notary evaluates one modelled question against the typed result of a compiler-pinned
-Relay consultation and returns a shaped answer; it is the only component that evaluates claims,
-applies disclosure policy, and issues credentials.
-Notary is the strongest minimization surface.
+Evidence answers one predefined requirement about one set of subjects and returns a signed
+assertion; it is the only component that evaluates a requirement, minimizes the result, and
+signs it.
+Evidence is the stronger minimization surface.
 Relay record reads are scoped and audited, not open data.
 
-The policy boundary remains separate across the two products and their consumers. Relay owns
-source access and adaptation policy. Notary owns evidence authorization and disclosure policy.
-The evidence consumer determines how evidence is used, and the decision owner remains accountable
-for requirements, eligibility, qualification, prioritization, approval, routing, payment,
-workflow, and action policy.
-Purpose-bound authorization can restrict an evidence request without changing which component owns
-the consumer decision. The caller that invokes Notary can be the evidence consumer or a technical
-intermediary acting for it.
+The policy boundary remains separate across the two products and their consumers. Relay
+owns source access and adaptation policy. Evidence owns evidence authorization and the
+declared disclosure of each requirement.
+The evidence consumer determines how evidence is used, and the decision owner remains
+accountable for requirements, eligibility, qualification, prioritization, approval, routing,
+payment, workflow, and action policy.
+Purpose-bound authorization can restrict an evidence request without changing which
+component owns the consumer decision. The caller that invokes Evidence can be the evidence
+consumer or a technical intermediary acting for it.
 
 ## What stays home
 
@@ -100,9 +111,15 @@ intermediary acting for it.
 - The institution keeps custody: The design premise is *distributed custody*: each
   authority retains control of its own registry data, and the stack does not aggregate
   records into a central system. It provides the exchange surface, not a data lake.
+- Evidence keeps no copy of what it read: Version 1 has no application database and
+  persists no selector, source, evidence, or response data. Raw source responses are never
+  persisted or logged, and selector, source, and disclosed values never reach logs or the
+  native audit record (`products/evidence/OPERATOR-CONTRACT.md`, invariants `V1-I14` and
+  `V1-I15` in `products/evidence/contracts/security-invariant-matrix.yaml`).
 - Private signing keys never leave the issuer: The institution publishes the *public*
-  half of its signing key so anyone can verify a signed credential or signed result; the
-  private half stays inside.
+  half of its signing key so anyone can verify a signed assertion; the private half stays
+  inside, owned by the service core and absent from configuration values, scripts, logs,
+  audit, and errors (invariant `V1-I23`).
 
 ## What crosses the boundary
 
@@ -110,99 +127,72 @@ What crosses depends on the surface.
 Registry Relay can return scoped source records to an authorized caller through a
 governed, audited read bounded by the caller's per-dataset row scope and the dataset's
 configured filters and limits.
-Registry Notary returns the answer a rule computes from typed consultation outputs rather than the
-source row; keeping that answer narrow is a modelling discipline, because a well-modelled claim
-returns one reusable evidence statement or one extracted value.
-A Notary answer takes one of a few shapes:
+Evidence returns the values a requirement declares rather than the source row; keeping that
+answer narrow is a modelling discipline, because a well-modelled requirement declares the
+coarsest value form that still answers the question.
 
-- A yes/no: only the true/false satisfaction of the modelled rule.
-- A single value: the evaluated value itself, when the claim's disclosure mode is
-  `value` (this returns the full value).
-- A machine-readable evaluation result: a claim-result document carrying *provenance
-  metadata*: which evaluation produced it, under which policy, across how many sources. This
-  provenance lets a receiving system trace the result; it is not a cryptographic signature.
-- An issued credential: an SD-JWT VC the subject can store in a wallet and present later.
-  Unlike the plain result, the credential is cryptographically verifiable against the
-  issuer's published keys. Credential profiles are holder-bound by default, but an
-  operator can explicitly configure an unbound profile.
+An Evidence assertion is a closed document. It carries the requirement it supports, the
+evidence type it conforms to, the named issuer and the technical provider, the observation
+and validity timestamps, the purpose, the audience, the configuration revision it was
+produced under, one opaque binding per subject role, and one to sixteen declared values
+(`products/evidence/contracts/evidence.schema.yaml`).
+It carries nothing else: the schema rejects additional properties, and subject selector
+profiles and selector values never appear in it.
 
-Across a federation boundary (one institution's Notary asking another's), what crosses is
-a scoped, signed evaluation result, never a credential.
-
-## How much an answer reveals: the three disclosure modes
-
-Every claim carries a **disclosure mode** that fixes how much of the answer the caller
-receives. There are exactly three:
-
-| Mode | Discloses | Withholds |
-|------|-----------|-----------|
-| `value` | the evaluated value, less any object fields the policy redacts | nothing beyond policy-redacted object fields |
-| `predicate` | only the true/false satisfaction, for a claim whose rule yields a boolean | the underlying value |
-| `redacted` | neither: the result carries no value **and** no yes/no | the value *and* the outcome |
-
-The mode is policy-bound: a claim defines an `allowed` set, a `default`, and a downgrade
-policy.
-A caller may request a mode.
-Under the default `deny` downgrade, the service refuses a requested mode outside the
-allowed set; a `default` or `redacted` downgrade substitutes that fallback mode when the
-fallback is itself allowed.
-The default mode applies when the caller requests none, and every result records which
-mode was applied.
-A privacy-sensitive claim is expected to default to the least-revealing mode that still
-answers the question.
-
-This is the mechanism behind "prove a fact without sharing the record". To check whether a
-person has a registered record, model the question as an *existence* rule and disclose it
-as a `predicate`: a resolved record returns `true`, and the row never crosses the
-boundary.
-By default, a record that does not resolve collapses to a single not-available reason
-rather than a `false`, which hides the reason matching failed. An authorized caller can
-still distinguish a resolved record from a not-available response, so use this pattern for
-minimization, not for hiding whether a requested subject matched.
-To report whether a source records a vaccination dose, derive that evidence predicate from the
-declared typed source output. A public-health programme, acting as evidence consumer and decision
-owner, can combine the result with other evidence and its own case state to decide whether outreach
-or follow-up is required.
-Registry Notary can attest an eligibility or other decision already made by an authoritative
-source only when the claim identifier and its review documentation identify the fact as a
-source-owned decision. Notary does not recompute that decision.
+The values themselves are shaped by the requirement's *concept declaration*, which fixes
+the exact form each value takes. A boolean answers a yes-or-no question. A controlled code
+answers with membership in a reviewed codelist rather than the register's own code. A date
+bucket answers with a bucket rather than the underlying date
+(`products/evidence/contracts/supported-value-forms.yaml`).
+[Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/) works
+through what each form does and does not reveal.
 
 ## Why the answer is not the record
 
-A credential is not a copy of the record. It is an **SD-JWT VC**: the signed body carries a
-SHA-256 *digest* of each selectively disclosable field rather than the field value, so a
-field the holder does not present stays hidden.
-Holder binding is set by the credential profile.
-By default, a profile with no `holder_binding` block uses `did:jwk` holder binding.
-A holder-bound profile ties the credential to the holder's key so it is not presentable
-without the matching private key; an operator that intentionally needs a bearer-style
-credential can set `holder_binding.mode: none`.
-Each selectively disclosable field is a whole claim output, so an object-valued output is
-revealed as a unit unless an explicit projection splits it into separately disclosable
-fields.
-Anyone can verify the credential against the issuer's published public keys, served
-without authentication so a verifier needs no credential of its own.
-The issued credential carries no full record payload.
+A subject appears in an assertion only as a role-bound, audience-scoped opaque binding: a
+keyed derivation over the audience, purpose, role, profile, binding-key version, and the
+complete canonical selector bundle. The same person asked about by two relying parties, or
+under two purposes, produces two unrelated bindings, so an assertion is not a correlatable
+identifier (`products/evidence/contracts/evidence.schema.yaml`, invariant `V1-I17`).
+
+The same assertion can also be serialized as an **SD-JWT VC** under a frozen local profile,
+selected by its own exact media type and released only when both the deployment's reviewed
+configuration and the caller's matched grant permit it. That serialization carries one
+disclosure per declared value and adds a second encoding of one answer, never a credential
+lifecycle: there is no offer, no status list, no revocation, and no persisted credential
+state (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
+Its subject binding stays audience-scoped, so it is meaningful to the relying party named
+in the assertion and to no other. It is not a general multi-verifier credential.
+
+Anyone can verify a signed assertion against the issuer's published public keys, served
+without authentication so a verifier needs no credential of its own. A signature
+authenticates the provider and the payload's integrity; it does not assert legal-signature
+status or that the source is correct (invariant `V1-I24`).
 
 ## How the boundary is enforced
 
 The "stays home" property rests on a few enforced rules, covered in depth in the Trust &
 Security material:
 
-- Scope-before-source, deny-by-default: A service checks the caller's scope *before* it
-  reads any source or evaluates any claim, and does not widen a caller's reach at request
-  time beyond what its configuration grants. Anything that touches a record or a claim
-  requires authentication. Routes reachable without it return no record or claim result on
-  their own: liveness and readiness probes, public verification keys, public metadata, and,
-  where OID4VCI issuance or credential status is enabled, the protocol surfaces that run
-  their own flow checks.
-- A permit, or a closed door: On a governed read, the policy decision point must return
-  a permit before data is returned; a denial fails closed with a stable reason rather than
-  falling back to an ungoverned read.
-- Every person-level request is audited: An audit record captures at least the caller,
-  the scopes exercised, a request id, and the declared purpose where one was supplied.
-  A deployment can run audit fail-closed, so a request whose audit record cannot be
-  written does not return success.
+- One authorization decision, before any source read: Evidence resolves a single decision
+  binding the requester, the requirement revision, the purpose, the audience, the authority
+  path, and every subject role's profile and value origin, and denies before it resolves a
+  source credential or contacts a source. Permissions are never unioned across grants
+  (invariant `V1-I05`). Possession of an identifier does not authorize a lookup
+  (invariant `V1-I06`).
+- Caller data cannot widen the question: the request schema is closed, so a caller cannot
+  supply thresholds, expressions, scripts, paths, headers, source fields, or response
+  projections. Every one of those is fixed by reviewed configuration that is immutable for
+  the life of the process (invariants `V1-I02` and `V1-I18`).
+- Every request is audited, at two gates: Evidence durably accepts an access-attempt record
+  after authorization and before it touches a source, and a disclosure-release record after
+  the final response bytes exist and before those exact bytes are released. A sink failure
+  blocks the step rather than releasing unaudited evidence (invariants `V1-I13` and
+  `V1-I29`).
+- A refusal reveals nothing: no-match, ambiguous, missing-fact, and inconsistent-derivation
+  outcomes collapse to one public problem with the same status, title, and body shape, so a
+  caller cannot use the response as an existence oracle for who is in the register
+  (invariant `V1-I16`, `products/evidence/contracts/problem-contract.yaml`).
 
 ## What this guarantees, and what it does not
 
@@ -211,32 +201,39 @@ Security material:
 - It is not "data never moves" and not "air-gapped": The promise is *read-in-place, no
   write-back, retained custody*. Authorized, minimized answers do leave the boundary by
   design: that is the point of the system.
-- Minimization is modelled, not automatic: `value` mode discloses the evaluated value,
-  less any object fields the policy marks for redaction; it is not constrained to a
-  scalar, so a claim modelled to return an object or extracted record returns one. A claim
-  reveals only what its author configured it to reveal; least disclosure is a design choice
-  the claim makes, not a property the stack imposes on every answer.
+- Minimization is modelled, not automatic: A requirement reveals exactly what its concept
+  declaration says it reveals. A requirement authored to disclose a precise value discloses
+  that precise value. Least disclosure is a design choice the requirement makes, not a
+  property the runtime imposes on every answer.
+- Purpose does not narrow the answer: A requirement returns the same values and the same
+  forms for every purpose authorized to invoke it. Purpose gates whether a caller may ask at
+  all; a purpose that justifies a coarser answer needs its own requirement
+  (`products/evidence/OPERATOR-CONTRACT.md`).
+- One requirement is not the whole disclosure surface: Two requirements that are each safe
+  alone can reconstruct a protected value between them. The complete enabled configuration
+  is reviewed as one disclosure surface, and that review is an operator duty rather than
+  something the runtime can decide (invariant `V1-I03`).
 - Correctness depends on the source: Relay reports what the reviewed source consultation says,
-  and Notary evaluates that typed result. Neither product independently vouches for whether the
-  source is correct or current.
-- A plain result is provenance-tagged, not signed: The everyday evaluation response
-  carries provenance metadata, not a cryptographic signature. Cryptographic verifiability
-  comes from the SD-JWT VC credential and the signed federation result: a receiving system
-  that must verify an answer cryptographically uses the credential, not the default response.
-- Matching is only as strict as the Relay integration contract: Relay returns `match`,
-  `no_match`, or `ambiguous` under the compiled selector and output rules. Notary does not
-  replace that result with direct source matching or choose between ambiguous records.
-- Missing evidence is not a negative fact: A matched source value of `false`, a matched `null`
-  value, `no_match`, `ambiguous`, and source failure have different reviewed meanings. Claim rules
-  must not collapse `null`, unavailable evidence, or failures to `false`. An explicitly named
-  existence predicate can map `matched == false` to `false` when its reviewed meaning is exactly
-  whether one admissible match exists; ambiguity and failure remain unavailable.
-- Notary is not a consumer decision engine: Notary returns governed evidence. The evidence consumer
-  determines how that evidence is used, and the decision owner remains accountable for requirements,
-  decisions, workflow, and actions unless Notary is attesting a decision explicitly owned by the
-  authoritative source.
-- This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
-  inside the service; SD-JWT selective disclosure is digest omission. Neither is a
+  and Evidence derives its answer from what the source returned. Neither product
+  independently vouches for whether the source is correct or current.
+- Signed is the default, unsigned is not evidence: The signed flattened JWS is mandatory and
+  the default result. A separately typed unsigned envelope exists only when both the
+  reviewed configuration and the matched grant permit it, carries no integrity protection,
+  is never later-verifiable evidence, and is never produced as a fallback from a signing
+  failure (invariants `V1-I21` and `V1-I22`).
+- Matching is only as strict as the lookup contract: A lookup resolves to exactly one
+  match, no match, or ambiguity. Evidence never surfaces or chooses between candidates, and
+  emits no candidate count, score, or comparison (invariant `V1-I10`).
+- Missing evidence is not a negative fact: A source value of `false`, an absent value,
+  no match, ambiguity, and source failure have different reviewed meanings. A derivation
+  must not collapse an absent value, an unresolved lookup, or a failure into `false`.
+  Existence may be disclosed only as a separately authorized declared value, never as error
+  detail (`products/evidence/contracts/problem-contract.yaml`).
+- Evidence is not a consumer decision engine: Evidence returns governed evidence. The
+  evidence consumer determines how that evidence is used, and the decision owner remains
+  accountable for requirements, decisions, workflow, and actions.
+- This is not zero-knowledge: A boolean answer is a value computed inside the service from
+  data the service read, and SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof.
 
 This page's promise also sits inside the wider set of stack-wide limits: revocation and
@@ -247,8 +244,7 @@ the underlying specifications. Weigh those alongside the limits in this section;
 ## Related
 
 - The security model and protocol contracts: [RS-SEC-G](../../spec/rs-sec-g/),
-  [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-PR-NOTARY](../../spec/rs-pr-notary/),
-  [RS-DM-CLAIM](../../spec/rs-dm-claim/)
-- [Evidence issuance, end to end](../evidence-issuance/)
+  [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/)
+- [Evidence security model](../../security/evidence/)
 - [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
 - [Threat model](../threat-model/)

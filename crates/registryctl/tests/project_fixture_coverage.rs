@@ -28,10 +28,9 @@ use registryctl::{
     FixtureCoverageDimensions, FixtureCoverageEvidenceKind, FixtureCoverageGapReason,
     FixtureCoverageNotApplicableReason, FixtureCoverageNotEvaluatedReason,
     FixtureCoverageRequirementState, FixtureCoverageTarget, FixtureCoverageTargetComparisonInput,
-    FixtureCoverageTargetSetState, FixturePassState, FixtureRequestBindingState,
-    FixtureRequirementCoverage, FixtureSafeCode, GeneratedRecipeApplicability, GeneratorRecipeId,
-    ProjectFixtureCoverageReportV1, RequiredFixtureCoverageRequirement,
-    Sha256Digest as RegistrySha256Digest, SourceCallExpectation,
+    FixtureCoverageTargetSetState, FixturePassState, FixtureRequirementCoverage, FixtureSafeCode,
+    GeneratedRecipeApplicability, GeneratorRecipeId, ProjectFixtureCoverageReportV1,
+    RequiredFixtureCoverageRequirement, Sha256Digest as RegistrySha256Digest,
 };
 use serde_json::{json, Value};
 
@@ -221,8 +220,6 @@ fn empty_dimensions() -> FixtureCoverageDimensions {
     FixtureCoverageDimensions {
         input_ids: Vec::new(),
         output_ids: Vec::new(),
-        claim_ids: Vec::new(),
-        disclosure_modes: Vec::new(),
         status_mappings: Vec::new(),
         protocol_helpers: Vec::new(),
         limits: Vec::new(),
@@ -252,13 +249,6 @@ fn comparison_input_for(targets: &[FixtureCoverageTarget]) -> FixtureCoverageCom
                     .cloned()
                     .into_iter()
                     .collect(),
-                changed_claim_ids: target
-                    .declared
-                    .claim_ids
-                    .first()
-                    .cloned()
-                    .into_iter()
-                    .collect(),
                 source_contract_changed: true,
             })
             .collect(),
@@ -277,8 +267,14 @@ fn canonical_representative_fixture_validates_and_roundtrips_exactly() {
         decoded.summary.target_set_state,
         FixtureCoverageTargetSetState::TargetsPresent
     );
-    assert_eq!(decoded.summary.requirements.total, 35);
-    assert_eq!(decoded.targets[0].requirements.len(), 35);
+    assert_eq!(
+        decoded.summary.requirements.total as usize,
+        RequiredFixtureCoverageRequirement::ALL.len()
+    );
+    assert_eq!(
+        decoded.targets[0].requirements.len(),
+        RequiredFixtureCoverageRequirement::ALL.len()
+    );
     assert!(!decoded.targets[0].fixture_inventory.is_empty());
     assert!(!decoded.targets[0].generated_cases.is_empty());
     assert!(decoded.targets[0]
@@ -338,7 +334,7 @@ fn explicit_no_target_fixture_validates_and_roundtrips_exactly() {
 }
 
 #[test]
-fn generated_targets_have_exact_ordered_35_requirement_contracts() {
+fn generated_targets_have_exact_ordered_requirement_contracts() {
     for (project, capability) in [
         ("bounded-http-starter", FixtureCapability::DeclarativeHttp),
         ("dhis2-script", FixtureCapability::Script),
@@ -355,7 +351,10 @@ fn generated_targets_have_exact_ordered_35_requirement_contracts() {
         );
         let target = only_target(&report);
         assert_eq!(target.identity.capability, capability);
-        assert_eq!(target.requirements.len(), 35);
+        assert_eq!(
+            target.requirements.len(),
+            RequiredFixtureCoverageRequirement::ALL.len()
+        );
         assert_eq!(
             target
                 .requirements
@@ -371,7 +370,7 @@ fn generated_targets_have_exact_ordered_35_requirement_contracts() {
                 .map(FixtureRequirementCoverage::requirement)
                 .collect::<BTreeSet<_>>()
                 .len(),
-            35
+            RequiredFixtureCoverageRequirement::ALL.len()
         );
         for requirement in target.requirements.iter().skip(
             RequiredFixtureCoverageRequirement::ALL.len() - FixtureCoverageChangeKind::ALL.len(),
@@ -385,7 +384,10 @@ fn generated_targets_have_exact_ordered_35_requirement_contracts() {
                 } if evidence.is_empty()
             ));
         }
-        assert_eq!(report.summary.requirements.total, 35);
+        assert_eq!(
+            report.summary.requirements.total as usize,
+            RequiredFixtureCoverageRequirement::ALL.len()
+        );
     }
 }
 
@@ -430,7 +432,7 @@ fn generated_cases_remain_executable_and_isolated_under_their_target() {
 }
 
 #[test]
-fn synthetic_opencrvs_events_api_covers_the_bounded_consultation_contract() {
+fn synthetic_opencrvs_events_api_covers_the_bounded_relay_source_contract() {
     let report = generated_coverage_project("opencrvs-events-api");
     let target = only_target(&report);
     assert_eq!(target.identity.integration, "birth-event-search");
@@ -467,34 +469,6 @@ fn synthetic_opencrvs_events_api_covers_the_bounded_consultation_contract() {
         .find(|fixture| fixture.fixture_id == "birth-event-match")
         .expect("passing exact-selector fixture is present");
     assert_eq!(matched.output_ids, ["event_type", "registered"]);
-    assert_eq!(
-        matched.claim_ids,
-        ["birth-event-found", "birth-event-registered"]
-    );
-    assert_eq!(
-        matched.request_to_consultation_binding.state,
-        FixtureRequestBindingState::Passed
-    );
-    assert_eq!(
-        matched
-            .request_to_consultation_binding
-            .actual_relay_consultations,
-        Some(1)
-    );
-    assert_eq!(
-        matched
-            .request_to_consultation_binding
-            .consultations
-            .iter()
-            .map(|consultation| {
-                (
-                    consultation.service_id.as_str(),
-                    consultation.consultation_id.as_str(),
-                )
-            })
-            .collect::<Vec<_>>(),
-        [("birth-event-verification", "event")]
-    );
 
     for (recipe, safe_code) in [
         (
@@ -508,10 +482,6 @@ fn synthetic_opencrvs_events_api_covers_the_bounded_consultation_contract() {
         (
             GeneratorRecipeId::Timeout,
             Some(FixtureSafeCode::SourceDeadlineExceeded),
-        ),
-        (
-            GeneratorRecipeId::AuthorizationBeforeSource,
-            Some(FixtureSafeCode::AuthorizationDenied),
         ),
         (GeneratorRecipeId::OutputMinimization, None),
     ] {
@@ -528,15 +498,6 @@ fn synthetic_opencrvs_events_api_covers_the_bounded_consultation_contract() {
         ));
         assert_eq!(generated.actual_safe_code, safe_code);
         assert_eq!(generated.pass_state, FixturePassState::Passed);
-        if recipe == GeneratorRecipeId::AuthorizationBeforeSource {
-            let assertion = generated
-                .source_access_assertion
-                .as_ref()
-                .expect("authorization denial records source-call evidence");
-            assert_eq!(assertion.expected_source_calls, SourceCallExpectation::Zero);
-            assert_eq!(assertion.actual_source_calls, Some(0));
-            assert!(assertion.passed);
-        }
     }
 }
 
@@ -571,7 +532,10 @@ fn no_targets_and_a_fixtureless_target_are_distinct_states() {
         report.summary.target_set_state,
         FixtureCoverageTargetSetState::TargetsPresent
     );
-    assert_eq!(report.targets[0].requirements.len(), 35);
+    assert_eq!(
+        report.targets[0].requirements.len(),
+        RequiredFixtureCoverageRequirement::ALL.len()
+    );
 }
 
 #[test]
@@ -592,21 +556,6 @@ fn declared_and_exercised_dimensions_do_not_relabel_semantics_as_coverage() {
             ..
         })
     ));
-    if !script.declared.claim_ids.is_empty() {
-        assert!(!script.declared.disclosure_modes.is_empty());
-        assert!(script.exercised.disclosure_modes.is_empty());
-        assert!(matches!(
-            script
-                .requirements
-                .iter()
-                .find(|coverage| coverage.requirement()
-                    == RequiredFixtureCoverageRequirement::ExercisedDisclosureModes),
-            Some(FixtureRequirementCoverage::Missing {
-                reason: FixtureCoverageGapReason::RuntimeDimensionNotObserved,
-                ..
-            })
-        ));
-    }
     assert!(script.declared.limits.len() > script.exercised.limits.len());
 }
 
@@ -685,7 +634,10 @@ fn multi_target_evidence_cannot_cross_integration_boundaries() {
         ProjectFixtureCoverageReportV1::from_targets("multi-target".to_owned(), None, targets)
             .expect("disjoint targets form one valid report");
     assert_eq!(report.targets.len(), 2);
-    assert_eq!(report.summary.requirements.total, 70);
+    assert_eq!(
+        report.summary.requirements.total as usize,
+        RequiredFixtureCoverageRequirement::ALL.len() * 2
+    );
 
     let mut document = serde_json::to_value(report).unwrap();
     let foreign_evidence = document["targets"][1]["fixture_inventory"][0]["evidence"].clone();
@@ -765,10 +717,6 @@ fn fixed_scope_sentinels_and_evidence_kinds_cannot_claim_live_compatibility() {
         ("evidence_scope", json!("live_country_source")),
         ("compatibility_claim", json!("source_interoperable")),
         ("live_compatibility", json!("compatible")),
-        (
-            "governed_request_evidence",
-            json!("independent_caller_contract_compatible"),
-        ),
     ] {
         let mut document = serde_json::to_value(&report).unwrap();
         document[field] = value;
@@ -776,76 +724,10 @@ fn fixed_scope_sentinels_and_evidence_kinds_cannot_claim_live_compatibility() {
         assert_typed_invalid(document);
     }
 
-    let mut omitted_boundary = serde_json::to_value(&report).unwrap();
-    omitted_boundary
-        .as_object_mut()
-        .expect("coverage report is an object")
-        .remove("governed_request_evidence");
-    assert_schema_invalid(&omitted_boundary);
-    assert_typed_invalid(omitted_boundary);
-
     let mut wrong_kind = serde_json::to_value(report).unwrap();
     wrong_kind["targets"][0]["fixture_inventory"][0]["evidence"]["kind"] =
         json!("semantic_comparison");
     assert_typed_invalid(wrong_kind);
-}
-
-#[test]
-fn pre_witness_v1_report_is_intentionally_rejected_during_pre_one_point_zero() {
-    // The public compatibility promise starts at registryctl v1.0.0:
-    // docs/site/src/content/docs/spec/rs-pr-registryctl.mdx. Before that
-    // boundary, this closed report is replaced deliberately instead of being
-    // accepted with a misleading mapping-derived request claim.
-    let mut legacy = parse(REPRESENTATIVE_FIXTURE);
-    legacy
-        .as_object_mut()
-        .expect("legacy report is an object")
-        .remove("governed_request_evidence");
-    let targets = legacy["targets"]
-        .as_array_mut()
-        .expect("targets are an array");
-    let mut removed_states = Vec::new();
-    for target in targets {
-        target["contract"]
-            .as_object_mut()
-            .expect("target contract is an object")
-            .remove("registry_backed_consultations");
-        for fixture in target["fixture_inventory"]
-            .as_array_mut()
-            .expect("fixture inventory is an array")
-        {
-            fixture
-                .as_object_mut()
-                .expect("fixture record is an object")
-                .remove("request_to_consultation_binding");
-        }
-        let requirements = target["requirements"]
-            .as_array_mut()
-            .expect("requirements are an array");
-        let position = requirements
-            .iter()
-            .position(|coverage| coverage["requirement"] == "request_to_consultation_binding")
-            .expect("new request requirement is present");
-        let removed = requirements.remove(position);
-        removed_states.push(
-            removed["state"]
-                .as_str()
-                .expect("removed requirement state is a string")
-                .to_owned(),
-        );
-    }
-    let counts = legacy["summary"]["requirements"]
-        .as_object_mut()
-        .expect("summary counts are an object");
-    for state in removed_states {
-        let count = counts[&state].as_u64().expect("state count is numeric");
-        counts.insert(state, json!(count - 1));
-        let total = counts["total"].as_u64().expect("total count is numeric");
-        counts.insert("total".to_owned(), json!(total - 1));
-    }
-
-    assert_schema_invalid(&legacy);
-    assert_typed_invalid(legacy);
 }
 
 #[test]
@@ -858,12 +740,6 @@ fn report_has_no_value_path_or_secret_bearing_fields() {
         "environments/local.yaml",
         "FICTIONAL_REGISTRY_TOKEN",
         "SECRET_REFERENCE_SENTINEL",
-    );
-    replace_authored_text(
-        &project,
-        "environments/local.yaml",
-        "/run/secrets/relay-workload-token",
-        "/private/PATH-SENTINEL",
     );
     replace_authored_text(
         &project,
@@ -914,7 +790,6 @@ fn report_has_no_value_path_or_secret_bearing_fields() {
         "query",
         "body",
         "outputs",
-        "claims",
         "values",
         "cel",
         "generated_at",
@@ -930,7 +805,6 @@ fn report_has_no_value_path_or_secret_bearing_fields() {
         b"SECRET_REFERENCE_SENTINEL".as_slice(),
         b"FIXTURE-INPUT-SENTINEL".as_slice(),
         b"TOP-SECRET-CREDENTIAL".as_slice(),
-        b"/private/PATH-SENTINEL".as_slice(),
         b"https://ORIGIN-SENTINEL.invalid".as_slice(),
     ] {
         assert!(!bytes
@@ -957,7 +831,6 @@ fn comparison_input_is_strict_and_default_reports_do_not_fake_affected_sets() {
             "integration": "health",
             "changed_input_ids": ["person_id"],
             "changed_output_ids": [],
-            "changed_claim_ids": [],
             "source_contract_changed": true
         }]
     });
@@ -1095,7 +968,7 @@ fn comparison_enabled_generation_validates_all_impacts_and_keeps_targets_isolate
     let document = serde_json::to_value(&report).unwrap();
     assert_schema_valid(&document);
     let roundtrip: ProjectFixtureCoverageReportV1 =
-        serde_json::from_value(document.clone()).expect("all four impacts roundtrip");
+        serde_json::from_value(document.clone()).expect("all three impacts roundtrip");
     assert_eq!(roundtrip, report);
 
     for target in &report.targets {

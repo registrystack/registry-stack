@@ -6,7 +6,7 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(registry-notary registry-relay)
+images=(registry-relay)
 relay_dockerfile="${repo_root}/release/docker/Dockerfile.registry-relay"
 
 source_label="https://github.com/registrystack/registry-stack"
@@ -32,8 +32,6 @@ if [[ ! -x "${true_binary}" ]]; then
 fi
 cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay"
 cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay-rhai-worker"
-cp "${true_binary}" "${context_dir}/dist/image-bin/registry-notary"
-cp "${true_binary}" "${context_dir}/dist/image-bin/registry-notary-cel-worker"
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 
 docker buildx create \
@@ -102,8 +100,6 @@ for image in "${images[@]}"; do
   touch -t 200001010101 \
     "${context_dir}/dist/image-bin/registry-relay" \
     "${context_dir}/dist/image-bin/registry-relay-rhai-worker" \
-    "${context_dir}/dist/image-bin/registry-notary" \
-    "${context_dir}/dist/image-bin/registry-notary-cel-worker" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
   expected_label_args=()
@@ -121,8 +117,6 @@ for image in "${images[@]}"; do
   touch -t 203001010101 \
     "${context_dir}/dist/image-bin/registry-relay" \
     "${context_dir}/dist/image-bin/registry-relay-rhai-worker" \
-    "${context_dir}/dist/image-bin/registry-notary" \
-    "${context_dir}/dist/image-bin/registry-notary-cel-worker" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${second_layout}" "${revision_label}" "${version_label}"
   python3 "${layout_comparator}" "${first_layout}" "${second_layout}"

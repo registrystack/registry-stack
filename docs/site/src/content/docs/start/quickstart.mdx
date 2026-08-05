@@ -1,39 +1,43 @@
 ---
 title: Start with Registry Stack 1.0
-description: Run Registry Relay and Registry Notary from a spreadsheet, then adapt the source or evidence rule.
+description: Answer a bounded question with Evidence, or publish protected records with Registry Relay, then adapt the source or the definition.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start with the maintained spreadsheet registry.
-It is the shortest complete path through Registry Relay, Registry Notary,
-authorization, source access, evidence evaluation, and minimized disclosure.
+Pick the door that matches what your caller needs. To learn only a fact about
+one subject, start with Evidence. To read specific records or fields, start
+with Registry Relay over the maintained spreadsheet registry. Both first runs
+use one terminal and synthetic data. Neither needs a source checkout,
+production keys, or a deployment package.
+
+## Answer a bounded question with Evidence
+
+Evidence signs the answer to one bounded question about one subject without
+releasing the record behind it.
+[Evidence overview](../evidence-quickstart/) explains the source, assertion,
+verification, and audit boundaries.
+[Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
+then connects a visible Python registry, sends a real request, and verifies the
+minimum answer before reading the answer.
 
 ## Start from a spreadsheet
 
 [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
-creates the released `spreadsheet` project, checks its evidence rules offline,
-and runs Relay and Notary locally over maintained synthetic records.
+creates the released `spreadsheet` project, checks its source behavior offline,
+and runs Relay locally over maintained synthetic records.
 
-Take this path first when evaluating Registry Stack.
+Take this path when the institution has a workbook, or can prepare a reviewed
+workbook derivative.
 Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
 after the sample works.
-
-## Expose evidence
-
-The starter already exposes selected records and evaluates two predicate
-claims.
-[Change one spreadsheet-backed evidence rule](../../tutorials/verify-claim-registry-api/)
-to learn which decisions belong to Relay, Notary, fixtures, and the operator
-handoff.
 
 ## Connect an existing registry
 
@@ -51,12 +55,19 @@ Continue with:
 - [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
   for a synthetic example of that generic integration path
 
-The first run uses one terminal and synthetic data.
-You do not need a source checkout, production keys, or a deployment package.
+## See both doors working together
 
-## Move an older project
+The two doors are not alternatives an institution has to choose between once
+and for all. One institution can publish records through Registry Relay and
+answer bounded questions through Evidence over those same records, because
+Evidence treats a Relay API as an ordinary fixed HTTP source.
 
-Pre-1.0 commands and generated runtime files do not have compatibility aliases
-or an automated migration path.
-Use the [pre-1.0 cutover guide](../pre-1.0-cutover/) to preserve reviewed
-authored intent and recreate generated material.
+[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) is
+where that arrangement is visible end to end. It brings up a whole fictional
+country's registry services on a laptop, then asks Evidence one question about
+one person: is this subject an adult? The answer comes back signed, carrying
+`true` and neither the identifier nor the date of birth that settled it, while
+the record stays with the authority that holds it.
+
+Run it after the spreadsheet or HTTP tutorial above. It needs Docker and
+about 30 minutes.

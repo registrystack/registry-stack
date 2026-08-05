@@ -1,14 +1,16 @@
 ---
 title: Disclosure modes and computed answers
-description: Why Registry Notary can answer a question about a subject by returning a computed result (value, predicate, or redacted) instead of handing back the source record.
+description: Why Evidence answers a question about a subject with a computed value whose shape is fixed in advance, instead of handing back the source record.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-28"
+  - registry-evidence
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
-standards_referenced: []
+standards_referenced:
+  - sd-jwt-vc
 ---
 
 You are weighing whether Registry Stack actually keeps a sensitive registry record private while
@@ -16,167 +18,193 @@ still answering questions about the subjects in it.
 The short answer is that a caller asks a question and receives a *computed answer*, not the record.
 This page explains how that works, what each kind of answer does and does not reveal, and where
 the privacy claim has edges.
-You will see one product term used throughout: an **evidence claim**, which is one atomic,
-precisely defined evidence statement or extracted value, such as "is this person registered?" or
-"what is this person's registration date?".
-A claim is deliberately narrow and reusable. A claim that returned a whole record would
-over-collect, and a claim that embedded one consumer's eligibility or action rules could not be
-reused as neutral evidence.
+You will see one product term used throughout: a **requirement**, which is one predefined,
+reviewed question about one set of subject roles, together with the exact set of values its answer
+may carry.
+A requirement is deliberately narrow and reusable. A requirement that returned a whole record would
+over-collect, and a requirement that embedded one consumer's eligibility or action rules could not
+be reused as neutral evidence.
 
-## How Registry Notary controls what leaves the service
+## Evidence has no caller-selectable disclosure modes
 
-Registry Notary is the component that evaluates an evidence claim and enforces what the caller
-receives back.
-It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`.
-There are exactly three.
-`value` is not always all-or-nothing, though: when a claim returns an object, `value` mode can
-have specific fields redacted (configured through `redaction_fields`), and the result carries the
-object minus those fields plus a list of what was withheld.
+The most important difference is a subtraction.
+An Evidence request carries four required members: a per-request nonce, the requirement identifier,
+the purpose, and one selector per declared subject role. The only optional member is a holder
+public key, which is echoed into the SD-JWT VC `cnf` claim and never reaches authorization,
+selectors, scripts, source requests, or audit. The request schema is closed and rejects anything
+else (`products/evidence/contracts/request.schema.yaml`).
+There is no disclosure mode, no redaction field list, no allowed set, and no downgrade policy,
+because there is nothing for a caller to choose.
 
-Per-claim disclosure control is enforced at runtime by the service.
-It is not left to a caller's good behavior.
+Evidence answers a predefined requirement and returns that requirement's answer.
+It does not run a disclosure policy engine over an arbitrary record, and it has no notion of "the
+same answer, revealed at three levels of detail."
+How much a requirement reveals is fixed when the requirement is authored and reviewed, and it is
+identical for every caller and every purpose authorized to invoke it.
 
-## The evaluation pipeline: computed answers, not record handoffs
+That is deliberately narrow. It moves the disclosure decision
+from request time, where a caller could argue for more, to authoring and review time, where an
+operator has to justify it once and can be held to it.
 
-The reason an answer can stand in for a record is that the caller never supplies the value being
-asked about.
-To evaluate a claim, the caller sends a **claim id** plus the typed request inputs the claim policy
-admits. Those inputs can include target or requester identifiers, declared variables, or scoped
-relationship attributes.
-The REST call is authenticated the way the rest of the service is: an API key or bearer token in
-static-credential mode, or an OIDC token, whichever your deployment is configured for.
-For every claim, Registry Notary requests exactly one compiler-pinned
-consultation from Registry Relay. Request inputs may parameterize the
-consultation but do not become evidence.
-The caller does not supply the evaluated value, and cannot inject one.
+## What actually controls disclosure
 
-The evaluation runs as a pipeline: Relay returns a closed typed consultation result when the claim
-is registry-backed, a rule evaluates the configured evidence statement, a disclosure mode shapes
-what leaves the service, and a response format carries the result.
-Because Notary computes the answer from the closed Relay result and any
-declared non-evidentiary evaluation parameters, it can return that computed
-answer rather than handing back a source record.
+A requirement declares one to sixteen **concepts**. Each concept names the fact being disclosed and
+fixes the exact **value form** that fact takes. The answer carries a value for each declared
+concept and nothing else; the assertion schema rejects additional properties, and subject selector
+profiles and selector values never appear in it
+(`products/evidence/contracts/evidence.schema.yaml`).
 
-The rule that does the computing is one of three kinds.
-An **exists** rule checks whether the pinned consultation produced one admissible match.
-An **extract** rule reads a declared typed output.
-A **`cel`** rule derives an evidence value from typed Relay outputs and
-declared non-evidentiary request variables through a hardened expression.
-Each kind produces an answer about the subject without that answer being a copy of the source row.
+The value form is the minimization control, because the form decides what the number, code, or date
+behind the answer is allowed to become before it leaves the service. There are eleven forms and the
+set is closed (`products/evidence/contracts/supported-value-forms.yaml`).
+
+| Value form | What the caller learns |
+|------------|------------------------|
+| `boolean` | one true or false, and nothing about how it was reached |
+| `controlled-code`, `controlled-code-list` | exact membership in a reviewed codelist; labels and source codes are not disclosed |
+| `controlled-category` | exact membership in a reviewed closed category set |
+| `bounded-integer`, `bounded-decimal` | a number inside declared bounds, at a declared scale |
+| `date-bucket`, `time-bucket` | which reviewed bucket applies; the underlying date, instant, or duration is not disclosed |
+| `audience-scoped-entity-reference`, `entity-reference-list` | an opaque reference meaningful to the named audience and to no other |
+| `reviewed-structured-value` | a small structure whose closed JSON Schema forbids arbitrary JSON; the widest form, and the one to justify hardest |
+
+Two of these deserve emphasis. A controlled code answers with a reviewed disclosure code rather than
+the register's own code, so the register's internal coding never leaves. A date bucket answers with
+a bucket rather than the date, which is how a question about time can be answered without releasing
+a birth date or an expiry date.
+
+The size ceilings are part of the control: at most sixteen concepts per requirement, and a total
+serialized value budget of 65536 bytes.
+
+## Four questions, four answer shapes
+
+Four acceptance definitions carry equal weight in the Evidence contract. None is privileged, none
+is a built-in type, and none has a special route (`AGENTS.md`, `products/evidence/CONCEPT.md`).
+They are worth reading together because they show the same mechanism producing four differently
+shaped answers.
+
+- **Adult status** declares one `boolean` concept, derived from a date the caller never sees, with
+  the age threshold supplied as a reviewed derivation parameter rather than by the caller. The
+  caller learns whether the threshold is met, not the date or the age.
+- **Residence region** declares one `controlled-code` concept bound to a reviewed codelist at a
+  pinned version. Several register codes map onto one disclosed region, so the answer is coarser
+  than the register's own value by construction. A register code with no reviewed mapping leaves
+  the requirement unresolved rather than guessing.
+- **Professional licence status** declares two concepts: a `boolean` for whether the licence is
+  active, and a `controlled-category` for an expiry bucket. The caller learns "active, expiring
+  within 90 days" without learning the expiry date.
+- **Legal-parent relationship** declares one `boolean` concept over two subject roles, a child and
+  a candidate parent that the caller already holds a reference to. It confirms or denies the
+  relationship the caller asked about, and never enumerates the child's parents.
+
+The fixtures for all four are in `products/evidence/fixtures/acceptance/`.
 
 ## Evidence is not a consumer decision
 
 Registry Relay source-access and adaptation policy controls how an authoritative source is read
-and normalized. Registry Notary evidence policy controls which evidence statement is evaluated,
-who can request it, and how much can be disclosed. The evidence consumer determines how the
-evidence is used, while the decision owner remains accountable for requirements, decisions, and
-actions.
+and normalized. Evidence authorization and requirement policy control which requirement is
+evaluated, who can request it, for what purpose, and exactly which values leave the service. The
+evidence consumer determines how the evidence is used, while the decision owner remains accountable
+for requirements, decisions, and actions.
 
-A Common Expression Language (CEL) rule can derive an evidence predicate, such as whether the
-source records an active programme enrollment or a measles dose. It is not a general-purpose
-consumer eligibility or decision engine. A public-health programme, for example, can act as both
-evidence consumer and decision owner when it combines those evidence claims with its own
-thresholds, priorities, and case state to decide whether outreach or follow-up is required.
+A derivation script can compute an evidence value, such as whether a threshold is met or which
+reviewed bucket applies. It is not a general-purpose consumer eligibility or decision engine, and
+Version 1 has no general policy engine (`products/evidence/contracts/README.md`). A public-health
+programme, for example, can act as both evidence consumer and decision owner when it combines those
+answers with its own thresholds, priorities, and case state to decide whether outreach or follow-up
+is required.
 
-Registry Notary can also attest a decision that an authoritative source already owns. The claim
-identifier and its review documentation must say that it is a source-owned decision. Notary does
-not recompute that decision or present the source's decision policy as Notary policy.
+## There is no redacted answer
 
-## The three disclosure modes
+Evidence cannot return an answer that carries neither a value nor a satisfaction outcome, and this
+is structural rather than an omission: an assertion must carry at least one
+supported value, so an assertion with nothing in it cannot be produced
+(`products/evidence/contracts/evidence.schema.yaml`).
 
-The disclosure mode fixes how much of the computed answer the caller receives:
+An Evidence request that cannot be answered does not return an empty assertion. It returns an
+`application/problem+json` document with a closed member set, and no assertion is produced at all
+(`products/evidence/contracts/problem-contract.yaml`).
 
-| Mode | What the caller receives |
-|------|--------------------------|
-| `value` | the evaluated value, less any object fields the policy redacts |
-| `predicate` | only the true/false satisfaction of a boolean result |
-| `redacted` | no value and no satisfaction outcome |
+What used to be modelled as a redacted answer is modelled in Evidence as a different requirement,
+or as a coarser value form on the same requirement, and is reviewed as such.
 
-`value` returns the computed result, minus configured object-field redactions, so this mode is the
-least private of the three and is appropriate only where the use case calls for the actual value.
+## A refusal is not an existence oracle
 
-Every evaluation result records which disclosure mode was applied, so a downstream system can tell
-how much was revealed.
+Collapsing an unresolved outcome is not optional and not a mode.
+Every requirement declares `existenceDisclosure: collapse-unresolved`, and that enum has exactly
+one permitted value (`products/evidence/contracts/bundle.schema.yaml`).
 
-## Why predicate and redacted avoid sharing the underlying record
+No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
+one public problem, `evidence_not_available` with status 422, carrying the same title and the same
+body shape. A caller cannot tell which of the four happened, so it cannot use the response to learn
+whether a record exists (`products/evidence/contracts/problem-contract.yaml`, invariant `V1-I16` in
+`products/evidence/contracts/security-invariant-matrix.yaml`).
+Existence may be disclosed only as a separately authorized declared concept, never as error detail.
 
-This is the central privacy property.
-Because Notary computes the answer from compiler-pinned Relay outputs or permitted
-subject access, a `predicate` result can satisfy a question while disclosing only a boolean.
-A question of whether someone has a registered record is modelled as an `exists` rule disclosed as
-`predicate`: the caller learns `true` when a matching record is found, while a subject with no
-matching record returns `evidence.not_available` (collapsed to a single public reason by default)
-rather than `false`; absence is surfaced as no-evidence, not as a negative result.
-Either way the source row never leaves the service.
-A source fact such as whether a recorded vaccination dose is present can be modelled as a boolean
-evidence predicate without returning the underlying health record.
-
-A `redacted` result goes further: it carries neither the source value nor the satisfaction
-outcome.
-Both are withheld.
-The standard result body reports no `satisfied` value, and the CCCEV JSON-LD renderer omits
-`cccev:isConformantTo`.
-
-`predicate` still discloses a true-or-false fact; `redacted` does not.
+Internally the outcomes stay distinct in the audit record. Collapsing is a property of what the
+caller sees, not of what the operator can review.
 
 ## Preserve negative, unknown, and unavailable evidence
 
-Claim authors must keep these source meanings distinct:
+Requirement authors must keep these source meanings distinct:
 
-- `true` means the reviewed source contract positively establishes the evidence statement.
+- `true` means the reviewed source contract positively establishes the fact.
 - `false` means the reviewed source contract positively establishes its negative.
-- `null` means a subject matched but the declared source value is unknown, absent, or not recorded.
-- `no_match` means the exact selector did not resolve a subject.
-- `ambiguous` means the selector resolved more than one admissible subject.
+- An absent value means a subject matched but the declared source value is unknown, absent, or
+  not recorded.
+- No match means the exact selector did not resolve a subject.
+- Ambiguity means the selector resolved more than one admissible subject.
 - A source failure means the source could not provide a reliable result.
 
-A claim rule must not silently coerce `null`, `no_match`, `ambiguous`, or source failure to
-`false`. Missing evidence is not a negative fact. An explicitly named existence predicate is the
-narrow exception: a reviewed rule can map `matched == false` to `false` only when the claim means
-that one admissible match exists. This exception does not make other claims negative, and ambiguity
-or source failure never becomes `false`. A public disclosure policy can collapse matching failures
-to `evidence.not_available`, but the reviewed source outcome and audit provenance remain distinct
-from an explicit negative source value.
+A derivation must not silently coerce an absent value, no match, ambiguity, or source failure to
+`false`. Missing evidence is not a negative fact. An explicitly named existence concept is the
+narrow exception: a reviewed derivation can treat "no admissible match" as a negative only when the
+concept means exactly that one admissible match exists, and ambiguity or source failure never
+becomes `false`.
 
-## How disclosure policy is configured per claim
+## Subjects do not travel, and do not correlate
 
-The caller does not freely pick from all three modes.
-Each claim configures a **disclosure policy**: a `default` mode, an `allowed` set drawn from the
-three modes, and a `downgrade` policy.
-A caller may request a mode: Notary honors it when it is in that claim's allowed set.
-Under the default `deny` downgrade, a disallowed request is refused
-(`claim.disclosure_not_allowed`); a `default` or `redacted` downgrade substitutes that fallback
-mode when the fallback is itself allowed.
-When the caller requests no mode, Notary applies the claim's default.
-So the policy bounds which modes are allowed, and the caller chooses among the allowed modes.
-A privacy-sensitive claim can be configured to default to the least-revealing mode that still
-answers the question.
+A subject appears in an assertion only as a role-bound, audience-scoped opaque binding, derived
+with a keyed function over the audience, purpose, role, selector profile, binding-key version, and
+the complete canonical selector bundle. The same person asked about by two relying parties, or
+under two purposes, yields two unrelated bindings, so assertions cannot be joined into a profile
+(invariant `V1-I17`).
 
-## What a redacted result still reveals (and to whom)
+That property is also why `audience-scoped-entity-reference` is a usable value form: an assertion
+can identify a related entity to the audience that asked without minting an identifier anyone else
+can match on.
 
-"Reveals nothing to the caller" is not the same as "leaves no trace." A `redacted` evaluation can
-still be pointed back at: it carries an `evaluation_id`, and the audit record carries a
-`verification_id` and a `claim_hash`.
-That lets you reference the evaluation that happened; it is not a cryptographic signature on the
-answer.
-Redaction shapes what the caller sees; it does not erase the fact that an evaluation happened.
+## Response formats are not disclosure levels
 
-That trace is by design.
-Every evaluation (redacted or not) is audited, and a deployment can run audit fail-closed, so that
-a request whose audit record cannot be written does not succeed.
-So redaction does not mean an unlogged request; it means an unrevealed answer.
+Evidence can serialize the same assertion in up to three formats: a signed flattened JWS, an
+SD-JWT VC under a frozen local profile, and a separately typed unsigned envelope. `signed-jws` is
+mandatory in every bundle and is the default (`products/evidence/contracts/bundle.schema.yaml`).
 
-There is a related protection on the matching surface.
-By default, a matching failure collapses to a single public reason, `evidence.not_available`, so
-the lookup cannot be used as an existence oracle; a "not found" answer does not tell the caller
-whether a record exists.
-This complements `redacted` disclosure by not leaking record existence.
-A deployment can turn this off, but only in a controlled environment; it is not always on.
+These are integrity and encoding choices, not privacy choices. All three carry the same declared
+values.
+The SD-JWT VC serialization emits one root disclosure per supported value by default. A governed
+`reviewed-structured-value` can instead expose an always-visible object whose direct fields are
+independent disclosures. Nested field values remain atomic. The issuer appends every disclosure,
+so the response the caller receives reveals the same set as the JWS. Holder-side omission at
+presentation time is outside Version 1, which performs no presentation-side verification, no
+key-binding JWT validation, and no wallet interaction
+(`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
+The unsigned envelope carries no integrity protection, is released only when both the reviewed
+configuration and the caller's matched grant permit it, and is never later-verifiable evidence.
+
+## One requirement is not the whole disclosure surface
+
+Each requirement declares a `disclosureGuard` naming the value families it touches, and two
+requirements that are each defensible alone can reconstruct a protected value between them.
+The complete enabled configuration is therefore reviewed as one disclosure surface rather than
+requirement by requirement, and that review is an operator duty the runtime cannot perform
+(invariant `V1-I03`, `products/evidence/OPERATOR-CONTRACT.md`).
 
 ## Disclosure control is one safeguard among several
 
-Disclosure modes are one runtime safeguard within a broader posture that also includes
-authentication, scoped routes, no source mutation, and audit.
+Value forms are one design-time safeguard within a broader posture that also includes
+authentication, a single authorization decision taken before any source is contacted, immutable
+startup configuration, and audit at two durable gates.
 They are not the whole privacy guarantee.
 A few protections are not the software's to make at all: secret and key custody, audit retention,
 tenant isolation, transport, and rate limiting are your deployment's job, not built-in guarantees.
@@ -185,34 +213,31 @@ tenant isolation, transport, and rate limiting are your deployment's job, not bu
 
 A few boundaries matter when you evaluate this design:
 
-- Minimization is conditional, not absolute: A minimized answer can be narrower than the full
-  source record only where the configured use case supports that pattern.
-  Notary does not always return less than the record; `value` mode returns the full value, and a
-  claim reveals only what its policy was configured to reveal.
-- The caller cannot inject a value, but matching strictness is configured: The "computed answer
-  avoids sharing the record" guarantee rests on Notary computing the answer from the configured
-  evidence mode and closed typed inputs.
-  Matching is only as strict as the reviewed Relay consultation contract.
-- Disclosure modes are not credential selective disclosure: A holder's later choice of which
-  credential fields to present is a separate mechanism from Notary's three evaluation modes.
-  Do not read `value`/`predicate`/`redacted` as the same thing as a wallet holder selectively
-  disclosing credential fields.
-- Credential selective disclosure is claim-output scoped by default: without an explicit
-  projection, each claim becomes one disclosure carrying the whole value, so an object-valued
-  output is revealed as a unit.
+- Minimization is modelled, not automatic: a requirement reveals exactly what its concepts declare.
+  A requirement authored with `reviewed-structured-value` returns that structure. Least disclosure
+  is a choice the requirement makes, not a property the runtime imposes on every answer.
+- Purpose does not narrow the answer: a requirement returns the same concepts in the same forms for
+  every purpose authorized to invoke it. Purpose gates whether a caller may ask; a purpose that
+  justifies a coarser answer needs its own requirement.
+- The caller cannot inject a value, but matching strictness is configured: the computed answer rests
+  on Evidence deriving it from one reviewed source consultation. A lookup resolves to exactly one
+  match, no match, or ambiguity, and matching is only as strict as that reviewed source contract.
+- This is not zero-knowledge: a boolean answer is computed inside the service from data the service
+  read, and SD-JWT selective disclosure is digest omission. Neither is a zero-knowledge proof.
+- An assertion is not a general-purpose credential: its subject binding is scoped to the audience
+  named in it, so it is meaningful to that relying party and to no other.
 
-These modes also sit inside boundaries that are not specific to disclosure design: how the Relay
-consultation is authorized and pinned, how subject access inputs are scoped, and what "aligned
-with a standard" does and does not mean.
-Weigh those alongside the disclosure modes; see the [known limitations hub](../known-limitations/) for
+These forms also sit inside boundaries that are not specific to disclosure design: how the source
+consultation is authorized and pinned, how subject selectors are scoped, and what "aligned with a
+standard" does and does not mean.
+Weigh those alongside the value forms; see the [known limitations hub](../known-limitations/) for
 the full inventory.
 
 ## Related
 
 - [Security overview](../../security/): the full posture this fits into
-- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/): the
-  privacy view
+- [Evidence security model](../../security/evidence/): the invariants named on this page
 - [Known limitations and non-guarantees](../known-limitations/): where the edges are
 - [Records stay home](../records-stay-home/): what stays inside the institution and what crosses out
-- How a claim and its disclosure policy are defined: [RS-DM-CLAIM](../../spec/rs-dm-claim/);
-  disclosure modes, credentials, and federation: [RS-PR-NOTARY](../../spec/rs-pr-notary/)
+- How a requirement and its disclosure are defined:
+  [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/)

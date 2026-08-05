@@ -1,0 +1,37 @@
+openapi: 3.0.3
+info:
+  title: Unsupported Constructs
+  version: "1.0.0"
+paths:
+  /records:
+    get:
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  trackingId:
+                    type: string
+                  choice:
+                    oneOf:
+                      - type: string
+                      - type: integer
+                  wildcard:
+                    type: object
+                    properties: {}
+                    additionalProperties:
+                      type: string
+                  simpleAllOf:
+                    allOf:
+                      - type: string
+                        format: date
+                  missingItems:
+                    type: array
+                  freeform:
+                    type: object
+                  multiType:
+                    type: [string, integer]

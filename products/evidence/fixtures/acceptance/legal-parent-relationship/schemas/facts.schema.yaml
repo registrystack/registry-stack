@@ -1,0 +1,14 @@
+type: object
+additionalProperties: false
+required: [returned_child_reference, parent_references, reference_namespace, relationship_set_contract, relationship_set_complete]
+properties:
+  returned_child_reference: {type: string, minLength: 1, maxLength: 96}
+  parent_references:
+    type: array
+    minItems: 0
+    maxItems: 2
+    uniqueItems: true
+    items: {type: string, minLength: 1, maxLength: 128}
+  reference_namespace: {const: urn:example:fixture:person-reference}
+  relationship_set_contract: {const: urn:example:fixture:legal-parent-set:v1}
+  relationship_set_complete: {const: true}

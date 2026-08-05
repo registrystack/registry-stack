@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Approved baseline sets now carry schema version `2.0`. Registry Notary is
+  retired, so a schema version `1.0` approved set, its notary lane, and the
+  cross-lane interface digests it binds are no longer verified. Registryctl
+  refuses such a document by name instead of honoring an approval whose
+  integrity claim it no longer enforces. Re-approve the baseline to issue a
+  schema version `2.0` approved set.
+
 ## [0.16.3] - 2026-08-01
 
 - No user-visible Registryctl changes. The v0.16.2 workflow stopped at an

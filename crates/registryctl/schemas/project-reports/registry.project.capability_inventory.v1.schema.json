@@ -26,8 +26,8 @@
     },
     "capabilities": {
       "type": "array",
-      "minItems": 12,
-      "maxItems": 12,
+      "minItems": 9,
+      "maxItems": 9,
       "items": {
         "$ref": "#/$defs/capability_record"
       },
@@ -38,18 +38,15 @@
         {"contains": {"properties": {"capability": {"const": "rhai_runtime"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"capability": {"const": "rhai_abi"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"capability": {"const": "registry_relay_product"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"capability": {"const": "registry_notary_product"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"capability": {"const": "registry_relay_validator"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"capability": {"const": "registry_notary_validator"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"capability": {"const": "project_authoring_schemas"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"capability": {"const": "registry_relay_config_schema"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"capability": {"const": "registry_notary_config_schema"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1}
+        {"contains": {"properties": {"capability": {"const": "registry_relay_config_schema"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1}
       ]
     },
     "support": {
       "type": "array",
-      "minItems": 14,
-      "maxItems": 14,
+      "minItems": 10,
+      "maxItems": 10,
       "items": {
         "$ref": "#/$defs/support_assessment"
       },
@@ -59,20 +56,16 @@
         {"contains": {"properties": {"component": {"const": "snapshot_materialization_worker"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "rhai_xw_protocol_helper"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "registry_relay_product"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"component": {"const": "registry_notary_product"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "registry_relay_validator"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"component": {"const": "registry_notary_validator"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "project_authoring_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "registry_relay_config_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"component": {"const": "registry_notary_config_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
         {"contains": {"properties": {"component": {"const": "registryctl_distribution"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"component": {"const": "registry_relay_image"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
-        {"contains": {"properties": {"component": {"const": "registry_notary_image"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1}
+        {"contains": {"properties": {"component": {"const": "registry_relay_image"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1}
       ]
     },
     "missing_support": {
       "type": "array",
-      "maxItems": 14,
+      "maxItems": 10,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/missing_support"
@@ -80,7 +73,7 @@
     },
     "inactive_or_unused": {
       "type": "array",
-      "maxItems": 5,
+      "maxItems": 4,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/inactive_or_unused"
@@ -96,12 +89,9 @@
         "rhai_runtime",
         "rhai_abi",
         "registry_relay_product",
-        "registry_notary_product",
         "registry_relay_validator",
-        "registry_notary_validator",
         "project_authoring_schemas",
-        "registry_relay_config_schema",
-        "registry_notary_config_schema"
+        "registry_relay_config_schema"
       ]
     },
     "capability_version": {
@@ -110,27 +100,24 @@
         "relay_integration_pack_v1",
         "rhai_language_v1",
         "rhai_xw_v1",
-        "registry_relay_config_v1",
-        "registry_notary_config_v1"
+        "registry_relay_config_v1"
       ]
     },
     "owner": {
       "enum": [
         "registryctl",
         "registry_relay",
-        "registry_notary",
         "release_engineering"
       ]
     },
     "usage": {
-      "description": "Value-free usage counts. total is the bounded aggregate; strict typed ingress requires it to equal services + consultations + claims.",
+      "description": "Value-free usage counts. total is the bounded aggregate; strict typed ingress requires it to equal services + consultations.",
       "x-registry-aggregateMaximum": 1000000,
       "type": "object",
       "additionalProperties": false,
       "required": [
         "services",
         "consultations",
-        "claims",
         "total"
       ],
       "properties": {
@@ -140,11 +127,6 @@
           "maximum": 1000000
         },
         "consultations": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 1000000
-        },
-        "claims": {
           "type": "integer",
           "minimum": 0,
           "maximum": 1000000
@@ -333,15 +315,11 @@
         "snapshot_materialization_worker",
         "rhai_xw_protocol_helper",
         "registry_relay_product",
-        "registry_notary_product",
         "registry_relay_validator",
-        "registry_notary_validator",
         "project_authoring_schema",
         "registry_relay_config_schema",
-        "registry_notary_config_schema",
         "registryctl_distribution",
-        "registry_relay_image",
-        "registry_notary_image"
+        "registry_relay_image"
       ]
     },
     "support_kind": {
@@ -413,10 +391,7 @@
           "if": {
             "properties": {
               "component": {
-                "enum": [
-                  "registry_relay_image",
-                  "registry_notary_image"
-                ]
+                "const": "registry_relay_image"
               }
             },
             "required": [
@@ -558,8 +533,7 @@
             "source_http",
             "source_script",
             "source_snapshot",
-            "registry_relay_product",
-            "registry_notary_product"
+            "registry_relay_product"
           ]
         },
         "reason": {

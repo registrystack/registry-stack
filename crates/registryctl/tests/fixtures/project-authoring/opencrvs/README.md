@@ -26,5 +26,5 @@ it constructs each released parent object field by field and releases only
 `type`, `name`, and `identifier`. The closed `parents` output permits at most
 two objects and caps both the array and each item by canonical serialized
 bytes. The adapter never spreads or returns a whole source parent record.
-`parents` is one top-level credential claim and is disclosed or withheld as a
-whole unit; this project does not declare nested selective disclosure.
+`parents` is one bounded top-level consultation output and is returned as a
+whole unit; the project does not expose the source-only reference.

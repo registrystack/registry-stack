@@ -1,11 +1,12 @@
 ---
 title: Trusted context constraints
-description: Explains how Relay and Notary preserve legal basis, consent, jurisdiction, assurance, and freshness context across their separate policy boundaries.
+description: How Registry Relay and Evidence each preserve policy facts such as legal basis, consent, jurisdiction, assurance, and source freshness at their own separate boundaries.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-24"
+  - registry-evidence
+last_reviewed: "2026-08-04"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -13,22 +14,32 @@ standards_referenced:
 ---
 
 Trusted context constraints are policy facts whose meaning must survive the boundary between a
-caller, Registry Notary, Registry Relay, and a source registry. Registry Platform supplies shared
-types and redacted reporting conventions. Each product still owns the decision made at its own
-boundary.
+caller, the product that answers the caller, and the source registry behind it. Registry Platform
+supplies shared types and redacted reporting conventions to the products that use them. Each
+product still owns the decision made at its own boundary.
+
+Read one thing before the rest: Registry Relay and Evidence do not share an authorization model.
+No service in this stack authorizes a caller and then consults another service on its behalf.
+Evidence enforces its own boundary, and when it reads a Relay-protected API it does so as an
+ordinary fixed HTTP source, no differently from any other client of that API.
 
 ## The shared vocabulary
 
-The shared policy vocabulary covers five families:
+Registry Platform's policy vocabulary covers five families:
 
 - Legal basis records why the requested operation is permitted.
 - Consent records whether a trusted consent reference is required and accepted.
-- Jurisdiction limits where the request or evidence can be used.
+- Jurisdiction limits where the request can be used.
 - Assurance records the accepted assurance level and the trusted context that supplied it.
 - Source freshness limits the accepted age of an observation.
 
-Sharing names and report shapes does not make Relay and Notary interchangeable. It prevents a
-constraint from being silently renamed or weakened as a request crosses products.
+That vocabulary lives in `registry-platform-pdp` and is reported through `registry-config-report`.
+Registry Relay uses it. Evidence does not: Evidence enforces its own constraints under its own
+frozen contract names, which are described below and specified in
+`products/evidence/contracts/`.
+
+Sharing names and report shapes does not make two products interchangeable. Where the vocabulary is
+shared, it prevents a constraint from being silently renamed or weakened.
 
 ## Relay owns source context
 
@@ -44,26 +55,56 @@ declares that meaning and its fixtures prove it.
 If the observation-time contract is not proven, diagnostics must report it as unknown. They must
 not reinterpret a domain date as source freshness.
 
-## Notary owns evidence authorization
+## Evidence owns its own boundary
 
-Notary authenticates the evidence caller and enforces the compiled service purpose, required
-scopes, subject binding, legal basis, consent, jurisdiction, assurance, disclosure, and issuance
-policy before consulting Relay. A failed preflight makes zero Relay calls.
+Evidence authenticates the caller itself. It validates the bearer token against exactly one
+configured issuer with exact audience, token type, and algorithm allowlists, and it reads the
+principal from one configured claim with no `client_id`, `azp`, header, or request fallback.
+Unsigned headers and caller request fields never substitute for authenticated authority, even
+behind a gateway (invariant `V1-I04`,
+[Evidence operator contract](../../products/registry-evidence/operator-contract/)).
 
-For a registry-backed claim, Notary can invoke only the compiler-pinned Relay consultation named
-by its evidence mode. The pinned profile fixes the contract hash, purpose, closed input mapping,
-outcome union, and typed outputs. Notary does not configure a source origin, credential, lookup
-recipe, freshness field, or adapter runtime.
+Authorization is a single decision, not a series of separately satisfied checks. One exact
+entitlement match binds requester, optional actor, requirement revision, purpose, every
+role/selector-profile/value-origin tuple, subject authority, and audience together, and it happens
+before audit, credential resolution, or source access. A request that does not match completely
+contacts no source at all (invariant `V1-I05`).
 
-Subject access constrains the authenticated requester and subject. It does not
-replace the Relay observation contract or provide claim evidence.
+Two consequences of that decision are worth stating separately, because they are the places where
+authorization is most often assumed rather than enforced:
+
+- A selector is a provider-lookup input, never proof of authority. Selector validation happens
+  inside an already matched subject-authority path, so holding an identifier or a demographic tuple
+  does not entitle a caller to ask about that subject (invariant `V1-I06`).
+- A consent, approval, or grant reference supplied by the caller never creates authority. Grant
+  identifiers are accepted only from authenticated context and must be bound to the complete
+  entitlement (invariant `V1-I07`).
+
+Evidence does not pin a Relay consultation by contract hash, and it has no notion of a compiled
+evidence mode selecting one. It declares an HTTP source with a fixed origin, method, fixed or
+selector-bound path, fixed non-secret headers, denied redirects, and client-side response
+projection, all executed by the core rather than by a script (invariant `V1-I09`). If that origin
+happens to be a Relay-protected API, Relay evaluates its own policy against the request Evidence
+makes, under the credentials Evidence was configured with. Neither product sees the other's
+authorization decision.
+
+## Freshness has no Evidence counterpart
+
+An assertion carries `observedAt`, which is when Evidence evaluated the requirement. It is not a
+source-declared observation time, and Evidence Version 1 has no source freshness family: there is
+no maximum accepted observation age, no freshness field, and no configuration for one. The request
+nonce is uninterpreted correlation data and is explicitly not a freshness proof
+(`products/evidence/contracts/cccev-field-mapping.yaml`).
+
+A deployment that needs an age bound on the underlying record has to obtain it from the source
+contract on the Relay side. An assertion on its own does not carry one.
 
 ## Reports and audit evidence
 
-Product diagnostics expose bounded policy summaries and may include a `context_constraints`
-array. An empty array means that the configuration has no additional shared constraint block to
-report. It does not mean authentication, purpose, scope, consultation pinning, or product-owned
-policy is disabled.
+Registry Relay diagnostics expose bounded policy summaries and include a `context_constraints`
+array. An empty array means the configuration has no additional shared constraint block to report,
+which is what Relay reports today. It does not mean authentication, purpose, scope, or
+product-owned policy is disabled.
 
 Reports may identify the policy family, product-owned config location, trusted value class, and
 whether a presence or allow-list check was applied. They must not expose Relay source credentials,
@@ -75,14 +116,16 @@ distinct from an assurance value asserted in authorization context.
 
 ## Review questions
 
-- Does Notary reject an unauthorized request before any Relay consultation?
-- Does the compiled Notary contract exactly match the Relay consultation semantics and hash?
 - Is source freshness derived from a proven Relay observation contract rather than a domain date?
+- Does Evidence deny an unauthorized request before it contacts any source?
+- Is every dimension of the Evidence entitlement matched as one decision rather than one at a time?
+- Where Evidence reads a Relay-protected API, is Relay's own policy still evaluated for the
+  credentials Evidence presents?
 - Are reports bounded and redacted at both product boundaries?
-- Does every claim retain a compiler-pinned Relay observation contract?
 
 ## Related pages
 
-- [Evidence issuance, end to end](../evidence-issuance/)
+- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+- [Consultation flow](../consultation-flow/)
 - [Integration patterns](../integration-patterns/)
 - [Contracts](../../reference/contracts/)

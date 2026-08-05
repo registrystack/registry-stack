@@ -16,10 +16,6 @@ const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
   'utf8',
 );
-const cutoverSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/start/pre-1.0-cutover.mdx'),
-  'utf8',
-);
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
@@ -56,6 +52,7 @@ function assertOrdered(source, expectations, label) {
 test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
+    'Answer with Evidence',
     'Connect an existing registry',
     'Operate',
     'Security',
@@ -66,6 +63,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
 test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
+    ['Answer with Evidence', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
@@ -77,30 +75,26 @@ test('publishes one overview route for every task-flow section', () => {
   }
 });
 
-test('starts with the spreadsheet registry and keeps HTTP under existing registries', () => {
+test('groups Relay tutorials under existing registries', () => {
   const start = topLevelSection(sidebarSource, 'Start');
-  assert.match(
+  assert.doesNotMatch(
     start,
+    /slug: 'tutorials\//,
+  );
+  const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
+  assert.match(
+    connect,
     /label: 'Start a spreadsheet registry', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
   );
   assert.match(
-    start,
+    connect,
     /label: 'Use your own spreadsheet', slug: 'tutorials\/use-your-spreadsheet'/,
   );
-  assert.match(
-    start,
-    /label: 'Expose spreadsheet evidence', slug: 'tutorials\/verify-claim-registry-api'/,
-  );
-  assert.match(
-    start,
-    /label: 'Pre-1.0 cutover', slug: 'start\/pre-1\.0-cutover'/,
-  );
-  assert.doesNotMatch(start, /author-registry-project/);
-  const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
   assert.match(
     connect,
     /label: 'Connect an HTTP registry', slug: 'tutorials\/author-registry-project'/,
   );
+  assert.doesNotMatch(connect, /verify-opencrvs-claims/);
   assert.match(
     homepageSource,
     /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
@@ -110,13 +104,41 @@ test('starts with the spreadsheet registry and keeps HTTP under existing registr
     /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
   );
   assert.match(homepageSource, /\]\(tutorials\/author-registry-project\/\)/);
-  assert.match(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
   assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/);
-  assert.match(
+  assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
+  assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
+});
+
+test('gives Evidence a lane on both front doors without a retired Notary path', () => {
+  assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
+  assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
+  assert.match(quickstartSource, /tutorials\/first-evidence-assertion/);
+  assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
+  assert.doesNotMatch(quickstartSource, /Expose Notary|verify-claim-registry-api/);
+});
+
+test('ends the onboarding spine on Evidence answering over a Relay-protected API', () => {
+  // The two doors are only shown working together in one place: the composed
+  // lab, where Evidence answers over a Relay API rather than a local fixture.
+  // The chooser has to close there, and that page has to be published rather
+  // than redirected back to the chooser.
+  assertOrdered(
     quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/,
+    [
+      'evidence-quickstart/',
+      'tutorials/first-evidence-assertion/',
+      'tutorials/first-run-with-solmara-lab/',
+    ],
+    'quickstart lane',
   );
-  assert.match(homepageSource, /\]\(start\/pre-1\.0-cutover\/\)/);
+  assert.doesNotMatch(configSource, /'\/tutorials\/first-run-with-solmara-lab\/':/);
+  assert.ok(
+    hasDocForSlug('tutorials/first-run-with-solmara-lab'),
+    'the composed lab tutorial is still a draft',
+  );
+  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence');
+  assert.match(evidence, /slug: 'tutorials\/first-run-with-solmara-lab'/);
 });
 
 test('keeps validation on offline test and nested development commands', () => {
@@ -143,14 +165,14 @@ test('keeps validation on offline test and nested development commands', () => {
   );
 });
 
-test('keeps removed command mappings on the cutover page only', () => {
-  assert.match(cutoverSource, /Pre-1\.0 commands have no aliases/);
-  assert.match(cutoverSource, /no automated migration path/);
-  assert.match(cutoverSource, /`registryctl start`/);
-  assert.match(cutoverSource, /`registryctl dev`/);
-  assert.match(cutoverSource, /Bruno generation/);
-  assert.match(cutoverSource, /The public 1\.0 starters are `http` and `spreadsheet`/);
-  assert.match(cutoverSource, /--template spreadsheet/);
+test('does not publish the retired pre-1.0 cutover page', () => {
+  assert.equal(
+    existsSync(resolve(siteRoot, 'src/content/docs/start/pre-1.0-cutover.mdx')),
+    false,
+  );
+  assert.doesNotMatch(sidebarSource, /pre-1\.0-cutover/);
+  assert.doesNotMatch(homepageSource, /pre-1\.0-cutover/);
+  assert.doesNotMatch(quickstartSource, /pre-1\.0-cutover/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -176,8 +198,9 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.doesNotMatch(
     configSource,
-    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet|verify-claim-registry-api)\/':/,
+    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet)\/':/,
   );
+  assert.match(configSource, /buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
 });
 
 test('keeps source-assurance artifacts out of the adopter navigation', () => {

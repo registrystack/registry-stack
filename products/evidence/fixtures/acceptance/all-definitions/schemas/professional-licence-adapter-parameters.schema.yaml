@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [requestedFields, resultLimit]
+properties:
+  requestedFields: {const: "licence_state,valid_from,valid_until"}
+  resultLimit: {const: "2"}

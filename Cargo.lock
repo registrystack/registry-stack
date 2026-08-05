@@ -1156,6 +1156,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1307,6 +1316,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "crossterm"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
+dependencies = [
+ "bitflags 2.13.0",
+ "crossterm_winapi",
+ "derive_more",
+ "document-features",
+ "mio",
+ "parking_lot",
+ "rustix",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm_winapi"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "crosswalk-cel"
 version = "0.2.0"
 source = "git+https://github.com/PublicSchema/crosswalk?rev=1d44ec735fdc8a7c719264b339574371e8330337#1d44ec735fdc8a7c719264b339574371e8330337"
@@ -1435,28 +1471,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "hybrid-array",
-]
-
-[[package]]
-name = "cryptoki"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff765b99fc49f3116c9a908484486a2b92fd73c48da45c3a69716471c6cc56c6"
-dependencies = [
- "bitflags 2.13.0",
- "cryptoki-sys",
- "libloading",
- "log",
- "secrecy",
-]
-
-[[package]]
-name = "cryptoki-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1fd850498411e4057f1cba79e6e2bc7cbe960544c1046ab46d4685c403a1121"
-dependencies = [
- "libloading",
 ]
 
 [[package]]
@@ -2251,9 +2265,6 @@ name = "deadpool-runtime"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
-dependencies = [
- "tokio",
-]
 
 [[package]]
 name = "debug_unsafe"
@@ -2326,6 +2337,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2364,6 +2397,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
 ]
 
 [[package]]
@@ -2819,6 +2861,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -3608,6 +3659,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "inquire"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6654738b8024300cf062d04a1c13c10c8e2cea598ec1c47dc9b6641159429756"
+dependencies = [
+ "bitflags 2.13.0",
+ "crossterm",
+ "dyn-clone",
+ "fuzzy-matcher",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "insta"
 version = "1.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3963,16 +4028,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
-
-[[package]]
 name = "liblzma"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4024,6 +4079,12 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lock_api"
@@ -4153,6 +4214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
+ "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
 ]
@@ -5337,7 +5399,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-config-report"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "jsonschema 0.46.6",
  "serde",
@@ -5345,8 +5407,83 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidence"
+version = "0.17.0"
+dependencies = [
+ "assert-json-diff",
+ "async-trait",
+ "axum",
+ "axum-test",
+ "base64",
+ "bytes",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "clap",
+ "criterion",
+ "ed25519-dalek",
+ "fs2",
+ "http",
+ "jsonschema 0.18.3",
+ "jsonwebtoken",
+ "rand_core 0.6.4",
+ "rcgen",
+ "registry-platform-audit",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-sdjwt",
+ "reqwest 0.12.28",
+ "rhai",
+ "rustix",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "utoipa",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-evidencectl"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "clap",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "inquire",
+ "registry-platform-crypto",
+ "rhai",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "signal-hook",
+ "tempfile",
+ "ureq",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-language-server"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5359,7 +5496,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5370,7 +5507,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5384,175 +5521,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary"
-version = "0.16.3"
+name = "registry-mint"
+version = "0.17.0"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-test",
  "base64",
- "chrono",
  "clap",
  "ed25519-dalek",
- "getrandom 0.4.3",
- "hyper",
- "hyper-util",
- "jsonschema 0.18.3",
- "registry-config-report",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-ops",
- "reqwest 0.12.28",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "wiremock",
-]
-
-[[package]]
-name = "registry-notary-client"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "axum",
- "axum-test",
- "base64",
- "flate2",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-sdjwt",
- "reqwest 0.12.28",
- "secrecy",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "registry-notary-core"
-version = "0.16.3"
-dependencies = [
- "base64",
- "humantime-serde",
- "ipnet",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-ops",
- "registry-platform-sdjwt",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "ulid",
- "url",
- "utoipa",
-]
-
-[[package]]
-name = "registry-notary-server"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "aws-lc-rs",
- "axum",
- "axum-test",
- "base64",
- "chrono",
- "criterion",
- "crosswalk-core",
- "cryptoki",
- "deadpool",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "jsonschema 0.18.3",
+ "http",
  "jsonwebtoken",
- "native-tls",
- "postgres-native-tls",
- "registry-notary-client",
- "registry-notary-core",
- "registry-notary-worker-harness",
+ "registry-evidence",
  "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-cache",
- "registry-platform-config",
+ "registry-platform-canonical-json",
  "registry-platform-crypto",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
- "registry-platform-ops",
- "registry-platform-pdp",
- "registry-platform-replay",
- "registry-platform-sdjwt",
- "registry-platform-testing",
  "reqwest 0.12.28",
  "rustix",
  "serde",
  "serde_json",
  "serde_norway",
- "sha2 0.11.0",
- "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "time",
  "tokio",
- "tokio-postgres",
  "tower-http 0.7.0",
  "tracing",
+ "tracing-subscriber",
  "ulid",
- "utoipa",
- "wiremock",
+ "url",
  "zeroize",
 ]
 
 [[package]]
-name = "registry-notary-worker-harness"
-version = "0.16.3"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "registry-platform-audit"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
  "registry-platform-canonical-json",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5569,7 +5578,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5582,19 +5591,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-cache"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-canonical-json"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5604,7 +5602,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5619,7 +5617,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5642,7 +5640,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "axum",
  "http",
@@ -5657,7 +5655,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "axum",
  "base64",
@@ -5683,23 +5681,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-oid4vci"
-version = "0.16.3"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-replay",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-oidc"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "axum",
  "base64",
@@ -5715,7 +5698,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
@@ -5732,26 +5715,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-pdp"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "registry-platform-replay"
-version = "0.16.3"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "registry-platform-cache",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-sdjwt"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -5768,7 +5739,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5779,14 +5750,11 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
- "registry-platform-replay",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tower",
  "wiremock",
@@ -5794,7 +5762,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -5834,8 +5802,6 @@ dependencies = [
  "rcgen",
  "registry-config-report",
  "registry-manifest-core",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
@@ -5877,7 +5843,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5895,8 +5861,6 @@ dependencies = [
  "regex",
  "registry-config-report",
  "registry-language-server",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -6287,6 +6251,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
@@ -6323,15 +6288,6 @@ dependencies = [
  "generic-array 0.14.9",
  "pkcs8",
  "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "secrecy"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
-dependencies = [
  "zeroize",
 ]
 
@@ -6628,6 +6584,27 @@ name = "sif-itree"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7f45b8998ced5134fb1d75732c77842a3e888f19c1ff98481822e8fbfbf930b"
+
+[[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-mio"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
+dependencies = [
+ "libc",
+ "mio",
+ "signal-hook",
+]
 
 [[package]]
 name = "signal-hook-registry"
@@ -8344,17 +8321,6 @@ dependencies = [
  "cmpv2",
  "cms",
  "der",
-]
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-sdjwt",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
