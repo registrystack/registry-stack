@@ -35,6 +35,7 @@ SHARDS = {
         "registry-evidence",
         "registry-evidence-client",
         "registry-evidence-client-node",
+        "registry-evidence-client-py",
         "registry-evidence-verifier",
         "registry-evidencectl",
     ),
@@ -77,13 +78,15 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
     }
 )
 
-# Binding crates (the Node relying-party SDK today; more may join it) stay in
-# EVIDENCE_PACKAGES and the `evidence` shard, because their own source is
-# covered by check-source-neutrality.sh, and that is what makes
+# Binding crates (the Node and Python relying-party SDKs today; more may join
+# them) stay in EVIDENCE_PACKAGES and the `evidence` shard, because their own
+# source is covered by check-source-neutrality.sh, and that is what makes
 # `evidence_contracts` run the neutrality check against them. A binding-only
 # change does not, on its own, replay the docs Evidence tutorials: it touches
 # none of a tutorial's shell commands or fixtures, so it is excluded here.
-EVIDENCE_BINDING_PACKAGES = frozenset({"registry-evidence-client-node"})
+EVIDENCE_BINDING_PACKAGES = frozenset(
+    {"registry-evidence-client-node", "registry-evidence-client-py"}
+)
 
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
@@ -480,7 +483,9 @@ def classify(
     )
     editors = complete or any(path.startswith("editors/") for path in paths)
     client_bindings = complete or any(
-        path.startswith("crates/registry-evidence-client-node/") for path in paths
+        path.startswith(f"crates/{package}/")
+        for path in paths
+        for package in EVIDENCE_BINDING_PACKAGES
     )
 
     tutorial_infrastructure = any(

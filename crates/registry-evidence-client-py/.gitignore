@@ -1,0 +1,11 @@
+# The workspace root's own `/target/` and `__pycache__/`/`*.py[cod]` entries
+# already cover cargo's build output and every compiled Python cache in this
+# crate; nothing here duplicates those. What is left is local Python tooling
+# state that only ever appears under this crate, from a manual `maturin
+# develop` or an editable install: `maturin develop`'s own virtualenv and
+# dependency lock, and the compiled extension it drops directly into the
+# source tree next to the hand-written `__init__.py`/`__init__.pyi`.
+*.egg-info/
+.venv/
+uv.lock
+python/registry_evidence_client/*.so
