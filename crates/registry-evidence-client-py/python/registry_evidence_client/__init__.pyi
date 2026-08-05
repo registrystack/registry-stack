@@ -21,7 +21,7 @@ None of this crosses into `asyncio`; there is no `async def` anywhere here.
 from typing import Any, Optional, Sequence, Union
 
 class EvidenceClientError(Exception):
-    """Base exception for every failure this client reports.
+    """Base exception for every mapped failure this client reports.
 
     `kind` is always present, one of "configuration", "nonce", "token",
     "transport", "denied", "not_available", "protocol", or "verification".
@@ -32,6 +32,11 @@ class EvidenceClientError(Exception):
 
     No attribute here ever carries response bytes, a credential, a header
     value, a selector value, or a subject binding.
+
+    Two failures escape this hierarchy entirely, since neither is a mapped
+    failure with a `kind`: the client's internal runtime failing to start,
+    which raises `RuntimeError`, and a serialization failure on a value this
+    crate itself constructed, which raises `ValueError`.
     """
 
     kind: str
