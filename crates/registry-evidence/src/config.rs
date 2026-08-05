@@ -864,6 +864,7 @@ pub struct ListenerConfig {
 impl ListenerConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_private_bind_host(&self.bind_host)?;
+        validate_listener_port(self.port)?;
         if self.trust_proxy_identity_headers {
             return invalid("proxy identity headers must not be trusted");
         }
@@ -910,6 +911,7 @@ pub struct MetricsListenerConfig {
 impl MetricsListenerConfig {
     fn validate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
         validate_private_bind_host(&self.bind_host)?;
+        validate_listener_port(self.port)?;
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
@@ -918,6 +920,18 @@ impl MetricsListenerConfig {
         }
         Ok(())
     }
+}
+
+/// Refuse port 0, which asks the kernel for an arbitrary ephemeral port rather
+/// than naming one.
+///
+/// Every listener here is an operator-network binding that something upstream
+/// firewalls, health-checks, or terminates TLS for, and none of that can follow
+/// a port that is chosen at bind time and changes on every restart. The
+/// published runtime schema already states the bound, so this is the loader
+/// agreeing with the contract an operator validated against.
+fn validate_listener_port(port: u16) -> Result<(), ConfigError> {
+    validate_range(u64::from(port), 1, 65_535, "port")
 }
 
 /// Accept only numeric loopback, RFC 1918 private IPv4, and RFC 4193
@@ -4630,6 +4644,67 @@ outboundTls:
         );
         assert!(RuntimeConfig::parse_yaml(unknown.as_bytes()).is_err());
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
+    }
+
+    /// Port 0 is not a port. The kernel picks an arbitrary one, so the socket an
+    /// operator firewalls, health-checks, and puts behind their TLS terminator
+    /// is not the socket the service opens, and it changes on every restart.
+    /// The published runtime schema already forbids it on both listeners; the
+    /// loader accepting it meant a deployment could pass the documented contract
+    /// check and still come up on an address nobody configured. On the metrics
+    /// listener it also defeats the binding-collision refusal, which compares
+    /// configured ports rather than bound ones.
+    #[test]
+    fn a_listener_port_of_zero_is_refused_on_both_listeners() {
+        let base = r#"
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+"#;
+        let validator = runtime_contract_validator();
+        RuntimeConfig::parse_yaml(base.as_bytes()).expect("the configured ports load");
+
+        let ephemeral_evidence = base.replace("port: 8080", "port: 0");
+        assert!(
+            RuntimeConfig::parse_yaml(ephemeral_evidence.as_bytes()).is_err(),
+            "the evidence listener accepted an ephemeral port"
+        );
+        assert!(
+            !validator.is_valid(&bundle_contract_instance(ephemeral_evidence.as_bytes())),
+            "the published schema must already refuse this, so Rust is matching it"
+        );
+
+        let ephemeral_metrics =
+            format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 0\n");
+        assert!(
+            RuntimeConfig::parse_yaml(ephemeral_metrics.as_bytes()).is_err(),
+            "the metrics listener accepted an ephemeral port"
+        );
+        assert!(!validator.is_valid(&bundle_contract_instance(ephemeral_metrics.as_bytes())));
+
+        // Both at zero would compare equal and trip the collision rule instead,
+        // so the port rule has to be the one that fires.
+        let both = format!(
+            "{}metricsListener:\n  bindHost: 127.0.0.1\n  port: 0\n",
+            base.replace("port: 8080", "port: 0")
+        );
+        assert!(RuntimeConfig::parse_yaml(both.as_bytes()).is_err());
     }
 
     #[test]
