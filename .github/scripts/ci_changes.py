@@ -62,10 +62,10 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/check-evidence-tutorials.sh",
         "docs/site/scripts/check-evidence-tutorials.test.mjs",
         "docs/site/scripts/registryctl-tutorial.mjs",
-        "docs/site/src/content/docs/tutorials/author-an-acceptance-definition.mdx",
-        "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
+        "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-        "docs/site/src/content/docs/tutorials/serve-assertions-over-http.mdx",
+        "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+        "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
         "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     }
 )
