@@ -74,12 +74,16 @@ fn to_napi_serialization_error(what: &str, error: serde_json::Error) -> NapiErro
 /// ordinary rejection instead of letting the unwind cross the FFI boundary,
 /// which aborts the whole process.
 ///
-/// napi-derive 3.6.2's generated glue carries no panic handling of its own for
-/// synchronous `#[napi]` functions; only `napi`'s tokio bridge wraps
-/// asynchronous work in `catch_unwind`. Every synchronous entry point in this
-/// file (the constructor, `prepare`, `verify`, `verify_as_of`, and the
+/// napi-derive 3.6.2's generated glue carries no panic handling of its own
+/// for synchronous `#[napi]` functions, so every synchronous entry point in
+/// this file (the constructor, `prepare`, `verify`, `verify_as_of`, and the
 /// `PreparedEvidenceRequest`/`RawEvidenceResponse` getters) routes through
-/// this helper.
+/// this helper. An asynchronous entry point (`discover`, `fetch_jwks`,
+/// `send`, `request_and_verify`) takes a different path: its future runs on
+/// tokio, and a panic during a poll is caught by tokio's own task-level panic
+/// isolation, not by this helper, then surfaces to napi as a join error that
+/// the `tokio_rt`-backed async bridge detects and translates into a rejected
+/// promise.
 ///
 /// `AssertUnwindSafe` is appropriate here: every call site immediately
 /// converts a caught panic into a returned `Err` and never inspects or
@@ -91,6 +95,14 @@ fn to_napi_serialization_error(what: &str, error: serde_json::Error) -> NapiErro
 /// is, by construction, a code path nobody validated ahead of time, so its
 /// payload carries none of the redaction guarantees the rest of this crate's
 /// error reporting is held to.
+///
+/// The asynchronous path is not held to that same guarantee, and this crate
+/// does not control it: napi rejects with the panic payload downcast to
+/// `&str`, falling back to the fixed literal "Panic in async function" for
+/// any other payload type, including the `String` a formatted
+/// `panic!("{}", x)` produces. A panic in an asynchronous entry point can
+/// therefore echo its own message to JS, unlike `to_napi_panic_error` below,
+/// which returns fixed prose regardless of the payload.
 fn catch_panic<T>(what: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|_payload| Err(to_napi_panic_error(what)))
