@@ -255,3 +255,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: unauthenticated_source_is_local_loopback_only_and_matches_the_bundle_schema}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: local_unauthenticated_loopback_source_sends_no_authentication_header}
+  - id: sec-authority-claim-names-closed
+    tests: [{file: crates/registry-evidence/src/config.rs, name: authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims}]
+  - id: sec-path-binding-unreachable-selector-set
+    tests: [{file: crates/registry-evidence/tests/source_contracts.rs, name: an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused}]

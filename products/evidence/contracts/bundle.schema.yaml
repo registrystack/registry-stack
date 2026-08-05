@@ -730,11 +730,13 @@ startup_checks:
   - Each context-derived or grant-derived subject has valueClaims whose keys exactly equal the named selector profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
   - Request-derived subjects have no valueClaims.
   - Request preparation receives only the closed selectorInputs alternatives and cannot choose transport authority, paths, headers, credentials, or request count.
+  - Configured authority claim names are distinct and none names a registered JWT claim; `sub` is permitted for principalClaim alone, because it already carries the principal. A repeated or shadowing name would read one verified token member as something the issuer wrote for another purpose.
   - For authenticated-grant origin, verified token values at authentication.grantIdClaim and grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must bind requirement, purpose, audience, role, selector profile, and valueClaims result before selector resolution.
   - Required signing, audit, credential, and source dependencies are ready.
   - Every retired public JWK file is public-only, has a unique kid, uses the configured allowlisted algorithm, and remains available for the maximum assertion validity plus clock skew.
   - Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml secretProviders.file.root.
   - Fixed path and selector-bound path-template forms are mutually exclusive and every template placeholder has one authorized selector binding.
+  - Every selector set an authority grant can activate for a source carries each role and profile that source's path template binds. The sets are derived one per grant, so covering a bound role across their union is not enough: a single grant omitting one yields a set with no value to substitute, which fails startup rather than every request that grant would serve.
   - Fixed headers and static API-key header names reject authentication, routing, framing, cookie, forwarding, proxy, tracing, and hop-by-hop collisions after ASCII case folding.
   - Extended JSON Pointer projections are non-empty, uniquely decoded, and reject duplicate or overlapping ancestor, descendant, and wildcard paths.
   - Every source preparation, extraction, and derivation selector-input contract is closed and cross-referenced to the exact authorized role/profile/field set.

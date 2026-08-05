@@ -35,6 +35,7 @@ evidence_data_request:
   path:
     fixed: One normalized absolute path.
     template: A placeholder occupies one complete segment and binds directly to one already authorized selector role, profile, and field through pathBindings.
+    template_reachability: A binding is mandatory against the selector set a request activates, not against the union of the sets. Every allowed set must therefore carry each bound role and profile, and plan compilation refuses the source otherwise. Sets are derived one per authority grant, so an authority granted over roles the template does not bind would otherwise compile, pass readiness, and fail every request it serves.
     encoding: Rust rejects missing, extra, duplicated, empty, slash, backslash, percent, control, and dot-segment values and percent-encodes each accepted segment exactly once.
     script_authority: prohibited
   fixed_headers:
