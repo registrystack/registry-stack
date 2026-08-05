@@ -15,7 +15,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use url::{Host, Url};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{
     validate_local_unauthenticated_source_origin, AcquisitionPosture, CredentialPlacement,
@@ -1246,9 +1246,23 @@ async fn parse_token_response(
             return Err(SourceError::Credential);
         }
     }
-    if !object.is_empty() {
-        return Err(SourceError::Credential);
+    // RFC 6749 section 5.1 permits members beyond the ones it defines, and
+    // deployed authorization servers send them: `refresh_expires_in` and
+    // `not-before-policy` from Keycloak, `ext_expires_in` from Entra ID.
+    // Refusing them would refuse the providers Evidence is documented against.
+    //
+    // Ignoring is not trusting. Nothing here reads an unread member, no script
+    // ever sees the token response, and `parse_strict_json` refuses duplicate
+    // members, so an extension cannot arrive as a second `access_token`. What
+    // remains is that one of them may carry credential material of its own, so
+    // scrub the strings before the map is dropped rather than leaving them for
+    // the allocator, the same reason the response bytes are zeroized above.
+    for (_, value) in &mut object {
+        if let JsonValue::String(value) = value {
+            value.zeroize();
+        }
     }
+    drop(object);
     Ok((ProtectedToken::from_string(access_token)?, lifetime))
 }
 

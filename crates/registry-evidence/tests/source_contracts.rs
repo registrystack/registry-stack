@@ -1701,7 +1701,8 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
         "malformed-token-json".to_owned(),
         "token-400".to_owned(),
         "token-401".to_owned(),
-        "token-response-extra-field".to_owned(),
+        "token-response-duplicate-access-token".to_owned(),
+        "token-response-extension-members".to_owned(),
         "token-response-oversized".to_owned(),
         "token-response-wrong-access-token-field".to_owned(),
         "token-response-wrong-lifetime".to_owned(),
@@ -1748,12 +1749,28 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
                 ),
                 "application/json",
             )),
-            "token-response-extra-field" => Some(ResponseTemplate::new(200).set_body_json(json!({
+            // The members a deployed authorization server actually adds, plus
+            // one carrying the client-secret canary. Ignored members must not
+            // become credentials and must not surface anywhere.
+            "token-response-extension-members" => Some(ResponseTemplate::new(200).set_body_json(json!({
                 "access_token": access_token.clone(),
                 "token_type": "Bearer",
                 "expires_in": 120,
+                "scope": "fixture.read",
+                "refresh_expires_in": 0,
+                "not-before-policy": 0,
+                "session_state": "b2c1d0f3-0000-4000-8000-000000000000",
+                "ext_expires_in": 120,
                 "unexpected": client_secret.clone()
             }))),
+            // An extension member must not be able to arrive as a second
+            // access_token, which is what makes ignoring the unread ones safe.
+            "token-response-duplicate-access-token" => Some(ResponseTemplate::new(200).set_body_raw(
+                format!(
+                    "{{\"access_token\":\"{access_token}\",\"token_type\":\"Bearer\",\"expires_in\":120,\"access_token\":\"{client_secret}\"}}"
+                ),
+                "application/json",
+            )),
             "token-response-wrong-access-token-field" => {
                 Some(ResponseTemplate::new(200).set_body_json(json!({
                     "access_token": 7,
@@ -1848,7 +1865,9 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
             .await;
         let expects_success = matches!(
             case_id.as_str(),
-            "token-success" | "token-response-omitted-lifetime-with-assumed-lifetime"
+            "token-success"
+                | "token-response-extension-members"
+                | "token-response-omitted-lifetime-with-assumed-lifetime"
         );
         if expects_success {
             assert!(result.is_ok(), "success fixture case {case_id} failed");
@@ -1878,6 +1897,20 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
                 data_count == 1,
                 "successful token did not authorize one data request"
             );
+            // The credential the source presents is the access token and only
+            // the access token. For the extension-members case this is what
+            // proves an ignored member did not become one.
+            let authorization = requests
+                .iter()
+                .find(|request| request.url.path() == "/data")
+                .expect("the data request was journaled")
+                .headers
+                .get("authorization")
+                .expect("the data request carried a credential")
+                .to_str()
+                .expect("the authorization header is text")
+                .to_owned();
+            assert_eq!(authorization, format!("Bearer {access_token}"));
         } else {
             assert!(
                 data_count == 0,
