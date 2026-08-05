@@ -11,6 +11,7 @@ for source_file in $(
   rg --files \
     "$repository_root/crates/registry-evidence/src" \
     "$repository_root/crates/registry-evidence-client/src" \
+    "$repository_root/crates/registry-evidence-client-node/src" \
     "$repository_root/crates/registry-evidence-verifier/src" \
     "$repository_root/crates/registry-evidencectl/src" \
     -g '*.rs' | sort
@@ -136,6 +137,7 @@ if rg -n -i 'dhis2|opencrvs' \
   "$production_text" \
   "$repository_root/crates/registry-evidence/Cargo.toml" \
   "$repository_root/crates/registry-evidence-client/Cargo.toml" \
+  "$repository_root/crates/registry-evidence-client-node/Cargo.toml" \
   "$repository_root/crates/registry-evidence-verifier/Cargo.toml" \
   "$repository_root/crates/registry-evidencectl/Cargo.toml" \
   "$repository_root/Cargo.toml"; then
