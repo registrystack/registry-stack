@@ -655,7 +655,8 @@ that evidence gap remains marked with an author comment in the source of this pa
   `products/evidence/scripts/check-contracts.sh`, which regenerates the artifacts under
   `products/evidence/generated/` from the `registry-evidence` crate into a temporary directory and
   fails on any byte difference from the committed set. The same job runs
-  `products/evidence/scripts/check-source-neutrality.sh`.
+  `products/evidence/scripts/check-source-neutrality.sh` and
+  `products/evidence/scripts/check-verifier-portability.sh`.
 - Narrative contracts and requirements that are not generated remain review-owned. Their cited tests
   and traceability entries are inspectable evidence, not a claim that CI mechanically proves every
   sentence in those documents.
