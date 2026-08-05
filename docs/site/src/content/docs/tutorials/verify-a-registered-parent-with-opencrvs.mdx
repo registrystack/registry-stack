@@ -26,7 +26,7 @@ receive them.
 <QuickstartMeta
   outcome="Verified relationship and parent-identifier assertions from a synthetic OpenCRVS birth."
   time="About 30 minutes"
-  level="Institution integration with synthetic data"
+  level="Institution source with synthetic data"
   prerequisites={[
     'The completed role-bound relationship tutorial',
     'The Evidence toolset',
@@ -123,11 +123,11 @@ deployment before production use.
 Create an editable Evidence project and disposable local keys:
 
 ```sh
-evidencectl new project \
+evidencectl new registered-parent \
   --openapi opencrvs-events.openapi.yaml \
   --profile local \
   --generate-keys
-cd project
+cd registered-parent
 ```
 
 The command retains the OpenAPI document and creates empty authoring directories. It does not
@@ -634,7 +634,7 @@ evidencectl request prepare registered-parent \
 unset OPENCRVS_MOTHER_NID
 ```
 
-Use this only with the public synthetic record. In a real integration, selectors need an input
+Use this only with the public synthetic record. In a real deployment, selectors need an input
 path that does not expose identifiers in shell history or process arguments.
 
 Preparation obtains short-lived local authorization and records verification expectations before
@@ -782,7 +782,7 @@ files when you finish.
 
 ## Next
 
-- [Issue a birth certificate VC from OpenCRVS](../issue-a-birth-certificate-vc-from-opencrvs/)
+- [Request a birth certificate SD-JWT VC from OpenCRVS](../issue-a-birth-certificate-vc-from-opencrvs/)
 - [Issue an immunization summary from DHIS2](../issue-immunization-evidence-from-dhis2/)
 - [Draft another institution source from OpenAPI](../connect-an-institution-source/)
 - [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)

@@ -25,7 +25,7 @@ one governed answer, and verify the signed assertion returned across the Evidenc
 <QuickstartMeta
   outcome="A verified assertion containing five governed immunization readings from DHIS2."
   time="About 30 minutes"
-  level="Institution integration with synthetic data"
+  level="Institution source with synthetic data"
   prerequisites={[
     'The completed governed-value tutorial',
     'The Evidence toolset',
@@ -38,7 +38,7 @@ This tutorial uses synthetic data from the public DHIS2 demo.
 Do not substitute a real child record.
 The demo maintainers can reset its data, credentials, and synthetic subjects.
 
-## Define the answer before the integration
+## Define the answer before the source
 
 The DHIS2 Child Programme records several immunization readings across its Birth and Baby
 Postnatal events.
@@ -57,7 +57,7 @@ up to date.
 Those conclusions require an approved immunization schedule, the child's age, a jurisdiction,
 and rules for exceptional or late doses.
 
-The integration also applies two conservative readings:
+The source adapter also applies two conservative readings:
 
 - An absent source value does not become `false` or `0`.
 - Two different values for the same concept make the source record inconsistent.
@@ -78,20 +78,7 @@ In Tracker Capture, select the `Child Programme` and the `Ngelehun CHC` organisa
 Choose a synthetic child with completed `Birth` and `Baby Postnatal` events whose five
 immunization fields contain values.
 
-Create an untracked, owner-only subject file and place the tracked entity identifier in it:
-
-```sh
-umask 077
-mkdir -p .local
-touch .local/child.yaml
-chmod 600 .local/child.yaml
-```
-
-```yaml
-child:
-  tracked_entity_id: <synthetic-tracked-entity-id>
-```
-
+Note its tracked entity identifier and keep it out of tracked files.
 The identifier selects the source record.
 It will be used for the DHIS2 read and the Evidence request, but it will not appear in the signed
 assertion.
@@ -101,6 +88,8 @@ assertion.
 Create an owner-only curl configuration at `.local/dhis2.curl`:
 
 ```sh
+umask 077
+mkdir -p .local
 touch .local/dhis2.curl
 chmod 600 .local/dhis2.curl
 ```
@@ -183,17 +172,18 @@ evidencectl source suggest \
   --select /enrollments/*/events/*/dataValues/*/value
 ```
 
-The command creates one editable source:
+The command creates one editable source, two scripts, and three schemas:
 
 ```text
-sources/child-tracker/
-├── source.yaml
-├── response.schema.yaml
-├── extract.rhai
-└── facts.schema.yaml
+sources/child-tracker.yaml
+adapters/child-tracker-prepare.rhai
+adapters/child-tracker-extract.rhai
+schemas/child-tracker-parameters.schema.yaml
+schemas/child-tracker-response.schema.yaml
+schemas/child-tracker-facts.schema.yaml
 ```
 
-Open `sources/child-tracker/source.yaml`.
+Open `sources/child-tracker.yaml`.
 Keep the generated projection and artifact paths, then resolve the source decisions:
 
 ```yaml
@@ -242,7 +232,7 @@ source definition.
 
 The OpenAPI document describes the nested response shape, but it cannot decide how repeated event
 values become one answer.
-Open `sources/child-tracker/extract.rhai` and replace its draft body with this reviewed rule:
+Open `adapters/child-tracker-extract.rhai` and replace its draft body with this reviewed rule:
 
 ```rhai
 fn source_boolean(value) {
@@ -323,7 +313,7 @@ It accepts only completed Birth and Baby Postnatal events, converts DHIS2 string
 facts, and refuses conflicting readings.
 Unrelated data elements are never added to `facts`.
 
-Replace `sources/child-tracker/facts.schema.yaml` with the closed extraction result:
+Replace `schemas/child-tracker-facts.schema.yaml` with the closed extraction result:
 
 ```yaml
 type: object
@@ -359,14 +349,7 @@ subject:
   role: child
   selector: tracked_entity_id
 source:
-  id: child-tracker
-  facts:
-    - record_reference
-    - bcg_recorded
-    - opv_dose_count
-    - penta_dose_count
-    - measles_recorded
-    - yellow_fever_recorded
+  ref: child-tracker
 answers:
   - concept: bcg_recorded_as_administered
     type: boolean
@@ -392,6 +375,8 @@ disclosure:
     - yellow_fever_recorded_as_administered
 ```
 
+`source.ref` names the reviewed source, whose closed fact schema decides what the derivation
+receives.
 The `answers` list declares the exact concepts and their forms.
 The `disclosure.allow` list must match those concepts in order.
 Adding another answer or changing an integer bound is a reviewed project change.
@@ -440,15 +425,17 @@ Local assurance keeps the project editable and does not require production fixtu
 
 ## Request the real assertion
 
-Prepare a closed request and its independent verification expectations from the owner-only
-subject file:
+Prepare a closed request and its independent verification expectations for the chosen subject:
 
 ```sh
 evidencectl request prepare immunization-summary \
   --purpose care-continuity \
-  --subjects ../.local/child.yaml \
+  --subject "child:tracked_entity_id=$DHIS2_TRACKED_ENTITY_ID" \
   --name immunization-summary
 ```
+
+Use this only with the public synthetic record. In a real deployment, selectors need an input
+path that does not expose identifiers in shell history or process arguments.
 
 Send that request across the Evidence HTTP boundary:
 
@@ -538,7 +525,7 @@ It does not record their values or the DHIS2 response.
 
 Delete `.local/dhis2-response.json` and `.local/dhis2.curl` if they were created only for this
 tutorial.
-Keep the project editable while evaluating the integration.
+Keep the project editable while evaluating the source.
 Before deployment, add project-specific fixtures, replace the demo account with a least-privilege
 service account, review the source acquisition posture, and build a reviewed production candidate.
 

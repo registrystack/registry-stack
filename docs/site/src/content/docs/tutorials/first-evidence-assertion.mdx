@@ -254,7 +254,7 @@ matching the purpose declared here.
 ### `derivations/adult-status.rhai`
 
 Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
-scripting language Evidence uses for source-specific derivations:
+scripting language Evidence uses for requirement-specific derivations:
 
 ```rhai
 fn answer(facts, selectors, context) {
@@ -380,6 +380,9 @@ binding. The fields relevant to this question look like this excerpt:
   "supportsRequirement": "urn:registrystack:evidence:local:requirement:adult-status"
 }
 ```
+
+`supportsRequirement` names the requirement that the question you authored under `questions/`
+compiles to, which is the unit the deployed configuration and the audit record.
 
 The verified payload does not include `person_id`, `name`, or `date_of_birth`. The assertion
 answers the authored question without becoming another copy of the registry record.

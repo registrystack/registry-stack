@@ -111,11 +111,11 @@ format explicitly:
 evidence verify \
   --sd-jwt-vc assertion.sd-jwt \
   --jwks trusted-issuer-keys.json \
-  --policy verification-policy.yaml
+  --policy verification-policy.json
 ```
 
 The verifier opens no network connection. `trusted-issuer-keys.json` is the complete approved trust
-set for the run, and `verification-policy.yaml` comes from the consumer's request and governance
+set for the run, and `verification-policy.json` comes from the consumer's request and governance
 records, not from the credential.
 
 An unprojected value has one root disclosure. A configured structured value has one disclosure for

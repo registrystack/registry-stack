@@ -26,7 +26,7 @@ Through your organization's provider-onboarding process, verify and retain:
 - the legal issuer and technical provider identifiers;
 - the expected Evidence service and JWKS endpoints;
 - the Ed25519 public keys and their `kid` values;
-- the audience that identifies your relying service;
+- the audience that identifies your relying party;
 - the requirements, evidence types, purposes, concepts, and configuration revisions you accept;
 - the maximum assertion lifetime and clock skew your decisions allow.
 
@@ -49,7 +49,7 @@ Pass public JWK files only. The command rejects private key members, conflicting
 `kid`, and an existing output path.
 
 During the overlap window, the candidate set contains the new key and each retiring key that may
-still have a valid assertion in circulation. The provider should retain retiring public keys for
+still have a valid assertion in circulation. The provider must retain retiring public keys for
 at least its maximum assertion validity plus verifier clock skew. Your retention policy may be
 longer when historical re-verification requires it.
 
@@ -85,6 +85,6 @@ Remove a retiring key from current verification only after:
 Never make verification fetch a missing key automatically. An unknown `kid` is a trust-change
 signal and must fail closed until your organization approves the change.
 
-Provider operators use [Move Evidence to production signing](../move-evidence-to-production-signing/)
+Provider operators use [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
 for the other side of this rotation. Consumers remain independent and do not inherit trust merely
 because the provider published a key.

@@ -64,7 +64,7 @@ PY
 You now have:
 
 - `assertion.jws.json`, the exact untrusted response bytes you stored;
-- `trusted-issuer-keys.json`, the public keys your relying service trusts;
+- `trusted-issuer-keys.json`, the public keys your relying party trusts;
 - `verification-policy.json`, expectations retained from your own request and governance.
 
 The tutorial extracts the latter two from the private local context because it recorded them before
@@ -105,7 +105,7 @@ same instant for later audit re-verification.
 
 ## Put the boundary in application code
 
-Your consuming application should preserve this order:
+Your consuming application must preserve this order:
 
 1. Generate and retain the request nonce and all expected policy fields before sending the
    request.

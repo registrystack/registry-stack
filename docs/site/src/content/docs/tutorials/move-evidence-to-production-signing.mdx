@@ -32,11 +32,11 @@ evidencectl keygen signing \
 ```
 
 The command writes a private and public JWK without printing private bytes. Provision the private
-JWK into the deployment's secret-provider root under a new logical filename. Keep the public JWK
+JWK into the deployment's secret root under a new logical filename. Keep the public JWK
 as a separately approved distribution artifact for consumers. The active public key does not need
 to be copied into the closed bundle because Evidence derives it from the active private JWK.
 
-Do not overwrite the active private key in place. A candidate revision should be complete and
+Do not overwrite the active private key in place. A candidate revision must be complete and
 checkable before it becomes active.
 
 ## Build the overlap revision
@@ -63,7 +63,7 @@ configured retired public files. You do not publish a separate operator-built JW
 
 ## Validate and coordinate consumer approval
 
-Run the project fixtures and startup validator against the candidate revision:
+Run the project fixtures and `evidence check` against the candidate revision:
 
 ```sh
 evidencectl fixtures run --project "<evidence-project>"
@@ -71,8 +71,9 @@ evidence check --runtime "<evidence-project>/runtime.yaml"
 ```
 
 Give consumers the new public key, `kid`, provider identity, activation window, and overlap period
-through your governed onboarding channel. Consumers should add the new key to a candidate pinned
-trust set and prove both an old-key and a new-key synthetic response before accepting the change.
+through your governed onboarding channel. Consumers are expected to add the new key to a candidate
+pinned trust set and prove both an old-key and a new-key synthetic response before accepting the
+change.
 
 The [verifier trust procedure](../manage-evidence-verifier-trust/) covers that independent side of
 the rotation.
@@ -87,7 +88,7 @@ curl --fail --silent --show-error \
   "https://<evidence-host>/.well-known/evidence/jwks.json"
 ```
 
-The JWKS should contain the new active public key and the old retired public key, with no private
+The JWKS contains the new active public key and the old retired public key, with no private
 members. Send one authorized synthetic request and verify its `kid` with the consumer's approved
 overlap set.
 

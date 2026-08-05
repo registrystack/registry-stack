@@ -1,5 +1,5 @@
 ---
-title: Issue a birth certificate VC from OpenCRVS
+title: Request a birth certificate SD-JWT VC from OpenCRVS
 description: >-
   Map a synthetic OpenCRVS birth into a governed structured value, request it as SD-JWT VC, and
   verify the credential across the Evidence HTTP boundary.
@@ -26,7 +26,7 @@ Credential (SD-JWT VC). The credential exposes `givenName`, `familyName`, `dateO
 <QuickstartMeta
   outcome="A verified SD-JWT VC containing a governed birth-record extract from synthetic data."
   time="About 25 minutes"
-  level="Institution integration with synthetic data"
+  level="Institution source with synthetic data"
   prerequisites={[
     'The completed OpenCRVS registered-parent tutorial project',
     'A Record Search client for the public OpenCRVS demo',
@@ -66,9 +66,12 @@ legal status to the document.
 Each direct child of `birthCertificate` has its own SD-JWT disclosure. `placeOfBirth` is one atomic
 nested value, so its `locationId` is not disclosed separately from its container.
 
+This response is a second serialization of one stateless assertion, not a credential lifecycle.
+There is no issuance session, status list, revocation, or presentation exchange.
+
 ## Draft a birth-record source
 
-Continue in the `project` directory created by
+Continue in the `registered-parent` directory created by
 [Issue registered-parent evidence from OpenCRVS](../verify-a-registered-parent-with-opencrvs/).
 The retained `source.openapi.yaml` includes the bounded birth fields used in this tutorial.
 
@@ -480,7 +483,7 @@ awk -F '~' '{print "disclosures:", NF - 2}' opencrvs-birth-certificate.sd-jwt
 disclosures: 4
 ```
 
-Evidence's V1 verifier checks the complete issued credential. Wallet presentation, omission of
+Evidence's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
 selected disclosures, and key-binding JWT validation remain outside this profile.
 
 ## Inspect the audit and clean up
@@ -503,5 +506,5 @@ you no longer need the project.
 ## Next
 
 - [Request another Evidence assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
-- [Prove and promote an Evidence project](../prove-an-evidence-project/)
+- [Prove an Evidence project](../prove-an-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

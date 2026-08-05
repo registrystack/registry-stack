@@ -381,8 +381,8 @@ DISCLOSURE RELEASED age_bracket
 ```
 
 The audit distinguishes requester pseudonyms without writing client identifiers, tokens, subject
-selectors, or returned values. The earlier entitlement refusal is not retained in the durable
-Evidence audit. Evidence currently returns that refusal before appending an access-audit event.
+selectors, or returned values. The earlier authorization refusal is not retained in the durable
+Evidence audit. Evidence currently returns that refusal before appending an access-attempt event.
 The revoked-client preparation also has no Evidence audit event because no HTTP request was sent.
 
 ## Clean up
@@ -413,7 +413,7 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## Next
 
-- [See Evidence refuse unsafe changes](../refuse-unsafe-evidence-requests/)
+- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
 - [Configure Registry Mint](../../configure/mint/)
 - [Request an access token from application code](../../configure/request-an-access-token/)
 - [Manage Evidence verifier trust](../manage-evidence-verifier-trust/)

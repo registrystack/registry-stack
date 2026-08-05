@@ -297,7 +297,7 @@ export default defineConfig({
             { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
             { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
             { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
-            { label: 'Issue a birth certificate VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
+            { label: 'Request a birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
             { label: 'Issue DHIS2 immunization evidence', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
             { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
             { label: 'Draft an institution source', slug: 'tutorials/connect-an-institution-source' },

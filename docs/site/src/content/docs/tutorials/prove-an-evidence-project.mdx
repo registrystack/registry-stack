@@ -17,7 +17,7 @@ standards_referenced: []
 Start with a reviewed editable project. If you need to create one,
 [connect an institution source from OpenAPI](../connect-an-institution-source/) before adding
 fixtures. Fixtures are executable claims about your own Evidence project. They are not sample data
-for a first run and they should not be generated from an unrelated domain.
+for a first run and they must not be generated from an unrelated domain.
 
 Use them when your source, requirement, and derivation are ready for review. Local assurance may
 omit them while you iterate. Production and evidence-grade assurance require complete fixture
@@ -33,7 +33,7 @@ Cover behavior your reviewers need to approve:
 - one ordinary positive result;
 - one legitimate negative value, or an unresolved case when false would be misleading;
 - each important boundary in the derivation;
-- no match and several matches;
+- the `no_match` and `ambiguous` outcomes;
 - missing or mistyped required facts;
 - malformed and unavailable source responses;
 - output outside the governed codelist or schema;
@@ -69,7 +69,7 @@ build input. Do not convert a real failure into an ignored case.
 
 ## Check the deployable inputs
 
-Run the real startup validator against the runtime file you plan to deploy:
+Run `evidence check` against the runtime file you plan to deploy:
 
 ```sh
 evidence check --runtime "<evidence-project>/runtime.yaml"
@@ -107,5 +107,5 @@ the target-host ceremony.
 ## Next
 
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
-- [Move Evidence to production signing](../move-evidence-to-production-signing/)
+- [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
 - [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
