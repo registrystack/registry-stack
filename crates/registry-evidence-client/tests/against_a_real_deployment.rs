@@ -743,6 +743,39 @@ fn selector_value(field: &SelectorField, subject_label: &str) -> SelectorValue {
 }
 
 // ---------------------------------------------------------------------------
+// Shared loopback harness
+// ---------------------------------------------------------------------------
+
+/// Reserve an ephemeral loopback port and read it back.
+///
+/// The caller has to know the port before it authors the deployment that will
+/// be served on it, so the listener is returned rather than dropped here. Hold
+/// it until immediately before the real service binds the same port.
+fn reserve_loopback_port() -> (TcpListener, u16) {
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
+    let port = reservation
+        .local_addr()
+        .expect("read the reserved address")
+        .port();
+    (reservation, port)
+}
+
+/// Ask a spawned service to stop and abandon its task.
+///
+/// A drop cannot await the graceful stop, so the task is aborted rather than
+/// joined. Taking the shutdown sender is what makes this safe to call from a
+/// `Drop` impl more than once.
+fn stop_service(
+    shutdown: &mut Option<tokio::sync::oneshot::Sender<()>>,
+    server: &tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    if let Some(shutdown) = shutdown.take() {
+        let _ = shutdown.send(());
+    }
+    server.abort();
+}
+
+// ---------------------------------------------------------------------------
 // The deployment harness
 // ---------------------------------------------------------------------------
 
@@ -836,13 +869,9 @@ impl Deployment {
 
 impl Drop for Deployment {
     fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        // A drop cannot await the graceful stop, so the task is abandoned
-        // rather than joined. The temporary deployment it reads is removed
-        // below, and the process ends with the test binary.
-        self.server.abort();
+        // The temporary deployment the stopped task reads is removed below,
+        // and the process ends with the test binary.
+        stop_service(&mut self.shutdown, &self.server);
         // The runtime requires an immutable deployment, so the staged tree was
         // sealed. Restoring write permission is what lets the temporary
         // directory be removed; a failure here leaves a directory behind for
@@ -896,11 +925,7 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
 
     // Hold the allocation while the matching deployment is authored, and
     // release it only immediately before the service binds it.
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
-    let port = reservation
-        .local_addr()
-        .expect("read the reserved address")
-        .port();
+    let (reservation, port) = reserve_loopback_port();
 
     let directory = tempfile::tempdir().expect("temporary deployment root");
     let bundle_root = directory.path().join("bundle");
@@ -1086,13 +1111,9 @@ impl TokenIssuer {
 
 impl Drop for TokenIssuer {
     fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        // A drop cannot await the graceful stop, so the task is abandoned rather
-        // than joined. The temporary deployment it reads is removed with this
+        // The temporary deployment the stopped task reads is removed with this
         // struct, and the process ends with the test binary.
-        self.server.abort();
+        stop_service(&mut self.shutdown, &self.server);
     }
 }
 
@@ -1102,11 +1123,7 @@ async fn start_token_issuer() -> TokenIssuer {
     // Hold the allocation while the matching deployment is authored, and release
     // it only immediately before the service binds it. The issuer identity is
     // part of that deployment, so the port has to be known first.
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
-    let port = reservation
-        .local_addr()
-        .expect("read the reserved address")
-        .port();
+    let (reservation, port) = reserve_loopback_port();
     let origin = format!("http://127.0.0.1:{port}");
     let token_endpoint = Url::parse(&format!("{origin}/token")).expect("the token endpoint parses");
 
