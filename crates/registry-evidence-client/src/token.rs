@@ -67,6 +67,9 @@ impl fmt::Debug for BearerToken {
 ///
 /// Implementations may cache, refresh, or mint a credential. The client calls
 /// this once per outbound request and never stores what it returns.
+///
+/// This trait is `#[async_trait]`. An integrator implementing it outside this
+/// crate needs the `async-trait` dependency themselves; it is not re-exported.
 #[async_trait]
 pub trait TokenProvider: Send + Sync {
     async fn bearer_token(&self) -> Result<BearerToken, TokenError>;
