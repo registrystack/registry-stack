@@ -414,6 +414,7 @@ fn write_authorization(path: &Path, token: &str) -> Result<()> {
 fn ensure_requests_root(project: &Path) -> Result<PathBuf> {
     let generated = project.join(".evidence");
     validate_private_directory(&generated)?;
+    ensure_self_ignored(&generated)?;
     let requests = generated.join("requests");
     match fs::symlink_metadata(&requests) {
         Ok(_) => validate_private_directory(&requests)?,
@@ -423,6 +424,25 @@ fn ensure_requests_root(project: &Path) -> Result<PathBuf> {
         Err(error) => return Err(error.into()),
     }
     Ok(requests)
+}
+
+/// Make the generated directory ignore its own contents.
+///
+/// It holds a live bearer token. The scaffold ignores `.evidence/` from the
+/// project root, but `dev start` can create the directory in a repository that
+/// never ran the scaffold, and then `git add .` commits the token. A `.gitignore`
+/// of `*` inside the directory covers everything in it including itself, so the
+/// guarantee travels with the directory instead of depending on how it was made.
+/// An existing file is left as the operator wrote it.
+fn ensure_self_ignored(directory: &Path) -> Result<()> {
+    let path = directory.join(".gitignore");
+    match fs::symlink_metadata(&path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_private_bytes(&path, b"*\n")
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn require_absent(path: &Path) -> Result<()> {
@@ -578,4 +598,47 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
         std::io::ErrorKind::Unsupported,
         "atomic no-replace request publication is unsupported",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `.evidence` holds a live bearer token. The scaffold ignores it from the
+    /// project root, but `dev start` can create the directory in a repository
+    /// that never ran the scaffold, and then `git add .` commits the token. The
+    /// ignore has to travel with the directory rather than depend on how it was
+    /// made.
+    #[test]
+    fn the_generated_directory_ignores_itself_however_it_was_created() {
+        let project = tempfile::tempdir().expect("temporary project");
+        let generated = project.path().join(".evidence");
+        create_private_directory(&generated).expect("the generated directory is created");
+
+        ensure_requests_root(project.path()).expect("the requests root is prepared");
+
+        let ignore = generated.join(".gitignore");
+        assert_eq!(
+            fs::read_to_string(&ignore).expect("the generated directory ignores itself"),
+            "*\n"
+        );
+    }
+
+    /// An operator who has written their own rules keeps them. Replacing the
+    /// file would be the tool overruling the project it is running inside.
+    #[test]
+    fn an_existing_ignore_file_is_left_alone() {
+        let project = tempfile::tempdir().expect("temporary project");
+        let generated = project.path().join(".evidence");
+        create_private_directory(&generated).expect("the generated directory is created");
+        let ignore = generated.join(".gitignore");
+        fs::write(&ignore, "*\n!notes.md\n").expect("write an existing ignore file");
+
+        ensure_requests_root(project.path()).expect("the requests root is prepared");
+
+        assert_eq!(
+            fs::read_to_string(&ignore).expect("the ignore file is readable"),
+            "*\n!notes.md\n"
+        );
+    }
 }
