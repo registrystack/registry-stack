@@ -254,6 +254,13 @@ pub fn evidence_payload_from_claims(
         return Err(SdJwtVcClaimError::ClaimShape);
     }
 
+    // The profile sources `iss` and `providedBy` from the same
+    // `service.providerId`, so a token that disagrees with itself about the
+    // technical provider is not the projection of any payload.
+    if string_of(claims, "iss")? != string_of(claims, "providedBy")? {
+        return Err(SdJwtVcClaimError::ClaimShape);
+    }
+
     let subjects = claims
         .get("subjects")
         .ok_or(SdJwtVcClaimError::MissingClaim)?
@@ -652,6 +659,71 @@ mod tests {
         assert_eq!(
             issuance_input(&bad_valid_until, None, &BTreeMap::new()).unwrap_err(),
             SdJwtVcMappingError::Timestamp
+        );
+    }
+
+    /// The claim map and resolved disclosures the verifier hands to the
+    /// inverse projection once the signature and the digests check out.
+    fn verified_claims(evidence: &Evidence) -> (Map<String, Value>, Vec<(String, Value)>) {
+        let input = issuance_input(evidence, None, &BTreeMap::new()).expect("evidence maps");
+        let credential_id = input.credential_id.clone().expect("credential identifier");
+        let mut claims = Map::new();
+        claims.insert("iss".to_string(), Value::String(input.iss.clone()));
+        claims.insert("sub".to_string(), Value::String(input.sub_ref.clone()));
+        claims.insert("iat".to_string(), Value::from(input.iat));
+        claims.insert("exp".to_string(), Value::from(input.exp));
+        claims.insert("vct".to_string(), Value::String(input.vct.clone()));
+        claims.insert("id".to_string(), Value::String(credential_id.clone()));
+        claims.insert("jti".to_string(), Value::String(credential_id));
+        for (name, value) in &input.public_claims {
+            claims.insert(name.clone(), value.clone());
+        }
+        let disclosed = input
+            .disclosures
+            .iter()
+            .map(|disclosure| (disclosure.name.clone(), disclosure.value.clone()))
+            .collect();
+        (claims, disclosed)
+    }
+
+    #[test]
+    fn rebuilds_the_payload_from_a_conformant_claim_set() {
+        let evidence = evidence();
+        let (claims, disclosed) = verified_claims(&evidence);
+
+        let payload = evidence_payload_from_claims(&claims, &disclosed).expect("claims rebuild");
+
+        assert_eq!(payload["providedBy"], Value::String(evidence.provided_by));
+        assert_eq!(payload["issuedBy"], Value::String(evidence.issued_by));
+    }
+
+    #[test]
+    fn rejects_an_issuer_claim_that_is_not_the_provider() {
+        let evidence = evidence();
+        let (mut claims, disclosed) = verified_claims(&evidence);
+        // The profile sources `iss` and `providedBy` from the same
+        // `service.providerId`, so a token that disagrees with itself about
+        // who signed it is not the profile's projection of any payload.
+        claims.insert(
+            "iss".to_string(),
+            Value::String("urn:example:provider:other-service".to_string()),
+        );
+
+        assert_eq!(
+            evidence_payload_from_claims(&claims, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::ClaimShape
+        );
+    }
+
+    #[test]
+    fn rejects_a_claim_set_without_an_issuer() {
+        let evidence = evidence();
+        let (mut claims, disclosed) = verified_claims(&evidence);
+        claims.remove("iss");
+
+        assert_eq!(
+            evidence_payload_from_claims(&claims, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::MissingClaim
         );
     }
 }
