@@ -127,25 +127,17 @@ impl EvidenceClientConfig {
                 "the base URL must carry no credentials, query, or fragment",
             ));
         }
-        if let Some(mut segments) = self.base_url.path_segments().map(Iterator::peekable) {
-            // A single trailing separator is the ordinary way to write a
-            // deployment prefix, and `endpoint` drops it. Any other empty
-            // segment would put `//` in every request path, which the deployment
-            // answers with a confusing 404.
-            while let Some(segment) = segments.next() {
-                if segment.is_empty() && segments.peek().is_some() {
-                    return Err(EvidenceClientError::configuration(
-                        "the base URL path must carry no empty segment other than a trailing separator",
-                    ));
-                }
-            }
-        }
         // A bearer credential in cleartext is only acceptable when it cannot
         // leave the host, which is the local development and tutorial case. The
         // accepted forms are the ones an adopter types: either loopback numeric
         // family, or the reserved name `localhost`. Any other name is refused,
         // because a name that happens to resolve to a loopback address is still
         // resolved off-host, and the answer can change.
+        //
+        // This is checked before the path, so a base URL that is wrong in both
+        // ways is reported for the transport it cannot protect the credential
+        // over rather than for a path detail the adopter would fix first and
+        // learn nothing from.
         let transport_protects_the_credential = match self.base_url.scheme() {
             "https" => true,
             "http" => self.base_url.host().is_some_and(|host| match host {
@@ -159,6 +151,19 @@ impl EvidenceClientConfig {
             return Err(EvidenceClientError::configuration(
                 "the base URL must use HTTPS, or HTTP with a loopback host",
             ));
+        }
+        if let Some(mut segments) = self.base_url.path_segments().map(Iterator::peekable) {
+            // A single trailing separator is the ordinary way to write a
+            // deployment prefix, and `endpoint` drops it. Any other empty
+            // segment would put `//` in every request path, which the deployment
+            // answers with a confusing 404.
+            while let Some(segment) = segments.next() {
+                if segment.is_empty() && segments.peek().is_some() {
+                    return Err(EvidenceClientError::configuration(
+                        "the base URL path must carry no empty segment other than a trailing separator",
+                    ));
+                }
+            }
         }
         // The pinned key set is the load-bearing decision, so it fails here
         // rather than once per request inside the verifier, where an empty set
@@ -243,6 +248,9 @@ mod tests {
         }
     }
 
+    /// The transport is checked before the path, so a base URL that is wrong in
+    /// both ways names the transport. That is the fault an adopter has to fix
+    /// first, and fixing the path alone would leave the credential exposed.
     #[test]
     fn a_base_url_that_cannot_protect_the_credential_is_refused() {
         for base_url in [
@@ -255,10 +263,18 @@ mod tests {
             "http://127.0.0.2.nip.io:8080",
             "http://localhost.evidence.example.org",
             "ftp://evidence.example.org",
+            // Unusable transport and an unusable path at once.
+            "ftp://evidence.example.org//x",
         ] {
-            assert!(
-                config(base_url).validate().is_err(),
-                "{base_url} was accepted"
+            let Err(error) = config(base_url).validate() else {
+                panic!("{base_url} was accepted");
+            };
+            assert_eq!(
+                error,
+                EvidenceClientError::configuration(
+                    "the base URL must use HTTPS, or HTTP with a loopback host"
+                ),
+                "{base_url}"
             );
         }
     }
@@ -288,10 +304,11 @@ mod tests {
             "https://evidence.example.org//registry",
             "https://evidence.example.org/registry//tenant",
         ] {
+            let Err(error) = config(base_url).validate() else {
+                panic!("{base_url} was accepted");
+            };
             assert_eq!(
-                config(base_url)
-                    .validate()
-                    .expect_err("{base_url} was accepted"),
+                error,
                 EvidenceClientError::configuration(
                     "the base URL path must carry no empty segment other than a trailing separator"
                 ),
