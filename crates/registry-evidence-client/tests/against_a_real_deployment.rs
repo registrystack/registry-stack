@@ -1111,7 +1111,7 @@ impl TokenIssuer {
 
 impl Drop for TokenIssuer {
     fn drop(&mut self) {
-        // The temporary deployment the stopped task reads is removed with this
+        // The temporary deployment the abandoned task reads is removed with this
         // struct, and the process ends with the test binary.
         stop_service(&mut self.shutdown, &self.server);
     }
