@@ -75,6 +75,24 @@ pub enum NonceError {
     NotCanonical,
 }
 
+impl NonceError {
+    /// A stable, machine-readable name for which kind of nonce failure this is.
+    ///
+    /// It exists for callers that have to branch or aggregate without matching
+    /// an enum this crate may extend: a metric label, a structured log field, or
+    /// a language binding that carries the discriminant across a boundary. The
+    /// rendered message is for people and may be reworded; these names are part
+    /// of the crate's contract and will not be renamed. A variant added later
+    /// brings a new name rather than reusing one of these.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Entropy => "entropy",
+            Self::NotCanonical => "not_canonical",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +153,21 @@ mod tests {
         // and only unacceptable because it is not random, which is a caller
         // obligation this type cannot check.
         assert!(is_canonical("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_nonce_failure_reports_its_own_stable_kind() {
+        let cases = [
+            (NonceError::Entropy, "entropy"),
+            (NonceError::NotCanonical, "not_canonical"),
+        ];
+        for (error, kind) in &cases {
+            assert_eq!(error.kind(), *kind, "{error}");
+        }
+        let kinds: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 }
