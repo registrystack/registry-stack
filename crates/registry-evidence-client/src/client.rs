@@ -263,6 +263,14 @@ impl EvidenceClient {
     /// validity; it only asks whether the assertion would have been acceptable
     /// then.
     ///
+    /// A past instant is the direction that costs something. Naming the instant
+    /// the bytes arrived, or any other stale instant, accepts an assertion whose
+    /// validity interval has since elapsed: the question asked is whether it was
+    /// acceptable then, and the answer stays yes forever. A caller deciding
+    /// something now calls [`EvidenceClient::verify`], which judges the response
+    /// against the current clock. This variant is for re-verifying a response
+    /// already held, at an instant the caller can justify.
+    ///
     /// The parameter is a [`chrono::DateTime<Utc>`], the same instant type the
     /// portable verifier's own policy takes.
     pub fn verify_as_of(
@@ -960,6 +968,40 @@ mod tests {
         );
     }
 
+    /// The media-type grammar makes the type itself case-insensitive and a
+    /// parameter no part of it. The problem contract is compared that way, and so
+    /// is the success path, which shares the comparison: a deployment or an
+    /// intermediary that spells the type differently or appends a charset is
+    /// still answering with the contract's media type.
+    #[tokio::test]
+    async fn the_response_media_type_is_compared_without_its_case_or_parameters() {
+        let fixture = signed_evidence();
+        for media_type in [
+            EVIDENCE_JWS_MEDIA_TYPE,
+            "Application/JOSE+JSON",
+            "application/jose+json; charset=utf-8",
+        ] {
+            let server = MockServer::start().await;
+            let client = client_for(&server.uri(), &fixture);
+            let prepared = client
+                .prepare(spec(SubjectExpectations::AcceptFirstUse))
+                .expect("the specification is accepted");
+            Mock::given(method("POST"))
+                .and(path("/v1/evidence"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(fixture.sign(prepared.request_nonce()), media_type),
+                )
+                .mount(&server)
+                .await;
+
+            client
+                .send(&prepared)
+                .await
+                .unwrap_or_else(|error| panic!("{media_type} was refused: {error}"));
+        }
+    }
+
     /// A body the problem contract does not cover leaves the client with nothing
     /// to say about the failure, which is exactly when the deployment's own
     /// identifier for the exchange matters. A header value outside the rule is
@@ -1194,6 +1236,13 @@ mod tests {
                 b"-----BEGIN CERTIFICATE-----\nnot base64 at all\n-----END CERTIFICATE-----\n"
                     .to_vec(),
                 "the outbound client options are not usable",
+            ),
+            // A framed block whose body is outside the base64 alphabet fails
+            // while the bundle is being read, which is the one refusal that
+            // names the PEM itself.
+            (
+                b"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n".to_vec(),
+                "the pinned certificate authority bundle is not readable PEM",
             ),
         ] {
             assert_eq!(
