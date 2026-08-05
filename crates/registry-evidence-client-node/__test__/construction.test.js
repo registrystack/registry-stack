@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { EvidenceClient } = require('../index.js');
+const { EvidenceClient, EvidenceClientError } = require('..');
 
 function validConfig(overrides = {}) {
   return {
@@ -24,12 +24,13 @@ function validConfig(overrides = {}) {
 }
 
 /** Every construction refusal in this file is the Rust configuration
- * failure, crossing as a thrown error whose `message` is the stable JSON
- * envelope `kind: "configuration"`. */
+ * failure, crossing as an `EvidenceClientError` with `kind: "configuration"`
+ * and a human-readable `message` (not JSON a caller must parse). */
 function assertConfigurationRefusal(build) {
   assert.throws(build, (error) => {
-    const mapped = JSON.parse(error.message);
-    assert.equal(mapped.kind, 'configuration');
+    assert.ok(error instanceof EvidenceClientError);
+    assert.equal(error.kind, 'configuration');
+    assert.doesNotMatch(error.message, /^\{/, 'message must be prose, not a JSON envelope');
     return true;
   });
 }
