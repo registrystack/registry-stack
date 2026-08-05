@@ -9,6 +9,13 @@
   },
   "main": "client.js",
   "types": "client.d.ts",
+  "exports": {
+    ".": {
+      "types": "./client.d.ts",
+      "default": "./client.js"
+    }
+  },
+  "private": true,
   "files": [
     "client.js",
     "client.d.ts",

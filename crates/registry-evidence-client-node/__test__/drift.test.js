@@ -71,6 +71,22 @@ test('every class client.js exports is declared in client.d.ts or the index.d.ts
   }
 });
 
+test('the exports map is the only resolvable entry point, not index.js', () => {
+  // `package.json`'s `exports` map exists to stop a caller from reaching the
+  // raw native module (and its unpatched, JSON-message errors) through a
+  // subpath require that bypasses `client.js`. A package with an `exports`
+  // map can self-reference by its own name, so this asserts both halves from
+  // inside the package itself: the package name resolves to the same wrapper
+  // `require('..')` gives, and the subpath `index.js` no longer resolves at
+  // all.
+  const byName = require('@registrystack/evidence-client');
+  assert.equal(byName.EvidenceClient, wrapper.EvidenceClient);
+  assert.throws(
+    () => require('@registrystack/evidence-client/index.js'),
+    (error) => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  );
+});
+
 test('client.d.ts declares no EvidenceClientError field client.js never sets', () => {
   // The exact field list `normalize` copies onto a new `EvidenceClientError`,
   // plus `kind`, which the constructor always sets directly.

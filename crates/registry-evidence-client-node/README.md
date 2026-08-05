@@ -28,11 +28,22 @@ const verified = client.verifyAsOf(prepared, response, asOfMillis);
 
 ### Error mapping
 
-Every failure that crosses from Rust to JS is a thrown `napi::Error` whose
-`message` is a JSON-stringified envelope (`kind`, `message`, plus fields
-specific to that kind). Callers must `JSON.parse(error.message)` rather than
-matching on the error's own type. `kind` is one of: `configuration`, `nonce`,
-`token`, `transport`, `denied`, `not_available`, `protocol`, `verification`.
+A mapped failure surfaces to a caller as an `EvidenceClientError`, exported
+from the package root. Its `kind` is always present; `status`, `code`,
+`operation`, `retryAfterSeconds`, `transportKind`, and `tokenKind` are present
+when the underlying failure carries them. `message` is human prose, not JSON:
+read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
+`transport`, `denied`, `not_available`, `protocol`, `verification`.
+
+Underneath, the native layer throws every mapped failure as a plain
+`napi::Error` whose `message` is a JSON-stringified envelope; `client.js`
+parses that envelope and reconstructs it as an `EvidenceClientError`. That JSON
+form is how the native layer hands a failure to `client.js`, not a
+caller-facing contract: do not `JSON.parse(error.message)`.
+
+A failure that is not a recognized envelope (a serialization defect, a caught
+panic, napi's own argument-type checking) is left exactly as thrown, so it
+cannot be mistaken for one of the eight kinds above.
 
 The `denied`/`protocol` split is a hazard worth calling out explicitly: HTTP
 401, 403, and 429 all map to `denied` regardless of the response body's own
