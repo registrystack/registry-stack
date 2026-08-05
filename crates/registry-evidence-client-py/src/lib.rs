@@ -53,8 +53,12 @@ pyo3::create_exception!(
     registry_evidence_client,
     EvidenceClientError,
     PyException,
-    "Base exception for every failure this client reports. See the module \
-     documentation for the attributes every instance carries."
+    "Base exception for every mapped failure this client reports. See the \
+     module documentation for the attributes every instance carries. Two \
+     failures escape this hierarchy entirely, since neither is a mapped \
+     failure with a `kind`: the client's internal runtime failing to start, \
+     which raises `RuntimeError`, and a serialization failure on a value \
+     this crate itself constructed, which raises `ValueError`."
 );
 
 pyo3::create_exception!(
@@ -179,7 +183,7 @@ fn serialization_error(what: &str, error: serde_json::Error) -> PyErr {
 /// public constructor either. It owns the real value directly rather than a
 /// clone of it: the real type is deliberately not `Clone`, to protect its
 /// interior single-send flag, and copying it here would defeat that guard.
-#[pyclass(name = "PreparedEvidenceRequest")]
+#[pyclass(name = "PreparedEvidenceRequest", module = "registry_evidence_client")]
 struct PreparedEvidenceRequest {
     inner: RealPreparedEvidenceRequest,
 }
@@ -219,7 +223,7 @@ impl PreparedEvidenceRequest {
 /// [`EvidenceClient::send`]. It carries no attributes: nothing in it has been
 /// trusted yet, and `verify` is what judges it, never Python code inspecting
 /// its bytes directly.
-#[pyclass(name = "RawEvidenceResponse")]
+#[pyclass(name = "RawEvidenceResponse", module = "registry_evidence_client")]
 struct RawEvidenceResponse {
     inner: RealRawEvidenceResponse,
 }
@@ -229,7 +233,7 @@ struct RawEvidenceResponse {
 /// Unlike the two classes above, this is a terminal result nothing hands back
 /// into a later call, so it carries plain, eagerly converted data rather than
 /// protecting any interior state.
-#[pyclass(name = "VerifiedEvidence")]
+#[pyclass(name = "VerifiedEvidence", module = "registry_evidence_client")]
 struct VerifiedEvidence {
     /// The verified payload, as a plain Python object graph.
     #[pyo3(get)]
@@ -272,7 +276,7 @@ fn verified_evidence_to_python(
 /// waits for the first to yield the runtime's single core rather than racing
 /// it, so two Python threads may safely call an async method on the same
 /// client at once.
-#[pyclass(name = "EvidenceClient")]
+#[pyclass(name = "EvidenceClient", module = "registry_evidence_client")]
 struct EvidenceClient {
     inner: RealEvidenceClient,
     runtime: tokio::runtime::Runtime,
@@ -324,7 +328,8 @@ impl EvidenceClient {
             max_response_bytes,
         )
         .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
-        let inner = RealEvidenceClient::new(config)
+        let inner = py
+            .detach(|| RealEvidenceClient::new(config))
             .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -510,12 +515,18 @@ mod tests {
     /// `pyo3-0.29.1/src/panic.rs` (`PanicException` itself, at
     /// `pyo3::panic::PanicException`, not re-exported at the crate root).
     ///
-    /// This crate has exactly one latent panic to worry about:
-    /// `Ulid::new()` (used to generate a request nonce) reaches
-    /// `rand::rng()`, which panics when OS entropy is unavailable, a case the
-    /// wrapped crate deliberately leaves unguarded. No extra guard is added
-    /// here for it: this test proves the boundary already turns any such
-    /// panic into an ordinary Python exception instead of a process abort.
+    /// This crate has exactly one latent panic to worry about, and it is not
+    /// the client's own request nonce: that one is generated through
+    /// `getrandom::fill`, which reports entropy failure as an ordinary error
+    /// rather than panicking. The unguarded path is the private-key-JWT token
+    /// provider's own `jti` claim, generated with `Ulid::new()`, which reaches
+    /// `rand::rng()` and panics when OS entropy is unavailable, a case that
+    /// provider deliberately leaves unguarded. It is reachable only in a
+    /// deployment configured for private-key-JWT: a static-bearer deployment
+    /// never calls that provider, so it has no reachable panic at all. No
+    /// extra guard is added here for it: this test proves the boundary
+    /// already turns any such panic into an ordinary Python exception instead
+    /// of a process abort.
     ///
     /// The catch must be exercised from Python code, not from a Rust `call0`:
     /// `PyErr::take` (which every pyo3 call-from-Rust helper uses to read the
