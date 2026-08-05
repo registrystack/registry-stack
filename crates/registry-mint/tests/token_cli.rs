@@ -355,6 +355,88 @@ fn an_unregistered_actor_is_refused_by_the_endpoint() {
     );
 }
 
+/// A refused request must not put the signed assertion back on the terminal.
+///
+/// `--url` and `--audience` are separate flags precisely so the assertion can be
+/// audience-bound to the public endpoint while the request travels over
+/// loopback. Point `--url` at the wrong host and the assertion, still valid at
+/// the real Mint until it expires, is now that host's to echo. Repeating an
+/// arbitrary body into stderr writes it to the operator's logs and scrollback
+/// too, which is a second place to lose it from.
+#[test]
+fn a_refusal_does_not_echo_the_signed_assertion_back() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind an echoing endpoint");
+    let port = listener.local_addr().expect("a bound address").port();
+    let echo = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept the token request");
+        let mut request = Vec::new();
+        // The form is small and the client closes after it, so reading to the
+        // content length is not worth a parser here.
+        let mut buffer = [0u8; 8192];
+        loop {
+            let read = std::io::Read::read(&mut stream, &mut buffer).expect("read the request");
+            request.extend_from_slice(&buffer[..read]);
+            if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let body = String::from_utf8_lossy(&request).into_owned();
+        let payload = json!({
+            "error": "invalid_request",
+            "error_description": "unrecognized request",
+            "received": body,
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            payload.len()
+        );
+        std::io::Write::write_all(&mut stream, response.as_bytes()).expect("write the refusal");
+        body
+    });
+
+    let server = server();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mint"));
+    command
+        .arg("token")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}/token"))
+        .arg("--audience")
+        .arg(ASSERTION_AUDIENCE)
+        .arg("--client-id")
+        .arg("scheduler")
+        .arg("--key")
+        .arg(server.caller_key("scheduler"));
+    let output = command.output().expect("the mint binary runs");
+    let received = echo.join().expect("the echoing endpoint finished");
+
+    let assertion = received
+        .split("client_assertion=")
+        .nth(1)
+        .expect("the endpoint received an assertion")
+        .split('&')
+        .next()
+        .expect("the assertion is a form value")
+        .to_owned();
+    assert!(
+        assertion.len() > 64,
+        "the test needs a real assertion to look for: {assertion}"
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(&assertion),
+        "the refusal echoed the signed assertion back"
+    );
+    // The status and the OAuth error stay, because that is what tells an
+    // operator which endpoint refused and why.
+    assert!(
+        stderr.contains("400") && stderr.contains("invalid_request"),
+        "the refusal should still name the status and the error: {stderr}"
+    );
+}
+
 /// A subject file that is not a flat object of scalars is a caller mistake with
 /// an opaque server-side answer, so it is named locally instead.
 #[test]

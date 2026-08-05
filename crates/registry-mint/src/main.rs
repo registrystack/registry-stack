@@ -286,13 +286,46 @@ async fn request_token(
         .await
         .map_err(|error| format!("the token response could not be read: {error}"))?;
     if !status.is_success() {
-        // OAuth error bodies name the failure and carry no token, so echoing
-        // one is the useful thing to do.
+        // The request carried a signed client assertion, which is a bearer
+        // credential at the endpoint it is bound to until it expires. Whatever
+        // answered here is not necessarily that endpoint, and a refusal body is
+        // free to quote the form back. Report the two bounded OAuth fields and
+        // drop the rest rather than write the assertion into stderr, the
+        // operator's logs, and their scrollback.
         return Err(format!(
-            "the endpoint refused the request ({status}): {body}"
+            "the endpoint refused the request ({status}): {}",
+            oauth_error(&body)
         ));
     }
     serde_json::from_str(&body).map_err(|error| format!("the token response is not JSON: {error}"))
+}
+
+/// Summarize a refusal using only the two fields RFC 6749 defines for one.
+///
+/// Both are reproduced as printable ASCII within the length the RFC's own
+/// grammar allows, so a hostile or merely careless endpoint cannot use the
+/// refusal to write arbitrary bytes, control sequences, or the caller's own
+/// request into the terminal.
+fn oauth_error(body: &str) -> String {
+    let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(body) else {
+        return "the response carried no OAuth error".to_owned();
+    };
+    let field = |name: &str| -> Option<String> {
+        let value = fields.get(name)?.as_str()?;
+        let bounded: String = value
+            .chars()
+            .filter(|character| {
+                character.is_ascii_graphic() || *character == ' ' || *character == '\t'
+            })
+            .take(200)
+            .collect();
+        (!bounded.is_empty()).then_some(bounded)
+    };
+    match (field("error"), field("error_description")) {
+        (Some(error), Some(description)) => format!("{error}: {description}"),
+        (Some(error), None) => error,
+        _ => "the response carried no OAuth error".to_owned(),
+    }
 }
 
 fn now_seconds() -> Result<i64, String> {
