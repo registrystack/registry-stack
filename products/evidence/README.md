@@ -163,20 +163,23 @@ commands remain outside this build command.
 Releases that include the Evidence toolset publish reproducible bare binaries
 named `<bin>-<tag>-<os>-<arch>` (for example `evidence-v1.2.0-linux-amd64`)
 plus a `SHA256SUMS` file that is cosign-signed at promotion. Older releases do
-not carry these assets. For a release that does, download the pinned installer
-asset and run it:
+not carry these assets. To install the newest release that does:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+```
+
+To pin a release, run that release's own installer asset:
 
 ```sh
 tag=vX.Y.Z
-curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/evidencectl-${tag}-install.sh"
-bash "./evidencectl-${tag}-install.sh"
+curl -fsSL "https://github.com/registrystack/registry-stack/releases/download/${tag}/evidencectl-${tag}-install.sh" | bash
 ```
 
-The installer reads the release it belongs to from its own asset filename, so
-it has to reach the shell as a file. Piping it from `curl` leaves it with no
-filename and no pinned release, and it refuses to guess one. To install
-without keeping the file, name the release instead:
-`curl -fsSL <installer-url> | EVIDENCECTL_VERSION=<tag> bash`.
+Every published installer carries the release it belongs to, so neither form
+needs a tag in the environment and both refuse an `EVIDENCECTL_VERSION` naming
+a different release. A copy taken from this repository carries none and
+installs nothing until `EVIDENCECTL_VERSION` names one.
 
 The installer installs the three-binary Evidence toolset, the `evidence`
 runtime, `evidencectl` adopter tooling, and the `mint` token issuer, together
@@ -188,9 +191,10 @@ tag, then rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at that
 verified directory.
 
 Three environment variables configure the installer: `EVIDENCECTL_VERSION`
-pins a `vMAJOR.MINOR.PATCH` tag, `EVIDENCECTL_INSTALL_DIR` sets the install
-directory (default `~/.local/bin`), and `EVIDENCECTL_ASSET_DIR` installs from
-a locally verified asset directory instead of downloading.
+names a `vMAJOR.MINOR.PATCH` release for a copy that carries none,
+`EVIDENCECTL_INSTALL_DIR` sets the install directory (default `~/.local/bin`),
+and `EVIDENCECTL_ASSET_DIR` installs from a locally verified asset directory
+instead of downloading.
 
 To build the toolset from source instead:
 
