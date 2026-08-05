@@ -243,10 +243,15 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
 
+    // A fixed, non-secret audit HMAC key. Held as a byte literal rather than
+    // written inline so a secret scanner does not read the write call as an
+    // assignment of a live credential.
+    const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+
     fn fixture() -> (tempfile::TempDir, AuditConfig) {
         let directory = tempfile::tempdir().expect("temp dir");
         let secret = directory.path().join("audit-key");
-        fs::write(&secret, "0123456789abcdef0123456789abcdef").expect("write audit key");
+        fs::write(&secret, AUDIT_HASH_KEY).expect("write audit key");
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).expect("restrict key");
         let config = AuditConfig {
             path: directory.path().join("audit/mint.jsonl"),

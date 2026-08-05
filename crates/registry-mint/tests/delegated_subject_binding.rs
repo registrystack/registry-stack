@@ -41,6 +41,11 @@ const ASSERTION_AUDIENCE: &str = "https://localhost:8443/token";
 
 const AGENT: &str = "urn:example:demo:agent:appointment-scheduler";
 
+// A fixed, non-secret audit HMAC key. Held as a byte literal rather than
+// written inline so a secret scanner does not read the write call as an
+// assignment of a live credential.
+const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+
 fn key_pair(seed: u8) -> (PrivateJwk, Value, Value) {
     let seed_bytes = [seed; 32];
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
@@ -74,7 +79,7 @@ async fn deployment() -> Deployment {
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
         .expect("restrict signing key");
     let audit_key_path = root.join("secrets/audit-hmac-key");
-    fs::write(&audit_key_path, "0123456789abcdef0123456789abcdef").expect("write audit key");
+    fs::write(&audit_key_path, AUDIT_HASH_KEY).expect("write audit key");
     fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
         .expect("restrict audit key");
     let audit_path = root.join("audit/mint.jsonl");

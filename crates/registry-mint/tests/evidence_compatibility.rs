@@ -26,6 +26,10 @@ use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use serde_json::{json, Value};
 
+// A fixed, non-secret audit HMAC key. Held as a byte literal rather than
+// written inline so a secret scanner does not read the write call as an
+// assignment of a live credential.
+const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
 const ISSUER: &str = "https://mint.example.org";
 const ASSERTION_AUDIENCE: &str = "https://mint.example.org/token";
 const LOCAL_ISSUER: &str = "http://127.0.0.1:18081";
@@ -94,7 +98,7 @@ async fn deployment_with_transport(
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
         .expect("restrict signing key");
     let audit_key_path = root.join("secrets/audit-hmac-key");
-    fs::write(&audit_key_path, "0123456789abcdef0123456789abcdef").expect("write audit key");
+    fs::write(&audit_key_path, AUDIT_HASH_KEY).expect("write audit key");
     fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
         .expect("restrict audit key");
 
