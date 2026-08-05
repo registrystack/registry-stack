@@ -10,6 +10,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::error::TransportKind;
+
 /// Longest accepted credential. Access tokens are bounded well below this; the
 /// limit keeps a hostile provider from handing over an unbounded header.
 const MAXIMUM_TOKEN_BYTES: usize = 8 * 1024;
@@ -101,6 +103,84 @@ pub enum TokenError {
     Unavailable,
     #[error("the bearer credential is not usable: {reason}")]
     Invalid { reason: &'static str },
+
+    /// The provider cannot be used as configured. The reason is fixed text
+    /// chosen by the provider, never caller data and never key material.
+    #[error("the token provider cannot be used as configured: {reason}")]
+    Configuration { reason: &'static str },
+
+    /// The exchange with the authorization server did not complete.
+    #[error("the token request did not complete: {kind}")]
+    Transport { kind: TransportKind },
+
+    /// The authorization server declined to issue a token. The registered error
+    /// code is the whole of what is reported.
+    #[error("the authorization server declined to issue a token: {code}")]
+    Refused { code: OAuthErrorCode },
+
+    /// The answer was not a token response this crate can use: an unexpected
+    /// status, an unexpected media type, an unreadable body, or a token type the
+    /// Evidence request cannot present.
+    #[error("the token response does not satisfy the OAuth 2.0 contract: status {status}")]
+    Protocol { status: u16 },
+}
+
+/// The OAuth 2.0 error code an authorization server returned.
+///
+/// This code is all a refused token request reports. The accompanying
+/// `error_description` is server-authored text about a failed authentication
+/// attempt, so it is dropped where the body is parsed rather than carried into a
+/// diagnostic, and the client assertion and the key that signed it are never part
+/// of any of these values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OAuthErrorCode {
+    InvalidRequest,
+    InvalidClient,
+    InvalidGrant,
+    UnauthorizedClient,
+    UnsupportedGrantType,
+    InvalidScope,
+    /// A code outside RFC 6749 section 5.2. The server's own spelling is
+    /// deliberately not kept: it is unbounded text from the failed exchange, and
+    /// the extension registry is open, so no closed variant could hold it.
+    Other,
+}
+
+impl OAuthErrorCode {
+    /// The registered spelling, or a fixed name for a code from outside the
+    /// section 5.2 set.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::InvalidClient => "invalid_client",
+            Self::InvalidGrant => "invalid_grant",
+            Self::UnauthorizedClient => "unauthorized_client",
+            Self::UnsupportedGrantType => "unsupported_grant_type",
+            Self::InvalidScope => "invalid_scope",
+            Self::Other => "unregistered_error_code",
+        }
+    }
+
+    /// Read a code off the wire, keeping only whether it is one this crate names.
+    pub(crate) fn from_wire(code: &str) -> Self {
+        match code {
+            "invalid_request" => Self::InvalidRequest,
+            "invalid_client" => Self::InvalidClient,
+            "invalid_grant" => Self::InvalidGrant,
+            "unauthorized_client" => Self::UnauthorizedClient,
+            "unsupported_grant_type" => Self::UnsupportedGrantType,
+            "invalid_scope" => Self::InvalidScope,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl fmt::Display for OAuthErrorCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +215,88 @@ mod tests {
             );
         }
         assert!(BearerToken::new("A".repeat(MAXIMUM_TOKEN_BYTES + 1)).is_err());
+    }
+
+    /// A refusal names the registered code and nothing else, and every acquisition
+    /// failure renders as its own sentence so a support conversation can start
+    /// from the message alone.
+    #[test]
+    fn acquisition_failures_render_their_own_fixed_text() {
+        let cases = [
+            (
+                TokenError::Configuration {
+                    reason: "the client identifier must not be empty",
+                },
+                "the token provider cannot be used as configured: the client identifier must not be empty",
+            ),
+            (
+                TokenError::Transport {
+                    kind: TransportKind::Connect,
+                },
+                "the token request did not complete: connection setup failed",
+            ),
+            (
+                TokenError::Refused {
+                    code: OAuthErrorCode::InvalidClient,
+                },
+                "the authorization server declined to issue a token: invalid_client",
+            ),
+            (
+                TokenError::Refused {
+                    code: OAuthErrorCode::Other,
+                },
+                "the authorization server declined to issue a token: unregistered_error_code",
+            ),
+            (
+                TokenError::Protocol { status: 500 },
+                "the token response does not satisfy the OAuth 2.0 contract: status 500",
+            ),
+        ];
+        for (error, rendered) in &cases {
+            assert_eq!(&error.to_string(), rendered);
+        }
+        let renderings: std::collections::BTreeSet<String> =
+            cases.iter().map(|(error, _)| error.to_string()).collect();
+        assert_eq!(
+            renderings.len(),
+            cases.len(),
+            "two failures render the same text"
+        );
+    }
+
+    /// A server may spell a code however it likes. Only the registered set is
+    /// named, so an unbounded spelling cannot travel in the error.
+    #[test]
+    fn unregistered_error_codes_collapse_to_one_name() {
+        assert_eq!(
+            OAuthErrorCode::from_wire("invalid_request"),
+            OAuthErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            OAuthErrorCode::from_wire("invalid_client"),
+            OAuthErrorCode::InvalidClient
+        );
+        assert_eq!(
+            OAuthErrorCode::from_wire("invalid_grant"),
+            OAuthErrorCode::InvalidGrant
+        );
+        assert_eq!(
+            OAuthErrorCode::from_wire("unauthorized_client"),
+            OAuthErrorCode::UnauthorizedClient
+        );
+        assert_eq!(
+            OAuthErrorCode::from_wire("unsupported_grant_type"),
+            OAuthErrorCode::UnsupportedGrantType
+        );
+        assert_eq!(
+            OAuthErrorCode::from_wire("invalid_scope"),
+            OAuthErrorCode::InvalidScope
+        );
+        for candidate in ["", "Invalid_Client", "canary_extension_code"] {
+            let code = OAuthErrorCode::from_wire(candidate);
+            assert_eq!(code, OAuthErrorCode::Other, "{candidate}");
+            assert!(!code.to_string().contains("canary"), "{candidate}");
+        }
     }
 
     #[test]

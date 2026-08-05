@@ -17,18 +17,23 @@ base64.workspace = true
 chrono.workspace = true
 getrandom.workspace = true
 registry-evidence-verifier.workspace = true
+registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The synchronization primitives the cached token provider needs. Holding a
+# credential across an await rules out a blocking lock, and reqwest already
+# brings this runtime into any build that reaches the network.
+tokio.workspace = true
+ulid.workspace = true
 url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
 registry-evidence.workspace = true
-registry-platform-crypto.workspace = true
+registry-mint.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
 wiremock.workspace = true

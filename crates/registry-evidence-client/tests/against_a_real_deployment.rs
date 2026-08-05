@@ -15,6 +15,13 @@
 //! `initialize` seam, which builds the deployed authenticator and therefore
 //! requires a loopback token issuer, which only the local profile permits.
 //! Nothing in the fixture names a source product.
+//!
+//! Most cases are their own token issuer: the suite publishes a key set and signs
+//! the credentials it presents. The credential-acquisition cases instead run a
+//! real authorization server on its own loopback origin and let the client's
+//! provider authenticate to it with a signed client assertion, so acquisition,
+//! caching, and refusal are proven against a server that enforces the grant
+//! rather than against a stub of this crate's making.
 
 use std::{
     error::Error,
@@ -32,9 +39,13 @@ use registry_evidence::{runtime::EvidenceRuntime, server};
 use registry_evidence_client::{
     AssuranceProfile, ConceptForm, DefinitionCardinality, DefinitionKind, EvidenceClient,
     EvidenceClientConfig, EvidenceClientError, EvidenceDefinitionsDocument, EvidenceRequestSpec,
-    PublicValue, SelectorField, SelectorValue, SelectorValueOrigin, StaticToken,
-    SubjectExpectations, SubjectRequest, TransportKind, VerificationError,
-    EVIDENCE_DEFINITIONS_SCHEMA_V1,
+    OAuthErrorCode, PrivateKeyJwt, PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue,
+    SelectorValueOrigin, StaticToken, SubjectExpectations, SubjectRequest, TokenError,
+    TokenProvider, TransportKind, VerificationError, EVIDENCE_DEFINITIONS_SCHEMA_V1,
+};
+use registry_mint::{
+    config::MintConfig,
+    server::{self as mint_server, MintService},
 };
 use registry_platform_crypto::{sign, PrivateJwk};
 use serde_json::{json, Value};
@@ -55,6 +66,17 @@ const RELYING_AUDIENCE: &str = "https://relying.invalid/procedure";
 const PRINCIPAL: &str = "client-suite-principal";
 const AUTH_KEY_ID: &str = "client-suite-auth-key";
 const SOURCE_BEARER: &str = "source-bearer-canary";
+
+/// The registered client the acquisition cases authenticate as, the key it
+/// signs its assertions with, and the key the authorization server signs the
+/// credentials it issues with.
+const CLIENT_ID: &str = "client-suite-relying-party";
+const CLIENT_KEY_ID: &str = "client-suite-client-key";
+const ISSUER_KEY_ID: &str = "client-suite-issuer-key";
+
+/// The shortest access token lifetime the authorization server accepts. The
+/// refresh margin case needs a margin wider than a whole credential's life.
+const ISSUED_TOKEN_LIFETIME_SECONDS: i64 = 60;
 
 /// Prefix the runtime gives every published subject binding.
 const BINDING_PREFIX: &str = "urn:evidence:subject:v1_";
@@ -470,6 +492,157 @@ async fn a_response_beyond_the_configured_bound_is_refused() {
     );
 }
 
+/// The whole chain, with no credential this suite signed: the provider proves who
+/// it is to a real authorization server with a signed assertion, the server issues
+/// an access token, and the deployment accepts that token for an exchange whose
+/// response verifies.
+#[tokio::test]
+async fn an_acquired_credential_completes_a_verified_exchange() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let client = deployment.client_using(issuer.provider());
+
+    let proof: Result<_, Box<dyn Error>> = async {
+        let definitions = client.discover().await?;
+        let prepared = client.prepare(spec(
+            &definitions,
+            "acquired-credential",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        Ok(client.request_and_verify(&prepared).await?)
+    }
+    .await;
+    let accepted = proof.expect("the acquired credential is accepted and the response verifies");
+
+    let evidence = accepted.evidence();
+    assert_eq!(evidence.supports_requirement, REQUIREMENT);
+    assert_eq!(evidence.supported_values.len(), 1);
+    assert_eq!(
+        evidence.supported_values[0].value,
+        PublicValue::Boolean(true)
+    );
+    // The audience is the one the authorization server registered for this
+    // client, not one the request could choose: the deployment compares the two
+    // and refuses a mismatch. Reaching a verified response therefore proves the
+    // acquired credential carried the registered identity.
+    assert_eq!(evidence.audience, RELYING_AUDIENCE);
+    assert_eq!(evidence.subjects.len(), 1);
+    assert!(evidence.subjects[0].binding.starts_with(BINDING_PREFIX));
+}
+
+/// A credential is acquired once and reused while it has life left. Two whole
+/// exchanges are four requests, and every one of them presents the one credential
+/// the authorization server issued.
+#[tokio::test]
+async fn a_cached_credential_serves_every_request_inside_its_window() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let client = deployment.client_using(issuer.provider());
+
+    let proof: Result<_, Box<dyn Error>> = async {
+        let definitions = client.discover().await?;
+        let first = client.prepare(spec(
+            &definitions,
+            "cached-credential",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        let accepted = client.request_and_verify(&first).await?;
+        let again = client.discover().await?;
+        let second = client.prepare(spec(
+            &again,
+            "cached-credential",
+            SubjectExpectations::Pinned(accepted.pinned_subject_expectations()),
+        ))?;
+        client.request_and_verify(&second).await?;
+        Ok(())
+    }
+    .await;
+    proof.expect("both exchanges are accepted and verify");
+
+    assert_eq!(
+        issuer.issued_credential_count(),
+        1,
+        "four requests inside the cache window asked the authorization server once"
+    );
+}
+
+/// A credential with less life left than the refresh margin is replaced rather
+/// than presented, and the replacement is one the deployment accepts.
+///
+/// A margin wider than the issuer's whole token lifetime puts every credential
+/// inside it as soon as it arrives, which is the state an expiring credential
+/// reaches on its own. The boundary itself is driven against a movable clock in
+/// the crate's own suite; what this proves is that acquiring again against a real
+/// server yields a working credential rather than a stale or refused one.
+#[tokio::test]
+async fn a_credential_inside_the_refresh_margin_is_replaced() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let provider = issuer.provider_with_refresh_margin(ISSUED_TOKEN_LIFETIME_SECONDS * 2);
+    let client = deployment.client_using(Arc::clone(&provider) as Arc<dyn TokenProvider>);
+
+    let proof: Result<_, Box<dyn Error>> = async {
+        let first = provider.bearer_token().await?;
+        let second = provider.bearer_token().await?;
+        let definitions = client.discover().await?;
+        let prepared = client.prepare(spec(
+            &definitions,
+            "refreshed-credential",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        let accepted = client.request_and_verify(&prepared).await?;
+        Ok((first, second, accepted))
+    }
+    .await;
+    let (first, second, accepted) =
+        proof.expect("each acquisition is accepted and the last response verifies");
+
+    // Two direct acquisitions, then one for discovery and one for the request:
+    // nothing was cacheable, so each of the four asked the server for its own.
+    assert_eq!(issuer.issued_credential_count(), 4);
+    assert_eq!(
+        accepted.evidence().supports_requirement,
+        REQUIREMENT,
+        "the replacement credential is one the deployment accepts"
+    );
+    // Neither acquisition can be printed, which is what keeps a credential out of
+    // a test log as much as out of a production one.
+    assert_eq!(format!("{first:?}"), "BearerToken { .. }");
+    assert_eq!(format!("{second:?}"), "BearerToken { .. }");
+}
+
+/// A client whose key the authorization server never registered acquires nothing,
+/// the failure is the registered OAuth code, and no request reaches the
+/// deployment.
+#[tokio::test]
+async fn an_unregistered_client_key_is_refused_without_detail() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    // The registered key identifier over key material the server has never seen,
+    // so the assertion is refused on its signature rather than for naming a key
+    // the server cannot find.
+    let unregistered = generate_key(CLIENT_KEY_ID);
+    let client = deployment.client_using(issuer.provider_signing_with(unregistered));
+
+    let refusal = client
+        .discover()
+        .await
+        .expect_err("a client the server cannot authenticate acquires no credential");
+
+    assert_eq!(
+        refusal,
+        EvidenceClientError::Token(TokenError::Refused {
+            code: OAuthErrorCode::InvalidClient
+        }),
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "the authorization server declined to issue a token: invalid_client",
+        "the refusal reports the registered code and nothing else"
+    );
+    assert_eq!(issuer.issued_credential_count(), 0);
+}
+
 // ---------------------------------------------------------------------------
 // Request specifications
 // ---------------------------------------------------------------------------
@@ -601,6 +774,17 @@ impl Deployment {
         self.build_client(access_token, Some(max_response_bytes))
     }
 
+    /// A client that acquires its credential from a provider rather than
+    /// presenting one this suite signed.
+    fn client_using(&self, token_provider: Arc<dyn TokenProvider>) -> EvidenceClient {
+        EvidenceClient::new(EvidenceClientConfig::new(
+            self.base_url.clone(),
+            token_provider,
+            self.runtime.jwks().clone(),
+        ))
+        .expect("the client configuration is usable")
+    }
+
     fn build_client(&self, access_token: &str, max_response_bytes: Option<u64>) -> EvidenceClient {
         let mut config = EvidenceClientConfig::new(
             self.base_url.clone(),
@@ -618,7 +802,11 @@ impl Deployment {
         self.token_with_tags(&[CONFIGURED_TAG])
     }
 
-    /// A credential this issuer signed, carrying the requester tags given.
+    /// A credential this suite signed, carrying the requester tags given.
+    ///
+    /// The deployment accepts it only where the suite is the issuer it trusts. A
+    /// deployment pointed at an external authorization server publishes a key set
+    /// this key is not in, so its credentials come from that server instead.
     fn token_with_tags(&self, requester_tags: &[&str]) -> String {
         let now = Utc::now().timestamp();
         let claims = json!({
@@ -660,22 +848,38 @@ impl Drop for Deployment {
 }
 
 /// Stage, seal, load, and serve one deployment whose fixed source answers with
-/// `source_answer`.
+/// `source_answer`, trusting this suite as its token issuer.
 async fn start(source_answer: Value) -> Deployment {
-    let source = MockServer::start().await;
-    let issuer = source.uri();
-    let auth_key = generate_key(AUTH_KEY_ID);
+    start_trusting(source_answer, None).await
+}
 
-    // The issuer's key set and the fixed source share this origin. Under the
-    // local assurance profile the authentication issuer must be a canonical
-    // loopback HTTP origin, which is exactly what a wiremock server publishes.
-    Mock::given(method("GET"))
-        .and(path("/.well-known/jwks.json"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"keys": [auth_key.public()]})),
-        )
-        .mount(&source)
-        .await;
+/// The same deployment, trusting the token issuer at `external_issuer` when one
+/// is named.
+///
+/// Without one the suite publishes its own key set beside the fixed source and
+/// signs the credentials it presents. With one, the deployment fetches keys from
+/// that origin and only credentials that server issued are accepted.
+async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> Deployment {
+    let source = MockServer::start().await;
+    let auth_key = generate_key(AUTH_KEY_ID);
+    let issuer = match external_issuer {
+        Some(origin) => origin.to_owned(),
+        None => {
+            // The issuer's key set and the fixed source share this origin. Under
+            // the local assurance profile the authentication issuer must be a
+            // canonical loopback HTTP origin, which is exactly what a wiremock
+            // server publishes.
+            Mock::given(method("GET"))
+                .and(path("/.well-known/jwks.json"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"keys": [auth_key.public()]})),
+                )
+                .mount(&source)
+                .await;
+            source.uri()
+        }
+    };
+
     // Matched on method and path only. The request the adapter builds is the
     // runtime's own contract, proven by the runtime's suite; re-pinning it here
     // would test the fixture rather than this client.
@@ -703,7 +907,7 @@ async fn start(source_answer: Value) -> Deployment {
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("the secret root is owner-only");
     copy_tree(&fixture_root(), &bundle_root);
-    rewrite_for_local_profile(&bundle_root, &issuer);
+    rewrite_for_local_profile(&bundle_root, &source.uri(), &issuer);
 
     write_secret(
         &secret_root,
@@ -753,27 +957,35 @@ async fn start(source_answer: Value) -> Deployment {
         server,
         _directory: directory,
     };
-    await_readiness(&deployment).await;
+    await_readiness(
+        "the deployment",
+        deployment
+            .base_url
+            .join("ready")
+            .expect("the readiness URL resolves"),
+        &deployment.server,
+    )
+    .await;
     deployment
 }
 
-/// Wait until the deployment reports itself ready, or fail with the reason it
-/// did not.
-async fn await_readiness(deployment: &Deployment) {
+/// Wait until the service reports itself ready, or fail with the reason it did
+/// not.
+async fn await_readiness(
+    label: &str,
+    ready: Url,
+    server: &tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let probe = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(1))
         .build()
         .expect("the readiness probe client builds");
-    let ready = deployment
-        .base_url
-        .join("ready")
-        .expect("the readiness URL resolves");
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             assert!(
-                !deployment.server.is_finished(),
-                "the deployment stopped before it reported readiness"
+                !server.is_finished(),
+                "{label} stopped before it reported readiness"
             );
             if probe
                 .get(ready.clone())
@@ -787,7 +999,207 @@ async fn await_readiness(deployment: &Deployment) {
         }
     })
     .await
-    .expect("the deployment reports readiness");
+    .unwrap_or_else(|_| panic!("{label} reports readiness"));
+}
+
+// ---------------------------------------------------------------------------
+// The token issuer harness
+// ---------------------------------------------------------------------------
+
+/// One real authorization server, issuing access tokens on loopback for the life
+/// of one test.
+///
+/// It is the reference issuer for this stack, driven here as an ordinary OAuth 2.0
+/// token endpoint: the provider under test carries nothing specific to it, and any
+/// server accepting the `client_credentials` grant with the `private_key_jwt`
+/// authentication method would serve.
+struct TokenIssuer {
+    origin: String,
+    token_endpoint: Url,
+    /// The key the registered client signs its assertions with.
+    client_key: PrivateJwk,
+    /// The issuer's own audit chain, which is where a released credential is
+    /// recorded and therefore how this suite counts what it issued.
+    audit_path: PathBuf,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    /// Held so the deployment on disk outlives the service that reads it.
+    _directory: tempfile::TempDir,
+}
+
+impl TokenIssuer {
+    /// A provider authenticating as the registered client with its own key.
+    fn provider(&self) -> Arc<dyn TokenProvider> {
+        self.build_provider(self.client_key.clone(), None)
+    }
+
+    /// The same provider, treating this much of a credential's life as spent.
+    fn provider_with_refresh_margin(&self, seconds: i64) -> Arc<PrivateKeyJwt> {
+        self.build_provider(self.client_key.clone(), Some(seconds))
+    }
+
+    /// The same provider, signing with the key given instead of the registered
+    /// one.
+    fn provider_signing_with(&self, client_key: PrivateJwk) -> Arc<dyn TokenProvider> {
+        self.build_provider(client_key, None)
+    }
+
+    fn build_provider(
+        &self,
+        client_key: PrivateJwk,
+        refresh_margin_seconds: Option<i64>,
+    ) -> Arc<PrivateKeyJwt> {
+        // The assertion audience is left to its default, which is the token
+        // endpoint URL. This server requires exactly that, so the default is what
+        // is under test.
+        let mut config =
+            PrivateKeyJwtConfig::new(self.token_endpoint.clone(), CLIENT_ID, client_key);
+        if let Some(seconds) = refresh_margin_seconds {
+            config = config.with_refresh_margin_seconds(seconds);
+        }
+        Arc::new(PrivateKeyJwt::new(config).expect("the provider configuration is usable"))
+    }
+
+    /// How many credentials this server has released.
+    ///
+    /// The audit chain is written before a credential leaves the endpoint, so a
+    /// count taken after an exchange has settled includes every release that
+    /// exchange caused.
+    fn issued_credential_count(&self) -> usize {
+        let chain =
+            fs::read_to_string(&self.audit_path).expect("the issuer audit chain is readable");
+        chain
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str::<Value>(line).expect("every audit line is one JSON envelope")
+            })
+            .filter(|envelope| envelope["record"]["decision"] == json!("issued"))
+            .count()
+    }
+}
+
+impl Drop for TokenIssuer {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        // A drop cannot await the graceful stop, so the task is abandoned rather
+        // than joined. The temporary deployment it reads is removed with this
+        // struct, and the process ends with the test binary.
+        self.server.abort();
+    }
+}
+
+/// Author, load, and serve one authorization server with a single registered
+/// client whose identity matches what the Evidence fixture entitles.
+async fn start_token_issuer() -> TokenIssuer {
+    // Hold the allocation while the matching deployment is authored, and release
+    // it only immediately before the service binds it. The issuer identity is
+    // part of that deployment, so the port has to be known first.
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve a loopback port");
+    let port = reservation
+        .local_addr()
+        .expect("read the reserved address")
+        .port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let token_endpoint = Url::parse(&format!("{origin}/token")).expect("the token endpoint parses");
+
+    let directory = tempfile::tempdir().expect("temporary issuer root");
+    let root = directory.path();
+    let secret_root = root.join("secrets");
+    fs::create_dir(&secret_root).expect("create the issuer secret root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("the issuer secret root is owner-only");
+    fs::create_dir(root.join("clients")).expect("create the client registry");
+    write_secret(&secret_root, "signing.jwk", &private_jwk(ISSUER_KEY_ID));
+    write_secret(
+        &secret_root,
+        "audit-hash-key",
+        "issuer-audit-secret-canary-32-bytes-minimum",
+    );
+
+    // The registered client carries the principal, the relying-party audience, and
+    // the requester tag. None of them is anything the client can ask for: the
+    // deployment reads them from the credential this server issues.
+    let client_key = generate_key(CLIENT_KEY_ID);
+    let public_key =
+        serde_json::to_string(&client_key.public()).expect("the public key serializes");
+    fs::write(
+        root.join(format!("clients/{CLIENT_ID}.yaml")),
+        format!(
+            "clientId: {CLIENT_ID}\nprincipal: {PRINCIPAL}\nevidenceAudience: {RELYING_AUDIENCE}\nrequesterTags: [{CONFIGURED_TAG}]\nkeys: [{public_key}]\n"
+        ),
+    )
+    .expect("write the client registration");
+
+    let config_path = root.join("mint.yaml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"version: 1
+validationMode: supervised-local-development
+issuer: {origin}
+listener: {{address: 127.0.0.1, port: {port}}}
+signing:
+  algorithm: EdDSA
+  activeKeyId: {ISSUER_KEY_ID}
+  activeKeyFile: secrets/signing.jwk
+audit:
+  path: audit/decisions.jsonl
+  hashKeyFile: secrets/audit-hash-key
+  hashKeyVersion: 1
+accessTokens:
+  audiences: [{TOKEN_AUDIENCE}]
+  lifetimeSeconds: {ISSUED_TOKEN_LIFETIME_SECONDS}
+  claims:
+    principal: sub
+    requesterTags: evidence_tags
+    evidenceAudience: evidence_audience
+    grantId: evidence_grant_id
+    grantAuthority: evidence_authority
+clientAssertion:
+  audience: {token_endpoint}
+  algorithms: [EdDSA]
+clients:
+  directory: clients
+"#
+        ),
+    )
+    .expect("write the issuer configuration");
+
+    let config = MintConfig::load(&config_path).expect("the staged issuer configuration is valid");
+    let audit_path = config.audit.path.clone();
+    let service = Arc::new(
+        MintService::load(config)
+            .await
+            .expect("the staged issuer loads"),
+    );
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    drop(reservation);
+    let server = tokio::spawn(async move {
+        mint_server::serve(service, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+
+    let issuer = TokenIssuer {
+        origin,
+        token_endpoint,
+        client_key,
+        audit_path,
+        shutdown: Some(shutdown_tx),
+        server,
+        _directory: directory,
+    };
+    await_readiness(
+        "the token issuer",
+        Url::parse(&format!("{}/ready", issuer.origin)).expect("the readiness URL parses"),
+        &issuer.server,
+    )
+    .await;
+    issuer
 }
 
 fn fixture_root() -> PathBuf {
@@ -795,13 +1207,13 @@ fn fixture_root() -> PathBuf {
         .join("../../products/evidence/fixtures/acceptance/adult-status")
 }
 
-/// Point the staged bundle at this test's issuer and source, and lower it to the
-/// local assurance profile.
+/// Point the staged bundle at this test's source and token issuer, and lower it
+/// to the local assurance profile.
 ///
 /// The local profile is what permits a loopback token issuer. Every other
 /// security decision in the bundle, including authentication, authorization,
 /// selector validation, subject binding, signing, and audit, is unchanged.
-fn rewrite_for_local_profile(bundle_root: &Path, origin: &str) {
+fn rewrite_for_local_profile(bundle_root: &Path, source_origin: &str, issuer_origin: &str) {
     let configuration_path = bundle_root.join("evidence.yaml");
     let mut document =
         fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
@@ -814,19 +1226,19 @@ fn rewrite_for_local_profile(bundle_root: &Path, origin: &str) {
     replace_exact(
         &mut document,
         "baseUrl: https://source.invalid",
-        &format!("baseUrl: {origin}"),
+        &format!("baseUrl: {source_origin}"),
         1,
     );
     replace_exact(
         &mut document,
         "issuer: https://identity.invalid",
-        &format!("issuer: {origin}"),
+        &format!("issuer: {issuer_origin}"),
         1,
     );
     replace_exact(
         &mut document,
         "jwksUri: https://identity.invalid/.well-known/jwks.json",
-        &format!("jwksUri: {origin}/.well-known/jwks.json"),
+        &format!("jwksUri: {issuer_origin}/.well-known/jwks.json"),
         1,
     );
     fs::write(&configuration_path, document).expect("the local configuration is written");
