@@ -134,8 +134,20 @@ sys.stdout.write(source[cursor:])
 PY
 done
 
+# The two bindings ship a non-Rust surface that the Rust sweep above cannot see.
+# Enumerate exactly those shipped files: a sweep of the binding crate directories
+# would also reach their tests, fixtures, and installed dependencies, where a
+# source-product name is allowed.
 if rg -n -i 'dhis2|opencrvs' \
   "$production_text" \
+  "$repository_root/crates/registry-evidence-client-node/client.js" \
+  "$repository_root/crates/registry-evidence-client-node/client.d.ts" \
+  "$repository_root/crates/registry-evidence-client-node/index.js" \
+  "$repository_root/crates/registry-evidence-client-node/index.d.ts" \
+  "$repository_root/crates/registry-evidence-client-node/package.json" \
+  "$repository_root/crates/registry-evidence-client-py/python/registry_evidence_client/__init__.py" \
+  "$repository_root/crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi" \
+  "$repository_root/crates/registry-evidence-client-py/pyproject.toml" \
   "$repository_root/crates/registry-evidence/Cargo.toml" \
   "$repository_root/crates/registry-evidence-client/Cargo.toml" \
   "$repository_root/crates/registry-evidence-client-node/Cargo.toml" \
@@ -143,13 +155,22 @@ if rg -n -i 'dhis2|opencrvs' \
   "$repository_root/crates/registry-evidence-verifier/Cargo.toml" \
   "$repository_root/crates/registry-evidencectl/Cargo.toml" \
   "$repository_root/Cargo.toml"; then
-  echo 'Evidence production code, adopter tooling, or Cargo metadata contains a prohibited source-product name.' >&2
+  echo 'Evidence production code, adopter tooling, the shipped binding surface, or Cargo metadata contains a prohibited source-product name.' >&2
   exit 1
 fi
 
+# The two package manifests stay out of this sweep: their SPDX license field
+# matches the licence pattern, and neither declares a caller-visible API surface
+# that could name an acceptance case.
 if rg -n -i 'adult|age[_ -]?at|residence|licen[cs]e|parentage|legal[_ -]?parent|given_name|family_name|birth_date|national[_ -]?identifier' \
-  "$production_text"; then
-  echo 'Evidence production Rust or adopter tooling contains acceptance-case or jurisdiction-specific vocabulary.' >&2
+  "$production_text" \
+  "$repository_root/crates/registry-evidence-client-node/client.js" \
+  "$repository_root/crates/registry-evidence-client-node/client.d.ts" \
+  "$repository_root/crates/registry-evidence-client-node/index.js" \
+  "$repository_root/crates/registry-evidence-client-node/index.d.ts" \
+  "$repository_root/crates/registry-evidence-client-py/python/registry_evidence_client/__init__.py" \
+  "$repository_root/crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi"; then
+  echo 'Evidence production Rust, adopter tooling, or the shipped binding surface contains acceptance-case or jurisdiction-specific vocabulary.' >&2
   exit 1
 fi
 

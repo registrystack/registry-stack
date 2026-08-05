@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Client tooling links the portable Evidence verifier to check a stored
-# response, on any platform and without the runtime. Keep its normal dependency
-# tree free of the async runtime, HTTP stack, script engine, command line
-# parser, and logging framework that the runtime carries.
+# Client tooling links the portable Evidence verifier to check a stored response
+# without the runtime. Portable means free of the service runtime, not target
+# independent. Keep its normal dependency tree free of the async runtime, HTTP
+# stack, script engine, command line parser, logging framework, and filesystem
+# and socket syscall layers that the runtime carries.
 
 CDPATH=''
 repository_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
