@@ -125,6 +125,28 @@ pub enum TokenError {
     Protocol { status: u16 },
 }
 
+impl TokenError {
+    /// A stable, machine-readable name for which kind of token failure this is.
+    ///
+    /// It exists for callers that have to branch or aggregate without matching
+    /// an enum this crate may extend: a metric label, a structured log field, or
+    /// a language binding that carries the discriminant across a boundary. The
+    /// rendered message is for people and may be reworded; these names are part
+    /// of the crate's contract and will not be renamed. A variant added later
+    /// brings a new name rather than reusing one of these.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Invalid { .. } => "invalid_credential",
+            Self::Configuration { .. } => "configuration",
+            Self::Transport { .. } => "transport",
+            Self::Refused { .. } => "refused",
+            Self::Protocol { .. } => "protocol",
+        }
+    }
+}
+
 /// The OAuth 2.0 error code an authorization server returned.
 ///
 /// This code is all a refused token request reports. The accompanying
@@ -262,6 +284,46 @@ mod tests {
             cases.len(),
             "two failures render the same text"
         );
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_token_failure_reports_its_own_stable_kind() {
+        let cases = [
+            (TokenError::Unavailable, "unavailable"),
+            (
+                TokenError::Invalid {
+                    reason: "a bearer credential must be non-empty and within the accepted length",
+                },
+                "invalid_credential",
+            ),
+            (
+                TokenError::Configuration {
+                    reason: "the client identifier must not be empty",
+                },
+                "configuration",
+            ),
+            (
+                TokenError::Transport {
+                    kind: TransportKind::Connect,
+                },
+                "transport",
+            ),
+            (
+                TokenError::Refused {
+                    code: OAuthErrorCode::InvalidClient,
+                },
+                "refused",
+            ),
+            (TokenError::Protocol { status: 500 }, "protocol"),
+        ];
+        for (error, kind) in &cases {
+            assert_eq!(error.kind(), *kind, "{error}");
+        }
+        let kinds: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 
     /// A server may spell a code however it likes. Only the registered set is
