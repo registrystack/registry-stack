@@ -70,8 +70,8 @@ load_spec() {
 			"background:3"
 			"wait-http:http://127.0.0.1:8000/openapi.json"
 			"run:4-5"
-			"save:Create the Evidence project|yaml|1|questions/adult-status.yaml"
-			"save:Create the Evidence project|rhai|1|derivations/adult-status.rhai"
+			"save:Create the Evidence Gateway project|yaml|1|questions/adult-status.yaml"
+			"save:Create the Evidence Gateway project|rhai|1|derivations/adult-status.rhai"
 			"run:6-13"
 		)
 		SPEC_LITERALS=(
@@ -131,8 +131,8 @@ load_spec() {
 			"background:2"
 			"wait-http:http://127.0.0.1:8002/openapi.json"
 			"run:3"
-			"save:Create the Evidence project|yaml|1|questions/parent-relationship.yaml"
-			"save:Create the Evidence project|rhai|1|derivations/parent-relationship.rhai"
+			"save:Create the Evidence Gateway project|yaml|1|questions/parent-relationship.yaml"
+			"save:Create the Evidence Gateway project|rhai|1|derivations/parent-relationship.rhai"
 			"run:4-9"
 		)
 		SPEC_LITERALS=(
