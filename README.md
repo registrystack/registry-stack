@@ -27,7 +27,6 @@ release manifests, and docs.
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Get a first minimum-disclosure assertion | [Evidence quickstart](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
 | Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |
-| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/dev/start/pre-1.0-cutover/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |

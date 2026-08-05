@@ -57,8 +57,8 @@ must carry only reviewed authored intent.
 
 - For an ordinary restart, verify the exact current package and follow its ordinary
   stop, `verify_state`, and start commands.
-- For pre-1.0 authored intent, create a separate 1.0 project and follow the
-  [pre-1.0 cutover guide](../../../start/pre-1.0-cutover/).
+- For pre-1.0 authored intent, create a separate 1.0 project and copy only reviewed
+  authored intent into it.
 - For a product, image, or signed-lane update, generate and verify a fresh candidate
   package. Do not edit the current Compose model in place.
 - For state recovery, restore one complete recovery consistency group at the same or
@@ -110,8 +110,7 @@ registryctl -C <candidate-directory> build
 ```
 
 Registry Stack 1.0 provides no automated pre-1.0 migration command or removed-command
-aliases. Follow the
-[pre-1.0 cutover guide](../../../start/pre-1.0-cutover/) for the full review boundary.
+aliases.
 
 ## Stage a restart or upgrade
 

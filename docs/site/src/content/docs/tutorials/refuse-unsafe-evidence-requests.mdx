@@ -16,16 +16,16 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-A useful evidence service must fail safely, not only succeed. Reuse the age-bracket project to
-observe two boundaries: Evidence denies a purpose the provider did not authorize, and the verifier
-rejects a response changed after signing.
+Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
+You will reuse that project to observe two boundaries: Evidence denies a purpose the provider did
+not authorize, and the verifier rejects a response changed after signing.
 
 <QuickstartMeta
   outcome="Two unsafe changes are refused without producing trusted evidence."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The adult-status project after completing the governed age-bracket tutorial',
+    'The adult-status project after completing the governed-value tutorial',
     'The registry.py source from the first Evidence tutorial',
     'Python 3 and curl',
   ]}

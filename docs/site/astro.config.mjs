@@ -284,23 +284,8 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
             { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
             { label: 'Evaluate Evidence', slug: 'start/evaluate-evidence' },
-            { label: 'Pre-1.0 cutover', slug: 'start/pre-1.0-cutover' },
-          ],
-        },
-        {
-          label: 'Connect an existing registry',
-          items: [
-            { label: 'Overview', slug: 'configure' },
-            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
-            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
-            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
-            { label: 'OpenCRVS Events API case study', slug: 'tutorials/verify-opencrvs-claims' },
-            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
-            { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
         },
         {
@@ -308,7 +293,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
-            { label: 'Return an age bracket', slug: 'tutorials/return-a-governed-value' },
+            { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
             { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
             { label: 'Bind a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
             { label: 'Issue parent evidence from OpenCRVS', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
@@ -329,6 +314,19 @@ export default defineConfig({
             { label: 'Rotate signing keys', slug: 'tutorials/move-evidence-to-production-signing' },
             { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
             { label: 'See it over a Relay API', slug: 'tutorials/first-run-with-solmara-lab' },
+          ],
+        },
+        {
+          label: 'Connect an existing registry',
+          items: [
+            { label: 'Overview', slug: 'configure' },
+            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
+            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
+            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
+            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+            { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
         },
         {

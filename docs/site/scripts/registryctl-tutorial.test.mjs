@@ -524,7 +524,6 @@ test('OAuth guidance distinguishes expiring and strict no-expiry profiles', () =
 
 test('OpenCRVS remains a synthetic case study, not a template or conformance claim', () => {
   const tutorial = read('src/content/docs/tutorials/verify-opencrvs-claims.mdx');
-  const cutover = read('src/content/docs/start/pre-1.0-cutover.mdx');
 
   assert.match(tutorial, /^status: current$/m);
   assert.match(tutorial, /does not ship an OpenCRVS template/);
@@ -537,7 +536,4 @@ test('OpenCRVS remains a synthetic case study, not a template or conformance cla
   assert.match(tutorial, /birth-event-verification/);
   assert.match(tutorial, /kind: consultation_api/);
   assert.doesNotMatch(tutorial, /--template opencrvs|init --from opencrvs/);
-  assert.match(cutover, /public 1\.0 starters are `http` and `spreadsheet`/);
-  assert.match(cutover, /OAuth-backed Rhai is an adaptation of an HTTP project/);
-  assert.match(cutover, /OpenCRVS material is a synthetic example.*not a template/);
 });

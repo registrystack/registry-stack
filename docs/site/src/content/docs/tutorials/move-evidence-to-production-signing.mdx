@@ -13,11 +13,12 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence signs with one active Ed25519 key. Rotation is a reviewed, startup-only configuration
-change. There is no hot-rotation endpoint or standby-key field.
-
-Coordinate with consumers before activation. Publishing a new public key makes it discoverable; it
-does not make independently operated consumers trust it.
+Use this procedure after [Build and deploy an Evidence project](../build-and-deploy-evidence-project/).
+Coordinate the rotation with consumers through
+[Manage Evidence verifier trust](../manage-evidence-verifier-trust/) before activation. Evidence
+signs with one active Ed25519 key. Rotation is a reviewed, startup-only configuration change. There
+is no hot-rotation endpoint or standby-key field. Publishing a new public key makes it discoverable;
+it does not make independently operated consumers trust it.
 
 ## Stage a new keypair
 

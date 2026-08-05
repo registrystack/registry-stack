@@ -43,10 +43,8 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
     true,
   );
   assert.equal(
-    readmeLines.has(
-      '| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/dev/start/pre-1.0-cutover/) |',
-    ),
-    true,
+    [...readmeLines].some((line) => line.includes('/start/pre-1.0-cutover/')),
+    false,
   );
   assert.equal(
     current.description,
