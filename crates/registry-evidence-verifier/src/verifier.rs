@@ -87,11 +87,22 @@ pub struct EvidenceVerificationPolicyDocument {
     pub clock_skew_seconds: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExpectedSubjectDocument {
     pub role: String,
     pub binding: String,
+}
+
+impl std::fmt::Debug for ExpectedSubjectDocument {
+    /// A binding is a pseudonymous per-subject identifier, so only the role is
+    /// rendered.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExpectedSubjectDocument")
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -276,10 +287,21 @@ fn expected_form_of(value: &crate::model::PublicValue) -> ExpectedValueForm {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ExpectedSubject {
     pub role: String,
     pub binding: String,
+}
+
+impl std::fmt::Debug for ExpectedSubject {
+    /// A binding is a pseudonymous per-subject identifier, so only the role is
+    /// rendered.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExpectedSubject")
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1480,6 +1502,57 @@ mod tests {
                 Err(VerificationError::Policy)
             );
         }
+    }
+
+    const DEBUG_BINDING_CANARY: &str = "verifier-debug-binding-canary-x7q";
+
+    #[test]
+    fn expected_subject_document_debug_never_carries_its_binding() {
+        let subject = ExpectedSubjectDocument {
+            role: "candidate-parent".to_string(),
+            binding: DEBUG_BINDING_CANARY.to_string(),
+        };
+        let rendered = format!("{subject:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+        assert!(rendered.contains("candidate-parent"), "{rendered}");
+    }
+
+    #[test]
+    fn expected_subject_debug_never_carries_its_binding() {
+        let subject = ExpectedSubject {
+            role: "candidate-parent".to_string(),
+            binding: DEBUG_BINDING_CANARY.to_string(),
+        };
+        let rendered = format!("{subject:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+        assert!(rendered.contains("candidate-parent"), "{rendered}");
+    }
+
+    /// The policy document derives its `Debug`, so this proves the derive
+    /// delegates to `ExpectedSubjectDocument`'s own redaction rather than
+    /// relying on a second hand-written impl here.
+    #[test]
+    fn policy_document_debug_never_carries_a_subject_binding_through_derive() {
+        let policy = EvidenceVerificationPolicyDocument {
+            expected_assurance_profile: AssuranceProfile::EvidenceGrade,
+            issued_by: "urn:example:issuer".to_string(),
+            provided_by: "urn:example:provider".to_string(),
+            requirement: "urn:example:requirement:v1".to_string(),
+            evidence_type: "urn:example:type:v1".to_string(),
+            purpose: "casework".to_string(),
+            audience: "urn:example:audience".to_string(),
+            configuration_revision: format!("sha256:{}", "0".repeat(64)),
+            request_nonce: FIXTURE_NONCE.to_string(),
+            expected_subjects: vec![ExpectedSubjectDocument {
+                role: "candidate-parent".to_string(),
+                binding: DEBUG_BINDING_CANARY.to_string(),
+            }],
+            expected_outputs: Vec::new(),
+            maximum_assertion_lifetime_seconds: 48 * 60 * 60,
+            clock_skew_seconds: 30,
+        };
+        let rendered = format!("{policy:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
     }
 
     #[tokio::test]
