@@ -991,7 +991,9 @@ impl AuthenticationConfig {
         validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
-        for claim in [
+        // Ordered principal first, because `sub` is legitimate for that claim
+        // alone and the shadowing check below reads the rest of the list.
+        let claims = [
             Some(&self.principal_claim),
             Some(&self.requester_tags_claim),
             Some(&self.evidence_audience_claim),
@@ -1001,8 +1003,30 @@ impl AuthenticationConfig {
         ]
         .into_iter()
         .flatten()
-        {
+        .collect::<Vec<_>>();
+        for claim in &claims {
             validate_claim_name(claim)?;
+        }
+        // Two claims naming one member means the same value is read as two
+        // different things: requester tags read as a principal, or a grant id
+        // read as the authority that granted it.
+        if claims.iter().collect::<BTreeSet<_>>().len() != claims.len() {
+            return invalid("authority claim names must be distinct");
+        }
+        // These are defined by the token itself, so reading authority out of one
+        // reads something the issuer wrote for another purpose. `aud` is the
+        // sharpest: Evidence validates it against its own configured audiences,
+        // so a grant authority read from `aud` is Evidence's own name.
+        //
+        // `sub` is the exception, and only for the principal. It carries the
+        // principal already, so naming it there reads the same value; naming it
+        // anywhere else reads the principal as something it is not.
+        if claims
+            .iter()
+            .any(|claim| REGISTERED_JWT_CLAIMS.contains(&claim.as_str()))
+            || claims.iter().skip(1).any(|claim| claim.as_str() == "sub")
+        {
+            return invalid("authority claim names must not shadow registered JWT claims");
         }
         Ok(())
     }
@@ -1013,6 +1037,13 @@ impl AuthenticationConfig {
             && self.jwks_uri == format!("{}{}", self.issuer, LOCAL_MINT_JWKS_PATH)
     }
 }
+
+/// Registered JWT claims no authority claim may be read from. `sub` is handled
+/// separately, because the principal claim may legitimately name it.
+///
+/// Mint refuses to write these when it mints. Evidence refuses to read them,
+/// which is the check that still applies when the issuer is not Mint.
+const REGISTERED_JWT_CLAIMS: [&str; 7] = ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"];
 
 const LOCAL_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 
@@ -3485,6 +3516,80 @@ mod tests {
                 "{profile:?} inherited the local HTTP exception"
             );
         }
+    }
+
+    /// Two authority claims naming one JWT member, or naming a member the token
+    /// already defines, is a configuration the verifier must refuse.
+    ///
+    /// Mint refuses the same shapes when it mints (`ClaimNames::validate`), but
+    /// Mint is one possible issuer. Evidence is documented against any OIDC
+    /// issuer, and no other issuer enforces Mint's rules, so the deployment with
+    /// no issuer-side check is exactly the one where this is the only check.
+    /// `grantAuthorityClaim: aud` would read Evidence's own audience as the
+    /// authority that granted the request.
+    #[test]
+    fn authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config
+            .validate()
+            .expect("the fixture claim names are sound");
+
+        let mut duplicate = config.clone();
+        duplicate
+            .authentication
+            .grant_id_claim
+            .clone_from(&config.authentication.grant_authority_claim);
+        assert_eq!(
+            duplicate.validate(),
+            invalid("authority claim names must be distinct"),
+            "one member read as both the grant id and the granting authority"
+        );
+
+        let mut duplicate_actor = config.clone();
+        duplicate_actor.authentication.actor_claim =
+            Some(config.authentication.requester_tags_claim.clone());
+        assert_eq!(
+            duplicate_actor.validate(),
+            invalid("authority claim names must be distinct"),
+            "one member read as both the actor and the requester tags"
+        );
+
+        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
+            let mut candidate = config.clone();
+            candidate.authentication.grant_authority_claim = reserved.to_owned();
+            assert_eq!(
+                candidate.validate(),
+                invalid("authority claim names must not shadow registered JWT claims"),
+                "grant authority read from the registered claim {reserved}"
+            );
+        }
+
+        // `sub` carries the principal, so the principal claim may name it and
+        // the fixture does. Any other claim naming it would read the principal.
+        let mut principal_is_subject = config.clone();
+        principal_is_subject.authentication.principal_claim = "sub".to_owned();
+        principal_is_subject
+            .validate()
+            .expect("the principal may be read from sub");
+        // Moved off `sub` first, so this proves the shadowing rule rather than
+        // colliding with the principal and tripping distinctness instead.
+        let mut authority_is_subject = config.clone();
+        authority_is_subject.authentication.principal_claim = "evidence_principal".to_owned();
+        authority_is_subject.authentication.grant_authority_claim = "sub".to_owned();
+        assert_eq!(
+            authority_is_subject.validate(),
+            invalid("authority claim names must not shadow registered JWT claims"),
+            "the granting authority read from the principal member"
+        );
+
+        let mut distinct = config.clone();
+        distinct.authentication.actor_claim = Some("evidence_actor".to_owned());
+        distinct
+            .validate()
+            .expect("distinct, unreserved claim names load");
     }
 
     #[test]
