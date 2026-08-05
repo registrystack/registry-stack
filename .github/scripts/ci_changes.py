@@ -34,6 +34,7 @@ SHARDS = {
     "evidence": (
         "registry-evidence",
         "registry-evidence-client",
+        "registry-evidence-client-node",
         "registry-evidence-verifier",
         "registry-evidencectl",
     ),
@@ -468,6 +469,9 @@ def classify(
         for path in paths
     )
     editors = complete or any(path.startswith("editors/") for path in paths)
+    client_bindings = complete or any(
+        path.startswith("crates/registry-evidence-client-node/") for path in paths
+    )
 
     tutorial_infrastructure = any(
         path
@@ -550,6 +554,7 @@ def classify(
         "docs": docs,
         "docs_archives": docs_archives,
         "editors": editors,
+        "client_bindings": client_bindings,
         "registryctl_tutorial": registryctl_tutorial,
         "evidence_tutorial": evidence_tutorial,
     }
