@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { EvidenceClient } = require('../index.js');
+const { EvidenceClient, EvidenceClientError } = require('..');
 const { startStubServer } = require('./helpers/stub-server');
 const { requestSpec } = require('./helpers/live-signing');
 
@@ -44,7 +44,8 @@ async function assertMappedFailure(stub, assertMapping) {
   try {
     const { client, prepared } = await clientAndPrepared(stub);
     await assert.rejects(client.send(prepared), (error) => {
-      assertMapping(JSON.parse(error.message));
+      assert.ok(error instanceof EvidenceClientError);
+      assertMapping(error);
       return true;
     });
   } finally {
@@ -174,9 +175,9 @@ test('a response over maxResponseBytes is refused as a transport failure, not a 
     });
     const prepared = client.prepare(requestSpec());
     await assert.rejects(client.send(prepared), (error) => {
-      const mapped = JSON.parse(error.message);
-      assert.equal(mapped.kind, 'transport');
-      assert.equal(mapped.transportKind, 'response_too_large');
+      assert.ok(error instanceof EvidenceClientError);
+      assert.equal(error.kind, 'transport');
+      assert.equal(error.transportKind, 'response_too_large');
       return true;
     });
   } finally {
