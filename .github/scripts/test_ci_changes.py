@@ -221,6 +221,22 @@ class CiChangesTest(unittest.TestCase):
                     {"evidence", "mint"},
                 )
 
+    def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
+        # A Node-binding-only change has no bearing on any tutorial's shell
+        # commands or fixtures, so it must not replay them; but the binding's
+        # own source neutrality still needs the contracts gate to run.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client-node/src/lib.rs",),
+        )
+        self.assertFalse(outputs["evidence_tutorial"])
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["client_bindings"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"evidence"},
+        )
+
     def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("\n  evidence-contracts:\n", workflow)
