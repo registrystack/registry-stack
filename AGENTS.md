@@ -19,8 +19,10 @@ adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
 Registry Mint is a supporting service, not a third pattern: it issues the
 access tokens a resource server such as Evidence verifies, for deployments with
-no identity provider. The dependency runs one way only. Mint's tests drive
-Evidence's authenticator; Evidence does not depend on Mint.
+no identity provider. The dependency runs one way only in production: no
+Evidence crate depends on Mint at runtime. Mint's tests drive Evidence's
+authenticator, and Evidence test code may drive a real Mint instance to prove a
+client against a real authorization server.
 
 ## Repository map
 
