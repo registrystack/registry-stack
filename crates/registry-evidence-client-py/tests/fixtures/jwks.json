@@ -1,0 +1,11 @@
+{
+  "keys": [
+    {
+      "alg": "EdDSA",
+      "crv": "Ed25519",
+      "kid": "evidence-python-fixture-key-1",
+      "kty": "OKP",
+      "x": "TNEiCl1Dmh2rsbO3-TDo_dTjwID04eQq079z-tEPEHM"
+    }
+  ]
+}

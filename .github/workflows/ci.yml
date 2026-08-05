@@ -1187,6 +1187,13 @@ jobs:
           npm run check:types
           cmp ../../LICENSE LICENSE
 
+      - name: Build and test the Python binding
+        working-directory: crates/registry-evidence-client-py
+        run: |
+          cargo build --locked -p registry-evidence-client-py --lib --features registry-evidence-client-py/extension-module
+          python3 -m unittest discover -s tests/python -v
+          cmp ../../LICENSE LICENSE
+
   ci-result:
     name: CI result
     if: always()
