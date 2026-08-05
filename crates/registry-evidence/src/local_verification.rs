@@ -192,6 +192,7 @@ pub async fn prepare_local_verification_context_for_format(
 fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> {
     match form {
         ConceptForm::Boolean => Some(ExpectedScalarFormDocument::Boolean),
+        ConceptForm::BoundedInteger => Some(ExpectedScalarFormDocument::Integer),
         ConceptForm::ControlledCategory => Some(ExpectedScalarFormDocument::String),
         ConceptForm::ReviewedStructuredValue => Some(ExpectedScalarFormDocument::Structured),
         _ => None,
@@ -227,4 +228,17 @@ pub(crate) fn verify_local_response_at(
         }
     }
     .map_err(|_| LocalVerificationError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_integer_has_an_exact_local_verification_form() {
+        assert!(matches!(
+            local_expected_form(ConceptForm::BoundedInteger),
+            Some(ExpectedScalarFormDocument::Integer)
+        ));
+    }
 }
