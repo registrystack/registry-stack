@@ -9,6 +9,7 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
+use chrono::{DateTime, Utc};
 use registry_evidence_client::{
     AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError, EvidenceRequestSpec,
     ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument, PrivateKeyJwt,
@@ -117,6 +118,19 @@ fn optional_i64(object: &Map<String, Value>, field: &str) -> Result<Option<i64>,
 
 fn parse_url(value: &str, what: &str) -> Result<Url, ConversionError> {
     Url::parse(value).map_err(|_| ConversionError::new(format!("{what} must be a valid URL")))
+}
+
+/// Turn `verify_as_of`'s caller-supplied UNIX timestamp (milliseconds, as
+/// `asOfMillis`) into the instant
+/// [`registry_evidence_client::EvidenceClient::verify_as_of`] takes.
+pub fn datetime_from_unix_millis(millis: f64) -> Result<DateTime<Utc>, ConversionError> {
+    if !millis.is_finite() {
+        return Err(ConversionError::new(
+            "`asOfMillis` must be a finite number of milliseconds since the UNIX epoch",
+        ));
+    }
+    DateTime::from_timestamp_millis(millis as i64)
+        .ok_or_else(|| ConversionError::new("`asOfMillis` is not a representable instant"))
 }
 
 /// The three scalar shapes a selector value may take on the wire, read off a
@@ -470,6 +484,10 @@ pub fn map_client_error(error: &EvidenceClientError) -> Value {
     fields.insert("message".to_owned(), Value::String(error.to_string()));
 
     match error {
+        // Deliberately no `nonceKind` field: `NonceError::NotCanonical` is
+        // constructed only inside `RequestNonce::parse`'s own unit tests, so
+        // this crate's production path can only ever fail here with
+        // `NonceError::Entropy`, which carries nothing further to report.
         EvidenceClientError::Configuration { .. } | EvidenceClientError::Nonce(_) => {}
         EvidenceClientError::Token(token_error) => insert_token_fields(&mut fields, token_error),
         EvidenceClientError::Transport { kind } => {
@@ -566,6 +584,29 @@ mod tests {
     };
 
     use super::*;
+
+    // --- datetime_from_unix_millis ---
+
+    #[test]
+    fn a_non_finite_millis_value_is_refused() {
+        for millis in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                datetime_from_unix_millis(millis).is_err(),
+                "{millis} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_millis_value_outside_the_representable_range_is_refused() {
+        assert!(datetime_from_unix_millis(f64::MAX).is_err());
+    }
+
+    #[test]
+    fn a_millis_value_converts_to_the_expected_instant() {
+        let parsed = datetime_from_unix_millis(1_000.0).expect("the value converts");
+        assert_eq!(parsed.timestamp(), 1);
+    }
 
     // --- selector_value_from_json ---
 
