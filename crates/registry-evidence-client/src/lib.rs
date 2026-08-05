@@ -68,12 +68,14 @@
 //!
 //! # What the async surface requires
 //!
-//! Nothing in this crate names a runtime, and preparing and verifying are
-//! synchronous. The HTTP methods, however, are `reqwest` calls, and `reqwest`
-//! needs a tokio-compatible reactor to drive them, so an application that awaits
-//! [`EvidenceClient::send`], [`EvidenceClient::request_and_verify`],
-//! [`EvidenceClient::discover`], or [`EvidenceClient::fetch_jwks`] has to do so
-//! on one.
+//! Preparing and verifying are synchronous. The HTTP methods, however, are
+//! `reqwest` calls, and `reqwest` needs a tokio-compatible reactor to drive them,
+//! so an application that awaits [`EvidenceClient::send`],
+//! [`EvidenceClient::request_and_verify`], [`EvidenceClient::discover`], or
+//! [`EvidenceClient::fetch_jwks`] has to do so on one. [`PrivateKeyJwt`] runs
+//! there too: it awaits a token endpoint, and it guards its cached credential
+//! with tokio's asynchronous lock so a caller waiting for a token in flight does
+//! not block the reactor thread.
 
 pub mod client;
 pub mod config;
@@ -81,8 +83,14 @@ pub mod definitions;
 pub mod error;
 pub mod nonce;
 pub mod prepare;
+pub mod private_key_jwt;
 pub mod request;
 pub mod token;
+
+/// One rule set for every outbound exchange. Which rules apply to a credential
+/// leaving the process is not a caller's choice, so the options and the client
+/// construction stay internal.
+mod outbound;
 
 /// The closed problem contract is an internal parsing detail. What a caller acts
 /// on is the mapped failure in [`error`], never a problem body.
@@ -109,8 +117,12 @@ pub use prepare::{
     MAXIMUM_SELECTOR_STRING_BYTES, MAXIMUM_SELECTOR_VALUES, MAXIMUM_SUBJECTS,
     MINIMUM_SELECTOR_INTEGER,
 };
+pub use private_key_jwt::{
+    PrivateKeyJwt, PrivateKeyJwtConfig, DEFAULT_ASSERTION_LIFETIME_SECONDS,
+    DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+};
 pub use request::SelectorValue;
-pub use token::{BearerToken, StaticToken, TokenError, TokenProvider};
+pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
 
 // The verification seam, re-exported so a relying party does not have to depend
 // on the verifier crate directly to name the types this API returns and accepts.

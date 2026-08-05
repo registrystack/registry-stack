@@ -11,7 +11,9 @@ use registry_platform_httputil::DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{error::EvidenceClientError, token::TokenProvider};
+use crate::{
+    error::EvidenceClientError, outbound::transport_protects_the_credential, token::TokenProvider,
+};
 
 /// Longest response body the client will read.
 ///
@@ -25,10 +27,6 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Time allowed for connection setup, including TLS negotiation.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
-
-/// The one host name a cleartext base URL may carry. It is reserved for the
-/// loopback interface, so a credential sent to it cannot leave the host.
-const LOOPBACK_NAME: &str = "localhost";
 
 /// Everything the client needs, decided before the first request.
 pub struct EvidenceClientConfig {
@@ -127,27 +125,11 @@ impl EvidenceClientConfig {
                 "the base URL must carry no credentials, query, or fragment",
             ));
         }
-        // A bearer credential in cleartext is only acceptable when it cannot
-        // leave the host, which is the local development and tutorial case. The
-        // accepted forms are the ones an adopter types: either loopback numeric
-        // family, or the reserved name `localhost`. Any other name is refused,
-        // because a name that happens to resolve to a loopback address is still
-        // resolved off-host, and the answer can change.
-        //
-        // This is checked before the path, so a base URL that is wrong in both
-        // ways is reported for the transport it cannot protect the credential
-        // over rather than for a path detail the adopter would fix first and
-        // learn nothing from.
-        let transport_protects_the_credential = match self.base_url.scheme() {
-            "https" => true,
-            "http" => self.base_url.host().is_some_and(|host| match host {
-                url::Host::Ipv4(ip) => ip.is_loopback(),
-                url::Host::Ipv6(ip) => ip.is_loopback(),
-                url::Host::Domain(name) => name == LOOPBACK_NAME,
-            }),
-            _ => false,
-        };
-        if !transport_protects_the_credential {
+        // The transport is checked before the path, so a base URL that is wrong
+        // in both ways is reported for the transport it cannot protect the
+        // credential over rather than for a path detail the adopter would fix
+        // first and learn nothing from.
+        if !transport_protects_the_credential(&self.base_url) {
             return Err(EvidenceClientError::configuration(
                 "the base URL must use HTTPS, or HTTP with a loopback host",
             ));

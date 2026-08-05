@@ -11,7 +11,7 @@ use registry_evidence_verifier::{
     verifier::{verify_flattened_jws, ExpectedSubjectDocument},
     EVIDENCE_JWS_MEDIA_TYPE,
 };
-use registry_platform_httputil::{read_bounded, BoundedReadError};
+use registry_platform_httputil::read_bounded;
 use reqwest::{
     header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
     Method, StatusCode,
@@ -22,7 +22,8 @@ use zeroize::Zeroizing;
 use crate::{
     config::EvidenceClientConfig,
     definitions::EvidenceDefinitionsDocument,
-    error::{EvidenceClientError, TransportKind},
+    error::EvidenceClientError,
+    outbound::{self, OutboundOptions},
     prepare::{EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations},
     problem::{essence, map_problem, sanitized_operation},
     request::EvidenceRequestBody,
@@ -371,19 +372,10 @@ impl EvidenceClient {
             }
             Credential::None => request,
         };
-        request.send().await.map_err(|error| {
-            let kind = if error.is_timeout() {
-                TransportKind::Timeout
-            } else if error.is_connect() {
-                // TLS negotiation failures arrive here too. Separating them
-                // would mean reading a transport error chain whose text this
-                // crate must not copy into a diagnostic.
-                TransportKind::Connect
-            } else {
-                TransportKind::Exchange
-            };
-            EvidenceClientError::transport(kind)
-        })
+        request
+            .send()
+            .await
+            .map_err(|error| EvidenceClientError::transport(outbound::send_failure_kind(&error)))
     }
 
     /// Read a successful response of exactly one media type, or map the
@@ -426,7 +418,11 @@ impl EvidenceClient {
             }
             // An answer meant as a success has no status or code worth
             // reporting, only the reason its bytes never arrived.
-            Err(error) => return Err(EvidenceClientError::transport(read_failure_kind(&error))),
+            Err(error) => {
+                return Err(EvidenceClientError::transport(outbound::read_failure_kind(
+                    &error,
+                )))
+            }
         };
 
         if !(200..300).contains(&status) {
@@ -454,79 +450,23 @@ impl EvidenceClient {
     }
 }
 
-/// Build the outbound client.
+/// Build the outbound client from the pinned deployment options.
 fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, EvidenceClientError> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(config.request_timeout)
-        .connect_timeout(config.connect_timeout)
-        // A redirect is not part of the response contract, and following one
-        // would present the relying party's credential to a host the integrator
-        // never configured, on the say-so of a response header. The answer is
-        // reported as it stands instead.
-        .redirect(reqwest::redirect::Policy::none())
-        // The proxy environment variables are ignored deliberately. An ambient
-        // variable would otherwise route a credential through an intermediary the
-        // integrator did not choose, and terminate the TLS session the pinned
-        // certificate authorities were meant to authenticate.
-        .no_proxy()
-        // Select rustls explicitly. Cargo unifies reqwest's feature set across
-        // a whole build, so another crate enabling reqwest's native-tls feature
-        // must not silently change which TLS backend this client uses.
-        .use_rustls_tls()
-        // One prepared request is one exchange. A transport-level retry would
-        // resend a nonce the relying party's policy has already committed to
-        // and would duplicate an outbound call the caller did not ask for.
-        .retry(reqwest::retry::never());
-    if let Some(user_agent) = &config.user_agent {
-        builder = builder.user_agent(user_agent.clone());
-    }
-    if let Some(pem) = &config.trusted_root_certificates {
-        let certificates = reqwest::Certificate::from_pem_bundle(pem).map_err(|_| {
-            EvidenceClientError::configuration(
-                "the pinned certificate authority bundle is not readable PEM",
-            )
-        })?;
-        if certificates.is_empty() {
-            return Err(EvidenceClientError::configuration(
-                "the pinned certificate authority bundle carries no certificate",
-            ));
-        }
-        for certificate in certificates {
-            builder = builder.add_root_certificate(certificate);
-        }
-        // Trust exactly what the integrator pinned. Leaving the platform store
-        // enabled would mean any of its authorities could also vouch for the
-        // deployment, which is the opposite of pinning.
-        builder = builder.tls_built_in_root_certs(false);
-    }
-    builder.build().map_err(|_| {
-        EvidenceClientError::configuration("the outbound client options are not usable")
+    outbound::build_client(OutboundOptions {
+        request_timeout: config.request_timeout,
+        connect_timeout: config.connect_timeout,
+        user_agent: config.user_agent.as_deref(),
+        trusted_root_certificates: config
+            .trusted_root_certificates
+            .as_ref()
+            .map(|pem| pem.as_slice()),
     })
+    .map_err(EvidenceClientError::configuration)
 }
 
 fn serialize_request(body: &EvidenceRequestBody) -> Result<Vec<u8>, EvidenceClientError> {
     serde_json::to_vec(body)
         .map_err(|_| EvidenceClientError::configuration("the request body cannot be serialized"))
-}
-
-/// Why a bounded read failed, in the terms the caller can act on.
-///
-/// The distinction matters most for a timeout, which is the likely failure: the
-/// configured total timeout runs until the body finishes, so an answer that
-/// starts and stalls elapses here rather than at connection setup. No part of the
-/// underlying error text is copied into the reported failure.
-fn read_failure_kind(error: &BoundedReadError) -> TransportKind {
-    match error {
-        BoundedReadError::ContentLengthExceeded { .. }
-        | BoundedReadError::BodyTooLarge { .. }
-        | BoundedReadError::LengthOverflow => TransportKind::ResponseTooLarge,
-        BoundedReadError::Transport(error) if error.is_timeout() => TransportKind::Timeout,
-        // The reader's error type is open, so a variant this crate does not know
-        // yet becomes the coarse exchange failure. It must never become a claim
-        // about the response size, which is the one thing an adopter would act on
-        // by raising their own bound.
-        _ => TransportKind::Exchange,
-    }
 }
 
 /// Read the role-bound subject bindings out of a response that has not been
@@ -561,10 +501,12 @@ fn untrusted_subject_bindings(body: &[u8]) -> Vec<ExpectedSubjectDocument> {
 mod tests {
     use super::*;
     use crate::{
+        error::TransportKind,
         fixtures::{
             signed_evidence, SignedEvidenceFixture, AUDIENCE, CONCEPT, CONFIGURATION_REVISION,
             EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS, PROVIDED_BY, PURPOSE, REQUIREMENT,
         },
+        outbound::read_failure_kind,
         prepare::{EvidenceRequestSpec, SubjectRequest},
         request::SelectorValue,
         token::StaticToken,
@@ -1219,41 +1161,49 @@ mod tests {
     #[tokio::test]
     async fn unusable_pinned_certificate_material_is_refused_at_construction() {
         let fixture = signed_evidence();
-        for (bundle, reason) in [
+        for (bundle, reasons) in [
             (
                 b"".to_vec(),
-                "the pinned certificate authority bundle carries no certificate",
+                &["the pinned certificate authority bundle carries no certificate"][..],
             ),
             (
                 b"not a certificate".to_vec(),
-                "the pinned certificate authority bundle carries no certificate",
+                &["the pinned certificate authority bundle carries no certificate"][..],
             ),
-            // The PEM framing is accepted and the content is rejected later, when
-            // the outbound client is built, so this one surfaces as the coarse
-            // options failure. It is still refused at construction, which is what
-            // keeps the platform store from quietly taking over.
+            // PEM framing over base64 that decodes to nothing a certificate parser
+            // accepts. Which layer refuses it depends on the TLS backend the
+            // build's feature resolution left enabled: one rejects the content
+            // while the bundle is read, another while the outbound client is
+            // built. Either way it is refused at construction, which is the
+            // property that keeps the platform store from quietly taking over.
             (
                 b"-----BEGIN CERTIFICATE-----\nnot base64 at all\n-----END CERTIFICATE-----\n"
                     .to_vec(),
-                "the outbound client options are not usable",
+                &[
+                    "the pinned certificate authority bundle is not readable PEM",
+                    "the outbound client options are not usable",
+                ][..],
             ),
             // A framed block whose body is outside the base64 alphabet fails
             // while the bundle is being read, which is the one refusal that
             // names the PEM itself.
             (
                 b"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n".to_vec(),
-                "the pinned certificate authority bundle is not readable PEM",
+                &["the pinned certificate authority bundle is not readable PEM"][..],
             ),
         ] {
-            assert_eq!(
-                EvidenceClient::new(
-                    config_for("https://evidence.example.org", &fixture)
-                        .with_trusted_root_certificates(bundle.clone())
-                )
-                .map(|_| ())
-                .expect_err("unusable trust material is refused"),
-                EvidenceClientError::configuration(reason),
-                "{:?}",
+            let error = EvidenceClient::new(
+                config_for("https://evidence.example.org", &fixture)
+                    .with_trusted_root_certificates(bundle.clone()),
+            )
+            .map(|_| ())
+            .expect_err("unusable trust material is refused");
+            let EvidenceClientError::Configuration { reason } = error else {
+                panic!("unusable trust material is a configuration failure: {error}");
+            };
+            assert!(
+                reasons.contains(&reason),
+                "{:?} was refused as {reason}",
                 String::from_utf8_lossy(&bundle)
             );
         }
