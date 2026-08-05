@@ -1234,6 +1234,16 @@ mod tests {
     /// `RawEvidenceResponse`), so it has no case here; the wrapped crate's own
     /// test already covers it.
     ///
+    /// Six arrangements. In four of them, the canary is the very value the
+    /// refusing code is judging when it refuses: a bearer credential, a
+    /// signing key's `d` member, an array selector value, and a bare
+    /// `subject_expectations` string that is not `"accept_first_use"`. In the
+    /// remaining two, the canary instead sits in a well-typed selector value
+    /// or pinned subject binding while an unrelated missing-`purpose`
+    /// refusal fires; those two prove only that an unrelated error does not
+    /// sweep up a value merely sitting in memory, a narrower property than
+    /// the first four but still worth keeping.
+    ///
     /// Each arrangement first asserts on the specific error it produces, not
     /// only on the canary's absence: if a step refused for an unrelated
     /// reason instead of carrying the canary to the intended place, that
@@ -1336,6 +1346,38 @@ mod tests {
         spec.as_object_mut().unwrap().remove("purpose");
         let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
         assert_eq!(error, ConversionError::new("`purpose` must be a string"));
+        assert_canary_absent(&map_conversion_error(&error));
+
+        // A selector value whose offending input is the canary: an array is
+        // not one of the permitted selector value shapes, so
+        // `selector_value_from_json` refuses it with its own fixed message.
+        // `purpose` is left in place, so this refusal, unlike the two above,
+        // is caused by the canary itself rather than merely coinciding with
+        // one raised for an unrelated reason.
+        let mut spec = valid_spec_json();
+        spec["subjects"][0]["selector_values"] =
+            serde_json::json!({ "record_reference": [CANARY] });
+        let error = spec_from_json(&spec).expect_err("an array selector value is refused");
+        assert_eq!(
+            error,
+            ConversionError::new("a selector value must be a string, an integer, or a boolean")
+        );
+        assert_canary_absent(&map_conversion_error(&error));
+
+        // A `subject_expectations` value whose offending input is the
+        // canary: a bare string that is not `"accept_first_use"` is refused
+        // by `subject_expectations_from_json`'s own fixed message. `purpose`
+        // is again left in place, so the canary itself causes this refusal.
+        let mut spec = valid_spec_json();
+        spec["subject_expectations"] = Value::String(CANARY.to_owned());
+        let error =
+            spec_from_json(&spec).expect_err("a bare non-accept_first_use string is refused");
+        assert_eq!(
+            error,
+            ConversionError::new(
+                "`subject_expectations` must be \"accept_first_use\" or a sequence of {\"role\", \"binding\"} mappings"
+            )
+        );
         assert_canary_absent(&map_conversion_error(&error));
     }
 

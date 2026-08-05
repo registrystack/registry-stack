@@ -57,17 +57,24 @@ class ConcurrencyTest(unittest.TestCase):
         barrier = threading.Barrier(2)
         errors: list[BaseException] = []
 
-        def call_discover() -> None:
+        # Built on the main thread, before the timed region below, so the
+        # elapsed time it measures is the two `discover()` calls themselves,
+        # not construction plus those calls.
+        clients = [
+            revc.EvidenceClient(server.base_url, fixtures.VALID_JWKS, "test-token")
+            for _ in range(2)
+        ]
+
+        def call_discover(client: revc.EvidenceClient) -> None:
             try:
-                client = revc.EvidenceClient(
-                    server.base_url, fixtures.VALID_JWKS, "test-token"
-                )
                 barrier.wait(timeout=JOIN_TIMEOUT_SECONDS)
                 client.discover()
             except BaseException as error:  # noqa: BLE001 - captured, not swallowed
                 errors.append(error)
 
-        threads = [threading.Thread(target=call_discover) for _ in range(2)]
+        threads = [
+            threading.Thread(target=call_discover, args=(client,)) for client in clients
+        ]
         started_at = time.monotonic()
         for thread in threads:
             thread.start()
@@ -90,30 +97,31 @@ class ConcurrencyTest(unittest.TestCase):
 
 
 class ConstructionGilReleaseTest(unittest.TestCase):
-    """`EvidenceClient.__new__` also releases the GIL, for the same reason.
+    """`EvidenceClient.__new__` releases the GIL around its Rust-side work.
 
     Construction does no I/O (there is no server to race here at all: the
     base URL below is never contacted), but it does real work in Rust before
     returning: validating the configuration and building the TLS-capable HTTP
-    client, which loads the platform's native trust store. That work is
-    measurably slow enough, and this proves it overlaps across threads
-    instead of serializing while the GIL is released for it.
+    client, which loads the platform's native trust store. This proves the
+    GIL is available to other Python threads for the duration of that work,
+    with a daemon thread that spins incrementing a counter in a plain Python
+    loop until told to stop. Each loop iteration can only execute while the
+    spinning thread holds the GIL, so the final count is a direct measure of
+    how much GIL time that thread was given, not of CPU parallelism: unlike
+    timing two overlapping constructions against each other, it cannot be
+    confounded by both constructions instead serializing on a single CPU
+    core.
 
-    Unlike the async methods above, overlapping construction does not land
-    close to the single-call cost: loading the native trust store twice at
-    once still costs more than doing it once, so two overlapping
-    constructions measure at roughly 1.5x the single-call cost on the
-    machines this was calibrated against, not roughly 1x. The threshold
-    below is set from that measured behavior, not copied from the roughly-1x
-    async case.
-
-    The budget is calibrated against this machine's own speed rather than a
-    hard-coded duration, measured once at the start of this test run: a
-    fixed millisecond budget would either be flaky on a slow machine or too
-    loose on a fast one.
+    A control window, the observer running while the main thread sleeps
+    (which releases the GIL), calibrates this machine's tick rate with
+    nothing competing. The same observer, fresh, then runs across one
+    construction on the main thread. The construction window's count is
+    compared against the control count as a fraction, not against an
+    absolute number, so the assertion holds regardless of how fast any given
+    machine ticks.
     """
 
-    def test_two_concurrent_constructions_overlap_instead_of_serializing(self):
+    def test_construction_releases_the_gil(self):
         # Construction only validates and builds a client; it never connects,
         # so this address does not need to be reachable.
         base_url = "http://127.0.0.1:1"
@@ -121,48 +129,73 @@ class ConstructionGilReleaseTest(unittest.TestCase):
         def build_client() -> None:
             revc.EvidenceClient(base_url, fixtures.VALID_JWKS, "test-token")
 
-        started_at = time.monotonic()
-        build_client()
-        baseline_elapsed = time.monotonic() - started_at
-
-        barrier = threading.Barrier(2)
-        errors: list[BaseException] = []
-
-        def build_at_barrier() -> None:
+        def spin_observer(
+            counter: list[int],
+            stop_event: threading.Event,
+            errors: list[BaseException],
+        ) -> None:
             try:
-                barrier.wait(timeout=JOIN_TIMEOUT_SECONDS)
-                build_client()
+                while not stop_event.is_set():
+                    counter[0] += 1
             except BaseException as error:  # noqa: BLE001 - captured, not swallowed
                 errors.append(error)
 
-        threads = [threading.Thread(target=build_at_barrier) for _ in range(2)]
-        started_at = time.monotonic()
-        for thread in threads:
+        def start_observer():
+            counter = [0]
+            stop_event = threading.Event()
+            errors: list[BaseException] = []
+            thread = threading.Thread(
+                target=spin_observer, args=(counter, stop_event, errors), daemon=True
+            )
             thread.start()
-        for thread in threads:
-            thread.join(timeout=JOIN_TIMEOUT_SECONDS)
-        concurrent_elapsed = time.monotonic() - started_at
+            return thread, counter, stop_event, errors
 
-        for thread in threads:
+        def stop_observer(thread, stop_event, errors) -> None:
+            stop_event.set()
+            thread.join(timeout=JOIN_TIMEOUT_SECONDS)
             self.assertFalse(
                 thread.is_alive(),
-                "a construction thread did not finish within the bounded timeout",
+                "the GIL observer thread did not stop within the bounded timeout",
             )
-        self.assertEqual(errors, [])
+            self.assertEqual(errors, [])
 
-        # Serialized (GIL held for the whole constructor), the pair costs
-        # roughly 2x the baseline. Overlapping (GIL released around the
-        # trust-store load), it still costs more than 1x, since loading that
-        # store twice at once genuinely costs more than doing it once, but
-        # measurement across repeated runs put it consistently around 1.5x,
-        # well clear of the roughly-2x serialized cost. 1.8x sits between the
-        # two with headroom on both sides: comfortably above ordinary
-        # overlapping jitter, and comfortably below what a regression to full
-        # serialization would measure.
-        self.assertLess(
-            concurrent_elapsed,
-            baseline_elapsed * 1.8,
-            f"baseline={baseline_elapsed:.4f}s concurrent={concurrent_elapsed:.4f}s",
+        # A throwaway construction times roughly how long the real
+        # measurement below will take, so the control window spins the
+        # observer for a comparable duration.
+        started_at = time.monotonic()
+        build_client()
+        approximate_construction_seconds = time.monotonic() - started_at
+
+        control_thread, control_counter, control_stop, control_errors = start_observer()
+        try:
+            time.sleep(approximate_construction_seconds)
+        finally:
+            stop_observer(control_thread, control_stop, control_errors)
+        control_ticks = control_counter[0]
+
+        (
+            construction_thread,
+            construction_counter,
+            construction_stop,
+            construction_errors,
+        ) = start_observer()
+        try:
+            build_client()
+        finally:
+            stop_observer(construction_thread, construction_stop, construction_errors)
+        construction_ticks = construction_counter[0]
+
+        # A released GIL lets the observer tick at close to the control
+        # rate. A held GIL still lets some ticks through even for a call
+        # that never touches the interpreter, but nowhere near half of the
+        # control rate on this platform. A floor of half the control count
+        # sits with clear room on both sides of that gap, so the assertion
+        # discriminates a released GIL from a held one without depending on
+        # an exact percentage.
+        self.assertGreaterEqual(
+            construction_ticks,
+            control_ticks * 0.5,
+            f"control_ticks={control_ticks} construction_ticks={construction_ticks}",
         )
 
 
