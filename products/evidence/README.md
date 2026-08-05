@@ -162,6 +162,26 @@ storage, and keeps Evidence private behind operator TLS. Container, Helm,
 Kubernetes, Terraform, cloud packaging, approval, promotion, and deployment
 commands remain outside this build command.
 
+### Relying-party client library
+
+`registry-evidence-client` is the Rust SDK for the application side of the
+contract. It generates the request nonce and closes the verification policy
+before any byte leaves the process, sends the request over the public HTTP
+contract, and hands every judgement about the response to
+`registry-evidence-verifier`, so it adds no Evidence semantics of its own.
+`registry-evidence-client-node` binds that crate for Node.js callers through
+napi-rs and `registry-evidence-client-py` binds it for Python callers through
+PyO3; each is a thin surface plus a JSON conversion layer over the same Rust
+decisions. Neither binding is published: the npm package is private and PyPI
+publishing is out of scope for the crate, so both are built and tested from
+source here.
+
+Each crate documents its own surface and test commands:
+[`registry-evidence-client`](../../crates/registry-evidence-client/README.md),
+[`registry-evidence-client-node`](../../crates/registry-evidence-client-node/README.md),
+and
+[`registry-evidence-client-py`](../../crates/registry-evidence-client-py/README.md).
+
 ## Installing the toolset
 
 Releases that include the Evidence toolset publish reproducible bare binaries
@@ -301,12 +321,32 @@ From the monorepo root, the Evidence-specific reproducible gate is:
 
 ```sh
 cargo fmt --check
-cargo check --locked -p registry-evidence -p registry-evidencectl --all-targets
-cargo test --locked -p registry-evidence -p registry-evidencectl
-cargo clippy --locked -p registry-evidence -p registry-evidencectl --all-targets -- -D warnings
+cargo check --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl \
+  --all-targets
+cargo test --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl
+cargo clippy --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl \
+  --all-targets -- -D warnings
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
+
+The two bindings also carry their own JavaScript and Python suites, which this
+gate does not run; each binding's README states the commands, and root CI runs
+them in its client-bindings job. On macOS, `cargo test` for
+`registry-evidence-client-py` needs the interpreter's library directory on the
+dynamic linker path, as
+[the Python binding README](../../crates/registry-evidence-client-py/README.md)
+describes.
 
 Generated JSON Schema and OpenAPI artifacts are under `generated/`. The
 contract gate recreates them from Rust in a temporary directory and requires an

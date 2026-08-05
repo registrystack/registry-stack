@@ -69,6 +69,8 @@ crates/registry-evidence-verifier/
     verifier.rs
 crates/registry-evidencectl/
 crates/registry-evidence-client/
+crates/registry-evidence-client-node/
+crates/registry-evidence-client-py/
 products/evidence/
   contracts/
   fixtures/
@@ -86,12 +88,16 @@ evidence evaluate --fixture <path>
 evidence verify --jws <file> --jwks <file> --policy <file>
 ```
 
-Do not decompose the runtime into worker, adapter, policy, credential, or
-interoperability crates in version one. Rhai adapters and derivations are
-deployment-bundle artifacts, not Rust crates. The adopter tooling and the
-relying-party client library named above sit outside the frozen Version 1
-runtime contract, delegate every Evidence semantic decision to the runtime or to
-the portable verifier, and add no Evidence semantics of their own.
+Do not create client, worker, adapter, policy, credential, or interoperability
+crates in version one. What the prohibition forbids is carving a runtime
+responsibility out into a separate crate, not shipping a relying-party SDK that
+adds no Evidence semantics of its own. `registry-evidence-verifier` is the one
+approved decomposition of the runtime, and it is closed: no further extraction
+is approved. Rhai adapters and derivations are deployment-bundle artifacts, not
+Rust crates. The adopter tooling, the relying-party client, and its Node and
+Python bindings named above sit outside the frozen Version 1 runtime contract,
+delegate every Evidence semantic decision to the runtime or to the portable
+verifier, and add no Evidence semantics of their own.
 
 Production code is source-product neutral. `src/`, production Cargo features,
 dependencies, public types, configuration schemas, routes, and CLI options
@@ -919,6 +925,7 @@ cargo test --locked --workspace
 cargo deny check
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
 
 Generated artifacts are reproduced from code, never hand-edited. If a shared
