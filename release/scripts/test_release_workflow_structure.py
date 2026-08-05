@@ -48,6 +48,135 @@ def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subproce
         )
 
 
+class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
+    def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual(
+            list(document["jobs"]),
+            ["validate", "build", "assemble", "publish"],
+        )
+        self.assertEqual(
+            document["jobs"]["validate"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["assemble"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["publish"]["permissions"],
+            {"actions": "read", "contents": "write"},
+        )
+        self.assertEqual(text.count("contents: write"), 1)
+        publish_uses = {
+            step.get("uses", "") for step in document["jobs"]["publish"]["steps"]
+        }
+        self.assertFalse(
+            any(action.startswith("actions/checkout@") for action in publish_uses)
+        )
+
+    def test_binds_a_unique_dev_tag_to_successful_protected_main(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        validation = step_run(
+            document,
+            "validate",
+            "Validate manual source and successful CI",
+        )
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', validation)
+        self.assertIn(
+            '"$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}"',
+            validation,
+        )
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}", validation)
+        self.assertIn('.event == "push"', validation)
+        self.assertIn(
+            'tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"',
+            validation,
+        )
+        self.assertIn("Cannot prove development tag ${tag} is absent", validation)
+        for job_name in ("build", "assemble"):
+            checkout = next(
+                step
+                for step in document["jobs"][job_name]["steps"]
+                if step.get("uses", "").startswith("actions/checkout@")
+            )
+            self.assertEqual(
+                checkout["with"]["ref"],
+                "${{ needs.validate.outputs.source_sha }}",
+            )
+            self.assertFalse(checkout["with"]["persist-credentials"])
+
+    def test_builds_and_smokes_the_released_toolset_shape(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        matrix = document["jobs"]["build"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["target"], entry["asset"]) for entry in matrix},
+            {
+                ("x86_64-unknown-linux-gnu", "linux-amd64"),
+                ("aarch64-unknown-linux-gnu", "linux-arm64"),
+                ("aarch64-apple-darwin", "macos-arm64"),
+            },
+        )
+        build = step_run(
+            document,
+            "build",
+            "Build native Evidence development binaries",
+        )
+        for package in ("registry-evidence", "registry-evidencectl", "registry-mint"):
+            self.assertIn(f"-p {package}", build)
+        self.assertIn("cargo build --release --locked", build)
+        self.assertIn("for binary in evidence evidencectl mint", build)
+
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble development assets and checksums",
+        )
+        smoke = step_run(
+            document,
+            "assemble",
+            "Smoke the development installer before publication",
+        )
+        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn("registry.evidence-development-build/v1", assemble)
+        self.assertIn("sha256sum --", assemble)
+        self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
+        self.assertIn("bash development-assets/evidencectl-install.sh", smoke)
+
+    def test_publishes_one_unique_prerelease_and_prints_its_curl_command(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        verify = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        publish = step_run(
+            document,
+            "publish",
+            "Publish unique development prerelease",
+        )
+        self.assertIn("diff -u", verify)
+        self.assertIn("sha256sum --check --strict SHA256SUMS", verify)
+        self.assertIn("gh release create", publish)
+        self.assertIn('--target "${source_sha}"', publish)
+        self.assertIn("--prerelease", publish)
+        self.assertIn("--latest=false", publish)
+        self.assertIn("releases/download/${tag}/evidencectl-install.sh", publish)
+        for forbidden in (
+            "gh release upload",
+            "gh release delete",
+            "--clobber",
+            "git push",
+            "git update-ref",
+        ):
+            self.assertNotIn(forbidden, text)
+
+
 class CandidateWorkflowStructureTest(unittest.TestCase):
     def test_current_release_pipeline_has_no_retired_notary_surface(self) -> None:
         paths = (

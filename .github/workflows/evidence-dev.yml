@@ -1,0 +1,377 @@
+name: Registry Evidence Development Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-evidence-development-build
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  validate:
+    name: Validate protected-main development source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Validate manual source and successful CI
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != workflow_dispatch ||
+                "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo "Evidence development builds must be dispatched from main" >&2
+            exit 1
+          fi
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GitHub did not supply an exact source commit" >&2
+            exit 1
+          fi
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}" ]]; then
+            echo "Development source must be the current protected-main commit" >&2
+            exit 1
+          fi
+          ci_run="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
+              | jq -c --arg sha "${GITHUB_SHA}" \
+              '[.workflow_runs[] | select(
+                .head_sha == $sha and
+                .conclusion == "success" and
+                .event == "push"
+              )] | sort_by(.updated_at) | last'
+          )"
+          if [[ "${ci_run}" == null ]]; then
+            echo "Protected-main CI has no successful push run for this source" >&2
+            exit 1
+          fi
+          version="$(
+            cargo metadata --locked --no-deps --format-version 1 \
+              | jq -er '.packages[]
+                | select(.name == "registry-evidence")
+                | .version'
+          )"
+          if [[ ! "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Evidence workspace version is not canonical semantic version text" >&2
+            exit 1
+          fi
+          tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
+              >/dev/null 2>&1; then
+            echo "Development tag ${tag} already exists" >&2
+            exit 1
+          else
+            tag_lookup_status=$?
+            if [[ "${tag_lookup_status}" -ne 2 ]]; then
+              echo "Cannot prove development tag ${tag} is absent" >&2
+              exit 1
+            fi
+          fi
+          release_response="${RUNNER_TEMP}/evidence-dev-release-response"
+          if gh api --include --silent \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              >"${release_response}" 2>&1; then
+            release_status=200
+          else
+            release_status="$(
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${release_response}"
+            )"
+          fi
+          if [[ "${release_status}" != 404 ]]; then
+            echo "Development release destination is not absent" >&2
+            exit 1
+          fi
+          {
+            echo "source_sha=${GITHUB_SHA}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build Evidence dev toolset for ${{ matrix.asset }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: linux-arm64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset: macos-arm64
+    steps:
+      - name: Checkout exact development source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Restore Evidence development Cargo cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: registry-evidence-dev-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            registry-evidence-dev-${{ matrix.asset }}-
+
+      - name: Build native Evidence development binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 \
+            --profile minimal --target "${{ matrix.target }}"
+          cargo build --release --locked \
+            -p registry-evidence \
+            -p registry-evidencectl \
+            -p registry-mint \
+            --target "${{ matrix.target }}"
+          mkdir -p development-platform
+          for binary in evidence evidencectl mint; do
+            asset="${binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${binary}" \
+              "development-platform/${asset}"
+            chmod 0755 "development-platform/${asset}"
+            observed="$("development-platform/${asset}" --version)"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+          done
+
+      - name: Upload native Evidence development binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evidence-dev-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-platform
+          if-no-files-found: error
+          retention-days: 2
+
+  assemble:
+    name: Assemble and smoke the curl-installable toolset
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact development source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download exact native binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: evidence-dev-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-inputs
+          merge-multiple: true
+
+      - name: Assemble development assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          mkdir -p development-assets
+          cp development-inputs/* development-assets/
+          installer="evidencectl-${tag}-install.sh"
+          awk -v version="${tag}" '
+            $0 == "default_version=\"\"" {
+              print "default_version=\"" version "\""
+              rendered = 1
+              next
+            }
+            { print }
+            END { if (!rendered) exit 1 }
+          ' crates/registry-evidencectl/install.sh \
+            > "development-assets/${installer}"
+          chmod 0755 "development-assets/${installer}"
+          cp "development-assets/${installer}" \
+            development-assets/evidencectl-install.sh
+          chmod 0755 development-assets/evidencectl-install.sh
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
+            --arg version "${{ needs.validate.outputs.version }}" \
+            --arg tag "${tag}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{
+              schema: "registry.evidence-development-build/v1",
+              repository: $repository,
+              source_sha: $source_sha,
+              workspace_version: $version,
+              tag: $tag,
+              run_id: $run_id,
+              run_attempt: $run_attempt
+            }' > "development-assets/registry-evidence-${tag}-source.json"
+          checksum_file="${RUNNER_TEMP}/evidence-dev-SHA256SUMS"
+          (
+            cd development-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+              | sort -z \
+              | xargs -0 sha256sum --
+          ) > "${checksum_file}"
+          mv "${checksum_file}" development-assets/SHA256SUMS
+
+      - name: Smoke the development installer before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/evidence-dev-install"
+          EVIDENCECTL_ASSET_DIR="${GITHUB_WORKSPACE}/development-assets" \
+          EVIDENCECTL_INSTALL_DIR="${install_dir}" \
+            bash development-assets/evidencectl-install.sh
+          for binary in evidence evidencectl mint; do
+            observed="$("${install_dir}/${binary}" --version)"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+          done
+
+      - name: Upload exact Evidence development assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evidence-dev-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-assets
+          if-no-files-found: error
+          retention-days: 8
+
+  publish:
+    name: Publish unique Evidence development prerelease
+    needs:
+      - validate
+      - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download exact assembled development assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: evidence-dev-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-assets
+
+      - name: Reverify the closed development asset roster
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          for platform in linux-amd64 linux-arm64 macos-arm64; do
+            for binary in evidence evidencectl mint; do
+              echo "${binary}-${tag}-${platform}"
+            done
+          done > "${RUNNER_TEMP}/expected-assets"
+          {
+            echo "evidencectl-${tag}-install.sh"
+            echo evidencectl-install.sh
+            echo "registry-evidence-${tag}-source.json"
+            echo SHA256SUMS
+          } >> "${RUNNER_TEMP}/expected-assets"
+          sort -o "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/expected-assets"
+          find development-assets -maxdepth 1 -type f -exec basename {} \; \
+            | sort > "${RUNNER_TEMP}/actual-assets"
+          diff -u "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/actual-assets"
+          if find development-assets -type l -print -quit | grep -q .; then
+            echo "Development assets must not contain symbolic links" >&2
+            exit 1
+          fi
+          (
+            cd development-assets
+            sha256sum --check --strict SHA256SUMS
+          )
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
+            --arg tag "${tag}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '.schema == "registry.evidence-development-build/v1" and
+             .repository == $repository and
+             .source_sha == $source_sha and
+             .tag == $tag and
+             .run_id == $run_id and
+             .run_attempt == $run_attempt' \
+            "development-assets/registry-evidence-${tag}-source.json" \
+            >/dev/null
+
+      - name: Publish unique development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          source_sha="${{ needs.validate.outputs.source_sha }}"
+          install_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/evidencectl-install.sh"
+          notes="${RUNNER_TEMP}/evidence-development-release-notes.md"
+          {
+            echo "Development build from protected-main source \`${source_sha}\`."
+            echo
+            echo "This is an unsupported prerelease for development and evaluation."
+            echo "Its checksums are not signed and it is not a Registry Stack release."
+            echo
+            echo '```sh'
+            echo "curl -fsSL \"${install_url}\" | bash"
+            echo '```'
+            echo
+            echo "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${notes}"
+          gh release create "${tag}" development-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${source_sha}" \
+            --title "Registry Evidence development build ${tag}" \
+            --notes-file "${notes}" \
+            --prerelease \
+            --latest=false
+          {
+            echo '## Install this development build'
+            echo
+            echo '```sh'
+            echo "curl -fsSL \"${install_url}\" | bash"
+            echo '```'
+            echo
+            echo "Source: \`${source_sha}\`"
+            echo
+            echo "This prerelease is unsupported and its checksums are not signed."
+          } >> "${GITHUB_STEP_SUMMARY}"

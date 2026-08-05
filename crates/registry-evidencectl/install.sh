@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo="registrystack/registry-stack"
 binaries=(evidence evidencectl mint)
-# Release packaging replaces this empty value with the asset's canonical tag.
+# Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
 script_name="${script_name##*/}"
 filename_version=""
-if [[ "$script_name" =~ ^evidencectl-(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-install\.sh$ ]]; then
+if [[ "$script_name" =~ ^evidencectl-(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.([1-9][0-9]*)\.([1-9][0-9]*))?)-install\.sh$ ]]; then
 	filename_version="${BASH_REMATCH[1]}"
 fi
 if [ -n "$default_version" ] &&
@@ -45,7 +45,7 @@ set to the verified directory:
   https://github.com/${repo}/blob/<version>/release/VERIFY.md
 
 Environment:
-  EVIDENCECTL_VERSION      Release tag to install. A released installer
+  EVIDENCECTL_VERSION      Toolset tag to install. A published installer
                            embeds its tag and refuses a different override.
   EVIDENCECTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
   EVIDENCECTL_ASSET_DIR    Read already-downloaded release assets from this
@@ -66,16 +66,20 @@ need() {
 }
 
 if [ -z "$version" ]; then
-	echo "No release is pinned for this installer copy." >&2
+	echo "No toolset tag is pinned for this installer copy." >&2
 	echo "Evidence binaries ship with releases that include them; set" >&2
-	echo "EVIDENCECTL_VERSION to a pinned vMAJOR.MINOR.PATCH tag or run the" >&2
-	echo "versioned evidencectl-<tag>-install.sh asset from a release." >&2
+	echo "EVIDENCECTL_VERSION to a pinned vMAJOR.MINOR.PATCH tag, or run a" >&2
+	echo "published evidencectl-<tag>-install.sh asset." >&2
 	exit 1
 fi
-if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-	echo "Refusing non-canonical release tag '$version'." >&2
-	echo "Set EVIDENCECTL_VERSION to a pinned vMAJOR.MINOR.PATCH tag." >&2
+if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-dev\.([1-9][0-9]*)\.([1-9][0-9]*))?$ ]]; then
+	echo "Refusing non-canonical Evidence toolset tag '$version'." >&2
+	echo "Use vMAJOR.MINOR.PATCH or a workflow-produced vMAJOR.MINOR.PATCH-dev.RUN.ATTEMPT tag." >&2
 	exit 1
+fi
+development_build=0
+if [[ "$version" =~ -dev\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+	development_build=1
 fi
 
 need uname
@@ -191,7 +195,16 @@ for binary in "${binaries[@]}"; do
 	verify_asset "${binary}-${version}-${os_label}-${arch_label}"
 done
 printf 'Integrity checks passed: %s binaries matched SHA256SUMS.\n' "${#binaries[@]}"
-cat <<EOF
+if [ "$development_build" -eq 1 ]; then
+	cat <<EOF
+Development build: this unsupported prerelease was built from the exact source
+tag below, but its checksum file is not signed and this installer performs no
+authenticity check. Do not treat it as a Registry Stack release.
+  https://github.com/${repo}/tree/${version}
+
+EOF
+else
+	cat <<EOF
 Authenticity check not performed by this installer.
 For a higher-assurance installation, follow the tag-frozen release
 verification guide first, then rerun this installer with
@@ -199,6 +212,7 @@ EVIDENCECTL_ASSET_DIR set to that verified directory:
   $verify_url
 
 EOF
+fi
 
 mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.evidencectl-install.XXXXXX")"
