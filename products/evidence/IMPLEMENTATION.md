@@ -22,8 +22,10 @@ profiles and guarded extensions.
 
 ## Version 1 product shape
 
-Version one is one crate and one binary. Product-owned contracts and fixtures
-remain outside the crate:
+Version one is one runtime crate and one binary. The runtime depends on one
+portable library for response verification, adopter tooling sits beside it
+outside the frozen runtime contract, and product-owned contracts and fixtures
+remain outside every crate:
 
 ```text
 crates/registry-evidence/
@@ -36,8 +38,10 @@ crates/registry-evidence/
     contracts.rs
     kernel.rs
     lib.rs
+    local_verification.rs
     main.rs
     model.rs
+    observability.rs
     problem.rs
     rate_limit.rs
     rhai_runtime.rs
@@ -48,14 +52,23 @@ crates/registry-evidence/
     signing.rs
     source.rs
     values.rs
-    verifier.rs
   tests/
     cli.rs
     deployment_projects.rs
+    relay_shaped_source.rs
     source_contracts.rs
     selector_conformance.rs
     security_contract_traceability.rs
     live_sources.rs
+crates/registry-evidence-verifier/
+  src/
+    contracts.rs
+    lib.rs
+    model.rs
+    sdjwt_vc.rs
+    verifier.rs
+crates/registry-evidencectl/
+crates/registry-evidence-client/
 products/evidence/
   contracts/
   fixtures/
@@ -73,9 +86,12 @@ evidence evaluate --fixture <path>
 evidence verify --jws <file> --jwks <file> --policy <file>
 ```
 
-Do not create client, worker, adapter, policy, credential, or interoperability
-crates in version one. Rhai adapters and derivations are deployment-bundle
-artifacts, not Rust crates.
+Do not decompose the runtime into worker, adapter, policy, credential, or
+interoperability crates in version one. Rhai adapters and derivations are
+deployment-bundle artifacts, not Rust crates. The adopter tooling and the
+relying-party client library named above sit outside the frozen Version 1
+runtime contract, delegate every Evidence semantic decision to the runtime or to
+the portable verifier, and add no Evidence semantics of their own.
 
 Production code is source-product neutral. `src/`, production Cargo features,
 dependencies, public types, configuration schemas, routes, and CLI options
