@@ -50,9 +50,9 @@ TUTORIAL_PACKAGES = frozenset(
 ) | {"registry-config-report"}
 
 # Every input the Evidence tutorial gate replays or is built from. The tutorial
-# pages here must stay in step with the gate's own registry, which
-# test_ci_changes.py enforces: a tutorial CI does not watch is a tutorial that
-# rots silently.
+# pages and helper scripts here must stay in step with the gate's own registry
+# and the helpers it invokes, which test_ci_changes.py enforces: a tutorial or
+# helper CI does not watch is one that rots silently.
 EVIDENCE_TUTORIAL_INPUTS = frozenset(
     {
         "Cargo.lock",
@@ -61,6 +61,7 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/package.json",
         "docs/site/scripts/check-evidence-tutorials.sh",
         "docs/site/scripts/check-evidence-tutorials.test.mjs",
+        "docs/site/scripts/evidence-tutorial-fence.sh",
         "docs/site/scripts/registryctl-tutorial.mjs",
         "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",

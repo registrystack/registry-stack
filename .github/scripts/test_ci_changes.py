@@ -123,6 +123,23 @@ class CiChangesTest(unittest.TestCase):
                     EVIDENCE_TUTORIAL_INPUTS,
                 )
 
+    def test_evidence_tutorial_inputs_cover_every_helper_the_gate_invokes(self) -> None:
+        # Same reasoning as the tutorial registry above, one layer down. The gate
+        # delegates to sibling scripts, and a change to one of those changes what
+        # every tutorial replay does. A helper missing here routes the change
+        # past the job that would have caught it.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-evidence-tutorials.sh"
+        )
+        helpers = set(
+            re.findall(r"scripts/([A-Za-z0-9._-]+\.(?:sh|mjs))", gate.read_text())
+        )
+        self.assertTrue(helpers, "the gate must invoke at least one helper")
+        for helper in sorted(helpers):
+            with self.subTest(helper=helper):
+                self.assertIn(f"docs/site/scripts/{helper}", EVIDENCE_TUTORIAL_INPUTS)
+
     def test_evidence_tutorial_routing(self) -> None:
         infrastructure = (
             "docs/site/scripts/check-evidence-tutorials.sh",
