@@ -90,6 +90,27 @@ pub enum TransportKind {
     ResponseTooLarge,
 }
 
+impl TransportKind {
+    /// A stable, machine-readable name for which kind of transport failure
+    /// this is.
+    ///
+    /// It exists for callers that have to branch or aggregate without matching
+    /// an enum this crate may extend: a metric label, a structured log field, or
+    /// a language binding that carries the discriminant across a boundary. The
+    /// rendered message is for people and may be reworded; these names are part
+    /// of the crate's contract and will not be renamed. A variant added later
+    /// brings a new name rather than reusing one of these.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::Exchange => "exchange",
+            Self::ResponseTooLarge => "response_too_large",
+        }
+    }
+}
+
 impl EvidenceClientError {
     pub(crate) fn configuration(reason: &'static str) -> Self {
         Self::Configuration { reason }
@@ -215,6 +236,24 @@ mod tests {
         }
         let kinds: std::collections::BTreeSet<&str> =
             cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_transport_kind_reports_its_own_stable_kind() {
+        let cases = [
+            (TransportKind::Connect, "connect"),
+            (TransportKind::Timeout, "timeout"),
+            (TransportKind::Exchange, "exchange"),
+            (TransportKind::ResponseTooLarge, "response_too_large"),
+        ];
+        for (kind, name) in &cases {
+            assert_eq!(kind.kind(), *name, "{kind}");
+        }
+        let kinds: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(kind, _)| kind.kind()).collect();
         assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 }

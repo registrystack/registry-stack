@@ -336,6 +336,31 @@ pub enum VerificationError {
     Disclosure,
 }
 
+impl VerificationError {
+    /// A stable, machine-readable name for which kind of verification failure
+    /// this is.
+    ///
+    /// It exists for callers that want to branch or aggregate on the failure
+    /// without matching this crate's enum directly: a metric label, a
+    /// structured log field, or a language binding that carries the
+    /// discriminant across a boundary a Rust enum cannot cross. The rendered
+    /// message is for people and may be reworded; these names are part of the
+    /// crate's contract and will not be renamed.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::MalformedJws => "malformed_jws",
+            Self::ProtectedHeader => "protected_header",
+            Self::Key => "key",
+            Self::Signature => "signature",
+            Self::Payload => "payload",
+            Self::Policy => "policy",
+            Self::Time => "time",
+            Self::Disclosure => "disclosure",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProtectedHeader {
@@ -1972,5 +1997,26 @@ mod tests {
             verify_sd_jwt_vc(&jws, &jwks, &policy),
             Err(VerificationError::MalformedJws)
         );
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_verification_failure_reports_its_own_stable_kind() {
+        let cases = [
+            (VerificationError::MalformedJws, "malformed_jws"),
+            (VerificationError::ProtectedHeader, "protected_header"),
+            (VerificationError::Key, "key"),
+            (VerificationError::Signature, "signature"),
+            (VerificationError::Payload, "payload"),
+            (VerificationError::Policy, "policy"),
+            (VerificationError::Time, "time"),
+            (VerificationError::Disclosure, "disclosure"),
+        ];
+        for (error, kind) in &cases {
+            assert_eq!(error.kind(), *kind, "{error}");
+        }
+        let kinds: BTreeSet<&str> = cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 }
