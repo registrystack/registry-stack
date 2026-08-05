@@ -4,7 +4,7 @@
 //! integrator, out of band. The client never replaces it with keys a response
 //! or a discovery document named.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use registry_evidence_verifier::model::JwksDocument;
 use registry_platform_httputil::DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
@@ -169,13 +169,33 @@ impl EvidenceClientConfig {
     }
 }
 
+/// The base URL with any userinfo removed.
+///
+/// [`EvidenceClientConfig::validate`] refuses a base URL carrying credentials,
+/// but it runs inside `EvidenceClient::new`, so the rendering cannot rely on
+/// having been reached after construction.
+fn base_url_without_userinfo(base_url: &Url) -> Cow<'_, str> {
+    if base_url.username().is_empty() && base_url.password().is_none() {
+        return Cow::Borrowed(base_url.as_str());
+    }
+    let mut stripped = base_url.clone();
+    // Both setters refuse only a URL that cannot carry userinfo at all, and this
+    // point is reached only for a URL that carries some, so neither can refuse
+    // here. A refusal withholds the whole URL rather than rendering a credential.
+    if stripped.set_username("").is_err() || stripped.set_password(None).is_err() {
+        return Cow::Borrowed("<a base URL whose userinfo could not be removed>");
+    }
+    Cow::Owned(stripped.into())
+}
+
 impl fmt::Debug for EvidenceClientConfig {
     /// The key set, the credential source, and the pinned certificate material
-    /// are all withheld. Only the operational choices are rendered.
+    /// are all withheld, as is any userinfo in the base URL. Only the
+    /// operational choices are rendered.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EvidenceClientConfig")
-            .field("base_url", &self.base_url.as_str())
+            .field("base_url", &base_url_without_userinfo(&self.base_url))
             .field("request_timeout", &self.request_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("user_agent", &self.user_agent)
@@ -347,6 +367,18 @@ mod tests {
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("canary"), "{rendered}");
         assert!(!rendered.contains("token"), "{rendered}");
+        assert!(
+            rendered.contains("https://evidence.example.org/"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn debug_output_withholds_userinfo_the_caller_put_in_the_base_url() {
+        let config = config("https://operator:canary-secret@evidence.example.org");
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("canary-secret"), "{rendered}");
+        assert!(!rendered.contains("operator"), "{rendered}");
         assert!(
             rendered.contains("https://evidence.example.org/"),
             "{rendered}"
