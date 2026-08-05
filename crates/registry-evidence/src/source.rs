@@ -523,6 +523,7 @@ fn compile_request(
     let allowed_selector_sets =
         compile_allowed_selector_sets(&selector_inputs, allowed_selector_sets)?;
     let path = compile_source_path(request, &selector_inputs)?;
+    validate_bindings_are_reachable(&path, &allowed_selector_sets)?;
     let fixed_headers = compile_fixed_headers(request, authentication)?;
     let projection = compile_projection(&request.projection)?;
     Ok(RequestPlan {
@@ -605,6 +606,35 @@ fn compile_allowed_selector_sets(
         return Err(SourceError::InvalidPlan);
     }
     Ok(unique.into_iter().collect())
+}
+
+/// Refuse any allowed selector set that cannot fill the path template.
+///
+/// `materialize_url` resolves each placeholder against the set the request
+/// actually activated, so a binding is mandatory per set, not across their
+/// union. A set missing one has no value to substitute and fails every request
+/// it serves. That set exists because an authority grant produced it, which is
+/// a startup fact, so refuse it at startup rather than per request.
+fn validate_bindings_are_reachable(
+    path: &SourcePath,
+    allowed: &[SourceSelectorSet],
+) -> Result<(), SourceError> {
+    let SourcePath::Template { bindings, .. } = path else {
+        return Ok(());
+    };
+    for set in allowed {
+        let activated = set
+            .iter()
+            .map(|(role, profile)| (role.as_str(), profile.as_str()))
+            .collect::<BTreeSet<_>>();
+        if bindings
+            .values()
+            .any(|binding| !activated.contains(&(binding.role.as_str(), binding.profile.as_str())))
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+    }
+    Ok(())
 }
 
 fn compile_source_path(

@@ -2121,6 +2121,67 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     }
 }
 
+/// Every allowed selector set must carry the roles the path template binds.
+///
+/// The sets are not written by an operator. They are derived from authority
+/// grants, one per grant, filtered to the roles the source declares. So a grant
+/// that authorizes this requirement over a role the template does not bind
+/// yields a set with no value for the placeholder. `materialize_url` needs one
+/// for every placeholder, so that set fails every request it ever serves, while
+/// startup and readiness both pass because some other grant covers the role.
+/// Refuse the plan instead, at the point the mismatch is visible.
+#[test]
+fn an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused() {
+    let (_root, secrets) = resolver(&[("key", "api-key-value")]);
+    let mut source = source_config(
+        "http://127.0.0.1:18080",
+        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!(["record_id"]),
+        json!([]),
+        json!(["/ok"]),
+    );
+    // The template binds `subject`; `parent` is declared but never bound.
+    source.request.selector_inputs = serde_json::from_value(json!([
+        {"role": "subject", "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]},
+        {"role": "parent", "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]}
+    ]))
+    .expect("selector inputs deserialize");
+
+    let complete = vec![vec![
+        ("subject".to_owned(), "record-v1".to_owned()),
+        ("parent".to_owned(), "record-v1".to_owned()),
+    ]];
+    SourceExecutor::new_with_selector_sets(&source, &complete, Arc::clone(&secrets))
+        .expect("a set carrying every bound role compiles");
+
+    let subject_only = vec![vec![("subject".to_owned(), "record-v1".to_owned())]];
+    SourceExecutor::new_with_selector_sets(&source, &subject_only, Arc::clone(&secrets))
+        .expect("a set carrying only the bound role compiles");
+
+    // Legal-parent-relationship shape: one authority path over the parent, one
+    // source path template bound to the child. The parent-only path is the one
+    // that would fail every request.
+    let parent_only = vec![vec![("parent".to_owned(), "record-v1".to_owned())]];
+    assert_eq!(
+        SourceExecutor::new_with_selector_sets(&source, &parent_only, Arc::clone(&secrets)).err(),
+        Some(SourceError::InvalidPlan),
+        "a set omitting the bound role has no value for the placeholder"
+    );
+
+    let mixed = vec![
+        vec![
+            ("subject".to_owned(), "record-v1".to_owned()),
+            ("parent".to_owned(), "record-v1".to_owned()),
+        ],
+        vec![("parent".to_owned(), "record-v1".to_owned())],
+    ];
+    assert_eq!(
+        SourceExecutor::new_with_selector_sets(&source, &mixed, secrets).err(),
+        Some(SourceError::InvalidPlan),
+        "one complete set must not excuse an incomplete one"
+    );
+}
+
 #[tokio::test]
 async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     let (address, ca_pem, server) = spawn_private_ca_tls_server("127.0.0.1").await;
