@@ -984,12 +984,20 @@ impl OauthPlan {
         drop(form);
         drop(client_id);
         drop(client_secret);
+        // `expires_in` is measured from issuance, and issuance happens at the
+        // authorization server while this request is in flight. Anchoring here
+        // rather than after the response arrives assumes the token was issued at
+        // the earliest moment it could have been, which is the only assumption
+        // that cannot outlive the real expiry: anchoring later would add the
+        // whole round trip to the token's apparent life and let a cached token
+        // be presented after the issuer had stopped honouring it.
+        let requested_at = Instant::now();
         let response = request.send().await.map_err(map_transport_error)?;
         let (token, lifetime) =
             parse_token_response(response, self.scope.as_deref(), self.assumed_lifetime).await?;
         let cache_lifetime = lifetime.min(self.maximum_cache_lifetime);
         if !cache_lifetime.is_zero() {
-            let expires_at = Instant::now()
+            let expires_at = requested_at
                 .checked_add(cache_lifetime)
                 .ok_or(SourceError::Credential)?;
             *cache = Some(CachedToken {
@@ -1746,5 +1754,99 @@ mod tests {
                 .expect("OAuth admission is bounded by its configured timeout");
         assert!(matches!(result, Err(SourceError::Timeout)));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    /// `expires_in` is measured from issuance, which happens at the authorization
+    /// server while the token request is still in flight. Anchoring the cache
+    /// deadline after the response has arrived and been parsed adds the whole
+    /// round trip to the token's apparent life, so a cached token stays eligible
+    /// past the point the issuer stops honouring it and a request near that
+    /// boundary intermittently fails with 401. The anchor has to be taken before
+    /// the request goes out: that is the earliest moment issuance can have
+    /// happened, and so the only conservative choice available to a client.
+    #[tokio::test]
+    async fn the_oauth_cache_deadline_excludes_the_token_round_trip() {
+        use std::fs;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let secret_root = tempfile::tempdir().expect("temporary secret root");
+        for (name, value) in [
+            ("oauth-client-id", "fixture-client"),
+            ("oauth-client-secret", "fixture-secret"),
+        ] {
+            let path = secret_root.path().join(name);
+            fs::write(&path, value).expect("write synthetic secret");
+            #[cfg(unix)]
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("protect synthetic secret");
+        }
+        let secrets =
+            SecretResolver::new([crate::secrets::SecretProvider::File], secret_root.path())
+                .expect("secret resolver builds");
+
+        // Stands in for round-trip latency. It only has to separate the two
+        // candidate anchors by more than the slack allowed below.
+        let latency = Duration::from_millis(500);
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/token"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(latency)
+                    .set_body_json(json!({
+                        "access_token": "fixture-access-token",
+                        "token_type": "Bearer",
+                        "expires_in": 1
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let plan = OauthPlan {
+            token_endpoint: Url::parse(&format!("{}/token", server.uri()))
+                .expect("token endpoint parses"),
+            client_id_ref: SecretRef::parse("secret:file/oauth-client-id")
+                .expect("secret reference parses"),
+            client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
+                .expect("secret reference parses"),
+            scope: None,
+            credential_placement: CredentialPlacement::FormBody,
+            maximum_cache_lifetime: Duration::from_secs(60),
+            assumed_lifetime: None,
+            admission_timeout: Duration::from_secs(5),
+            cache: Mutex::new(None),
+        };
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("HTTP client builds");
+
+        let before = Instant::now();
+        plan.access_token(&client, &secrets)
+            .await
+            .expect("the token exchange succeeds");
+        let elapsed = before.elapsed();
+        assert!(
+            elapsed >= latency,
+            "the round trip has to be delayed for this test to tell the anchors apart, took {elapsed:?}"
+        );
+
+        let expires_at = plan
+            .cache
+            .lock()
+            .await
+            .as_ref()
+            .expect("the token is cached")
+            .expires_at;
+        // The slack covers only what happens between `before` and the request
+        // going out: taking the mutex and reading two secret files. It is well
+        // below the latency above, so a deadline anchored after the round trip
+        // cannot pass this.
+        let slack = Duration::from_millis(100);
+        assert!(
+            expires_at <= before + Duration::from_secs(1) + slack,
+            "the cache deadline outlives the token by about the round trip"
+        );
     }
 }
