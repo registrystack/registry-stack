@@ -869,7 +869,7 @@ impl Deployment {
 
 impl Drop for Deployment {
     fn drop(&mut self) {
-        // The temporary deployment the stopped task reads is removed below,
+        // The temporary deployment the abandoned task reads is removed below,
         // and the process ends with the test binary.
         stop_service(&mut self.shutdown, &self.server);
         // The runtime requires an immutable deployment, so the staged tree was

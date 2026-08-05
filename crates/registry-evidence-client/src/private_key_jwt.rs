@@ -913,18 +913,26 @@ mod tests {
         );
     }
 
-    /// A server that states no lifetime has told the client nothing it may cache
-    /// against, so every request asks again rather than guessing a lifetime.
+    /// A server that states no lifetime, or one that is already zero or
+    /// negative, has told the client nothing it may cache against, so every
+    /// request acquires its own credential rather than writing an unusable one
+    /// into the cache.
     #[tokio::test]
     async fn a_credential_without_a_stated_lifetime_is_not_cached() {
-        let server = token_endpoint_serving(issued(None)).await;
-        let clock = Arc::new(TestClock::new(NOW));
-        let provider = provider(endpoint(&server.uri()), &clock);
+        for expires_in in [None, Some(0), Some(-1)] {
+            let server = token_endpoint_serving(issued(expires_in)).await;
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = provider(endpoint(&server.uri()), &clock);
 
-        provider.bearer_token().await.expect("a first credential");
-        provider.bearer_token().await.expect("a second credential");
+            provider.bearer_token().await.expect("a first credential");
+            provider.bearer_token().await.expect("a second credential");
 
-        assert_eq!(token_requests(&server).await, 2);
+            assert_eq!(
+                token_requests(&server).await,
+                2,
+                "expires_in {expires_in:?} was cached"
+            );
+        }
     }
 
     /// Many callers starting at once must not each open a token request. The
@@ -986,6 +994,15 @@ mod tests {
             .expect("the refresh lock was not left held by the abandoned acquisition")
             .expect("a subsequent caller still receives a credential");
         assert_eq!(token.expose(), ISSUED_CREDENTIAL);
+        // The abandoned task's own request reaching the server proves it was
+        // past the lock acquisition, and the response delay of four times the
+        // abort delay proves it was still awaiting that request, so still
+        // holding the lock, when the abort landed.
+        assert_eq!(
+            token_requests(&server).await,
+            2,
+            "the abandoned task never reached the token request it would have held the lock for"
+        );
     }
 
     /// A declined request reports the registered code and nothing else. The
@@ -997,6 +1014,7 @@ mod tests {
             (
                 400,
                 json!({"error": "invalid_request"}).to_string(),
+                JSON_MEDIA_TYPE,
                 TokenError::Refused {
                     code: OAuthErrorCode::InvalidRequest,
                 },
@@ -1005,6 +1023,7 @@ mod tests {
                 401,
                 json!({"error": "invalid_client", "error_description": "canary assertion detail"})
                     .to_string(),
+                JSON_MEDIA_TYPE,
                 TokenError::Refused {
                     code: OAuthErrorCode::InvalidClient,
                 },
@@ -1012,6 +1031,7 @@ mod tests {
             (
                 400,
                 json!({"error": "canary_extension_code"}).to_string(),
+                JSON_MEDIA_TYPE,
                 TokenError::Refused {
                     code: OAuthErrorCode::Other,
                 },
@@ -1019,23 +1039,37 @@ mod tests {
             (
                 400,
                 "canary not json at all".to_owned(),
+                JSON_MEDIA_TYPE,
                 TokenError::Protocol { status: 400 },
             ),
             (
                 403,
                 json!({"error": "invalid_client"}).to_string(),
+                JSON_MEDIA_TYPE,
                 TokenError::Protocol { status: 403 },
             ),
             (
                 500,
                 json!({"error": "server_error"}).to_string(),
+                JSON_MEDIA_TYPE,
                 TokenError::Protocol { status: 500 },
+            ),
+            // A real authorization server states a charset parameter on its
+            // JSON responses; the essence the gate compares against must
+            // still match with one present.
+            (
+                400,
+                json!({"error": "invalid_request"}).to_string(),
+                "application/json; charset=utf-8",
+                TokenError::Refused {
+                    code: OAuthErrorCode::InvalidRequest,
+                },
             ),
         ];
 
-        for (status, body, expected) in cases {
+        for (status, body, media_type, expected) in cases {
             let server = token_endpoint_serving(
-                ResponseTemplate::new(status).set_body_raw(body.clone(), "application/json"),
+                ResponseTemplate::new(status).set_body_raw(body.clone(), media_type),
             )
             .await;
             let clock = Arc::new(TestClock::new(NOW));
@@ -1116,9 +1150,7 @@ mod tests {
             ),
             (
                 "an unreadable success body",
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/json")
-                    .set_body_string("{"),
+                ResponseTemplate::new(200).set_body_raw("{", "application/json"),
             ),
             (
                 "a redirect instead of an answer",
