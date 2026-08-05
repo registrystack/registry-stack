@@ -153,7 +153,7 @@ fn create_private_file(path: &Path) -> Result<File> {
             | rustix::fs::OFlags::CLOEXEC
             | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::NONBLOCK,
-        rustix::fs::Mode::from_bits_truncate(PRIVATE_FILE_MODE as u16),
+        rustix::fs::Mode::from_bits_truncate(PRIVATE_FILE_MODE as rustix::fs::RawMode),
     )
     .map_err(std::io::Error::from)
     .with_context(|| format!("failed to create private output {}", path.display()))?;
