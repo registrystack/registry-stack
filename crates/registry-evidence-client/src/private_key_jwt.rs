@@ -269,6 +269,9 @@ impl PrivateKeyJwt {
             .clone()
             .filter(|kid| !kid.trim().is_empty())
             .ok_or_else(|| refuse("the client key must carry a key identifier"))?;
+        // Ties the message below to the constant, so the constant cannot drift
+        // from the number the message states.
+        const _: () = assert!(MAXIMUM_ASSERTION_LIFETIME_SECONDS == 300);
         if !(1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&config.assertion_lifetime_seconds) {
             return Err(refuse(
                 "the assertion lifetime must be within 1..=300 seconds",

@@ -597,8 +597,11 @@ async fn a_credential_inside_the_refresh_margin_is_replaced() {
     let (first, second, accepted) =
         proof.expect("each acquisition is accepted and the last response verifies");
 
-    // Two direct acquisitions, then one for discovery and one for the request:
-    // nothing was cacheable, so each of the four asked the server for its own.
+    // The issuer states a lifetime, so each acquisition is cached; the margin
+    // configured above is twice that lifetime, so a cached credential is
+    // already outside it the moment it lands. Two direct acquisitions, then
+    // one for discovery and one for the request: every one of the four finds
+    // the cache unusable and asks the server for its own.
     assert_eq!(issuer.issued_credential_count(), 4);
     assert_eq!(
         accepted.evidence().supports_requirement,
@@ -611,9 +614,11 @@ async fn a_credential_inside_the_refresh_margin_is_replaced() {
     assert_eq!(format!("{second:?}"), "BearerToken { .. }");
 }
 
-/// A client whose key the authorization server never registered acquires nothing,
-/// the failure is the registered OAuth code, and no request reaches the
-/// deployment.
+/// A client whose key the authorization server never registered acquires
+/// nothing, and the failure is the registered OAuth code. This is proven
+/// against the issuer's own audit chain, which records zero credentials
+/// issued; it does not observe the Evidence deployment's own request count,
+/// only that `discover` returns the token failure before it would reach one.
 #[tokio::test]
 async fn an_unregistered_client_key_is_refused_without_detail() {
     let issuer = start_token_issuer().await;
