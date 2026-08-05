@@ -21,6 +21,11 @@ judgement about a response is made by `registry-evidence-verifier`.
   out-of-band pinning workflow only.
 - `TokenProvider` and `StaticToken` for the bearer credential the deployment's
   resource-server authentication expects.
+- `PrivateKeyJwt`: a `TokenProvider` that acquires that credential itself, with
+  the OAuth 2.0 `client_credentials` grant and the `private_key_jwt` client
+  authentication method of RFC 7523. It is plain OAuth against any authorization
+  server offering that grant, it caches what it is issued, and it replaces a
+  credential before the refresh margin rather than after expiry.
 - `EvidenceClient::verify_as_of`: the same verification at an instant the caller
   names, for re-verifying a response it retained.
 
@@ -83,6 +88,13 @@ async fn accept(
   outbound header, and never placed in an error, a `Debug` rendering, or a log
   line. Response bytes and header values are withheld from diagnostics too; a
   failure carries the deployment's operation identifier for support correlation.
+- A client signing key given to `PrivateKeyJwt` is held for the life of the
+  provider and never rendered, logged, or serialized. Each token request signs its
+  own single-use assertion with a fresh identifier, so a captured assertion is
+  worth one attempt within its short lifetime. A refused token request reports the
+  registered OAuth error code and nothing else: the server's `error_description`
+  is server-authored text about a failed authentication attempt, so it is dropped
+  where the response is parsed.
 - Every response is read under a caller-configured byte bound before it is
   parsed.
 - Redirects are not followed, and the proxy environment variables are ignored. A
@@ -99,7 +111,9 @@ cargo test -p registry-evidence-client
 The integration suite starts a real Evidence deployment over loopback HTTP and
 drives the whole exchange through it, so discovery, the request contract, the
 problem contract, and verification are proven against the runtime rather than
-against a stub.
+against a stub. The credential-acquisition cases add a real authorization server
+on its own loopback origin, so token acquisition, caching, and refusal are proven
+against a server that enforces the grant.
 
 ## License
 
