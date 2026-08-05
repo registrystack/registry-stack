@@ -149,8 +149,8 @@ evidencectl new dhis2-immunization \
 cd dhis2-immunization
 ```
 
-`evidencectl new` retains the OpenAPI document and creates empty `sources/`, `questions/`,
-`derivations/`, and `fixtures/` directories.
+`evidencectl new` retains the OpenAPI document and creates empty `selectors/`, `sources/`,
+`adapters/`, `schemas/`, `questions/`, `derivations/`, and `fixtures/` directories.
 It generates only disposable local Evidence signing, audit, and subject-binding material.
 It does not invent the source policy or the answer.
 
@@ -165,11 +165,11 @@ evidencectl source suggest \
   --source-id child-tracker \
   --operation 'GET /api/tracker/trackedEntities/{uid}' \
   --select /trackedEntity \
-  --select /enrollments/*/program \
-  --select /enrollments/*/events/*/programStage \
-  --select /enrollments/*/events/*/status \
-  --select /enrollments/*/events/*/dataValues/*/dataElement \
-  --select /enrollments/*/events/*/dataValues/*/value
+  --select '/enrollments/*/program' \
+  --select '/enrollments/*/events/*/programStage' \
+  --select '/enrollments/*/events/*/status' \
+  --select '/enrollments/*/events/*/dataValues/*/dataElement' \
+  --select '/enrollments/*/events/*/dataValues/*/value'
 ```
 
 The command creates one editable source, two scripts, and three schemas:
@@ -183,36 +183,81 @@ schemas/child-tracker-response.schema.yaml
 schemas/child-tracker-facts.schema.yaml
 ```
 
-Open `sources/child-tracker.yaml`.
-Keep the generated projection and artifact paths, then resolve the source decisions:
+## Define the tracked-entity selector
+
+Create `selectors/child-tracked-entity-v1.yaml`:
 
 ```yaml
-id: child-tracker
-operation: getTrackedEntity
-baseUrl: https://play.im.dhis2.org/stable-2-43-1
+maximumAggregateBytes: 64
+fields:
+  tracked_entity_id:
+    type: string
+    minimumBytes: 11
+    maximumBytes: 11
+```
+
+A DHIS2 identifier is exactly eleven characters.
+This bounded field is the only value a caller may send for the child role, and it selects the
+source record without reaching the assertion.
+
+## Configure the bounded source
+
+Replace `sources/child-tracker.yaml` with:
+
+```yaml
+transport: http-json
+baseUrl: https://play.im.dhis2.org
 posture: record-transformed
 authentication:
   kind: basic
   usernameRef: secret:file/dhis2-username
   passwordRef: secret:file/dhis2-password
 request:
+  method: GET
+  pathTemplate: /stable-2-43-1/api/tracker/trackedEntities/{uid}
   pathBindings:
-    uid:
-      role: child
-      field: tracked_entity_id
-  query:
-    fixed:
-      program: IpHINAT79UW
-      fields: trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]
-    selectorBindings: {}
-collectionBounds:
-  /enrollments: 4
-  /enrollments/*/events: 32
-  /enrollments/*/events/*/dataValues: 64
+    uid: {role: child, profile: child-tracked-entity-v1, field: tracked_entity_id}
+  fixedHeaders:
+    - name: Accept
+      value: application/json
+  selectorInputs:
+    - role: child
+      alternatives:
+        - profile: child-tracked-entity-v1
+          fields: [tracked_entity_id]
+  prepareScript: adapters/child-tracker-prepare.rhai
+  adapterParameters:
+    programId: IpHINAT79UW
+    responseFields: trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]
+  adapterParametersSchema: schemas/child-tracker-parameters.schema.yaml
+  preparationLimits:
+    query: required
+    jsonBody: forbidden
+    maximumQueryPairs: 2
+    maximumQueryNameBytes: 16
+    maximumQueryValueBytes: 256
+    maximumStringBytes: 256
+    maximumNormalizedBytes: 4096
+  projection:
+    - /trackedEntity
+    - /enrollments/*/program
+    - /enrollments/*/events/*/programStage
+    - /enrollments/*/events/*/status
+    - /enrollments/*/events/*/dataValues/*/dataElement
+    - /enrollments/*/events/*/dataValues/*/value
+  redirects: deny
+  timeoutMilliseconds: 10000
+  maximumResponseBytes: 262144
+  concurrencyLimit: 8
+responseSchema: schemas/child-tracker-response.schema.yaml
+extractScript: adapters/child-tracker-extract.rhai
+factSchema: schemas/child-tracker-facts.schema.yaml
 ```
 
+`baseUrl` carries an origin only, so the demo's `/stable-2-43-1` prefix belongs to the path
+template.
 The path binding accepts only the authorized `child.tracked_entity_id` selector.
-The caller cannot replace the DHIS2 origin, programme, field selection, event bounds, or source
+The caller cannot replace the DHIS2 origin, programme, field selection, response size, or source
 credential.
 
 Add the source credential as owner-only files:
@@ -227,6 +272,88 @@ Open `secrets/dhis2-password` and enter `district`.
 Do not add quotes or a trailing newline.
 The values stay under the project's ignored `secrets/` directory and are never copied into the
 source definition.
+
+## Prepare the bounded read
+
+The tracked entity identifier reaches DHIS2 through the path binding.
+The programme and field selection reach it as the only two query parameters the source allows.
+Replace `adapters/child-tracker-prepare.rhai` with:
+
+```rhai
+fn prepare(selectors, parameters) {
+    #{
+        query: [
+            #{name: "program", value: parameters["programId"]},
+            #{name: "fields", value: parameters["responseFields"]}
+        ],
+        body: ()
+    }
+}
+```
+
+Replace `schemas/child-tracker-parameters.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required: [programId, responseFields]
+properties:
+  programId: {const: IpHINAT79UW}
+  responseFields:
+    const: trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]
+```
+
+The schema closes both parameters around their reviewed values, so a later edit cannot widen the
+programme or the field selection.
+The script reads only those parameters and the authorized selector.
+It cannot read the source credential, the caller identity, the purpose, or the signing keys.
+
+## Close the response bounds
+
+Evidence validates the projected response before extraction runs, and every array in a schema
+must state its bound.
+Replace `schemas/child-tracker-response.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required: [trackedEntity]
+properties:
+  trackedEntity: {type: string, minLength: 11, maxLength: 11}
+  enrollments:
+    type: array
+    maxItems: 4
+    items:
+      type: object
+      additionalProperties: false
+      required: [program]
+      properties:
+        program: {type: string, minLength: 11, maxLength: 11}
+        events:
+          type: array
+          maxItems: 32
+          items:
+            type: object
+            additionalProperties: false
+            required: [programStage, status, dataValues]
+            properties:
+              programStage: {type: string, minLength: 11, maxLength: 11}
+              status: {type: string, minLength: 1, maxLength: 16}
+              dataValues:
+                type: array
+                maxItems: 64
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [dataElement, value]
+                  properties:
+                    dataElement: {type: string, minLength: 11, maxLength: 11}
+                    value: {type: string, minLength: 1, maxLength: 256}
+```
+
+A child with no enrollment and an enrollment with no event both stay valid, and the extraction
+script decides what they mean.
+A response that exceeds any bound is refused before a script sees it.
 
 ## Normalize the two events
 
@@ -348,6 +475,8 @@ purpose: care-continuity
 subject:
   role: child
   selector: tracked_entity_id
+  profile: child-tracked-entity-v1
+  derivation: true
 source:
   ref: child-tracker
 answers:
