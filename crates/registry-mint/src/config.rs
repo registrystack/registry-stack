@@ -60,6 +60,20 @@ fn default_jwks_path() -> String {
 
 pub(crate) const MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 pub(crate) const MINT_TOKEN_PATH: &str = "/token";
+pub(crate) const MINT_METADATA_PATH: &str = "/.well-known/oauth-authorization-server";
+pub(crate) const MINT_HEALTH_PATH: &str = "/health";
+pub(crate) const MINT_READY_PATH: &str = "/ready";
+
+/// Every path the router registers besides the configured JWKS path.
+///
+/// The router panics when one path is registered twice, so the configured
+/// JWKS path is checked against this list where the configuration is read.
+pub(crate) const MINT_FIXED_ROUTES: [&str; 4] = [
+    MINT_TOKEN_PATH,
+    MINT_METADATA_PATH,
+    MINT_HEALTH_PATH,
+    MINT_READY_PATH,
+];
 
 fn default_maximum_request_bytes() -> u32 {
     16 * 1024
@@ -97,6 +111,25 @@ impl ListenerConfig {
         self.address
             .parse()
             .map_err(|_| ConfigError::Invalid("listener address is not an IP address"))
+    }
+
+    /// Reject limits no token request can survive.
+    ///
+    /// A zero body limit or a zero timeout leaves Mint reporting itself ready
+    /// while every token request fails, which is an outage the readiness probe
+    /// cannot see. The bounds match the Evidence listener.
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !(1_024..=1_048_576).contains(&self.maximum_request_bytes) {
+            return Err(ConfigError::Invalid(
+                "listener maximumRequestBytes must be 1024..=1048576",
+            ));
+        }
+        if !(1..=30_000).contains(&self.request_timeout_milliseconds) {
+            return Err(ConfigError::Invalid(
+                "listener requestTimeoutMilliseconds must be 1..=30000",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -300,12 +333,18 @@ impl MintConfig {
             }
         }
         self.listener.bind_address()?;
+        self.listener.validate()?;
 
         if self.signing.active_key_id.trim().is_empty() || self.signing.active_key_id.len() > 256 {
             return Err(ConfigError::Invalid("active key id must be 1..=256 bytes"));
         }
         if !self.signing.jwks_path.starts_with('/') {
             return Err(ConfigError::Invalid("jwks path must be absolute"));
+        }
+        if MINT_FIXED_ROUTES.contains(&self.signing.jwks_path.as_str()) {
+            return Err(ConfigError::Invalid(
+                "jwks path must not take a route Mint already serves",
+            ));
         }
         if self.audit.path.as_os_str().is_empty()
             || self.audit.hash_key_file.as_os_str().is_empty()
@@ -563,6 +602,40 @@ clients:
                 "audit storage and secret paths must be distinct from signing material"
             )
         );
+    }
+
+    #[test]
+    fn a_jwks_path_may_not_take_a_route_mint_already_serves() {
+        for path in MINT_FIXED_ROUTES {
+            let text = VALID.replace(
+                "activeKeyFile: secrets/signing.jwk",
+                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: {path}"),
+            );
+            assert_eq!(
+                load_error(&text),
+                ConfigError::Invalid("jwks path must not take a route Mint already serves"),
+                "jwks path {path} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn listener_limits_must_admit_a_request() {
+        for (field, value) in [
+            ("maximumRequestBytes", 0),
+            ("maximumRequestBytes", 1_048_577),
+            ("requestTimeoutMilliseconds", 0),
+            ("requestTimeoutMilliseconds", 30_001),
+        ] {
+            let text = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8081}",
+                &format!("listener: {{address: 127.0.0.1, port: 8081, {field}: {value}}}"),
+            );
+            assert!(
+                matches!(load_from(&text), Err(ConfigError::Invalid(_))),
+                "{field} {value} must be rejected"
+            );
+        }
     }
 
     #[test]

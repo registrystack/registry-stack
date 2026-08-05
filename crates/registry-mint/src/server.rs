@@ -38,7 +38,7 @@ use crate::{
     assertion::ClientAuthenticator,
     audit::{MintAuditError, MintAuditLog},
     clients::{ClientRegistry, ClientRegistryError},
-    config::{MintConfig, MINT_TOKEN_PATH},
+    config::{MintConfig, MINT_HEALTH_PATH, MINT_METADATA_PATH, MINT_READY_PATH, MINT_TOKEN_PATH},
     error::TokenError,
     replay::ReplayCache,
     token::{MinterError, TokenMinter},
@@ -48,7 +48,6 @@ use crate::{
 const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
-const METADATA_PATH: &str = "/.well-known/oauth-authorization-server";
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -335,9 +334,9 @@ pub fn build_app(service: Arc<MintService>) -> Router {
     let routes = Router::new()
         .route(MINT_TOKEN_PATH, post(token))
         .route(&jwks_path, get(jwks))
-        .route(METADATA_PATH, get(metadata))
-        .route("/health", get(health))
-        .route("/ready", get(ready))
+        .route(MINT_METADATA_PATH, get(metadata))
+        .route(MINT_HEALTH_PATH, get(health))
+        .route(MINT_READY_PATH, get(ready))
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(service);
