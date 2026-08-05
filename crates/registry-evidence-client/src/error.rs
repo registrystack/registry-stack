@@ -28,7 +28,10 @@ pub enum EvidenceClientError {
     Token(#[from] TokenError),
 
     /// The exchange did not complete. Connection setup, TLS negotiation, a
-    /// timeout, and a truncated body all collapse here.
+    /// timeout, and a body that exceeded the configured bound all arrive in this
+    /// one variant, and [`TransportKind`] tells them apart: TLS negotiation is
+    /// reported as a connection failure, and the other three each have their own
+    /// kind.
     #[error("the Evidence request did not complete: {kind}")]
     Transport { kind: TransportKind },
 
