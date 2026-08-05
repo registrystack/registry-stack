@@ -42,8 +42,11 @@ const MAX_DELEGATED_ACTORS: usize = 64;
 /// The longest claim path Evidence will resolve.
 const MAX_CLAIM_PATH_BYTES: usize = 512;
 
-/// JWK members that only ever appear in private keys.
-const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
+/// JWK members that only ever appear in private keys. `oth` carries the
+/// remaining prime factors of a multi-prime RSA private key (RFC 7518 section
+/// 6.3.2.7); a whole private key also carries `d`, but the guard must not depend
+/// on which private member happens to be present.
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum ClientRegistryError {

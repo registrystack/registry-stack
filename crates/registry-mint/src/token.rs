@@ -359,6 +359,13 @@ fn load_retired_public_key(path: &Path) -> Result<Value, MinterError> {
     if !object.get("kid").is_some_and(Value::is_string) {
         return Err(MinterError::RetiredKey("has no key id"));
     }
+    // Resource servers parse the whole set into a `JwkSet` before selecting a
+    // key, so an entry that is well-formed JSON but not a usable public key
+    // fails their refresh and takes the active key down with it. Parse it here,
+    // as the same type they will, rather than serving a set Mint has never
+    // proved is loadable.
+    serde_json::from_value::<jsonwebtoken::jwk::Jwk>(value.clone())
+        .map_err(|_| MinterError::RetiredKey("is not a usable public key"))?;
     Ok(value)
 }
 
@@ -513,6 +520,44 @@ clients:
 
         let error =
             build_jwks(&active_signer(), &[first, second]).expect_err("duplicate id is rejected");
+
+        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+    }
+
+    /// Consumers parse the whole set into `JwkSet` before selecting a key, so a
+    /// retired entry that is well-formed JSON but not a usable public JWK takes
+    /// the whole set down with it: JWKS refresh fails and tokens signed by the
+    /// active key start being rejected, while Mint goes on reporting itself
+    /// ready. Checking for a `kid` string is not the same as checking the entry
+    /// is a key.
+    #[test]
+    fn a_retired_entry_that_is_not_a_usable_public_key_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("retired.jwk");
+        fs::write(&path, r#"{"kid":"mint-2025-07"}"#).expect("write retired key");
+
+        let error =
+            build_jwks(&active_signer(), &[path]).expect_err("an unusable entry is rejected");
+
+        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+    }
+
+    /// RFC 7518 section 6.3.2.7 puts the remaining prime factors of a
+    /// multi-prime RSA private key in `oth`. A real private key carries `d` too
+    /// and is caught by that, but the published set must not depend on which
+    /// private member happens to be present.
+    #[test]
+    fn a_retired_entry_carrying_other_prime_material_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("retired.jwk");
+        fs::write(
+            &path,
+            r#"{"kty":"RSA","kid":"mint-2025-07","n":"sXchDaQ","e":"AQAB","oth":[{"r":"sXchDaQ","d":"sXchDaQ","t":"sXchDaQ"}]}"#,
+        )
+        .expect("write retired key");
+
+        let error =
+            build_jwks(&active_signer(), &[path]).expect_err("private material is rejected");
 
         assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
     }
