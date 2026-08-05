@@ -99,6 +99,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 address = ("127.0.0.1", int(os.environ["ACCEPTANCE_HTTPS_PORT"]))
 server = http.server.ThreadingHTTPServer(address, Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+# The stand-in sets its own floor rather than inheriting whatever the runtime
+# happens to allow, so the handoff is proven over the transport a deployment
+# would actually run.
+context.minimum_version = ssl.TLSVersion.TLSv1_2
 context.load_cert_chain(
     os.environ["ACCEPTANCE_TLS_CERT"], os.environ["ACCEPTANCE_TLS_KEY"]
 )
