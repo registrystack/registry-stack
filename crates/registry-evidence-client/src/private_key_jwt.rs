@@ -7,8 +7,10 @@
 //!
 //! It is plain OAuth. Nothing here knows which authorization server it is talking
 //! to, and the provider carries no claim, route, or vocabulary belonging to any
-//! particular issuer. Any server that accepts this grant and this authentication
-//! method will do.
+//! particular issuer. The request body carries only `grant_type`,
+//! `client_assertion_type`, and `client_assertion`; a server that also requires a
+//! scope, a resource indicator, or a body `client_id` on this grant needs support
+//! this provider does not offer.
 //!
 //! # What is cached, and for how long
 //!
@@ -153,6 +155,8 @@ impl PrivateKeyJwtConfig {
         self
     }
 
+    /// Must be within `1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS`; an out-of-range
+    /// value is refused when the provider is built rather than here.
     #[must_use]
     pub fn with_assertion_lifetime_seconds(mut self, seconds: i64) -> Self {
         self.assertion_lifetime_seconds = seconds;
@@ -160,6 +164,9 @@ impl PrivateKeyJwtConfig {
     }
 
     /// Treat this much of an access token's remaining life as already spent.
+    ///
+    /// Must not be negative; a negative value is refused when the provider is
+    /// built rather than here.
     #[must_use]
     pub fn with_refresh_margin_seconds(mut self, seconds: i64) -> Self {
         self.refresh_margin_seconds = seconds;
@@ -461,11 +468,13 @@ impl TokenProvider for PrivateKeyJwt {
         if let Some(token) = self.usable_cached_token(self.clock.unix_seconds()).await {
             return Ok(token);
         }
-        // One caller performs the token request while the others wait here, then
-        // find what it cached. A lock rather than a shared future keeps this
-        // readable, and the wait is bounded by the request timeout the integrator
-        // configured. The freshness check is repeated after the lock is taken,
-        // because the caller that held it has usually just cached a credential.
+        // The refresh lock serializes acquisition: one caller holds it and
+        // performs a token request while the rest wait their turn for it. The
+        // freshness check below spares a waiter its own request only when the
+        // caller ahead of it cached something; a credential that could not be
+        // cached, or a failed request, sends the next waiter to acquire its own
+        // in turn. A wait is therefore bounded by the number of callers ahead of
+        // it times the configured request timeout, not by that timeout alone.
         let _refreshing = self.refresh_lock.lock().await;
         let now = self.clock.unix_seconds();
         if let Some(token) = self.usable_cached_token(now).await {

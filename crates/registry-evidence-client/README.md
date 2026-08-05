@@ -25,7 +25,8 @@ judgement about a response is made by `registry-evidence-verifier`.
   the OAuth 2.0 `client_credentials` grant and the `private_key_jwt` client
   authentication method of RFC 7523. It is plain OAuth against any authorization
   server offering that grant, it caches what it is issued, and it replaces a
-  credential before the refresh margin rather than after expiry.
+  credential once the credential enters the refresh margin, before it actually
+  expires.
 - `EvidenceClient::verify_as_of`: the same verification at an instant the caller
   names, for re-verifying a response it retained.
 
