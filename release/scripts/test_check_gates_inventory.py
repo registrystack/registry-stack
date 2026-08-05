@@ -575,6 +575,10 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_release_workflow_classification_is_reported(self) -> None:
         workflows = (
             (
+                ".github/workflows/evidence-dev.yml",
+                "Evidence development workflow change classification",
+            ),
+            (
                 ".github/workflows/release.yml",
                 "Release workflow change classification",
             ),

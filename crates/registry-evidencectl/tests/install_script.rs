@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
 const TEST_VERSION: &str = "v9.8.7";
+const TEST_DEV_VERSION: &str = "v9.8.7-dev.12345.2";
 const BINARIES: [&str; 3] = ["evidence", "evidencectl", "mint"];
 
 #[cfg(unix)]
@@ -29,7 +30,18 @@ fn installer_refuses_to_run_without_a_pinned_release() {
 #[cfg(unix)]
 #[test]
 fn installer_rejects_noncanonical_release_tags() {
-    for tag in ["9.8.7", "v9.8", "latest", "v09.8.7", "v9.8.7-rc1"] {
+    for tag in [
+        "9.8.7",
+        "v9.8",
+        "latest",
+        "v09.8.7",
+        "v9.8.7-rc1",
+        "v9.8.7-dev.1",
+        "v9.8.7-dev.0.1",
+        "v9.8.7-dev.1.0",
+        "v9.8.7-dev.01.1",
+        "v9.8.7-dev.1.01",
+    ] {
         let fixture = InstallerFixture::for_release(tag);
         let output = fixture.run();
         assert!(!output.status.success(), "tag {tag} must be refused");
@@ -90,6 +102,53 @@ fn released_installer_supports_the_conventional_curl_pipe() {
     let fixture = InstallerFixture::new();
     let rendered = fixture.rendered_installer();
     let output = fixture.command_from_stdin(&rendered).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+}
+
+#[cfg(unix)]
+#[test]
+fn development_installer_supports_the_curl_pipe_and_names_its_limit() {
+    let fixture = InstallerFixture::for_release(TEST_DEV_VERSION);
+    let rendered = fixture.rendered_installer();
+    let output = fixture.command_from_stdin(&rendered).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Development build"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("unsupported prerelease"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("not signed"), "stdout: {stdout}");
+
+    let downloads = fs::read_to_string(fixture.fake_curl_log()).unwrap();
+    assert_eq!(downloads.lines().count(), BINARIES.len() + 1);
+    assert!(
+        downloads
+            .lines()
+            .all(|url| url.contains(&format!("/releases/download/{TEST_DEV_VERSION}/"))),
+        "download URLs: {downloads}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn versioned_development_installer_selects_its_own_prerelease() {
+    let fixture = InstallerFixture::for_release(TEST_DEV_VERSION);
+    let versioned = fixture
+        .temp_path()
+        .join(format!("evidencectl-{TEST_DEV_VERSION}-install.sh"));
+    fs::copy(installer_path(), &versioned).unwrap();
+    let output = fixture.command_for(&versioned, false).output().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",

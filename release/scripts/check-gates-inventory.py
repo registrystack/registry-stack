@@ -39,6 +39,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         '".github/workflows/release.yml",',
     ),
     (
+        "Evidence development workflow change classification",
+        '".github/workflows/evidence-dev.yml",',
+    ),
+    (
         "Release candidate workflow change classification",
         '".github/workflows/release-candidate.yml",',
     ),
@@ -363,6 +367,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 
 RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/docs-pages.yml",
+    ".github/workflows/evidence-dev.yml",
     ".github/workflows/release.yml",
     ".github/workflows/release-candidate.yml",
     ".github/workflows/release-canary.yml",
@@ -375,6 +380,23 @@ RELEASE_SECURITY_POLICY_PATHS = (
 
 # The compact v2 release contract is the active release inventory.
 REQUIRED_RELEASE_SECURITY_GATES = (
+    (
+        "Protected-main Evidence development prerelease",
+        ".github/workflows/evidence-dev.yml",
+        (
+            "workflow_dispatch:",
+            '"${GITHUB_REF}" != refs/heads/main',
+            "name: Validate manual source and successful CI",
+            "actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success",
+            'tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"',
+            "name: Smoke the development installer before publication",
+            "name: Reverify the closed development asset roster",
+            "name: Publish unique development prerelease",
+            '--target "${source_sha}"',
+            "--prerelease",
+            "--latest=false",
+        ),
+    ),
     (
         "Protected-main candidate-bound annotated tag promotion",
         ".github/workflows/release.yml",
@@ -561,6 +583,12 @@ REQUIRED_RELEASE_SECURITY_GATES = (
 
 ORDERED_RELEASE_SECURITY_GATES = (
     (
+        "Evidence development smoke before publication permission",
+        ".github/workflows/evidence-dev.yml",
+        "name: Smoke the development installer before publication",
+        "publish:\n    name: Publish unique Evidence development prerelease",
+    ),
+    (
         "Latest release recheck immediately before docs deployment",
         ".github/workflows/docs-pages.yml",
         "name: Recheck latest published release immediately before deployment",
@@ -635,6 +663,25 @@ ORDERED_RELEASE_SECURITY_GATES = (
 )
 
 FORBIDDEN_RELEASE_SECURITY_GATES = (
+    (
+        "Evidence development publication cannot mutate an existing release or use branch workflow code",
+        ".github/workflows/evidence-dev.yml",
+        (
+            "push:",
+            "pull_request:",
+            "schedule:",
+            "repository_dispatch:",
+            "gh release upload",
+            "gh release delete",
+            "--clobber",
+            "git push",
+            "git update-ref",
+            "/git/refs",
+            "packages: write",
+            "id-token: write",
+            "attestations: write",
+        ),
+    ),
     (
         "Promotion cannot rebuild product bytes or write refs",
         ".github/workflows/release.yml",

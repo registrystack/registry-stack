@@ -191,10 +191,31 @@ tag, then rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at that
 verified directory.
 
 Three environment variables configure the installer: `EVIDENCECTL_VERSION`
-names a `vMAJOR.MINOR.PATCH` release for a copy that carries none,
+names a `vMAJOR.MINOR.PATCH` release or workflow-produced development tag for
+a copy that carries none,
 `EVIDENCECTL_INSTALL_DIR` sets the install directory (default `~/.local/bin`),
 and `EVIDENCECTL_ASSET_DIR` installs from a locally verified asset directory
 instead of downloading.
+
+### Manual development build
+
+To test the current protected `main` revision before the next release, run the
+**Registry Evidence Development Build** workflow manually from the `main`
+branch. It requires successful protected-main CI, builds the same three-binary
+toolset for Linux amd64, Linux arm64, and macOS arm64, and creates a unique
+prerelease named `v<workspace-version>-dev.<run>.<attempt>`.
+
+The workflow summary and prerelease notes contain the exact install command:
+
+```sh
+curl -fsSL "https://github.com/registrystack/registry-stack/releases/download/<development-tag>/evidencectl-install.sh" | bash
+```
+
+Development prereleases use unique source-bound tags, and the workflow never
+overwrites them. They are unsupported. Their installer checks each binary
+against the included `SHA256SUMS`; those checksums are not signed, and the
+prerelease is not a Registry Stack release. Use a normal released version for
+production or release verification.
 
 To build the toolset from source instead:
 

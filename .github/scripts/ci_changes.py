@@ -87,6 +87,7 @@ ROOT_RUST_INPUTS = {
 
 RELEASE_SECURITY_WORKFLOWS = frozenset(
     {
+        ".github/workflows/evidence-dev.yml",
         ".github/workflows/release.yml",
         ".github/workflows/release-candidate.yml",
         ".github/workflows/release-repeatability.yml",
