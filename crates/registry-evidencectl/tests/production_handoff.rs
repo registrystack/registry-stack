@@ -1631,7 +1631,7 @@ authorityProfiles:
         fs::write(
             &config,
             format!(
-                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: EdDSA\n  activeKeyId: mint-signing-key-1\n  activeKeyFile: secrets/signing-ed25519-private-jwk\naudit:\n  path: audit/mint.jsonl\n  hashKeyFile: secrets/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [EdDSA]\nclients:\n  directory: clients\n",
+                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: EdDSA\n  activeKeyId: mint-signing-key-1\n  activeKeyFile: secrets/signing-ed25519-private-jwk\naudit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyFile: secrets/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [EdDSA]\nclients:\n  directory: clients\n",
                 port = self.mint_port,
             ),
         )
