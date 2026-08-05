@@ -193,12 +193,21 @@ export function applyRepoDisplayName(md, repoId) {
         .map((segment, index) => {
           if (index % 2 === 1) return segment;
           let prose = segment;
+          const linkTargets = [];
+          prose = prose.replace(/(!?\[[^\]]*\]\()([^)]*)(\))/g, (_whole, prefix, target, suffix) => {
+            const placeholder = `\u0000EVIDENCE_LINK_TARGET_${linkTargets.length}\u0000`;
+            linkTargets.push(target);
+            return `${prefix}${placeholder}${suffix}`;
+          });
           for (const [placeholder, term] of placeholders) {
             prose = prose.replaceAll(term, placeholder);
           }
           prose = prose.replace(/\bEvidence\b(?! Gateway\b)/g, 'Evidence Gateway');
           for (const [placeholder, term] of placeholders) {
             prose = prose.replaceAll(placeholder, term);
+          }
+          for (const [index, target] of linkTargets.entries()) {
+            prose = prose.replaceAll(`\u0000EVIDENCE_LINK_TARGET_${index}\u0000`, target);
           }
           return prose;
         })

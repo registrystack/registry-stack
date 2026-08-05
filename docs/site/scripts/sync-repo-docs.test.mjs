@@ -31,6 +31,7 @@ test('uses the Evidence Gateway display name in generated product prose', () => 
     'Evidence Type and Core Criterion and Core Evidence Vocabulary keep their formal names.',
     'OOTS uses an Evidence Broker and an Evidence Provider.',
     'Inline `Evidence` and `registry-evidence` are technical identifiers.',
+    '[Evidence guidance](https://example.com/Evidence+Exchange) keeps its link target.',
     '',
     '```json',
     '{ "type": "Evidence" }',
@@ -46,6 +47,10 @@ test('uses the Evidence Gateway display name in generated product prose', () => 
   assert.match(transformed, /Evidence Type and Core Criterion and Core Evidence Vocabulary/);
   assert.match(transformed, /Evidence Broker and an Evidence Provider/);
   assert.match(transformed, /Inline `Evidence` and `registry-evidence`/);
+  assert.match(
+    transformed,
+    /\[Evidence Gateway guidance\]\(https:\/\/example\.com\/Evidence\+Exchange\)/,
+  );
   assert.match(transformed, /\{ "type": "Evidence" \}/);
   assert.match(transformed, /### Assertion evidence/);
   assert.match(transformed, /## Request an assertion from Evidence Gateway/);

@@ -46,9 +46,11 @@ At runtime, Registry Stack exposes source data through two patterns:
 - Minimum-disclosure assertions: one bounded question about one subject, answered with a signed
   assertion that carries the answer and not the record. Evidence Gateway implements this runtime surface.
 
-The two patterns are independent. Evidence Gateway contacts its own configured authoritative HTTP
-sources. It does not call Registry Relay, inherit Relay authorization, or depend on a Relay
-deployment.
+The two patterns are independent. Evidence Gateway contacts its configured authoritative HTTP
+sources directly. It does not require Registry Relay or inherit Relay authorization. A deployment
+can configure a Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source
+rather than part of the Evidence Gateway product boundary. The retired Solmara workflow is not a
+current integration path.
 
 This split matters because it separates the obligation to describe (what a registry declares it can expose
 and under what policy) from the obligation to enforce (what a running service will actually return to an

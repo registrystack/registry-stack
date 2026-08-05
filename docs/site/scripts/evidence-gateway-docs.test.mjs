@@ -48,22 +48,26 @@ test('uses Evidence Gateway as the public product display name', () => {
   }
 });
 
-test('does not publish Evidence Gateway over Relay as a current request path', () => {
-  const staleComposition = [
-    /Evidence Gateway (?:can |may |will )?(?:read|use|consume|treat)[^.\n]{0,80}Relay/i,
-    /Evidence Gateway[^.\n]{0,80} over (?:a |the )?Relay/i,
-    /Relay-protected[^.\n]{0,120}Evidence Gateway/i,
-    /Evidence Gateway[^.\n]{0,120}Relay-protected/i,
-    /Relay API as (?:an? )?(?:ordinary )?fixed HTTP source/i,
+test('keeps Relay outside the Evidence Gateway product boundary', () => {
+  const architecture = readFileSync(
+    resolve(docsRoot, 'explanation/architecture.mdx'),
+    'utf8',
+  );
+  assert.match(architecture, /Relay-protected API as a fixed HTTP source/);
+
+  const boundaryViolations = [
+    /Evidence Gateway (?:requires|depends on) Registry Relay/i,
+    /Evidence Gateway inherits Relay authorization/i,
+    /Registry Relay is part of the Evidence Gateway product boundary/i,
   ];
 
   for (const { path, source } of publishedHandAuthoredDocs()) {
     const prose = visibleProse(source);
-    for (const pattern of staleComposition) {
+    for (const pattern of boundaryViolations) {
       assert.doesNotMatch(
         prose,
         pattern,
-        `${relative(siteRoot, path)} republishes the obsolete Relay composition`,
+        `${relative(siteRoot, path)} merges the Relay and Evidence Gateway product boundaries`,
       );
     }
   }
