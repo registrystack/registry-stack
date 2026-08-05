@@ -63,7 +63,17 @@ runtime depends on. It owns the response wire formats, the Evidence payload
 contract, and relying-party verification, so client tooling can verify a signed
 Evidence response without the runtime. It is a library, not a second runtime and
 not a pattern of its own, and it carries no server, source access, or
-platform-specific dependency.
+service-runtime dependency; portable means free of the service runtime, not
+target independent.
+
+`registry-evidence-client` is the relying-party SDK beside the runtime. It
+requests assertions over the public HTTP contract and links
+`registry-evidence-verifier` for every verification decision, so it sits outside
+the frozen Version 1 runtime contract and adds no Evidence semantics of its own.
+`registry-evidence-client-node` (napi-rs) and `registry-evidence-client-py`
+(PyO3) are thin bindings over that SDK and carry the same boundary. All three
+are covered by the same source-product and domain neutrality checks as the
+runtime.
 
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
@@ -143,6 +153,25 @@ Evidence-specific contracts, source neutrality, and verifier portability:
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
 products/evidence/scripts/check-verifier-portability.sh
+```
+
+Evidence client bindings, from `crates/registry-evidence-client-node`:
+
+```bash
+npm ci
+npm run build:debug
+npm test
+npm run check:types
+cmp ../../LICENSE LICENSE
+```
+
+and from `crates/registry-evidence-client-py`:
+
+```bash
+cargo build --locked -p registry-evidence-client-py --lib \
+  --features registry-evidence-client-py/extension-module
+python3 -m unittest discover -s tests/python -v
+cmp ../../LICENSE LICENSE
 ```
 
 Release source checks:
