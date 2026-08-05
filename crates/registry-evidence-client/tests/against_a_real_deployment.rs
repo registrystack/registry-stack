@@ -1169,6 +1169,7 @@ signing:
   activeKeyFile: secrets/signing.jwk
 audit:
   path: audit/decisions.jsonl
+  maximumFileBytes: 1073741824
   hashKeyFile: secrets/audit-hash-key
   hashKeyVersion: 1
 accessTokens:
