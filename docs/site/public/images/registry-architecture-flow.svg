@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to both runtime services. Registry Manifest produces portable metadata contracts describing what a registry exposes. Registry Relay binds those descriptions to real sources and serves protected read-only APIs and typed consultations. Evidence answers one bounded question about one subject and returns a signed assertion carrying the answer and not the record; it reads a Relay API as one ordinary fixed HTTP source. Registry Mint is a supporting service that issues the short-lived access tokens Evidence verifies, for deployments with no identity provider. The external Solmara Lab adopter demo runs Relay, Evidence, and Mint together in a demo topology.</desc>
+  <desc>Registry Platform provides shared primitives to both runtime services. Registry Manifest produces portable metadata contracts describing what a registry exposes. Registry Relay binds those descriptions to real sources and serves protected read-only APIs and typed consultations. Evidence Gateway independently answers one bounded question about one subject from its own configured authoritative HTTP sources and returns a signed assertion carrying the answer and not the record. Registry Mint is a supporting service that issues the short-lived access tokens Evidence Gateway verifies, for deployments with no identity provider. The external Solmara Lab adopter demo provides synthetic registry data.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -54,13 +54,7 @@
     <text x="240" y="322">consultations.</text>
   </g>
 
-  <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="248" y1="336" x2="248" y2="360"/>
-    <polyline points="244,354 248,360 252,354"/>
-  </g>
-  <text x="262" y="356" fill="#6a6a6a" font-size="11">read as one fixed HTTP source</text>
-
-  <text x="240" y="392" fill="#161616" font-size="14" font-weight="700">Evidence</text>
+  <text x="240" y="392" fill="#161616" font-size="14" font-weight="700">Evidence Gateway</text>
   <text x="240" y="410" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-evidence</text>
   <g fill="#3a3a3a" font-size="12.5">
@@ -80,9 +74,9 @@
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">solmara-lab</text>
   <g fill="#3a3a3a" font-size="12.5">
     <text x="520" y="268">External adopter demo</text>
-    <text x="520" y="286">running Relay, Evidence,</text>
-    <text x="520" y="304">and Mint together in a</text>
-    <text x="520" y="322">demo topology.</text>
+    <text x="520" y="286">with generated synthetic</text>
+    <text x="520" y="304">registry data and demo</text>
+    <text x="520" y="322">configuration.</text>
   </g>
 
   <line x1="0" y1="520" x2="720" y2="520" stroke="#e5e5e5" stroke-width="1"/>
@@ -93,7 +87,7 @@
   <text x="144" y="574" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-mint</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="260" y="574">Issues the short-lived access tokens Evidence verifies,</text>
+    <text x="260" y="574">Issues the short-lived access tokens Evidence Gateway verifies,</text>
     <text x="260" y="592">for deployments with no identity provider.</text>
   </g>
 </svg>

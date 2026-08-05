@@ -27,7 +27,7 @@ standards_referenced:
 import ProjectMap from '../../../components/ProjectMap.astro';
 
 The formal Registry Stack has four products with distinct responsibilities: Registry Platform,
-Registry Manifest, Registry Relay, and Evidence.
+Registry Manifest, Registry Relay, and Evidence Gateway.
 Registry Mint is a supporting service beside them, issuing short-lived access tokens for deployments
 that have callers and no identity provider.
 Solmara Lab is a separate adopter project that demonstrates the products together.
@@ -40,9 +40,9 @@ and to understand how the products and the external demo connect at runtime.
             separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
             crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
             validation, and renderers. Registry Relay serves protected read-only APIs over sensitive
-            registry sources. Evidence answers one bounded question about one subject with a signed
-            assertion. Registry Mint issues the short-lived access tokens Evidence verifies. Solmara
-            Lab runs Relay, Evidence, and Mint together." />
+            registry sources. Evidence Gateway answers one bounded question about one subject with a signed
+            assertion. Registry Mint issues the short-lived access tokens Evidence Gateway verifies. Solmara
+            Solmara Lab is an external synthetic-data adopter demo." />
 </figure>
 
 <ProjectMap />
@@ -62,7 +62,7 @@ For how the products connect at runtime and how Solmara Lab demonstrates them, s
 | Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](https://github.com/registrystack/registry-stack) |
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
-| How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence](../../products/registry-evidence/) |
+| How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence Gateway](../../products/registry-evidence/) |
 | How does a deployment with callers and no identity provider issue access tokens? | [Registry Mint](../../reference/mint/) |
 | How do the services run together in a local demo? | [Solmara Lab](https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/README.md) |
 
@@ -78,7 +78,7 @@ Registry Platform is a shared crate workspace. It does not run a service or deci
 
 - Registry Relay route behavior, runtime source binding, metadata publication, or
   Relay-specific scope semantics.
-- Evidence requirement definitions, authorization grants, disclosure decisions, service routes,
+- Evidence Gateway requirement definitions, authorization grants, disclosure decisions, service routes,
   assertion construction, or signing policy.
   {/* Evidence: Rust in registry-evidence owns authentication, authorization, fixed source
        execution, output validation, evidence construction, signing, and audit; the platform
@@ -106,7 +106,7 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Production source configuration. Source paths, table IDs, scopes, cache paths, and backend
   runtime details belong in Registry Relay configuration, not in portable manifests.
   {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
-- Evidence deployment configuration. An Evidence process loads one immutable governed bundle and
+- Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and
   one closed runtime file mounted read-only at startup, and reads no portable manifest.
   {/* Evidence: "Governed bundle and operator runtime", products/evidence/OPERATOR-CONTRACT.md. */}
 
@@ -125,9 +125,9 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
   them for callers, but the schema is defined and versioned in Registry Manifest.
   {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership);
        registry-relay evidence packet, metadata publication section. */}
-- Assertion evaluation, disclosure, and signing owned by Evidence. Registry Relay can declare
-  evidence offerings and route clients onward, but requirement evaluation, disclosure form, and
-  signing run in Evidence, which reads a Relay API as one ordinary fixed HTTP source.
+- Assertion evaluation, disclosure, and signing owned by Evidence Gateway. Registry Relay can declare
+  evidence offerings, but requirement evaluation, disclosure form, source access, and signing run
+  independently in Evidence Gateway.
   {/* Evidence: registry-relay evidence packet, evidence offering verification section; contract
        registry.evidence.fixed-http-json-source/v1,
        products/evidence/contracts/source-contract.yaml. */}
@@ -142,9 +142,9 @@ Registry Relay exposes protected read-only APIs over registry sources. It does n
 Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
 systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */}
 
-## Evidence
+## Evidence Gateway
 
-Evidence answers one bounded question about one subject and returns a signed assertion carrying the
+Evidence Gateway answers one bounded question about one subject and returns a signed assertion carrying the
 answer rather than the record. It does not own:
 
 - Source access as a general capability. Each evaluation makes exactly one fixed, bounded HTTP JSON
@@ -153,22 +153,22 @@ answer rather than the record. It does not own:
   fulfillment, and source-planning scripts are outside the Version 1 contract.
   {/* Evidence: contract registry.evidence.fixed-http-json-source/v1,
        products/evidence/contracts/source-contract.yaml (frozen). */}
-- Record lookup and identity resolution. The authoritative provider owns lookup. Evidence accepts
+- Record lookup and identity resolution. The authoritative provider owns lookup. Evidence Gateway accepts
   only `match`, `no_match`, or `ambiguous`, and does not score candidates, choose a provider record,
   or expose counts, near-match hints, or per-field diagnostics.
   {/* Evidence: "Source and selector controls", products/evidence/OPERATOR-CONTRACT.md. */}
-- Portable metadata renderers owned by Registry Manifest. Evidence produces no DCAT, SHACL,
+- Portable metadata renderers owned by Registry Manifest. Evidence Gateway produces no DCAT, SHACL,
   BRegDCAT-AP, or OGC Records artifacts and consumes no manifest.
 - Shared auth, OIDC, audit, HTTP security, crypto, SD-JWT, and testing primitives owned by Registry
-  Platform. Evidence owns the assertion behavior that composes those primitives.
+  Platform. Evidence Gateway owns the assertion behavior that composes those primitives.
   {/* Evidence: crates/registry-evidence/Cargo.toml depends on registry-platform-audit, -crypto,
        -httpsec, -httputil, -oidc, and -sdjwt, and on no other product crate. */}
-- Token issuance and identity proofing. Evidence verifies access tokens under one reviewed OIDC
+- Token issuance and identity proofing. Evidence Gateway verifies access tokens under one reviewed OIDC
   profile with exactly one trusted issuer; it issues none. Registry Mint issues them for a
   deployment with no identity provider.
   {/* Evidence: "Supported deployment", products/evidence/OPERATOR-CONTRACT.md. */}
 - Consumer decisions. Requirements, eligibility, ranking, approval, routing, payment, workflow, and
-  action policy stay with the accountable decision owner. Evidence is not a workflow, orchestration,
+  action policy stay with the accountable decision owner. Evidence Gateway is not a workflow, orchestration,
   or case-management engine and not a runtime policy engine or general PDP.
   {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4. */}
 - A credential lifecycle. Version 1 has no issuance session, holder binding ceremony, status list,
@@ -176,7 +176,7 @@ answer rather than the record. It does not own:
   {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4; "Response formats",
        products/evidence/OPERATOR-CONTRACT.md. */}
 
-The default Evidence response is a flattened JWS JSON assertion (`application/jose+json`), not a W3C
+The default Evidence Gateway response is a flattened JWS JSON assertion (`application/jose+json`), not a W3C
 Verifiable Credentials Data Model JSON-LD envelope. An SD-JWT VC serialization
 (`application/dc+sd-jwt`) of the same stateless assertion is releasable only where the immutable
 bundle and the one matched authority grant both name that format, under the frozen profile in
@@ -192,7 +192,7 @@ identity provider still has one. It does not own:
   machine clients through `private_key_jwt`, not people.
 - Caller-declared authority. Token authority is written from the client registry and never from the
   caller's own request.
-- Evidence authorization. Evidence independently verifies the token and re-authorizes every request
+- Evidence Gateway authorization. Evidence Gateway independently verifies the token and re-authorizes every request
   against its own bundle and authority grants.
 
 {/* Evidence: contract status and stable properties, docs/site/src/content/docs/reference/mint.mdx,
@@ -202,7 +202,7 @@ identity provider still has one. It does not own:
 ## Solmara Lab
 
 Solmara Lab is a separately maintained adopter demo for the fictional Republic of Solmara.
-It runs Relay, Evidence, and Mint together in local and hosted topologies, but it is not a formal
+It uses generated synthetic data, but it is not a formal
 Registry Stack product. It does not own:
 
 - Production deployment guidance. The demo uses generated synthetic data and demo configuration.

@@ -1,6 +1,6 @@
 ---
 title: Error and status code reference
-description: RFC 9457 problem codes returned by Registry Relay, with their meaning and usual cause, and where the Evidence and Registry Mint error contracts are documented.
+description: RFC 9457 problem codes returned by Registry Relay, with their meaning and usual cause, and where the Evidence Gateway and Registry Mint error contracts are documented.
 status: current
 owner: registry-docs
 source_repos:
@@ -28,22 +28,22 @@ use `code` for the stack-wide meaning.
 The additive compatibility gate uses this reference as the error-code registry and the committed
 OpenAPI documents for operation mappings they enumerate.
 
-## Evidence
+## Evidence Gateway
 
-Evidence has its own closed problem set, documented at
-[Evidence problem types](../evidence-problems/). That page is the single place the set is written
+Evidence Gateway has its own closed problem set, documented at
+[Evidence Gateway problem types](../evidence-problems/). That page is the single place the set is written
 down, because the set is frozen in `products/evidence/contracts/problem-contract.yaml` and CI
 byte-diffs the generated schema against it; a second copy of the table here would drift without a
 gate to catch it.
 
-Two structural differences are worth knowing before reading the Evidence page. Evidence problem
+Two structural differences are worth knowing before reading the Evidence Gateway page. Evidence Gateway problem
 type URIs are `https://registrystack.org/problems/evidence/<code>` rather than the
-`https://id.registrystack.org/problems/...` form used elsewhere in the stack. And an Evidence
+`https://id.registrystack.org/problems/...` form used elsewhere in the stack. And an Evidence Gateway
 problem body carries exactly five members (`type`, `title`, `status`, `code`, and `operation`,
 the request's ULID), with no `detail` member and no other extension, so the failure never carries
 subject data or source diagnostics back to the caller.
 
-Evidence answers with one of that closed set for every failure, including transport-level ones: a
+Evidence Gateway answers with one of that closed set for every failure, including transport-level ones: a
 request body over the configured limit is refused as `malformed_request` rather than with a
 shared-middleware problem type (`crates/registry-evidence/src/server.rs`).
 
@@ -277,6 +277,6 @@ The startup-only runtime binding codes are raised by `crates/registry-relay/src/
 
 The codes this page points at rather than repeating are transcribed on their own pages from
 `crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml`
-(Evidence) and `crates/registry-mint/src/error.rs` (Registry Mint).
+(Evidence Gateway) and `crates/registry-mint/src/error.rs` (Registry Mint).
 The release compatibility gate compares this registry to its base reference and verifies that every
 listed code remains anchored in Rust or OpenAPI source.

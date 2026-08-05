@@ -1,6 +1,6 @@
 ---
-title: Request Evidence as SD-JWT VC
-description: Enable SD-JWT VC on one governed Evidence grant, request the second serialization over HTTP, and verify the stored credential offline.
+title: Request Evidence Gateway as SD-JWT VC
+description: Enable SD-JWT VC on one governed Evidence Gateway grant, request the second serialization over HTTP, and verify the stored credential offline.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,7 +16,7 @@ standards_referenced: []
 
 Start with a complete governed project. If you need to create and validate one,
 [connect an institution source from OpenAPI](../connect-an-institution-source/), then
-[prove the Evidence project](../prove-an-evidence-project/). Evidence can serialize the same
+[prove the Evidence Gateway project](../prove-an-evidence-project/). Evidence Gateway can serialize the same
 stateless assertion as signed JWS or SD-JWT VC. The question, source access, derivation, supported
 values, subject binding, purpose, audience, signing key, and audit boundaries remain the same.
 
@@ -34,7 +34,7 @@ answers:
       disclosure: top-level
 ```
 
-`birthCertificate` is adopter configuration, not a built-in Evidence claim. The `top-level` mode
+`birthCertificate` is adopter configuration, not a built-in Evidence Gateway claim. The `top-level` mode
 makes each direct field independently disclosable. A nested value, such as `placeOfBirth`, remains
 one atomic disclosure.
 
@@ -119,7 +119,7 @@ set for the run, and `verification-policy.json` comes from the consumer's reques
 records, not from the credential.
 
 An unprojected value has one root disclosure. A configured structured value has one disclosure for
-each direct field. Evidence's current verifier checks the complete stored credential. It does not
+each direct field. Evidence Gateway's current verifier checks the complete stored credential. It does not
 verify a selectively disclosed presentation from a wallet.
 
 ## Keep the boundary explicit
@@ -137,7 +137,7 @@ outside this minimum path.
 
 Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
 `/.well-known/evidence/jwks.json`. Both are discovery. Approve trust independently through
-[Manage Evidence verifier trust](../manage-evidence-verifier-trust/).
+[Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/).
 
 For deterministic source-tree proof of the full format and tamper refusals, see the
 [maintained SD-JWT VC demo](https://github.com/registrystack/registry-stack/blob/main/products/evidence/SD-JWT-VC-DEMO.md).

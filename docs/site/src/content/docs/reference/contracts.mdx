@@ -69,11 +69,11 @@ Stable machine identifiers for the registry stack resolve at `https://id.registr
 ### Credential contract ownership
 
 Registry Relay no longer issues signed response credentials and no longer serves the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
-[Evidence](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
+[Evidence Gateway](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
 Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in the table above.
 
 The removed Relay routes are not production contracts for 1.0.
-A client that needs a signed, minimum-disclosure answer calls Evidence directly instead of following a Relay evidence offering.
+A client that needs a signed, minimum-disclosure answer calls Evidence Gateway directly instead of following a Relay evidence offering.
 
 ### JSON-LD namespaces
 

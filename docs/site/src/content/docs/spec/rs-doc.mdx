@@ -90,7 +90,7 @@ A specification's canonical metadata is its frontmatter. The register surfaces i
 - `normative` defines required behavior. Its MUST and SHOULD statements bind.
 - `informative` explains, motivates, or illustrates. It binds nothing.
 
-**Evidence** is how true the document is against shipped code:
+**Evidence Gateway** is how true the document is against shipped code:
 
 - `verified` is backed by code, tests, fixtures, or generated artifacts that a reader can inspect. A `verified` document carries evidence references to those artifacts (REQ-DOC-014); a claim a reader cannot trace to one is not `verified`.
 - `partial` mixes shipped behavior with target behavior. The document marks which sections are which.
@@ -152,7 +152,7 @@ REQ-DOC-013: When a specification is superseded, its `status` becomes `historica
 
 A document conforms to RS-DOC when it: is a distilled public contract, not copied internal evidence (REQ-DOC-001); carries a unique, well-formed `doc_id` and the `category` and `evidence` axes (REQ-DOC-004, REQ-DOC-006); states its evidence honestly, including the unbuilt case (REQ-DOC-007); backs a `verified` evidence level with evidence references (REQ-DOC-014); carries a version-history table that records normative changes (REQ-DOC-012); and interprets normative keywords per Section 2. The frontmatter check enforces the mechanical requirements; the rest is a review responsibility.
 
-## Evidence
+## Evidence Gateway
 
 This specification is `verified`: the mechanisms it defines exist and run, and a reader can inspect them.
 

@@ -1,6 +1,6 @@
 ---
 title: Evidencectl command reference
-description: Reference for Evidence authoring, production build, deployment inspection, fixture, and local-development commands.
+description: Reference for Evidence Gateway authoring, production build, deployment inspection, fixture, and local-development commands.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,14 +11,14 @@ locale: en
 standards_referenced: []
 ---
 
-`evidencectl` is Evidence adopter tooling. It creates key material and editable projects, compiles
-production candidates, and invokes the `evidence` binary for Evidence semantic decisions. It does
+`evidencectl` is Evidence Gateway adopter tooling. It creates key material and editable projects, compiles
+production candidates, and invokes the `evidence` binary for Evidence Gateway semantic decisions. It does
 not approve, deploy, promote, register production clients, or write production secret values.
 Its client registration commands manage local development only.
 
 ## Contract status
 
-Evidencectl is outside the frozen Evidence Version 1 runtime contract. Its command line can change
+Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. Its command line can change
 before a compatibility promise covers it. The `evidence` runtime remains the authority for bundle
 compilation, fixture evaluation, secret validation, and startup acceptance.
 
@@ -58,13 +58,13 @@ by the final target-host `evidence check`.
 `evidencectl new --profile local` and `evidencectl dev` are local-authoring commands. Nothing under
 `.evidence/dev` is a production build input. `new` creates no source policy, question, fixture
 content, production target, Mint configuration, or deployable bundle. `--generate-keys` creates
-disposable, unbound Evidence key material only.
+disposable, unbound Evidence Gateway key material only.
 
 `evidencectl access` manages caller access for one local project:
 
 | Command | State | Result |
 | --- | --- | --- |
-| `evidencectl access policy add <policy> --question <question>` | Creates `access/policies/<policy>.yaml` | Defines one or more repeated `--question` values for the next Evidence generation |
+| `evidencectl access policy add <policy> --question <question>` | Creates `access/policies/<policy>.yaml` | Defines one or more repeated `--question` values for the next Evidence Gateway generation |
 | `evidencectl access policy list` | Reads `access/policies/` | Lists the governed local policies and their questions |
 | `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
 | `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
@@ -75,9 +75,9 @@ live only under `.evidence/clients/`. Generated Registry Mint registrations unde
 `.evidence/dev/generated/clients/` are disposable and contain public keys only.
 
 Client add and revoke request a Registry Mint reload only when `evidencectl dev` has a ready local
-session. They do not restart or reload Evidence. Registry Mint does not acknowledge completion of
+session. They do not restart or reload Evidence Gateway. Registry Mint does not acknowledge completion of
 the reload, so the next token exchange provides the functional check. A policy change requires a
-new Evidence generation.
+new Evidence Gateway generation.
 
 The local access commands do not define production authority or production clients. Production
 authority profiles remain in the deployment target's governed `governance.yaml`. Production client
@@ -90,6 +90,6 @@ production candidate input.
 
 ## Related reference
 
-- [Configure Evidence](../../configure/evidence/)
+- [Configure Evidence Gateway](../../configure/evidence/)
 - [Registry Mint reference](../mint/)
-- [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+- [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)

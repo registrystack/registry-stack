@@ -1,6 +1,6 @@
 ---
-title: Prove an Evidence project
-description: Add fixtures that describe your own requirement and run them through the Evidence evaluator before a production build.
+title: Prove an Evidence Gateway project
+description: Add fixtures that describe your own requirement and run them through the Evidence Gateway evaluator before a production build.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,7 +16,7 @@ standards_referenced: []
 
 Start with a reviewed editable project. If you need to create one,
 [connect an institution source from OpenAPI](../connect-an-institution-source/) before adding
-fixtures. Fixtures are executable claims about your own Evidence project. They are not sample data
+fixtures. Fixtures are executable claims about your own Evidence Gateway project. They are not sample data
 for a first run and they must not be generated from an unrelated domain.
 
 Use them when your source, requirement, and derivation are ready for review. Local assurance may
@@ -101,11 +101,11 @@ Build and hand off only when these facts are recorded together:
 
 Keep the governed bundle unchanged across environments where practical. Bind environment-specific
 paths, secret roots, audit storage, listener settings, and trust files through each environment's
-runtime file. [Build and deploy an Evidence project](../build-and-deploy-evidence-project/) covers
+runtime file. [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/) covers
 the target-host ceremony.
 
 ## Next
 
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
-- [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
+- [Rotate Evidence Gateway signing keys](../move-evidence-to-production-signing/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)

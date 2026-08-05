@@ -1,6 +1,6 @@
 ---
-title: Evidence security model
-description: "The security invariants Evidence enforces, how each traces to a named test, and the duties that remain with the operator."
+title: Evidence Gateway security model
+description: "The security invariants Evidence Gateway enforces, how each traces to a named test, and the duties that remain with the operator."
 status: current
 owner: registry-docs
 source_repos:
@@ -11,7 +11,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence's security model is contract-driven. The invariant matrix in
+Evidence Gateway's security model is contract-driven. The invariant matrix in
 `products/evidence/contracts/security-invariant-matrix.yaml` is the source of
 truth for what the runtime guarantees, `products/evidence/contracts/security-test-traceability.yaml`
 binds every invariant to the named tests that prove it, and continuous
@@ -29,7 +29,7 @@ is the complete, normative text.
 
 ### Closed request and requirement scope
 
-Evidence evaluates only predefined, versioned requirement revisions
+Evidence Gateway evaluates only predefined, versioned requirement revisions
 (`V1-I01`). The request schema is closed, so callers cannot supply
 thresholds, expressions, scripts, paths, headers, source fields, relationship
 types, adapter parameters, or response projections (`V1-I02`). Because a
@@ -56,7 +56,7 @@ exact field set (`V1-I08`).
 Source calls are fixed by trusted configuration and executed only by the
 core, closing off SSRF, credential forwarding, and script-directed
 networking (`V1-I09`). Provider lookup exposes only `match`, `no_match`, or
-`ambiguous`; Evidence never surfaces or chooses candidates (`V1-I10`). Rhai
+`ambiguous`; Evidence Gateway never surfaces or chooses candidates (`V1-I10`). Rhai
 scripts return one closed lookup result and declared typed concept values
 only (`V1-I11`), and the core rejects undeclared concepts, extra fields, and
 any value that violates its type, codelist, cardinality, precision, or size
@@ -101,7 +101,7 @@ integrity; it does not assert legal-signature status or source truth
 
 ### Discovery, nonce handling, and response-format authorization
 
-Evidence-definition discovery is authenticated and requester-scoped; it never
+Evidence Gateway definition discovery is authenticated and requester-scoped; it never
 creates authority or exposes deployment internals such as selectors, source
 plans, or credentials (`V1-I26`). Every request carries one canonical
 32-byte random nonce that is echoed into the evidence payload but never
@@ -124,7 +124,7 @@ unique role-bound subject bindings, and the expected concept identifiers,
 forms, and cardinalities, and returns one generic policy-mismatch error
 rather than revealing which comparison failed (`V1-I31`). An access token
 carrying a proof-of-possession confirmation claim is denied rather than
-accepted as an ordinary bearer token, because Evidence validates no sender
+accepted as an ordinary bearer token, because Evidence Gateway validates no sender
 proof and accepting one would discard the constraint the token was issued
 under (`V1-I32`).
 
@@ -215,7 +215,7 @@ merge, mutation, governed-field override, or fallback bundle or runtime
 file: a new revision is a new deployment, not a live change.
 
 Secret handling. Source credentials and private signing material reach
-Evidence only through the secret-reference mechanism and must not appear in
+Evidence Gateway only through the secret-reference mechanism and must not appear in
 YAML values, Rhai, command arguments, environment dumps, logs, audit,
 errors, snapshots, or generated contracts. The operator configures exactly
 one active signing key, whose `kid` matches `signing.activeKeyId`, and
@@ -224,7 +224,7 @@ maximum assertion validity plus allowed clock skew.
 
 ## Report a vulnerability
 
-Suspected Evidence vulnerabilities, including credential disclosure,
+Suspected Evidence Gateway vulnerabilities, including credential disclosure,
 authentication bypass, audit redaction failure, source connector data
 leakage, and signing-key handling bugs, go through the private disclosure
 process in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md),

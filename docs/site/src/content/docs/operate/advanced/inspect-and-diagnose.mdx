@@ -1,6 +1,6 @@
 ---
 title: Inspect and diagnose a running deployment
-description: Inspect Relay, Evidence, and Registry Mint runtime posture, audit, health, readiness, and API shape, then classify failures with stable diagnostics.
+description: Inspect Relay, Evidence Gateway, and Registry Mint runtime posture, audit, health, readiness, and API shape, then classify failures with stable diagnostics.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,7 +15,7 @@ locale: en
 standards_referenced: []
 ---
 
-Use this procedure to inspect a running Relay, Evidence, or Registry Mint instance and diagnose
+Use this procedure to inspect a running Relay, Evidence Gateway, or Registry Mint instance and diagnose
 source denial, policy denial, ambiguity, stale materialization, bundle rejection, or capability
 mismatch without collecting source rows or secret values.
 
@@ -23,7 +23,7 @@ mismatch without collecting source rows or secret values.
 
 - Use the protected operator network and a least-privilege posture or API credential.
 - Know the active product, environment, stream, instance, and expected bundle sequence for Relay,
-  and the deployment revision for Evidence and Registry Mint.
+  and the deployment revision for Evidence Gateway and Registry Mint.
 - Keep public problem responses, operator diagnostics, restricted posture, and protected audit
   records in separate access classes.
 - Reproduce with synthetic identifiers unless separate authority permits another probe.
@@ -34,8 +34,8 @@ Public problem details give callers stable, minimized classifications.
 The default posture tier is redacted for operational sharing.
 Restricted posture can contain per-resource or provider detail and belongs only to trusted
 operators.
-Relay, Evidence, and Registry Mint each write their own audit or operational records and keep
-their own keys separate: Relay's redacted posture and audit sink, Evidence's keyed JSONL audit
+Relay, Evidence Gateway, and Registry Mint each write their own audit or operational records and keep
+their own keys separate: Relay's redacted posture and audit sink, Evidence Gateway's keyed JSONL audit
 chain (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data), and Registry Mint's
 keyed JSONL token-decision chain.
 
@@ -58,12 +58,12 @@ Inspect each surface for its own purpose:
 
 | Surface | Use | Boundary |
 | --- | --- | --- |
-| `GET /healthz` (Relay) or `GET /health` (Evidence, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist and its audit writer is healthy |
-| `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence and Registry Mint have no equivalent admin posture endpoint |
-| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence and `mint verify-audit` for Mint |
-| `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence's is the released generated artifact, unauthenticated and independent of the deployed bundle |
-| Evidence `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
+| `GET /healthz` (Relay) or `GET /health` (Evidence Gateway, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist and its audit writer is healthy |
+| `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence Gateway and Registry Mint have no equivalent admin posture endpoint |
+| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway and `mint verify-audit` for Mint |
+| `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
+| Evidence Gateway `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
 
 Query health and readiness through the same network path used by traffic admission:
 
@@ -87,10 +87,10 @@ curl -fsS \
 Fetch the concrete Relay instance OpenAPI only through its configured authenticated route, and
 compare it with the reviewed generated input and the
 [Relay API reference](../../../reference/apis/registry-relay/).
-Evidence's `GET /openapi.json` needs no credential, because it always serves the same released
+Evidence Gateway's `GET /openapi.json` needs no credential, because it always serves the same released
 generated artifact rather than a deployment-specific document
 (`products/evidence/OPERATOR-CONTRACT.md`, Startup and readiness); compare it with the
-[Evidence API reference](../../../reference/apis/registry-evidence/).
+[Evidence Gateway API reference](../../../reference/apis/registry-evidence/).
 An OpenAPI match does not prove authorization, source behavior, or claim semantics.
 
 ## Load the stable diagnostic catalogs
@@ -110,8 +110,8 @@ Branch on the exact code and response status.
 Do not parse error prose, paths, or type URI segments.
 
 These catalogs cover Relay, `registryctl`, and shared platform operations; they do not enumerate
-Evidence or Registry Mint failures. Evidence's closed problem-code catalog is the
-[Evidence errors and problems reference](../../../reference/evidence-problems/) instead, and it
+Evidence Gateway or Registry Mint failures. Evidence Gateway's closed problem-code catalog is the
+[Evidence Gateway errors and problems reference](../../../reference/evidence-problems/) instead, and it
 needs no separate CLI catalog because the codes are fixed by the frozen public contract.
 
 ## Diagnose the failure class
@@ -125,11 +125,11 @@ boundary: Relay could not activate the source-credential capability its consulta
 needs at startup.
 Offline fixture failures such as `source.status_rejected`, `source.unavailable`, and
 `authorization.denied` classify synthetic Relay source behavior.
-Evidence collapses every source-boundary failure (unreachable, timed out, wrong credential, wrong
+Evidence Gateway collapses every source-boundary failure (unreachable, timed out, wrong credential, wrong
 media type, an oversized response, malformed JSON, or an error envelope) into the single
 `dependency_unavailable` problem (`crates/registry-evidence/src/runtime.rs`,
 `source_failure_problem`; see the
-[Evidence errors and problems reference](../../../reference/evidence-problems/)).
+[Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
 
 Confirm which boundary denied access before changing a credential or policy.
 Do not widen a source path or caller scope to clear a source credential failure.
@@ -139,7 +139,7 @@ Do not widen a source path or caller scope to clear a source credential failure.
 Stable `pdp.*` codes identify Relay policy decisions such as `pdp.purpose_not_permitted`,
 `pdp.assurance_insufficient`, and `pdp.evidence_stale`; despite the shared word, `pdp.evidence_stale`
 is Relay's policy-decision-point code for stale source data
-(`crates/registry-platform-pdp/src/lib.rs`) and is unrelated to the Evidence product.
+(`crates/registry-platform-pdp/src/lib.rs`) and is unrelated to the Evidence Gateway product.
 Use the policy id, hash, checked rule ids, and other redacted audit evidence available to the
 authorized operator.
 Do not turn a policy denial into source unavailability or bypass the rule during diagnosis.
@@ -152,11 +152,11 @@ The result carries no selected output map, and Relay must not choose a source re
 Reproduce the selector and cardinality with synthetic fixtures.
 Use `source.cardinality_violation` only when the source behavior violates the declared fixture or
 decoder contract.
-Evidence applies the same discipline to a `POST /v1/evidence` request: an ambiguous match is one
+Evidence Gateway applies the same discipline to a `POST /v1/evidence` request: an ambiguous match is one
 of the conditions the `evidence_not_available` problem collapses into a single value-free
 response, so timing and status code do not reveal which condition occurred
 (`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
-[Evidence errors and problems reference](../../../reference/evidence-problems/)).
+[Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
 
 ### Stale materialization
 
@@ -178,9 +178,9 @@ Relay's startup codes include:
 - `relay.startup.bundle_validation_rejected`
 - `relay.startup.bundle_rollback_rejected`
 
-Evidence and Registry Mint have no equivalent stable startup-rejection codes: `evidence check` and
+Evidence Gateway and Registry Mint have no equivalent stable startup-rejection codes: `evidence check` and
 `mint check` fail with a descriptive message instead, covered in
-[Rotate Evidence signing keys](../../../tutorials/move-evidence-to-production-signing/#validate-and-coordinate-consumer-approval)
+[Rotate Evidence Gateway signing keys](../../../tutorials/move-evidence-to-production-signing/#validate-and-coordinate-consumer-approval)
 and [Configure Registry Mint](../../../configure/mint/#troubleshooting).
 
 Correct the signer, binding, closed file set, product validation, or sequence.
@@ -206,7 +206,7 @@ Retain:
 - Default redacted posture and restricted fields only in the protected operator record.
 - Stable public, operator, fixture, or authoring diagnostic codes.
 - Product, environment, stream, instance, and bundle sequence for Relay.
-- Evidence's `operation` identifier from the problem response or `X-Request-Id` header, and the
+- Evidence Gateway's `operation` identifier from the problem response or `X-Request-Id` header, and the
   output of `evidence verify-audit` when a signing or audit failure is suspected.
 - Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
   when a token-decision audit failure is suspected. Do not retain the assertion or access token.
@@ -233,7 +233,7 @@ After a higher sequence or new correctness-state write, use a reviewed higher-se
 path unless the release documents safe rollback.
 
 For ambiguity, fix or narrow the reviewed selector or source data.
-Do not select a record manually inside Relay or Evidence.
+Do not select a record manually inside Relay or Evidence Gateway.
 For stale materialization, follow the materialization recovery procedure without enabling live
 fallback.
 
@@ -251,4 +251,4 @@ anti-rollback state or runtime schemas.
 - [Refresh and recover a materialization](../refresh-and-recover-materialization/)
 - [Recover, upgrade, migrate, and roll back](../recover-upgrade-migrate-and-rollback/)
 - [Review the error and status code reference](../../../reference/errors/)
-- [Evidence errors and problems reference](../../../reference/evidence-problems/)
+- [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)

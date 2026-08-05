@@ -36,11 +36,11 @@ For how the registry family relates to the wider ecosystem, see the
 [ecosystem page](https://registrystack.org/ecosystem/).
 
 Two runtime surfaces can appear in an integration path. Registry Relay publishes protected, scoped,
-read-only APIs over sources an institution already holds. Evidence answers one predefined
+read-only APIs over sources an institution already holds. Evidence Gateway answers one predefined
 requirement about one set of subjects with a signed assertion carrying the answer rather than the
 record. Registry Mint is a supporting service that issues the short-lived access tokens either
 surface verifies when a deployment has no identity provider.
-The patterns below describe Relay and Evidence.
+The patterns below describe Relay and Evidence Gateway.
 
 ## Country evidence mesh
 
@@ -50,7 +50,7 @@ public-health program systems such as DHIS2 can use Relay's product-neutral, rev
 capability, and social protection, agriculture, education, and civil registration systems can keep
 their own authoritative stores.
 Each authority keeps custody of its own data. Relay keeps source credentials and returns only
-reviewed typed outputs, and Evidence returns only the values a reviewed requirement declares.
+reviewed typed outputs, and Evidence Gateway returns only the values a reviewed requirement declares.
 Consuming systems such as a social-protection management information system do not become
 raw-record readers.
 
@@ -61,7 +61,7 @@ raw-record readers.
             (DHIS2) uses a reviewed Rhai script, and civil registration, social protection,
             agriculture, and education keep their own authoritative stores. Two bounded surfaces
             sit over them: Registry Relay keeps source credentials and returns only reviewed typed
-            outputs, and Evidence returns only the values a reviewed requirement declares. A
+            outputs, and Evidence Gateway returns only the values a reviewed requirement declares. A
             social-protection management information system and other consumers receive the
             answers these surfaces return, and do not become raw-record readers." />
 </figure>
@@ -69,19 +69,19 @@ raw-record readers.
 Snapshot remains an authored integration capability, not a public template or
 separate runtime architecture.
 
-{/* TODO[evidence]: registryctl cannot express an Evidence deployment at all, so this page cannot
+{/* TODO[evidence]: registryctl cannot express an Evidence Gateway deployment at all, so this page cannot
     yet describe a selectable topology. An authored service is only consultation_api or records_api
     (enum ServiceKind in crates/registryctl/src/project_authoring/model.rs), a kind: evidence
     service is rejected as an unknown variant (test retired_evidence_service_kind_is_rejected in
     the same file), and the environment deployment block is closed around profile and relay with no
     evidence key (crates/registryctl/schemas/project-authoring/environment.schema.json). Every
     compiled project is therefore relay-only. Restore a topology paragraph here once registryctl
-    gains an Evidence deployment path. */}
+    gains an Evidence Gateway deployment path. */}
 
-## Evidence-to-action boundary
+## Evidence Gateway to action boundary
 
 Every combined integration follows the same ownership boundary. Registry Relay owns
-source-specific acquisition, source-access policy, and typed normalization. Evidence owns the
+source-specific acquisition, source-access policy, and typed normalization. Evidence Gateway owns the
 predefined requirement, evidence authorization, and the declared disclosure that requirement
 carries. The evidence consumer determines how the evidence is used, and the decision owner remains
 accountable for requirements, decisions, workflow, and action.
@@ -90,12 +90,12 @@ The maintained DHIS2 health-evidence reference project makes that boundary visib
 DHIS2 remains the system of record.
 Relay uses its product-neutral script capability to perform bounded, same-origin acquisition and
 normalize the existing health outputs.
-Evidence exposes bounded facts as reusable requirements: that project reads two Tracker programmes
+Evidence Gateway exposes bounded facts as reusable requirements: that project reads two Tracker programmes
 for two independent requirements, adult status and professional licence status, and a caller
 authorized for one learns nothing about the other.
 In this example, a public-health programme is both the evidence consumer and the decision owner.
 It can compute an outreach or follow-up priority without moving either decision into Relay or
-Evidence.
+Evidence Gateway.
 
 The reviewed contract keeps a positive fact, its negative, an absent value, no match, ambiguity,
 and source failure distinct. Missing evidence is not a negative fact. Offline synthetic fixtures
@@ -105,9 +105,9 @@ compatibility runner.
 An operator can exercise a deployed API with a standard HTTP client and
 owner-maintained credentials as separate interoperability evidence.
 
-Evidence has no general policy engine and no eligibility or workflow engine. A requirement whose
+Evidence Gateway has no general policy engine and no eligibility or workflow engine. A requirement whose
 answer restates a decision an authoritative source already made must say so in its review
-documentation, and Evidence does not recompute that decision.
+documentation, and Evidence Gateway does not recompute that decision.
 
 {/* Evidence: products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/
     and products/evidence/contracts/README.md. */}
@@ -153,12 +153,12 @@ Each component is bounded and canonicalized under the compiled consultation cont
 Up to sixteen total inputs may also include bounded parameters that are not selector components.
 Relay reports no match, one match, or ambiguity instead of choosing between duplicate records.
 
-Evidence keeps the same discipline and adds no batch envelope over it.
+Evidence Gateway keeps the same discipline and adds no batch envelope over it.
 One request names one requirement and carries one selector per declared subject role, at most eight
 roles, and an evaluation performs exactly one evidence-data request against its one fixed source.
 Version 1 has no batch API and no multi-source fulfillment, so a caller that needs several answers
 issues several independently authorized requests.
-A lookup resolves to exactly one match, no match, or ambiguity, and Evidence never surfaces or
+A lookup resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never surfaces or
 chooses between candidates.
 
 {/* Evidence: crates/registry-relay/src/api/consultation.rs,
@@ -206,37 +206,23 @@ URL outside Registry Stack's control.
     crates/registry-relay/src/consultation/executor.rs, and
     crates/registry-relay/src/consultation/response.rs. */}
 
-## Evidence over a Relay-protected API
+## Evidence Gateway with a fixed authoritative source
 
-This is the composed pattern, and it is the one to reach for when an institution wants both a
-governed read path and a minimum-disclosure answer over the same data.
+Use this pattern when an institution wants a minimum-disclosure answer over data in an
+authoritative system. Evidence Gateway calls that system through its own fixed HTTP source
+contract. The reviewed bundle fixes the origin, path authority, method, authentication,
+projection, schemas, and bounded scripts. The caller cannot select or redirect the source.
 
-Evidence treats a Relay-protected API as an ordinary fixed HTTP source. Nothing in an Evidence
-bundle names Relay or depends on it: the requirement is authored against a protected, scoped,
-read-only HTTP JSON endpoint, and any protected read with those three properties fits. The
-reference deployment project for this shape answers one requirement, residence region as a coarse
-controlled code, over exactly that kind of source. The register's own region code never leaves the
-service, because a reviewed codelist maps several register codes onto each disclosed region, and a
-register code with no reviewed mapping leaves the requirement unresolved rather than guessing.
+The caller's access token and the source credential serve different boundaries:
 
-Two token hops make the arrangement work, and they are separate:
-
-- The caller holds a short-lived access token for Evidence, from the deployment's identity provider
-  or from Registry Mint when there is none. See the
+- The caller holds a short-lived access token for Evidence Gateway, from the deployment's identity
+  provider or from Registry Mint when there is none. See the
   [Registry Mint reference](../../reference/mint/).
-- Evidence holds its own compiled source credential for the Relay API. The caller never sees it,
-  and cannot influence which credential is resolved.
+- Evidence Gateway holds its own compiled credential for the authoritative source. The caller never
+  sees it and cannot influence which credential is resolved.
 
-The dependency runs one way. Evidence verifies tokens a Mint-shaped issuer produces; it does not
-depend on Registry Mint, and a deployment with its own identity provider omits Mint entirely.
-
-[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) runs the whole
-arrangement on a laptop, with Mint, Relay, and Evidence on separate ports, if you would rather see
-it than read about it.
-
-{/* Evidence:
-    products/evidence/reference/request-adapter/deployment-projects/relay-protected-read-evidence/
-    and products/evidence/contracts/source-contract.yaml. */}
+Registry Relay is not part of this request path. If the institution also operates Relay, it is a
+separate protected-read product with its own sources, callers, authorization, and audit trail.
 
 ## Workflow engines
 
@@ -300,15 +286,15 @@ authoritative list of claim levels and per-project evidence.
 | --- | --- |
 | Static catalog and service discovery (Registry Manifest) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL, SKOS-shaped codelists |
 | Scoped runtime metadata and protected data routes (Registry Relay) | OpenAPI, DCAT, BRegDCAT-AP, SHACL, JSON Schema, ODRL, OGC API Records, OGC API Features, OGC API EDR, SP-DCI, GovStack Digital Registries |
-| Minimum-disclosure assertions (Evidence) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
+| Minimum-disclosure assertions (Evidence Gateway) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
 
 {/* TODO[evidence]: the standards register in src/data/standards.yaml has no registry-evidence
-    entries, so the Evidence row above is not backed by a per-project claim level there. This is
+    entries, so the Evidence Gateway row above is not backed by a per-project claim level there. This is
     blocked, not merely pending: every evidence_docs URL in that file is pinned to commit
     d45761a0, which is reachable from origin/main, and neither crates/registry-evidence nor
     crates/registry-mint exists at any commit on pushed main (git cat-file -e
     origin/main:crates/registry-evidence fails). Repo policy forbids citing an unpushed session
-    commit in a durable artifact, so the Evidence entries can only be pinned once this work
+    commit in a durable artifact, so the Evidence Gateway entries can only be pinned once this work
     reaches main. */}
 
 ## Next

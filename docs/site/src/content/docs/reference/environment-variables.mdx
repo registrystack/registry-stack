@@ -1,6 +1,6 @@
 ---
 title: Environment variable reference
-description: Environment variables read by the Evidence, Registry Mint, and Registry Relay binaries and by registryctl, with links to the full configuration references.
+description: Environment variables read by the Evidence Gateway, Registry Mint, and Registry Relay binaries and by registryctl, with links to the full configuration references.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,9 +14,9 @@ locale: en
 standards_referenced: []
 ---
 
-This page lists the environment variables read directly by the Evidence binary, the Registry Mint binary, the Registry Relay binary, and registryctl. These are fixed variable names that the process resolves itself.
+This page lists the environment variables read directly by the Evidence Gateway binary, the Registry Mint binary, the Registry Relay binary, and registryctl. These are fixed variable names that the process resolves itself.
 
-The stack's other kind of environment variable is operator-named. Secret material such as credential hashes and upstream tokens is not read from a fixed variable name: a config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration reference rather than repeated on this page. Registry Relay is the product that works that way; see the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables. Evidence and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
+The stack's other kind of environment variable is operator-named. Secret material such as credential hashes and upstream tokens is not read from a fixed variable name: a config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration reference rather than repeated on this page. Registry Relay is the product that works that way; see the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
 ## Configuration expansion
 
@@ -30,12 +30,12 @@ Whitespace-only values are non-empty.
 Diagnostics name the variable or use the supplied message; they never include
 the variable value.
 
-Evidence and Registry Mint do not expand environment references in configuration.
-Both parse their documents as written: Evidence in `RuntimeConfig::parse_yaml`
+Evidence Gateway and Registry Mint do not expand environment references in configuration.
+Both parse their documents as written: Evidence Gateway in `RuntimeConfig::parse_yaml`
 (`crates/registry-evidence/src/config.rs`) and Registry Mint in `MintConfig::load`
 (`crates/registry-mint/src/config.rs`).
 
-## Evidence
+## Evidence Gateway
 
 The `evidence` binary reads the two variables below. Each is a global that applies to every subcommand.
 
@@ -44,7 +44,7 @@ The `evidence` binary reads the two variables below. Each is a global that appli
 | `REGISTRY_EVIDENCE_RUNTIME` | Absolute path to the one operator runtime file that binds the governed bundle. Equivalent to the global `--runtime` flag. | Defaults to `/etc/registry-evidence/runtime.yaml`. |
 | `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard output. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
 
-Evidence reads no secret from an environment variable. A configured secret reference uses one grammar, `secret:file/<name>`, enforced by `SecretRef::parse` in `crates/registry-evidence/src/config.rs`, and resolves to an owner-only regular file under the `secretProviders.file.root` directory named in `runtime.yaml` (`crates/registry-evidence/src/secrets.rs`). Neither the runtime file nor the governed bundle can name an environment variable to read a credential from. See [Configure Evidence](../../configure/evidence/) for the runtime file and the bundle it binds.
+Evidence Gateway reads no secret from an environment variable. A configured secret reference uses one grammar, `secret:file/<name>`, enforced by `SecretRef::parse` in `crates/registry-evidence/src/config.rs`, and resolves to an owner-only regular file under the `secretProviders.file.root` directory named in `runtime.yaml` (`crates/registry-evidence/src/secrets.rs`). Neither the runtime file nor the governed bundle can name an environment variable to read a credential from. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file and the bundle it binds.
 
 ## Registry Mint
 
@@ -91,4 +91,4 @@ any effect. Setting them is harmless and does nothing.
 
 ## Source
 
-The fixed variable names above are transcribed from the binaries and the registryctl source, at the paths given here. For the canonical definitions, read the Evidence binary entry point `crates/registry-evidence/src/main.rs` (the `Cli` struct and `install_operational_logging`), the Registry Mint binary entry point `crates/registry-mint/src/main.rs` (the `Command` enum and `main`), the Registry Relay binary entry point `crates/registry-relay/src/main.rs` (`default_config_path_from_env`, `default_env_file_from_env`, `default_bind_from_env`, `OperationalLogFormat::from_env`, and `init_tracing`), the Relay Postgres connector at `crates/registry-relay/src/connector/mod.rs`, and for registryctl `crates/registryctl/src/main.rs` (`resolve_environment`) together with `crates/registryctl/install.sh`. The operator-named secret variables are documented in the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
+The fixed variable names above are transcribed from the binaries and the registryctl source, at the paths given here. For the canonical definitions, read the Evidence Gateway binary entry point `crates/registry-evidence/src/main.rs` (the `Cli` struct and `install_operational_logging`), the Registry Mint binary entry point `crates/registry-mint/src/main.rs` (the `Command` enum and `main`), the Registry Relay binary entry point `crates/registry-relay/src/main.rs` (`default_config_path_from_env`, `default_env_file_from_env`, `default_bind_from_env`, `OperationalLogFormat::from_env`, and `init_tracing`), the Relay Postgres connector at `crates/registry-relay/src/connector/mod.rs`, and for registryctl `crates/registryctl/src/main.rs` (`resolve_environment`) together with `crates/registryctl/install.sh`. The operator-named secret variables are documented in the [Registry Relay configuration reference](../../products/registry-relay/configuration/).

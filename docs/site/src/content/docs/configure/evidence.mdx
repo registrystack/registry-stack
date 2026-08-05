@@ -1,6 +1,6 @@
 ---
-title: Configure Evidence
-description: Shape an Evidence deployment project's runtime file, governed bundle, key material, immutability, and validation with evidence check.
+title: Configure Evidence Gateway
+description: Shape an Evidence Gateway deployment project's runtime file, governed bundle, key material, immutability, and validation with evidence check.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,9 +11,9 @@ locale: en
 standards_referenced: []
 ---
 
-Configuring Evidence means assembling one deployment project: a governed `bundle/` of YAML,
+Configuring Evidence Gateway means assembling one deployment project: a governed `bundle/` of YAML,
 Rhai scripts, schemas, and fixtures, plus a process-local `runtime.yaml` that binds it to a
-listener, a secret root, and audit storage. Both are trusted, startup-only artifacts. Evidence
+listener, a secret root, and audit storage. Both are trusted, startup-only artifacts. Evidence Gateway
 loads them once, compiles and validates them together, and refuses to reload, merge, or
 partially serve a later change. `evidence check` is the gate every edit to the project must pass
 before `evidence serve` runs it.
@@ -48,7 +48,7 @@ Mint configuration, README, production target, or deployable bundle. Add `--gene
 signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
 editable artifacts from the retained contract. After you add a question, `evidencectl dev`
 compiles the authoring objects into a private local runtime and delegates validation to the real
-Evidence loader.
+Evidence Gateway loader.
 
 ## The runtime file
 
@@ -63,14 +63,14 @@ Top-level required fields:
 | --- | --- |
 | `version` | Fixed at `1`. |
 | `bundleDirectory` | Absolute path to the governed `bundle/` directory. |
-| `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
+| `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
 | `secretProviders.file.root` | The owner-only directory the file secret provider resolves every `secret:file/<name>` reference beneath. |
 | `auditStorage` | `path` for the active audit segment and `maximumFileBytes`, a per-segment rotation threshold. |
 | `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source can select through `tlsTrustProfile`. |
 
 An optional `metricsListener` (`bindHost`, `port`) serves `GET /metrics` on a second private
 binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
-Metrics reference rather than in the public Evidence contract.
+Metrics reference rather than in the public Evidence Gateway contract.
 
 `runtime.yaml` cannot override anything the bundle governs. The schema's `ownership` block closes
 the allowed set to the bundle directory, listener binding and process limits, the optional
@@ -80,7 +80,7 @@ authority, sources, disclosure, and signing policy, belongs to the bundle alone.
 
 ## The bundle
 
-`bundle/evidence.yaml` is the single governed contract Evidence compiles and validates as one
+`bundle/evidence.yaml` is the single governed contract Evidence Gateway compiles and validates as one
 atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-level sections:
 
 | Section | Declares |
@@ -103,7 +103,7 @@ the exact bundle bytes; there is no partial edit, hot reload, or fallback
 `derivations/`, `schemas/`, `codelists/`, `fixtures/`, and `public-keys/`; symlinks and any file
 outside them fail startup (`bundle.schema.yaml`, `bundle_layout`).
 
-Evidence's four coequal acceptance definitions are adult status, residence region, professional
+Evidence Gateway's four coequal acceptance definitions are adult status, residence region, professional
 licence status, and legal-parent relationship (`products/evidence/README.md`,
 `products/evidence/OPERATOR-CONTRACT.md`). You shape each as an ordinary `requirements` entry
 with its own source, derivation script, and fixtures. The four are presented as coequal, and none
@@ -163,27 +163,27 @@ evidencectl keygen secret --out "<secrets-dir>/subject-binding-hmac-key"
 
 ### `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json`
 
-Evidence signs assertions with the private Ed25519 JSON Web Key (JWK). Verifiers use the public
+Evidence Gateway signs assertions with the private Ed25519 JSON Web Key (JWK). Verifiers use the public
 JWK to check the signature without receiving the private key. The key identifier must match
 `signing.activeKeyId` in `bundle/evidence.yaml`.
 
 ### `audit-hmac-key`
 
-Evidence uses this random secret to authenticate the audit chain. A changed, removed, or
+Evidence Gateway uses this random secret to authenticate the audit chain. A changed, removed, or
 reordered audit entry then fails chain verification.
 
 ### `subject-binding-hmac-key`
 
-Evidence uses this random secret to derive audience-scoped subject references from authorized
+Evidence Gateway uses this random secret to derive audience-scoped subject references from authorized
 selector values. The references let an assertion identify its subject without disclosing the
 selector values or creating one identifier that every audience can reuse.
 
 ## Immutability
 
-Evidence refuses to start from a deployment input it could write to, and reports a
+Evidence Gateway refuses to start from a deployment input it could write to, and reports a
 non-immutable-input error rather than starting on it (`products/evidence/OPERATOR-CONTRACT.md`).
 Version 1 permits no reload, merge, mutation, governed-field override, or fallback bundle or
-runtime file: a project is either the exact bytes Evidence loaded at startup, or it is a different
+runtime file: a project is either the exact bytes Evidence Gateway loaded at startup, or it is a different
 revision that requires a restart.
 
 Freeze the project before validating or serving it:
@@ -193,7 +193,7 @@ chmod -R a-w bundle && chmod 444 runtime.yaml
 ```
 
 The bundle directory and every file beneath it carry no write bits, `runtime.yaml` is mode `444`,
-and the secret root stays owner-only at mode `0700` with mode `0600` secret files. Evidence
+and the secret root stays owner-only at mode `0700` with mode `0600` secret files. Evidence Gateway
 Version 1 supports Unix targets only because these invariants rely on owner, mode, no-follow,
 link-count, and open-file-identity checks the platform provides
 (`products/evidence/contracts/runtime.schema.yaml`, `platform`). To edit the project again,
@@ -238,8 +238,8 @@ deployment-targets/
 `governance.yaml` supplies the production-owned bundle fields, including service, issuer,
 authentication, audit, subject binding, rate limits, signing, response formats, and authority
 profiles. It cannot override selectors, sources, or requirements. Each production question adds
-stable concept identifiers and a `governance` block with its requirement, frameworks, Evidence
-Type, validity, observation timezone, fixture, and disclosure families.
+stable concept identifiers and a `governance` block with its requirement, frameworks, Evidence Type,
+validity, observation timezone, fixture, and disclosure families.
 
 `runtime.yaml` remains the ordinary runtime document. It names the final absolute bundle,
 private listener, secret root, audit path, and any private CA files for one target. It is copied
@@ -259,6 +259,6 @@ secret values, source responses, local request state, or audit records. The comp
 the resulting bundle with the `evidence` binary and every referenced fixture before publishing.
 It does not contact an identity provider, Mint, or a source endpoint.
 
-Use [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+Use [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
 for the full handoff, and [Evidencectl command reference](../../reference/evidencectl/) for the
 command contract.

@@ -1,6 +1,6 @@
 ---
-title: Control who can request Evidence
-description: Define access policies, add a client without restarting Evidence, and observe allowed and refused access.
+title: Control who can request Evidence Gateway
+description: Define access policies, add a client without restarting Evidence Gateway, and observe allowed and refused access.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,7 +16,7 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
-You will give two applications different access to that Evidence service, add one while the service
+You will give two applications different access to that Evidence Gateway service, add one while the service
 is running, and prove that a valid access token does not let its client ask every configured
 question.
 
@@ -37,26 +37,26 @@ question.
 This tutorial manages access for machine applications, not accounts for people.
 
 Registry Mint authenticates each application from its own key and issues a short-lived access
-token. Evidence then checks whether the application's access policy includes the configured
+token. Evidence Gateway then checks whether the application's access policy includes the configured
 question. These are separate decisions:
 
 | Decision | Example | Owner |
 | --- | --- | --- |
 | Which application is calling? | `age-checker` | Registry Mint client registration |
-| What may it ask? | The `age-checks` policy includes `adult-status` | Evidence access policy |
-| May Evidence read its source? | `GET /people/{person_id}` | Evidence source configuration |
+| What may it ask? | The `age-checks` policy includes `adult-status` | Evidence Gateway access policy |
+| May Evidence Gateway read its source? | `GET /people/{person_id}` | Evidence Gateway source configuration |
 | May a consumer trust the result? | Expected issuer, audience, and signing key | Consumer verification policy |
 
 The first two rows are the access-management boundary you will configure. Source credentials and
 consumer trust remain independent.
 
-Access policies are part of Evidence's immutable governed configuration. Client membership is
+Access policies are part of Evidence Gateway's immutable governed configuration. Client membership is
 part of Registry Mint's reloadable registry:
 
 | Change | Runtime effect |
 | --- | --- |
-| Add or revoke a client | Registry Mint receives a reload request; Evidence does not restart |
-| Add a question or change an access policy | Start a new Evidence generation |
+| Add or revoke a client | Registry Mint receives a reload request; Evidence Gateway does not restart |
+| Add a question or change an access policy | Start a new Evidence Gateway generation |
 
 A client change affects tokens issued after Registry Mint reloads. A token issued before a client
 is revoked remains valid for up to 300 seconds.
@@ -100,7 +100,7 @@ Added access policy age-checks for adult-status.
 Added access policy service-routing for age-bracket.
 ```
 
-Review the governed policies before starting Evidence:
+Review the governed policies before starting Evidence Gateway:
 
 ```sh
 evidencectl access policy list
@@ -117,7 +117,7 @@ The commands write the reviewable policy documents to `access/policies/age-check
 Many clients can share one policy. A client can also belong to several policies when their question
 sets do not overlap. `evidencectl` rejects overlapping policy assignments because they would make
 the access decision ambiguous. Adding a question to either policy later changes the governed
-authorization boundary and requires a new Evidence generation.
+authorization boundary and requires a new Evidence Gateway generation.
 
 ## Register the first local application
 
@@ -141,18 +141,18 @@ key.
 
 ## Start the protected service
 
-Compile the questions and both access policies, then start Evidence and Registry Mint:
+Compile the questions and both access policies, then start Evidence Gateway and Registry Mint:
 
 ```sh
 evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-Registry Mint recognizes `age-checker`. Evidence has both access policies available, even though
+Registry Mint recognizes `age-checker`. Evidence Gateway has both access policies available, even though
 no client belongs to `service-routing` yet.
 
 ## Make an allowed request
@@ -171,7 +171,7 @@ Preparation signs a one-time client assertion with the local application key, ex
 short-lived access token, and writes the request and verification expectations before any source
 access occurs.
 
-Send the request across the Evidence HTTP boundary:
+Send the request across the Evidence Gateway HTTP boundary:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -201,12 +201,12 @@ evidencectl verify age-checker-allowed.jws.json \
 VERIFIED
 ```
 
-The application was authenticated, its `age-checks` policy matched the request, and Evidence
+The application was authenticated, its `age-checks` policy matched the request, and Evidence Gateway
 called the registry only after both checks passed.
 
 ## Add an application without restarting
 
-Keep Evidence and Registry Mint running. Register `service-router` under the existing
+Keep Evidence Gateway and Registry Mint running. Register `service-router` under the existing
 `service-routing` policy:
 
 ```sh
@@ -223,7 +223,7 @@ Registry Mint reload requested.
 The command writes the public registration to `access/clients/service-router.yaml`, keeps the
 private key under `.evidence/clients/`, and asks Registry Mint to reload its complete client
 registry. The message confirms that the reload was requested, not that Registry Mint accepted the
-new registry. The next token exchange provides that functional proof. Evidence does not restart
+new registry. The next token exchange provides that functional proof. Evidence Gateway does not restart
 because both access policies were already part of its governed configuration.
 
 Review the active client assignments:
@@ -251,7 +251,7 @@ evidencectl request prepare age-bracket \
 ```
 
 The command can prepare the request because `age-bracket` is a valid project question and
-`age-checker` is a registered client. The Evidence service, not the request-building tool, makes
+`age-checker` is a registered client. The Evidence Gateway service, not the request-building tool, makes
 the authorization decision.
 
 Send the request:
@@ -290,7 +290,7 @@ python3 -m json.tool age-checker-refused.json
 
 The access token is valid, but the client's `age-checks` policy does not authorize the
 `age-bracket` question. The registry terminal shows no new `GET /people/person-456`, because
-Evidence refuses the request before source access. The response does not reveal which application,
+Evidence Gateway refuses the request before source access. The response does not reveal which application,
 question, or policy caused the refusal.
 
 ## Use the application assigned the policy
@@ -345,7 +345,7 @@ Registry Mint reload requested.
 ```
 
 The command updates `access/clients/age-checker.yaml` and requests another Registry Mint reload
-without restarting Evidence. Revocation cannot erase a stateless access token already issued to
+without restarting Evidence Gateway. Revocation cannot erase a stateless access token already issued to
 the application. That token remains valid for up to 300 seconds.
 
 Try to prepare a fresh request as the revoked client:
@@ -382,8 +382,8 @@ DISCLOSURE RELEASED age_bracket
 
 The audit distinguishes requester pseudonyms without writing client identifiers, tokens, subject
 selectors, or returned values. The earlier authorization refusal is not retained in the durable
-Evidence audit. Evidence currently returns that refusal before appending an access-attempt event.
-The revoked-client preparation also has no Evidence audit event because no HTTP request was sent.
+Evidence Gateway audit. Evidence Gateway currently returns that refusal before appending an access-attempt event.
+The revoked-client preparation also has no Evidence Gateway audit event because no HTTP request was sent.
 
 ## Clean up
 
@@ -399,21 +399,21 @@ Return to the registry terminal and press `Ctrl+C`.
 ## What you proved
 
 - Authentication identifies the calling application but grants no question by itself.
-- Many applications can share a governed access policy without client-specific Evidence config.
-- A client added while the services run can obtain a token without restarting Evidence or
+- Many applications can share a governed access policy without client-specific Evidence Gateway config.
+- A client added while the services run can obtain a token without restarting Evidence Gateway or
   Registry Mint.
 - Each application receives only the questions included in its assigned policies.
-- Evidence refuses unauthorized questions before reading the source.
+- Evidence Gateway refuses unauthorized questions before reading the source.
 - Revoking a local client requests a Registry Mint reload and prevents new local request
   preparation.
 - Client membership changes affect new tokens while existing tokens remain valid for up to 300
   seconds.
-- Adding a question or changing an access policy requires a new Evidence generation.
+- Adding a question or changing an access policy requires a new Evidence Gateway generation.
 - Source authentication and consumer trust remain separate from caller access.
 
 ## Next
 
-- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
 - [Configure Registry Mint](../../configure/mint/)
 - [Request an access token from application code](../../configure/request-an-access-token/)
-- [Manage Evidence verifier trust](../manage-evidence-verifier-trust/)
+- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

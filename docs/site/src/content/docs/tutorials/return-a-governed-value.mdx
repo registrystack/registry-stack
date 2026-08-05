@@ -1,6 +1,6 @@
 ---
 title: Return a governed value
-description: Add a controlled non-boolean answer to the first Evidence project and verify the signed result.
+description: Add a controlled non-boolean answer to the first Evidence Gateway project and verify the signed result.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,7 +15,7 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence assertion](../first-evidence-assertion/) before starting this
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting this
 tutorial. You will add a governed age-bracket question to that project while keeping its adult
 status question. The same date of birth can then answer either question without disclosing the
 date or exact age.
@@ -25,7 +25,7 @@ date or exact age.
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The completed first Evidence assertion tutorial',
+    'The completed first Evidence Gateway assertion tutorial',
     'Its adult-status project and registry.py',
     'Python 3',
     'A shell with curl',
@@ -98,7 +98,7 @@ disclosure:
 
 The new question uses the same OpenAPI operation, projected fact, and subject mapping as adult
 status. `values` defines the complete category list. The local compiler turns that list into the
-codelist enforced by the Evidence runtime.
+codelist enforced by the Evidence Gateway runtime.
 
 ### `derivations/age-bracket.rhai`
 
@@ -119,7 +119,7 @@ fn answer(facts, selectors, context) {
 }
 ```
 
-The script chooses one category from the reviewed list. Evidence rejects any other return value
+The script chooses one category from the reviewed list. Evidence Gateway rejects any other return value
 before constructing or signing an assertion.
 
 ## Start the updated project
@@ -131,11 +131,11 @@ evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-The command compiles both files in `questions/` into the same local Evidence service. The adult
+The command compiles both files in `questions/` into the same local Evidence Gateway service. The adult
 status question remains available. Authentication, source bounds, signing, verification, and audit
 apply to both questions.
 
@@ -194,12 +194,12 @@ The source value `2012-05-20` is currently in the `under-18` category. The verif
 does not include the date of birth, exact age, name, or `person_id`.
 
 Minimum disclosure is relative to the authorized purpose. A boolean was enough for the first
-question. A controlled category is enough for this service-path decision. Evidence protects both
+question. A controlled category is enough for this service-path decision. Evidence Gateway protects both
 without treating boolean answers as the only minimized form.
 
 ## Inspect the audit and clean up
 
-Stop the local Evidence services:
+Stop the local Evidence Gateway services:
 
 ```sh
 evidencectl dev stop
@@ -228,8 +228,8 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## Next
 
-- [Control which applications can request Evidence](../control-who-can-request-evidence/)
-- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Control which applications can request Evidence Gateway](../control-who-can-request-evidence/)
+- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
 - [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
-- [Configure Evidence](../../configure/evidence/)
-- [Review the Evidence security model](../../security/evidence/)
+- [Configure Evidence Gateway](../../configure/evidence/)
+- [Review the Evidence Gateway security model](../../security/evidence/)

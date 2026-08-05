@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
-  <title>Solmara Lab compose topology, the Evidence path</title>
-  <desc>The five hops this tutorial makes. One, your shell signs a request with the demo caller's own key and sends it to Registry Mint on host port 4341. Two, Mint returns a short-lived access token. Three, your shell presents that token to Registry Evidence on host port 4343 and asks one question: is this subject an adult. Four, Evidence reads two fields of one row, uin and birth_date, from the Civil Registration Authority's records Relay on host port 4342, under the recorded purpose adult-status-verification. Five, Evidence returns a signed answer carrying true or false and no record. Below, a strip lists the rest of the lab that just up-evidence also starts: six authority Relay instances on host ports 4311 to 4316, the citizen portal on 4300, the Visitor's Center on 4301, static metadata on 4331, Postgres on 54329, and the consultation Relay instances, workload identity agents, and journey services behind them. Forty-one long-running services in all.</desc>
+  <title>Historical Solmara Lab compose topology, the Evidence Gateway path</title>
+  <desc>The retired five-hop demo topology. One, your shell signs a request with the demo caller's own key and sends it to Registry Mint on host port 4341. Two, Mint returns a short-lived access token. Three, your shell presents that token to Evidence Gateway on host port 4343 and asks one question: is this subject an adult. Four, the historical Evidence Gateway deployment reads two fields of one row, uin and birth_date, from the Civil Registration Authority's records Relay on host port 4342, under the recorded purpose adult-status-verification. Five, Evidence Gateway returns a signed answer carrying true or false and no record. Current Evidence Gateway deployments no longer use Registry Relay as a source.</desc>
 
-  <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SOLMARA LAB — THE EVIDENCE PATH</text>
+  <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">HISTORICAL SOLMARA LAB · EVIDENCE GATEWAY PATH</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
 
   <!-- The caller: your shell -->
@@ -25,7 +25,7 @@
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">:4341</text>
   <text x="296" y="122" fill="#3a3a3a" font-size="11">Registry Mint</text>
 
-  <!-- Registry Evidence -->
+  <!-- Evidence Gateway -->
   <rect x="280" y="196" width="180" height="84" fill="#ffffff" stroke="#161616" stroke-width="1"/>
   <rect x="280" y="196" width="4" height="84" fill="#000091"/>
   <text x="296" y="222" fill="#000091" font-size="10.5"
@@ -33,7 +33,7 @@
   <text x="444" y="222" fill="#6a6a6a" font-size="10.5" text-anchor="end"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">:4343</text>
   <g fill="#3a3a3a" font-size="11">
-    <text x="296" y="244">Registry Evidence:</text>
+    <text x="296" y="244">Evidence Gateway:</text>
     <text x="296" y="262">is this subject an adult?</text>
   </g>
 
@@ -70,7 +70,7 @@
   </g>
   <text x="224" y="194" fill="#000091" font-size="11" font-weight="700">3</text>
 
-  <!-- 4: Evidence reads the Relay -->
+  <!-- 4: The historical Gateway reads the Relay -->
   <g stroke="#000091" stroke-width="1" fill="none">
     <polyline points="460,238 508,238"/>
     <polyline points="502,234 508,238 502,242"/>

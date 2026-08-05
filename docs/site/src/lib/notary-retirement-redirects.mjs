@@ -1,7 +1,7 @@
 export const NOTARY_RETIREMENT_ROUTE = '/decisions/notary-retirement-2026-08-03/';
 
 export const RETIRED_NOTARY_ROUTE_TARGETS = {
-  '/journeys/registry-backed-notary-claim/': '/tutorials/first-run-with-solmara-lab/',
+  '/journeys/registry-backed-notary-claim/': '/start/evidence-quickstart/',
   '/tutorials/configure-dhis2-claim-checks/': NOTARY_RETIREMENT_ROUTE,
   '/tutorials/getting-started-fhir-evidence/': NOTARY_RETIREMENT_ROUTE,
   '/tutorials/run-notary-standalone-for-api/': NOTARY_RETIREMENT_ROUTE,
@@ -9,7 +9,7 @@ export const RETIRED_NOTARY_ROUTE_TARGETS = {
   '/tutorials/verify-opencrvs-dci-claims/': NOTARY_RETIREMENT_ROUTE,
   '/tutorials/move-notary-to-production-signing/':
     '/tutorials/move-evidence-to-production-signing/',
-  '/tutorials/verify-claim-registry-api/': '/tutorials/first-run-with-solmara-lab/',
+  '/tutorials/verify-claim-registry-api/': '/start/evidence-quickstart/',
   '/explanation/evidence-issuance/': NOTARY_RETIREMENT_ROUTE,
   '/reference/apis/registry-notary/': '/reference/apis/registry-evidence/',
   '/reference/apis/notary/': '/reference/apis/evidence/',

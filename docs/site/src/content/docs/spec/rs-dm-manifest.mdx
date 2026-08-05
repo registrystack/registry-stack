@@ -55,7 +55,7 @@ This specification covers the structure and invariants of a portable metadata ma
 - The catalog and the top-level collections that describe a registry.
 - Reference integrity and identifier and vocabulary constraints.
 - Requirements and grouped evidence.
-- Governed evidence pack metadata and the Evidence Gateway PDP binding surface.
+- Governed evidence pack metadata and the Relay PDP binding surface.
 - Evidence-offering access discovery metadata.
 - The standards-shaped render set and the static discovery bundle.
 - Compatibility and evolution.
@@ -77,7 +77,7 @@ flowchart TD
     manifest["metadata.yaml<br/>schema_version: registry-manifest/v1"]
     catalog["Catalog<br/>id · base_url · title · publisher"]
     describe["Description<br/>datasets · entities · fields · requirements<br/>evidence types · services · forms · policies · codelists"]
-    offerings["Evidence offerings<br/>access.kind · endpoint · discovery · ruleset"]
+    offerings["Evidence Gateway offerings<br/>access.kind · endpoint · discovery · ruleset"]
     render["Validate, then render<br/>(pure · deterministic · no data sources)"]
     bundle["Discovery bundle<br/>DCAT · BRegDCAT-AP · CPSV-AP · SHACL<br/>JSON Schema · OGC Records · ODRL · CCCEV<br/>embedded SKOS-shaped codelists"]
     index["index.json<br/>source_manifest_digest · package_digest · per-artifact sha256"]
@@ -118,13 +118,13 @@ REQ-DM-MANIFEST-006: An evidence type MUST prove at least one requirement define
 
 ## 6. Governed evidence gateway metadata
 
-A manifest can publish governed evidence metadata for an Evidence Gateway runtime to select a policy decision point (PDP) policy. This is still metadata: Registry Manifest validates the pack shape, policy identity, hash binding, supported ODRL enforcement terms, and required evidence-pack declarations, while runtime enforcement remains with Registry Relay's governed PDP path.
+A manifest can publish governed evidence metadata for a Relay runtime to select a policy decision point (PDP) policy. This is still metadata: Registry Manifest validates the pack shape, policy identity, hash binding, supported ODRL enforcement terms, and required evidence-pack declarations, while runtime enforcement remains with Registry Relay's governed PDP path.
 
 REQ-DM-MANIFEST-007: Where an `ecosystem_bindings` entry declares `type: governed-evidence`, it MUST carry `id` and `version` values whose `(id, version)` pair is unique among the manifest's ecosystem bindings, a non-empty `profile`, and `evidence_pack` metadata. The evidence pack MUST declare `pack_id`, `pack_version`, `source_basis`, `semantic_profile`, `evidence_envelope`, `required_gates`, `allowed_outputs`, `policy_id`, `policy_hash`, and `odrl_enforcement`. `source_basis`, `semantic_profile`, `evidence_envelope`, `source_mapping`, `policy`, fixtures, and synthetic data remain JSON metadata values where the manifest validates presence and object shape where implemented; this requirement MUST NOT be read as a fully typed evidence-pack metadata model.
 
 REQ-DM-MANIFEST-008: A governed evidence pack MUST bind runtime policy selection to a policy identity and digest: `policy_id` MUST be non-empty, `policy_hash` MUST be a lowercase `sha256:` digest, and, when an inline `policy` object is present, Registry Manifest MUST verify `policy_hash` against the canonical JSON form of that inline policy. `required_gates` MUST include the gateway gates Registry Manifest requires for governed evidence, including source freshness, source binding, route scope, requester and subject identity, assurance, legal basis, consent, jurisdiction, requested disclosure, credential format, authority basis, and subject relationship. `allowed_outputs` MUST include `minimized_json`.
 
-REQ-DM-MANIFEST-009: A governed evidence pack MUST declare `odrl_enforcement.profile: registry-evidence-gateway-pdp/v1`, and its `constraint_terms` MUST contain at least one unique term from the profile vocabulary: `odrl:purpose` and `odrl:spatial`. The wider manifest policy renderer MAY publish broader Open Digital Rights Language (ODRL) metadata, but a governed evidence pack MUST NOT claim PDP enforcement for ODRL terms outside this profile vocabulary. A runtime service MAY support only a subset of the profile vocabulary; Registry Relay currently enforces `odrl:purpose` and denies `odrl:spatial` fail-closed.
+REQ-DM-MANIFEST-009: A governed evidence pack MUST declare `odrl_enforcement.profile: registry-evidence-gateway-pdp/v1`, and its `constraint_terms` MUST contain at least one unique term from the profile vocabulary: `odrl:purpose` and `odrl:spatial`. This legacy identifier names a Relay PDP profile and has no connection to the Evidence Gateway product. The wider manifest policy renderer MAY publish broader Open Digital Rights Language (ODRL) metadata, but a governed evidence pack MUST NOT claim PDP enforcement for ODRL terms outside this profile vocabulary. A runtime service MAY support only a subset of the profile vocabulary; Registry Relay currently enforces `odrl:purpose` and denies `odrl:spatial` fail-closed.
 
 ## 7. Evidence-offering access discovery metadata
 
@@ -169,7 +169,7 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 - **Library callers own untrusted-input resource limits.** The command-line path may impose its own input limits, but callers that embed Registry Manifest as a library and accept manifests from untrusted parties still need request size, nesting, collection-count, and time limits appropriate to their service boundary. Manifest validation is not a general resource sandbox.
 - **The access checks are keyed to one access kind and validate shape, not reachability.** They apply only where the manifest declares `access.kind: registry-evidence`. A `conforms_to` value or a well-formed HTTPS URL alone must not be treated by consumers as proof that an endpoint is live, that it returns the named profile, or that the endpoint set is safe to trust. Manifest validation does not fetch either URL.
 - **Publication provenance depends on a clean destination.** The `package_digest` pins the artifact inventory it sees. It is not proof that every file was created by the current publish invocation if the output directory already contained local files.
-- **Evidence pack metadata remains partly opaque.** Governed evidence packs require key metadata and validate selected object shapes, supported gate names, supported output names, policy digest shape, inline-policy digest binding, and supported ODRL enforcement terms. The implementation still represents several fields as JSON values rather than a fully typed external evidence-pack schema (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009).
+- **Evidence Gateway pack metadata remains partly opaque.** Governed evidence packs require key metadata and validate selected object shapes, supported gate names, supported output names, policy digest shape, inline-policy digest binding, and supported ODRL enforcement terms. The implementation still represents several fields as JSON values rather than a fully typed external evidence-pack schema (REQ-DM-MANIFEST-007 through REQ-DM-MANIFEST-009).
 - **Profile fixtures are non-normative.** The example profiles shipped with Registry Manifest are illustrative until reviewed against official artifacts; they are not authoritative profiles for any named external system (see the [profile fixtures guide](../../products/registry-manifest/profile-fixtures/)).
 
 ## Conformance
@@ -190,7 +190,7 @@ A metadata manifest, and the Registry Manifest tooling that validates and render
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 
-## Evidence
+## Evidence Gateway
 
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 

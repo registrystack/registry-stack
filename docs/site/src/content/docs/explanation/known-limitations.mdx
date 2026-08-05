@@ -58,11 +58,11 @@ Second, aligning with an external standard is not the same as conforming to it: 
 of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to any of them.
 The [standards register](../../reference/standards/) records how each one is actually adopted.
 
-## Evidence limits
+## Evidence Gateway limits
 
-Evidence releases one stateless assertion per request under a frozen Version 1 contract.
-Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and the
-[Evidence security model](../../security/evidence/).
+Evidence Gateway releases one stateless assertion per request under a frozen Version 1 contract.
+Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-evidence/) and the
+[Evidence Gateway security model](../../security/evidence/).
 
 - A serialization, not a credential lifecycle: enabling the SD-JWT VC response format adds an
   encoding of the same assertion. There is no issuance session, holder binding ceremony, status
@@ -70,12 +70,12 @@ Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and
   per-requester or per-requirement information. A released assertion stays verifiable until its
   declared validity expires; nothing recalls it.
 - The holder key is unverified: a request may carry an optional `holderKey` that is echoed into the
-  `cnf` member. Evidence issues no holder key, binds none, and verifies none, so `cnf` is a
+  `cnf` member. Evidence Gateway issues no holder key, binds none, and verifies none, so `cnf` is a
   caller-supplied convenience for whatever presentation layer the operator runs elsewhere.
 - Assertions are audience-scoped, not multi-verifier: the subject identifier is an audience-scoped
   pseudonym, so the same person requested for a different audience yields a different identifier.
   Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
-  linkable across purposes. This is deliberate, and it means an Evidence assertion is not a
+  linkable across purposes. This is deliberate, and it means an Evidence Gateway assertion is not a
   general-purpose credential a holder presents to several verifiers.
 - The request nonce is not replay protection: every request carries one canonical 32-byte random
   nonce that is echoed into the payload and never stored, uniqueness-checked, or exposed to
@@ -88,13 +88,13 @@ Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and
   the strict verifier rejects it. Treat it as transport-authenticated convenience, never as
   something a third party can verify later.
 - CCCEV is an alignment, not conformance: the payload field names map to CCCEV 2.2.0 as a frozen
-  semantic reference with Evidence-specific extensions. No JSON-LD envelope is emitted and no
+  semantic reference with Evidence Gateway-specific extensions. No JSON-LD envelope is emitted and no
   conformance to CCCEV is claimed.
 - Disclosure families are an attestation, not a classifier: the runtime rejects two simultaneously
   enabled requirements that declare the same `disclosureGuard` family, but a declared family is a
   reviewed operator assertion. Nothing detects that two differently labelled families are
   semantically equivalent, so the combined-bundle disclosure review stays an operator duty.
-- No cumulative disclosure budget: Evidence has no application database and persists no selector,
+- No cumulative disclosure budget: Evidence Gateway has no application database and persists no selector,
   source, evidence, or response data, so nothing tracks cumulative disclosure across repeated or
   overlapping requests. Native rate controls are uniform per principal, tracked per process in
   in-process memory, bounded at 100,000 tracked keys, multiplied by replica count, and reset to
@@ -104,8 +104,8 @@ Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and
   the same authority under different claim names, require a second deployment with its own bundle,
   signer, and audit boundary.
 - Bearer tokens only: a token carrying a proof-of-possession confirmation claim is denied rather
-  than accepted as an ordinary bearer, because Evidence validates no sender proof. An authorization
-  server that binds tokens to DPoP keys or client certificates must issue Evidence clients unbound
+  than accepted as an ordinary bearer, because Evidence Gateway validates no sender proof. An authorization
+  server that binds tokens to DPoP keys or client certificates must issue Evidence Gateway clients unbound
   tokens.
 - No hot reload, no admin surface, Unix targets only: there is no runtime upload, editor, approval
   API, hot reload, merge, mutation, governed-field override, or fallback path. Any change is a new
@@ -123,7 +123,7 @@ Read the full context in the [Evidence protocol](../../spec/rs-pr-evidence/) and
 
 ## Registry Mint limits
 
-Registry Mint issues the short-lived access tokens a resource server such as Evidence verifies,
+Registry Mint issues the short-lived access tokens a resource server such as Evidence Gateway verifies,
 for deployments with no identity provider. A deployment that already has an identity provider does
 not run it. Read the full surface in the [Registry Mint reference](../../reference/mint/).
 
@@ -150,7 +150,7 @@ not run it. Read the full surface in the [Registry Mint reference](../../referen
 These boundaries cut across components.
 
 - No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
-  source registry data, and it has no event-stream backend. Evidence reads its fixed sources
+  source registry data, and it has no event-stream backend. Evidence Gateway reads its fixed sources
   read-only as well, and persists nothing it read.
 - Aggregate routes are not a privacy budget: Relay aggregate routes return the configured
   statistical observations, but provide no built-in longitudinal privacy budget and do not track
@@ -189,7 +189,8 @@ Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/
   Relay only serves and scopes compiled artifacts.
 - Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy
   enforcement covers only the supported PDP profile
-  (`registry-evidence-gateway-pdp/v1`, the single PDP profile this build recognizes).
+  (`registry-evidence-gateway-pdp/v1`, the legacy Relay PDP profile identifier and the single
+  profile this build recognizes). The identifier does not name or connect to Evidence Gateway.
   It is not dynamic external policy discovery, and not enforcement of
   [ODRL](../../reference/standards/) terms outside the supported set.
 

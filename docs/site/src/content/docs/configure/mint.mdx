@@ -17,7 +17,7 @@ set of registered machine clients and has no identity provider to issue them.
 ## When to use Registry Mint
 
 Registry Mint is a supporting service, not a product pattern of its own. Use it when a resource
-server such as Evidence needs signed, expiring, audience-bound tokens and standing up a
+server such as Evidence Gateway needs signed, expiring, audience-bound tokens and standing up a
 general-purpose identity provider is not an option for the deployment.
 
 Version 1 runs one active Mint process. Its client-assertion replay cache is memory-only and
@@ -33,12 +33,12 @@ the client it claims to be, then writes the authority from the registry, never f
 
 For the whole round trip in one picture, from a client holding only its own private key to a
 signed assertion, see
-[how a client, Registry Mint, and Evidence interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-interact).
+[how a client, Registry Mint, and Evidence Gateway interact](../../reference/mint/#how-a-client-registry-mint-and-evidence-gateway-interact).
 
 ## When not to use Registry Mint
 
 Skip Registry Mint when an identity provider already issues client-credentials tokens for the
-deployment. Registry Mint exists only for the case where none does; pointing Evidence at an
+deployment. Registry Mint exists only for the case where none does; pointing Evidence Gateway at an
 existing IdP's token endpoint and JWKS does not require Registry Mint at all.
 
 Registry Mint is also not a place to route caller identity for people. It authenticates
@@ -63,11 +63,11 @@ You need:
 - An owner-only directory on durable storage for the keyed Mint audit chain. Plan its capacity,
   backup, and retention because Registry Mint rotates segments but never deletes or compacts
   them.
-- The claim names the resource server (Evidence, for example) reads its principal, requester
+- The claim names the resource server (Evidence Gateway, for example) reads its principal, requester
   tags, evidence audience, and grant pair from, so Registry Mint's `accessTokens.claims` can be
   set to match them exactly.
 - TLS in front of Registry Mint. Registry Mint serves plain HTTP and expects TLS termination it
-  does not manage; Evidence in turn requires the token issuer and its key set to be HTTPS, with
+  does not manage; Evidence Gateway in turn requires the token issuer and its key set to be HTTPS, with
   no exception for loopback (`crates/registry-mint/demo/README.md`).
 
 ## Configure the deployment
@@ -248,5 +248,5 @@ records were corrupted or reordered.
 | `mint serve` refuses to start over audit | The audit key, directory, chain, or lock file is unsafe, another writer holds the chain, or retained records do not verify. | Check owner-only permissions, run one writer per `audit.path`, then run `mint verify-audit` before deciding whether recovery is needed. Do not discard the chain to make startup pass. |
 | `mint check` refuses the configuration over audit | The audit hash key file is missing, is not owner-only, or is too short. `check` does not open the chain, so it never reports a running writer as a fault. | Restore the key file with owner-only permissions. Use `mint verify-audit` for the chain itself. |
 | The token request fails with `500 server_error` and readiness changes to `503` | Mint could not durably append the audit decision and permanently poisoned the writer for this process. | Stop traffic, restore writable durable storage, preserve and verify the retained chain, then restart Mint. The failed request did not receive an access token. |
-| Evidence rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
+| Evidence Gateway rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
 | `GET /ready` returns `503` | No client is currently registered, the client registry directory failed to load, or the audit writer is poisoned. | Check the startup or reload log and the audit storage. Add a valid client or restore and verify audit storage as indicated. |

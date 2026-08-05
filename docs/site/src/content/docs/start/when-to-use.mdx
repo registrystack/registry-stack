@@ -31,21 +31,19 @@ system that owns the data.
 | Caller needs | Use | Result |
 | --- | --- | --- |
 | To read specific data | Registry Relay | A protected, read-only API response |
-| To learn only a fact | Evidence | A signed assertion carrying the answer, not the source record |
+| To learn only a fact | Evidence Gateway | A signed assertion carrying the answer, not the source record |
 
-Registry Relay and Evidence can work together: an institution publishes
-records through Registry Relay, and Evidence answers a bounded question over
-those same records by treating the Relay API as a fixed HTTP source. Registry
-Mint issues the short-lived access tokens either service needs when a
-deployment has no identity provider; see the
+Registry Relay and Evidence Gateway are separate product choices. They can be
+operated by the same institution, but each has its own source, authorization,
+configuration, and audit boundary. Evidence Gateway does not use Relay as its
+source path. Registry Mint can issue short-lived access tokens to either
+service when a deployment has no identity provider; see the
 [Registry Mint reference](../../reference/mint/).
-[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) runs
-that combination on a laptop if you would rather see it than read about it.
 
 ### Who does what
 
 - The assertion provider is an institution that answers requests with signed
-  facts through Evidence.
+  facts through Evidence Gateway.
 - The data publisher is an institution that exposes records through Registry
   Relay.
 - The consumer or verifier is a relying service that calls either door and
@@ -81,6 +79,6 @@ approval.
 
 - [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
 - [Connect an existing HTTP registry](../../tutorials/author-registry-project/)
-- [Evaluate Evidence](../evaluate-evidence/)
+- [Evaluate Evidence Gateway](../evaluate-evidence/)
 - [Read the architecture overview](../../explanation/architecture/)
 - [Review the security boundaries](../../security/)

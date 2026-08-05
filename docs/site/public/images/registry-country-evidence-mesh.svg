@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Country evidence mesh</title>
-  <desc>At country scale several authorities each keep custody of their own data. Clinical health systems expose bounded outputs through a reviewed FHIR integration, public-health programme systems such as DHIS2 through a reviewed Rhai script, and civil registration, social protection, agriculture, and education systems keep their own authoritative stores. Two bounded surfaces sit over them: Registry Relay keeps source credentials and returns only reviewed typed outputs, and Evidence returns only the values a reviewed requirement declares. Consuming systems such as a social-protection management information system receive those answers and do not become raw-record readers.</desc>
+  <desc>At country scale several authorities each keep custody of their own data. Clinical health systems expose bounded outputs through a reviewed FHIR integration, public-health programme systems such as DHIS2 through a reviewed Rhai script, and civil registration, social protection, agriculture, and education systems keep their own authoritative stores. Two independent bounded surfaces sit over them: Registry Relay keeps its source credentials and returns only reviewed typed outputs, and Evidence Gateway uses its own configured sources and returns only the values a reviewed requirement declares. Consuming systems such as a social-protection management information system receive those answers and do not become raw-record readers.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">AUTHORITIES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -50,7 +50,7 @@
 
   <g fill="#161616" font-size="14" font-weight="700">
     <text x="16" y="270">Registry Relay</text>
-    <text x="376" y="270">Evidence</text>
+    <text x="376" y="270">Evidence Gateway</text>
   </g>
   <g fill="#6a6a6a" font-size="11.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">

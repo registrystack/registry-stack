@@ -1,6 +1,6 @@
 ---
-title: Rotate Evidence signing keys
-description: Stage a new Evidence signing key, publish an overlap set through the runtime JWKS endpoint, and retire the old key after consumers can verify both generations.
+title: Rotate Evidence Gateway signing keys
+description: Stage a new Evidence Gateway signing key, publish an overlap set through the runtime JWKS endpoint, and retire the old key after consumers can verify both generations.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,9 +13,9 @@ locale: en
 standards_referenced: []
 ---
 
-Use this procedure after [Build and deploy an Evidence project](../build-and-deploy-evidence-project/).
+Use this procedure after [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/).
 Coordinate the rotation with consumers through
-[Manage Evidence verifier trust](../manage-evidence-verifier-trust/) before activation. Evidence
+[Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/) before activation. Evidence Gateway
 signs with one active Ed25519 key. Rotation is a reviewed, startup-only configuration change. There
 is no hot-rotation endpoint or standby-key field. Publishing a new public key makes it discoverable;
 it does not make independently operated consumers trust it.
@@ -34,7 +34,7 @@ evidencectl keygen signing \
 The command writes a private and public JWK without printing private bytes. Provision the private
 JWK into the deployment's secret root under a new logical filename. Keep the public JWK
 as a separately approved distribution artifact for consumers. The active public key does not need
-to be copied into the closed bundle because Evidence derives it from the active private JWK.
+to be copied into the closed bundle because Evidence Gateway derives it from the active private JWK.
 
 Do not overwrite the active private key in place. A candidate revision must be complete and
 checkable before it becomes active.
@@ -58,7 +58,7 @@ signing:
 ```
 
 `activeKeyId` must exactly match the private JWK's `kid`. Each retired file contains public material
-only. Evidence assembles its JWKS endpoint from the active private key's public half and the
+only. Evidence Gateway assembles its JWKS endpoint from the active private key's public half and the
 configured retired public files. You do not publish a separate operator-built JWKS beside it.
 
 ## Validate and coordinate consumer approval
@@ -80,7 +80,7 @@ the rotation.
 
 ## Activate and observe
 
-Deploy the exact checked revision and restart Evidence. Confirm readiness, then inspect the public
+Deploy the exact checked revision and restart Evidence Gateway. Confirm readiness, then inspect the public
 endpoint:
 
 ```sh
@@ -92,7 +92,7 @@ The JWKS contains the new active public key and the old retired public key, with
 members. Send one authorized synthetic request and verify its `kid` with the consumer's approved
 overlap set.
 
-Missing, unreadable, or mismatched signing material fails closed. Evidence never falls back to an
+Missing, unreadable, or mismatched signing material fails closed. Evidence Gateway never falls back to an
 unsigned success.
 
 ## Retire the old public key
@@ -110,11 +110,11 @@ Remove the retired public file and its `retiredPublicJwkFiles` entry only in a l
 revision. Run fixtures and `evidence check` again, coordinate consumer removal, deploy, and confirm
 the JWKS no longer carries the old key.
 
-Removing a verification key is not selective assertion revocation. Evidence has no credential
+Removing a verification key is not selective assertion revocation. Evidence Gateway has no credential
 status or revocation lifecycle. It only changes which signatures a current trust set can verify.
 
 ## Related guidance
 
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
-- [Evidence security model](../../security/evidence/)
-- [Configure Evidence](../../configure/evidence/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Evidence Gateway security model](../../security/evidence/)
+- [Configure Evidence Gateway](../../configure/evidence/)

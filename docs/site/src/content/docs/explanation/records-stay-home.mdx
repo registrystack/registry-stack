@@ -25,12 +25,13 @@ guarantee.
 
 ## A question goes in, an answer comes out
 
-The combined Relay and Evidence mental model is one sentence: **a bounded question crosses
-into the institution, Relay reads and normalizes the source, Evidence returns one signed
+The Evidence Gateway mental model is one sentence: **a bounded question crosses into the
+institution, Evidence Gateway reads its configured authoritative source and returns one signed
 assertion carrying the answer, an evidence consumer uses it, and the decision owner remains
-accountable for what happens next.**
+accountable for what happens next.** Registry Relay offers a separate protected-read path and is
+not part of the Evidence Gateway request.
 
-An Evidence caller never sends the value it is asking about and never receives the
+An Evidence Gateway caller never sends the value it is asking about and never receives the
 underlying record as the answer.
 It sends the identifier of a *predefined requirement* at an exact revision, the purpose it
 acts under, one selector per declared subject role, and a per-request nonce. That is the
@@ -40,7 +41,7 @@ It receives one signed assertion carrying the values the requirement declares, a
 else (`products/evidence/contracts/evidence.schema.yaml`).
 The source record the answer was computed from stays behind.
 
-Four questions carry equal weight in the Evidence contract, and none of them is the
+Four questions carry equal weight in the Evidence Gateway contract, and none of them is the
 canonical one: adult status, residence region, professional licence status, and
 legal-parent relationship. All four run the same path, and none is a built-in type or a
 special route (`products/evidence/README.md`, `products/evidence/CONCEPT.md`). The
@@ -54,13 +55,14 @@ answer is one boolean. The register's list of that child's parents never travels
 ```mermaid
 flowchart LR
     subgraph inst["Institution: data stays here"]
-        src[("Source registry\nCSV · XLSX · Parquet · PostgreSQL")]
+        relaySrc[("Relay source\nfile · database · HTTP")]
+        evidenceSrc[("Evidence Gateway source\nauthoritative HTTP API")]
         relay["Registry Relay\nprotected read API"]
-        evidence["Evidence\nevaluate · minimize · sign"]
+        evidence["Evidence Gateway\nevaluate · minimize · sign"]
         key>"Signing key\n(private half never leaves)"]
         audit[("Audit log")]
-        src -- read in place --> relay
-        relay -- one fixed protected read --> evidence
+        relaySrc -- read in place --> relay
+        evidenceSrc -- one fixed request --> evidence
         evidence -. records .-> audit
         key -. signs .-> evidence
     end
@@ -72,7 +74,7 @@ flowchart LR
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
     classDef outside fill:#f7f7f7,stroke:#777,stroke-dasharray:3 3;
-    class src,relay,evidence,key,audit inside;
+    class relaySrc,evidenceSrc,relay,evidence,key,audit inside;
     class caller outside;
 ```
 
@@ -80,20 +82,20 @@ flowchart LR
 database table into a read-only, access-controlled API without replacing the source.
 Its scoped record routes can return source records to authorized callers that hold the
 dataset's row-read permission.
-Evidence answers one predefined requirement about one set of subjects and returns a signed
+Evidence Gateway answers one predefined requirement about one set of subjects and returns a signed
 assertion; it is the only component that evaluates a requirement, minimizes the result, and
-signs it.
-Evidence is the stronger minimization surface.
+signs it. It contacts its own configured authoritative HTTP source rather than calling Relay.
+Evidence Gateway is the stronger minimization surface.
 Relay record reads are scoped and audited, not open data.
 
 The policy boundary remains separate across the two products and their consumers. Relay
-owns source access and adaptation policy. Evidence owns evidence authorization and the
+owns source access and adaptation policy. Evidence Gateway owns evidence authorization and the
 declared disclosure of each requirement.
 The evidence consumer determines how evidence is used, and the decision owner remains
 accountable for requirements, eligibility, qualification, prioritization, approval, routing,
 payment, workflow, and action policy.
 Purpose-bound authorization can restrict an evidence request without changing which
-component owns the consumer decision. The caller that invokes Evidence can be the evidence
+component owns the consumer decision. The caller that invokes Evidence Gateway can be the evidence
 consumer or a technical intermediary acting for it.
 
 ## What stays home
@@ -111,7 +113,7 @@ consumer or a technical intermediary acting for it.
 - The institution keeps custody: The design premise is *distributed custody*: each
   authority retains control of its own registry data, and the stack does not aggregate
   records into a central system. It provides the exchange surface, not a data lake.
-- Evidence keeps no copy of what it read: Version 1 has no application database and
+- Evidence Gateway keeps no copy of what it read: Version 1 has no application database and
   persists no selector, source, evidence, or response data. Raw source responses are never
   persisted or logged, and selector, source, and disclosed values never reach logs or the
   native audit record (`products/evidence/OPERATOR-CONTRACT.md`, invariants `V1-I14` and
@@ -127,11 +129,11 @@ What crosses depends on the surface.
 Registry Relay can return scoped source records to an authorized caller through a
 governed, audited read bounded by the caller's per-dataset row scope and the dataset's
 configured filters and limits.
-Evidence returns the values a requirement declares rather than the source row; keeping that
+Evidence Gateway returns the values a requirement declares rather than the source row; keeping that
 answer narrow is a modelling discipline, because a well-modelled requirement declares the
 coarsest value form that still answers the question.
 
-An Evidence assertion is a closed document. It carries the requirement it supports, the
+An Evidence Gateway assertion is a closed document. It carries the requirement it supports, the
 evidence type it conforms to, the named issuer and the technical provider, the observation
 and validity timestamps, the purpose, the audience, the configuration revision it was
 produced under, one opaque binding per subject role, and one to sixteen declared values
@@ -174,7 +176,7 @@ status or that the source is correct (invariant `V1-I24`).
 The "stays home" property rests on a few enforced rules, covered in depth in the Trust &
 Security material:
 
-- One authorization decision, before any source read: Evidence resolves a single decision
+- One authorization decision, before any source read: Evidence Gateway resolves a single decision
   binding the requester, the requirement revision, the purpose, the audience, the authority
   path, and every subject role's profile and value origin, and denies before it resolves a
   source credential or contacts a source. Permissions are never unioned across grants
@@ -184,7 +186,7 @@ Security material:
   supply thresholds, expressions, scripts, paths, headers, source fields, or response
   projections. Every one of those is fixed by reviewed configuration that is immutable for
   the life of the process (invariants `V1-I02` and `V1-I18`).
-- Every request is audited, at two gates: Evidence durably accepts an access-attempt record
+- Every request is audited, at two gates: Evidence Gateway durably accepts an access-attempt record
   after authorization and before it touches a source, and a disclosure-release record after
   the final response bytes exist and before those exact bytes are released. A sink failure
   blocks the step rather than releasing unaudited evidence (invariants `V1-I13` and
@@ -214,7 +216,7 @@ Security material:
   is reviewed as one disclosure surface, and that review is an operator duty rather than
   something the runtime can decide (invariant `V1-I03`).
 - Correctness depends on the source: Relay reports what the reviewed source consultation says,
-  and Evidence derives its answer from what the source returned. Neither product
+  and Evidence Gateway derives its answer from what the source returned. Neither product
   independently vouches for whether the source is correct or current.
 - Signed is the default, unsigned is not evidence: The signed flattened JWS is mandatory and
   the default result. A separately typed unsigned envelope exists only when both the
@@ -222,14 +224,14 @@ Security material:
   is never later-verifiable evidence, and is never produced as a fallback from a signing
   failure (invariants `V1-I21` and `V1-I22`).
 - Matching is only as strict as the lookup contract: A lookup resolves to exactly one
-  match, no match, or ambiguity. Evidence never surfaces or chooses between candidates, and
+  match, no match, or ambiguity. Evidence Gateway never surfaces or chooses between candidates, and
   emits no candidate count, score, or comparison (invariant `V1-I10`).
 - Missing evidence is not a negative fact: A source value of `false`, an absent value,
   no match, ambiguity, and source failure have different reviewed meanings. A derivation
   must not collapse an absent value, an unresolved lookup, or a failure into `false`.
   Existence may be disclosed only as a separately authorized declared value, never as error
   detail (`products/evidence/contracts/problem-contract.yaml`).
-- Evidence is not a consumer decision engine: Evidence returns governed evidence. The
+- Evidence Gateway is not a consumer decision engine: Evidence Gateway returns governed evidence. The
   evidence consumer determines how that evidence is used, and the decision owner remains
   accountable for requirements, decisions, workflow, and actions.
 - This is not zero-knowledge: A boolean answer is a value computed inside the service from
@@ -245,6 +247,6 @@ the underlying specifications. Weigh those alongside the limits in this section;
 
 - The security model and protocol contracts: [RS-SEC-G](../../spec/rs-sec-g/),
   [RS-PR-RELAY](../../spec/rs-pr-relay/), [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/)
-- [Evidence security model](../../security/evidence/)
+- [Evidence Gateway security model](../../security/evidence/)
 - [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
 - [Threat model](../threat-model/)

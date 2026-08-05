@@ -45,9 +45,9 @@ The enforcement column names the repository CI checks so the mechanism is audita
 | Surface | Contract artifact | Enforcement today |
 | --- | --- | --- |
 | Registry Relay HTTP API (approved stable public and admin listener surface) | Committed OpenAPI document `crates/registry-relay/openapi/registry-relay.openapi.json`, scoped by the [authoritative 1.0 support roster](../apis/registry-relay/) | `just openapi-contract` checks byte-for-byte generation, filters only roster entries declared `included_unstable`, then runs `oasdiff breaking` against the base ref |
-| Evidence HTTP API and its Version 1 contracts | The frozen Version 1 source contracts under `products/evidence/contracts/`, indexed by `products/evidence/contracts/README.md`, and the artifacts generated from them under `products/evidence/generated/`, including `registry-evidence.openapi.json` | Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and fails on any byte difference from the committed copies, and `products/evidence/scripts/check-source-neutrality.sh` |
-| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), the `pdp.*` denial codes, and the `https://id.registrystack.org/` identifier space. Evidence's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence problem types](../evidence-problems/) | `release/scripts/check-stable-surface-compatibility.py` permits additions and rejects removal or changed meaning; product tests pin runtime rendering and status mappings; the `evidence-contracts` job byte-diffs the generated Evidence problem schema |
-| Configuration formats and documented environment variables | The committed Draft 2020-12 schema `schemas/registry-relay.config.schema.json`, the frozen Evidence schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Relay's `config-schema-check` command reproduces its schema from the typed config graph; Evidence's config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`); strict parsers and the deprecated-field guard reject unknown or retired fields |
+| Evidence Gateway HTTP API and its Version 1 contracts | The frozen Version 1 source contracts under `products/evidence/contracts/`, indexed by `products/evidence/contracts/README.md`, and the artifacts generated from them under `products/evidence/generated/`, including `registry-evidence.openapi.json` | Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and fails on any byte difference from the committed copies, and `products/evidence/scripts/check-source-neutrality.sh` |
+| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), the `pdp.*` denial codes, and the `https://id.registrystack.org/` identifier space. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | `release/scripts/check-stable-surface-compatibility.py` permits additions and rejects removal or changed meaning; product tests pin runtime rendering and status mappings; the `evidence-contracts` job byte-diffs the generated Evidence Gateway problem schema |
+| Configuration formats and documented environment variables | The committed Draft 2020-12 schema `schemas/registry-relay.config.schema.json`, the frozen Evidence Gateway schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Relay's `config-schema-check` command reproduces its schema from the typed config graph; Evidence Gateway's config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`); strict parsers and the deprecated-field guard reject unknown or retired fields |
 | Signed config bundle format and verification semantics | `registry.platform.config_bundle.v1` manifests, `registry.platform.config_bundle_signatures.v1` signature envelopes, and `registry.platform.config_trust_anchor.v1` trust anchors. Normal signed verification requires a valid, non-empty trust anchor and checks signature acceptance, file closure, product/environment/stream binding, optional instance pinning, and anti-rollback sequence. The hash-pinned `registry.platform.config_break_glass.v1` `accept_rollback` mode keeps signature, binding, closure, hash, and product checks but waives the monotonic sequence rejection for a signed bundle whose config hash matches the override. Its `accept_unsigned` mode skips signature, binding, and sequence checks while retaining exact hash pinning and product config validation. | Shared verifier tests in `registry-platform-config`; break-glass consumption, restart-pin, and sequence tests in `registry-platform-ops`; product CLI coverage in `crates/registry-relay/tests/config_verify_bundle_cli.rs` |
 | Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
 | Source-adaptation integration surfaces | Registry Relay's compiled `http`, `script`, and `snapshot` consultation plans, including the Rhai `consult(ctx)` host API and versioned protocol helpers | Registry Stack project-authoring schemas and fixtures; Relay source-plan compiler and consultation contract tests |
@@ -116,11 +116,11 @@ Every release documents a forward state path from its immediate predecessor.
 An upgrade that skips releases follows each sequential hop unless the target release explicitly
 certifies a direct path.
 
-The reverse is not promised. Registry Relay, Evidence, and Registry Mint all parse config with
+The reverse is not promised. Registry Relay, Evidence Gateway, and Registry Mint all parse config with
 `deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
 on an older binary. Pin your config to the release you deploy.
 
-Evidence and Registry Mint have no migrated state to upgrade. Evidence persists the append-only
+Evidence Gateway and Registry Mint have no migrated state to upgrade. Evidence Gateway persists the append-only
 audit log named by `auditStorage` in its runtime file. Registry Mint persists its client registry
 and the keyed append-only chain named by `audit.path`, while its client-assertion replay cache
 remains in memory. A newer binary must be checked against these retained audit formats before
@@ -145,7 +145,7 @@ The following are not covered by the compatibility promise, at any version:
   is not a covered surface.
 - Adopter tooling that wraps a covered surface rather than defining one, including `evidencectl`,
   which generates key material and project scaffolds and shells out to the `evidence` binary for
-  every Evidence semantic decision.
+  every Evidence Gateway semantic decision.
 - The layout of the repository, the `products/` export trees, the docs site internals, and
   the lab tooling.
 - Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is
@@ -158,10 +158,10 @@ The HTTP surface carries several independent version prefixes: `/v1` (data plane
 (Relay standards adapters). Each namespace versions independently; a `/v2` in one namespace does
 not imply a `/v2` in another.
 
-Evidence's two versioned routes, `POST /v1/evidence` and `GET /v1/evidence-definitions`, are the
+Evidence Gateway's two versioned routes, `POST /v1/evidence` and `GET /v1/evidence-definitions`, are the
 whole of its evidence surface under the frozen Version 1 contract. Its remaining routes are
 operational or discovery routes and are unversioned by convention: `/health`, `/ready`,
-`/openapi.json`, `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. Evidence
+`/openapi.json`, `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. Evidence Gateway
 serves `/metrics` on a separate listener when one is configured, never on the request listener.
 
 Registry Mint's routes are unversioned by protocol convention rather than by promise: the fixed,
@@ -178,7 +178,7 @@ The promise is machine-checked where a checker exists:
   document from the reference config, requires a byte-for-byte match with the committed file,
   removes only the aggregate representations marked `included_unstable` by the authoritative
   Relay roster, and runs `oasdiff breaking` against the base ref.
-- Evidence: root CI's `evidence-contracts` job regenerates every contract artifact from the code
+- Evidence Gateway: root CI's `evidence-contracts` job regenerates every contract artifact from the code
   with `products/evidence/scripts/check-contracts.sh` and fails on any byte difference from the
   committed copies, so the OpenAPI document, the problem schema, and the request and response
   schemas cannot drift from a released binary.
@@ -186,7 +186,7 @@ The promise is machine-checked where a checker exists:
   released registry and selected metric contract against the base reference while permitting
   additions.
 - Config: Registry Relay reproduces its committed schema from its typed config graph, and
-  Evidence's config parser is tested against the frozen contract schemas rather than a schema
+  Evidence Gateway's config parser is tested against the frozen contract schemas rather than a schema
   generated from it; `registry-platform-config` rejects removed or renamed keys with a pointer to
   the migration note instead of silently ignoring them.
 

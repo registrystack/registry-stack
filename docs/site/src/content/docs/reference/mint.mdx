@@ -1,6 +1,6 @@
 ---
 title: Registry Mint reference
-description: Configuration fields, the token endpoint contract, and the Evidence verification path for the Registry Mint token issuer.
+description: Configuration fields, the token endpoint contract, and the Evidence Gateway verification path for the Registry Mint token issuer.
 status: current
 owner: registry-docs
 source_repos:
@@ -219,7 +219,7 @@ Every response body is `{"error": "<code>"}`, from
 | `GET /health` | Liveness. |
 | `GET /ready` | Readiness. Returns `503` while no client is registered or after an audit write failure poisons the writer. |
 
-## How a client, Registry Mint, and Evidence interact
+## How a client, Registry Mint, and Evidence Gateway interact
 
 One round trip, from a client that holds only its own private key to a signed assertion. Every
 label in this diagram is stated in the prose and tables on this page; the diagram is a summary of
@@ -230,10 +230,10 @@ sequenceDiagram
     autonumber
     participant C as Registered client
     participant M as Registry Mint
-    participant E as Evidence
+    participant E as Evidence Gateway
     participant S as Source
 
-    Note over C,E: Set up once, before any request: the client's public JWK<br/>sits in Mint's client registry, and Evidence's<br/>authentication block names Mint's issuer and key set.
+    Note over C,E: Set up once, before any request: the client's public JWK<br/>sits in Mint's client registry, and Evidence Gateway's<br/>authentication block names Mint's issuer and key set.
 
     C->>C: Sign an assertion with<br/>the client's own private key
     C->>M: POST /token<br/>client_credentials + assertion
@@ -251,30 +251,30 @@ sequenceDiagram
 ```
 
 Everything through the access-token return is the whole of Registry Mint's job. It never sees the
-source, the acceptance definition, or the assertion. The remaining exchanges are Evidence's, and
-Evidence's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
+source, the acceptance definition, or the assertion. The remaining exchanges are Evidence Gateway's, and
+Evidence Gateway's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
 names in its own
 configuration, so any issuer writing those claims would serve equally well.
 
 The exact wire shapes the diagram abbreviates are given in full below:
 [Token endpoint contract](#token-endpoint-contract) for the assertion and token,
 [Other endpoints](#other-endpoints) for the key set path, and
-[How Evidence verifies these tokens](#how-evidence-verifies-these-tokens) for the claim names.
+[How Evidence Gateway verifies these tokens](#how-evidence-gateway-verifies-these-tokens) for the claim names.
 
 Two failures collapse deliberately and are worth reading beside the diagram. A client
 authentication failure returns `401 invalid_client` whatever went wrong, so the token endpoint
 cannot be used to probe which client ids are registered. A key-set retrieval failure prevents
-Evidence from verifying a token: with no key set ever retrieved, every request is rejected until
+Evidence Gateway from verifying a token: with no key set ever retrieved, every request is rejected until
 one can be, and with a key set already held, that held set keeps being accepted only until its
-allowance runs out. Evidence names the outage in either case rather than failing silently.
+allowance runs out. Evidence Gateway names the outage in either case rather than failing silently.
 
-## How Evidence verifies these tokens
+## How Evidence Gateway verifies these tokens
 
-Evidence's own `authentication` configuration block, defined in
+Evidence Gateway's own `authentication` configuration block, defined in
 `crates/registry-evidence/src/config.rs` (`AuthenticationConfig`), names the same claims Registry
 Mint writes: `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `grantIdClaim`,
 `grantAuthorityClaim`, and an optional `actorClaim`, alongside `issuer`, `audiences`,
-`tokenTypes`, `algorithms`, and `jwksUri`. Evidence verifies a presented token against that
+`tokenTypes`, `algorithms`, and `jwksUri`. Evidence Gateway verifies a presented token against that
 configuration in `crates/registry-evidence/src/auth.rs` (`Authenticator`), reading each claim by
 the name configured there rather than any hardcoded name. Setting `authentication.issuer` and
 `authentication.jwksUri` to Registry Mint's own `issuer` and published key set, and setting each
@@ -283,11 +283,11 @@ the two.
 
 This is proven by tests, not only by matching configuration. `registry-mint`'s
 `tests/evidence_compatibility.rs` drives the real Registry Mint router over a real on-disk
-deployment and feeds the minted token to Evidence's own authenticator;
+deployment and feeds the minted token to Evidence Gateway's own authenticator;
 `tests/delegated_subject_binding.rs` does the same for delegated, subject-bound tokens, running
-Evidence's own entitlement match and selector resolution over a token minted by the real Registry
-Mint router. The dependency runs one way only: Registry Mint's tests exercise Evidence's
-authenticator, and Evidence does not depend on Registry Mint.
+Evidence Gateway's own entitlement match and selector resolution over a token minted by the real Registry
+Mint router. The dependency runs one way only: Registry Mint's tests exercise Evidence Gateway's
+authenticator, and Evidence Gateway does not depend on Registry Mint.
 
 ## Next
 
