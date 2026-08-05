@@ -47,8 +47,8 @@ use registry_evidence_client::{
 };
 
 use convert::{
-    config_from_json, evidence_to_json, map_client_error, map_config_error, map_conversion_error,
-    spec_from_json, subject_expectations_to_json,
+    config_from_json, datetime_from_unix_millis, evidence_to_json, map_client_error,
+    map_config_error, map_conversion_error, spec_from_json, subject_expectations_to_json,
 };
 
 /// Every mapped failure (see `convert::map_client_error` and friends) carries
@@ -376,10 +376,8 @@ impl EvidenceClient {
         as_of_millis: f64,
     ) -> Result<VerifiedEvidence> {
         catch_panic("verifying a response as of an instant", || {
-            let millis = as_of_millis as i64;
-            let now = chrono::DateTime::from_timestamp_millis(millis).ok_or_else(|| {
-                NapiError::from_reason("`asOfMillis` is not a representable instant".to_owned())
-            })?;
+            let now = datetime_from_unix_millis(as_of_millis)
+                .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
             let verified = self
                 .inner
                 .verify_as_of(&prepared.inner, &response.inner, now)

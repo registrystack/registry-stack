@@ -5,7 +5,7 @@ const { test } = require('node:test');
 
 const { EvidenceClient, EvidenceClientError } = require('..');
 const { startStubServer } = require('./helpers/stub-server');
-const { requestSpec } = require('./helpers/live-signing');
+const { generateSigningKey, signEvidence, requestSpec, evidenceFor } = require('./helpers/live-signing');
 
 const DUMMY_JWKS = {
   keys: [
@@ -180,6 +180,44 @@ test('a response over maxResponseBytes is refused as a transport failure, not a 
       assert.equal(error.transportKind, 'response_too_large');
       return true;
     });
+  } finally {
+    await stub.close();
+  }
+});
+
+test('verifyAsOf refuses a non-finite or unrepresentable asOfMillis as a configuration failure', async () => {
+  const signingKey = generateSigningKey('as-of-millis-key');
+  const spec = requestSpec();
+  const stub = await startStubServer({
+    'POST /v1/evidence': (req, res, body) => {
+      const requestBody = JSON.parse(body.toString('utf8'));
+      const evidence = evidenceFor(spec, requestBody.requestNonce);
+      const jws = signEvidence(evidence, signingKey);
+      res.writeHead(200, { 'content-type': 'application/jose+json' });
+      res.end(JSON.stringify(jws));
+    },
+  });
+
+  try {
+    const client = new EvidenceClient({
+      baseUrl: stub.baseUrl,
+      trustedJwks: signingKey.jwks,
+      token: { static: 'as-of-millis-token' },
+    });
+    const prepared = client.prepare(spec);
+    const response = await client.send(prepared);
+
+    for (const asOfMillis of [NaN, Infinity, Number.MAX_VALUE]) {
+      assert.throws(
+        () => client.verifyAsOf(prepared, response, asOfMillis),
+        (error) => {
+          assert.ok(error instanceof EvidenceClientError);
+          assert.equal(error.kind, 'configuration');
+          return true;
+        },
+        `asOfMillis ${asOfMillis} was accepted`,
+      );
+    }
   } finally {
     await stub.close();
   }
