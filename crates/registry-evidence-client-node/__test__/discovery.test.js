@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const { EvidenceClient } = require('../index.js');
+const { EvidenceClient } = require('..');
 const { startStubServer } = require('./helpers/stub-server');
 
 // The golden fixture's key set is public verification material only (no

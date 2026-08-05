@@ -3,7 +3,11 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { EvidenceClient } = require('../index.js');
+const { EvidenceClient, EvidenceClientError, PreparedEvidenceRequest } = require('..');
+// The raw native module, used only to prove the package's exported
+// `PreparedEvidenceRequest` is the very same native class (see the identity
+// assertion below), not a wrapper or a copy of it.
+const native = require('../index.js');
 const { startStubServer } = require('./helpers/stub-server');
 const {
   generateSigningKey,
@@ -92,12 +96,21 @@ test('a second send on the same prepared request is refused locally, and the stu
     });
 
     const prepared = client.prepare(spec);
+    // The wrapper module patches `EvidenceClient.prototype` methods in place
+    // rather than wrapping arguments or return values, so `prepare()` must
+    // still hand back the exact native object: the single-send guard below
+    // depends on `send` recognizing the very same `PreparedEvidenceRequest`
+    // on its second call, not a copy or a proxy around it.
+    assert.ok(prepared instanceof PreparedEvidenceRequest);
+    assert.ok(prepared instanceof native.PreparedEvidenceRequest);
+    assert.equal(PreparedEvidenceRequest, native.PreparedEvidenceRequest);
+
     await client.send(prepared);
     assert.equal(stub.requests.length, 1);
 
     await assert.rejects(client.send(prepared), (error) => {
-      const mapped = JSON.parse(error.message);
-      assert.equal(mapped.kind, 'configuration');
+      assert.ok(error instanceof EvidenceClientError);
+      assert.equal(error.kind, 'configuration');
       return true;
     });
     assert.equal(stub.requests.length, 1, 'the stub must not see a second request');
