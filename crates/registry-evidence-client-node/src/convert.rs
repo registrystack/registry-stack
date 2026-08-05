@@ -451,11 +451,15 @@ pub fn map_config_error(error: &ConfigError) -> Value {
 
 /// Map any [`EvidenceClientError`] to the stable JSON envelope described in
 /// the crate's `AGENTS.md`-linked design: `kind` and `message` always, plus
-/// whichever of `status`, `code`, `operation`, `retryAfterSeconds`, and
-/// `transportKind` the variant carries. `code` is deliberately overloaded: a
-/// `Denied`/`Protocol` wire code, a `Token::Refused` OAuth code, and a
-/// `Verification` failure's own kind string all travel in the same member,
-/// since a caller branches on `kind` first and `code` only refines it.
+/// whichever of `status`, `code`, `operation`, `retryAfterSeconds`,
+/// `transportKind`, and `tokenKind` the variant carries. `code` is
+/// deliberately overloaded: a `Denied`/`Protocol` wire code, a
+/// `Token::Refused` OAuth code, and a `Verification` failure's own kind string
+/// all travel in the same member, since a caller branches on `kind` first and
+/// `code` only refines it. `tokenKind` is `Token`'s own analogous second
+/// discriminant: every `TokenError` carries one, from [`TokenError::kind`],
+/// alongside whichever further sub-fields (`transportKind`, `code`, `status`)
+/// that specific variant also carries.
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
@@ -516,6 +520,10 @@ pub fn map_client_error(error: &EvidenceClientError) -> Value {
 }
 
 fn insert_token_fields(fields: &mut Map<String, Value>, error: &TokenError) {
+    fields.insert(
+        "tokenKind".to_owned(),
+        Value::String(error.kind().to_owned()),
+    );
     match error {
         TokenError::Unavailable | TokenError::Invalid { .. } | TokenError::Configuration { .. } => {
         }
@@ -1029,24 +1037,43 @@ mod tests {
     fn a_token_failure_nests_its_own_sub_kind_details_under_the_token_kind() {
         let unavailable = map_client_error(&EvidenceClientError::Token(TokenError::Unavailable));
         assert_eq!(unavailable["kind"], "token");
-        assert_eq!(unavailable.as_object().unwrap().len(), 2);
+        assert_eq!(unavailable["tokenKind"], "unavailable");
+        assert_eq!(unavailable.as_object().unwrap().len(), 3);
+
+        let invalid = map_client_error(&EvidenceClientError::Token(TokenError::Invalid {
+            reason: "a bearer credential must be non-empty and within the accepted length",
+        }));
+        assert_eq!(invalid["kind"], "token");
+        assert_eq!(invalid["tokenKind"], "invalid_credential");
+        assert_eq!(invalid.as_object().unwrap().len(), 3);
+
+        let configuration =
+            map_client_error(&EvidenceClientError::Token(TokenError::Configuration {
+                reason: "the token provider cannot be used this way",
+            }));
+        assert_eq!(configuration["kind"], "token");
+        assert_eq!(configuration["tokenKind"], "configuration");
+        assert_eq!(configuration.as_object().unwrap().len(), 3);
 
         let transport = map_client_error(&EvidenceClientError::Token(TokenError::Transport {
             kind: TransportKind::Connect,
         }));
         assert_eq!(transport["kind"], "token");
+        assert_eq!(transport["tokenKind"], "transport");
         assert_eq!(transport["transportKind"], "connect");
 
         let refused = map_client_error(&EvidenceClientError::Token(TokenError::Refused {
             code: OAuthErrorCode::InvalidClient,
         }));
         assert_eq!(refused["kind"], "token");
+        assert_eq!(refused["tokenKind"], "refused");
         assert_eq!(refused["code"], "invalid_client");
 
         let protocol = map_client_error(&EvidenceClientError::Token(TokenError::Protocol {
             status: 500,
         }));
         assert_eq!(protocol["kind"], "token");
+        assert_eq!(protocol["tokenKind"], "protocol");
         assert_eq!(protocol["status"], 500);
     }
 
@@ -1088,5 +1115,80 @@ mod tests {
         let mapped = map_conversion_error(&ConversionError::new("bad shape"));
         assert_eq!(mapped["kind"], "configuration");
         assert_eq!(mapped["message"], "bad shape");
+    }
+
+    // --- redaction ---
+
+    /// Mirrors the wrapped crate's own redaction tests
+    /// (`debug_output_never_carries_the_credential` in `token.rs`,
+    /// `debug_output_never_carries_a_response_body_or_a_credential` in
+    /// `client.rs`): plant a canary value in every place a credential, key,
+    /// selector value, or subject binding legitimately reaches this crate's
+    /// own conversion and error-mapping layer, and confirm the mapped JSON
+    /// envelope this crate hands to JS never repeats it. A response body
+    /// never reaches this module at all (`map_client_error` never touches
+    /// `RawEvidenceResponse`), so it has no case here; the wrapped crate's own
+    /// test already covers it.
+    #[test]
+    fn mapped_errors_never_carry_a_credential_key_selector_value_or_subject_binding() {
+        const CANARY: &str = "secret-canary-value";
+
+        // A bearer credential shaped exactly as a caller might submit one by
+        // mistake (here, carrying a trailing newline `BearerToken` refuses):
+        // the fixed refusal reason must not repeat the credential itself.
+        let token_error =
+            StaticToken::new(format!("{CANARY}\n")).expect_err("a newline is refused");
+        let mapped = map_client_error(&EvidenceClientError::Token(token_error));
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
+
+        // A signing key whose private component is the canary: well-shaped
+        // JSON, but not a valid Ed25519 scalar, so `PrivateJwk::parse` refuses
+        // it. The refusal must describe the field (`d`), never echo it.
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": {
+                        "kty": "OKP",
+                        "crv": "Ed25519",
+                        "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "d": CANARY,
+                    },
+                },
+            },
+        });
+        let error = config_from_json(&config_json).expect_err("the malformed key is refused");
+        let mapped = map_config_error(&error);
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
+
+        // A selector value carrying the canary, in a specification refused
+        // for an unrelated reason (a missing `purpose`): the canary is parsed
+        // and held in memory before the refusal, but the refusal itself must
+        // not mention it.
+        let mut spec = valid_spec_json();
+        spec["subjects"][0]["selectorValues"]["record_reference"] =
+            Value::String(CANARY.to_owned());
+        spec.as_object_mut().unwrap().remove("purpose");
+        let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
+        let mapped = map_conversion_error(&error);
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
+
+        // A pinned subject binding carrying the canary, in a specification
+        // refused for the same unrelated reason.
+        let mut spec = valid_spec_json();
+        spec["subjectExpectations"] = serde_json::json!({
+            "pinned": [{ "role": "subject", "binding": CANARY }],
+        });
+        spec.as_object_mut().unwrap().remove("purpose");
+        let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
+        let mapped = map_conversion_error(&error);
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
     }
 }
