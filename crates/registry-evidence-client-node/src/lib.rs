@@ -70,6 +70,38 @@ fn to_napi_serialization_error(what: &str, error: serde_json::Error) -> NapiErro
     NapiError::from_reason(format!("{what} could not be described: {error}"))
 }
 
+/// Run a synchronous `#[napi]` entry point, turning a caught panic into an
+/// ordinary rejection instead of letting the unwind cross the FFI boundary,
+/// which aborts the whole process.
+///
+/// napi-derive 3.6.2's generated glue carries no panic handling of its own for
+/// synchronous `#[napi]` functions; only `napi`'s tokio bridge wraps
+/// asynchronous work in `catch_unwind`. Every synchronous entry point in this
+/// file (the constructor, `prepare`, `verify`, `verify_as_of`, and the
+/// `PreparedEvidenceRequest`/`RawEvidenceResponse` getters) routes through
+/// this helper.
+///
+/// `AssertUnwindSafe` is appropriate here: every call site immediately
+/// converts a caught panic into a returned `Err` and never inspects or
+/// continues using whatever state the unwinding closure touched, so a
+/// theoretically inconsistent intermediate state cannot leak into further
+/// observable behavior.
+///
+/// The reported reason is fixed and never echoes the panic payload: a panic
+/// is, by construction, a code path nobody validated ahead of time, so its
+/// payload carries none of the redaction guarantees the rest of this crate's
+/// error reporting is held to.
+fn catch_panic<T>(what: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_payload| Err(to_napi_panic_error(what)))
+}
+
+fn to_napi_panic_error(what: &'static str) -> NapiError {
+    NapiError::from_reason(format!(
+        "{what} failed unexpectedly and could not complete; this is a defect, not a refusal"
+    ))
+}
+
 /// One request, closed and nonce-bearing, before any byte has left the
 /// process.
 ///
@@ -85,23 +117,31 @@ pub struct PreparedEvidenceRequest {
 impl PreparedEvidenceRequest {
     /// The nonce this request carries. Retain it with the transaction record.
     #[napi(getter)]
-    pub fn request_nonce(&self) -> String {
-        self.inner.request_nonce().to_owned()
+    pub fn request_nonce(&self) -> Result<String> {
+        catch_panic("reading the request nonce", || {
+            Ok(self.inner.request_nonce().to_owned())
+        })
     }
 
     /// The closed verification policy, with the subject set as `prepare` left
     /// it.
     #[napi(getter)]
     pub fn policy_document(&self) -> Result<serde_json::Value> {
-        serde_json::to_value(self.inner.policy_document())
-            .map_err(|error| to_napi_serialization_error("the policy document", error))
+        catch_panic("reading the policy document", || {
+            serde_json::to_value(self.inner.policy_document())
+                .map_err(|error| to_napi_serialization_error("the policy document", error))
+        })
     }
 
     /// `"acceptFirstUse"` or `{ pinned: [{ role, binding }, ...] }`, exactly as
     /// this request was prepared.
     #[napi(getter)]
-    pub fn subject_expectations(&self) -> serde_json::Value {
-        subject_expectations_to_json(self.inner.subject_expectations())
+    pub fn subject_expectations(&self) -> Result<serde_json::Value> {
+        catch_panic("reading the subject expectations", || {
+            Ok(subject_expectations_to_json(
+                self.inner.subject_expectations(),
+            ))
+        })
     }
 }
 
@@ -119,15 +159,19 @@ impl RawEvidenceResponse {
     /// The signed response bytes, exactly as received. Nothing in them has
     /// been trusted yet; `verify` is what judges them.
     #[napi(getter)]
-    pub fn body(&self) -> Buffer {
-        self.inner.body().to_vec().into()
+    pub fn body(&self) -> Result<Buffer> {
+        catch_panic("reading the response body", || {
+            Ok(self.inner.body().to_vec().into())
+        })
     }
 
     /// The deployment's opaque identifier for this exchange, for support
     /// correlation.
     #[napi(getter)]
-    pub fn operation(&self) -> Option<String> {
-        self.inner.operation().map(str::to_owned)
+    pub fn operation(&self) -> Result<Option<String>> {
+        catch_panic("reading the response operation", || {
+            Ok(self.inner.operation().map(str::to_owned))
+        })
     }
 }
 
@@ -174,12 +218,14 @@ impl EvidenceClient {
     /// key set is refused, exactly as the Rust configuration is.
     #[napi(constructor)]
     pub fn new(config: serde_json::Value) -> Result<Self> {
-        let config =
-            config_from_json(&config).map_err(|error| to_napi_error(map_config_error(&error)))?;
-        let client = RealEvidenceClient::new(config)
-            .map_err(|error| to_napi_error(map_client_error(&error)))?;
-        Ok(Self {
-            inner: Arc::new(client),
+        catch_panic("constructing the client", || {
+            let config = config_from_json(&config)
+                .map_err(|error| to_napi_error(map_config_error(&error)))?;
+            let client = RealEvidenceClient::new(config)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            Ok(Self {
+                inner: Arc::new(client),
+            })
         })
     }
 
@@ -188,14 +234,16 @@ impl EvidenceClient {
     /// spend it with `send` or `requestAndVerify`.
     #[napi]
     pub fn prepare(&self, spec: serde_json::Value) -> Result<PreparedEvidenceRequest> {
-        let spec =
-            spec_from_json(&spec).map_err(|error| to_napi_error(map_conversion_error(&error)))?;
-        let prepared = self
-            .inner
-            .prepare(spec)
-            .map_err(|error| to_napi_error(map_client_error(&error)))?;
-        Ok(PreparedEvidenceRequest {
-            inner: Arc::new(prepared),
+        catch_panic("preparing a request", || {
+            let spec = spec_from_json(&spec)
+                .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
+            let prepared = self
+                .inner
+                .prepare(spec)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            Ok(PreparedEvidenceRequest {
+                inner: Arc::new(prepared),
+            })
         })
     }
 
@@ -266,11 +314,13 @@ impl EvidenceClient {
         prepared: &PreparedEvidenceRequest,
         response: &RawEvidenceResponse,
     ) -> Result<VerifiedEvidence> {
-        let verified = self
-            .inner
-            .verify(&prepared.inner, &response.inner)
-            .map_err(|error| to_napi_error(map_client_error(&error)))?;
-        verified_evidence_to_napi(&verified)
+        catch_panic("verifying a response", || {
+            let verified = self
+                .inner
+                .verify(&prepared.inner, &response.inner)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            verified_evidence_to_napi(&verified)
+        })
     }
 
     /// Request evidence and verify it in one step. This spends the single
@@ -313,14 +363,59 @@ impl EvidenceClient {
         response: &RawEvidenceResponse,
         as_of_millis: f64,
     ) -> Result<VerifiedEvidence> {
-        let millis = as_of_millis as i64;
-        let now = chrono::DateTime::from_timestamp_millis(millis).ok_or_else(|| {
-            NapiError::from_reason("`asOfMillis` is not a representable instant".to_owned())
-        })?;
-        let verified = self
-            .inner
-            .verify_as_of(&prepared.inner, &response.inner, now)
-            .map_err(|error| to_napi_error(map_client_error(&error)))?;
-        verified_evidence_to_napi(&verified)
+        catch_panic("verifying a response as of an instant", || {
+            let millis = as_of_millis as i64;
+            let now = chrono::DateTime::from_timestamp_millis(millis).ok_or_else(|| {
+                NapiError::from_reason("`asOfMillis` is not a representable instant".to_owned())
+            })?;
+            let verified = self
+                .inner
+                .verify_as_of(&prepared.inner, &response.inner, now)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            verified_evidence_to_napi(&verified)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ordinary_result_passes_through_catch_panic_unchanged() {
+        let ok: Result<i32> = catch_panic("a synthetic operation", || Ok(42));
+        assert_eq!(ok.unwrap(), 42);
+
+        let err: Result<i32> = catch_panic("a synthetic operation", || {
+            Err(NapiError::from_reason("an ordinary refusal".to_owned()))
+        });
+        assert_eq!(err.unwrap_err().reason, "an ordinary refusal");
+    }
+
+    /// Proves the one hazard `catch_panic` exists to close: without it, this
+    /// panic would unwind straight across the `#[napi]` boundary and abort
+    /// the process rather than reject one call.
+    ///
+    /// The default panic hook is silenced for the duration of this test so
+    /// the synthetic panic below does not print to stderr; no other test in
+    /// this crate panics, so swapping the process-wide hook here does not
+    /// affect any other test's output.
+    #[test]
+    fn a_caught_panic_becomes_an_ordinary_error_rather_than_an_abort() {
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result: Result<()> = catch_panic("a synthetic operation", || {
+            panic!("a synthetic panic carrying a canary-value that must not surface")
+        });
+        std::panic::set_hook(previous_hook);
+
+        let error = result.expect_err("the panic is caught and reported as an error");
+        assert!(error.reason.contains("a synthetic operation"));
+        assert!(error.reason.contains("failed unexpectedly"));
+        assert!(
+            !error.reason.contains("canary-value"),
+            "the panic payload leaked into the reported reason: {}",
+            error.reason
+        );
     }
 }
