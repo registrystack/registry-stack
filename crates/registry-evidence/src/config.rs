@@ -1057,7 +1057,14 @@ impl AuthenticationConfig {
 ///
 /// Mint refuses to write these when it mints. Evidence refuses to read them,
 /// which is the check that still applies when the issuer is not Mint.
-const REGISTERED_JWT_CLAIMS: [&str; 7] = ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"];
+///
+/// `cnf` is reserved for a second reason: the authenticator denies any token
+/// carrying it, because Version 1 validates no proof of possession and will not
+/// downgrade a sender-constrained token to a bearer one. Naming it here would
+/// otherwise produce a deployment that loads and checks clean but answers 401 to
+/// every authenticated request.
+const REGISTERED_JWT_CLAIMS: [&str; 8] =
+    ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"];
 
 const LOCAL_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 
@@ -3571,7 +3578,14 @@ mod tests {
             "one member read as both the actor and the requester tags"
         );
 
-        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
+        // `cnf` is here for a different reason than the rest. The others would
+        // read a member the issuer owns; `cnf` would name one the authenticator
+        // refuses outright, because Version 1 validates no proof of possession
+        // and denies a sender-constrained token rather than downgrading it. A
+        // deployment naming it would load, pass `evidence check`, and then answer
+        // 401 to every authenticated request, with nothing in the configuration
+        // to explain why.
+        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"] {
             let mut candidate = config.clone();
             candidate.authentication.grant_authority_claim = reserved.to_owned();
             assert_eq!(
