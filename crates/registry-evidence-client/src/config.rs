@@ -6,7 +6,10 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use registry_evidence_verifier::{model::JwksDocument, verifier::trusted_keys_are_usable};
+use registry_evidence_verifier::{
+    model::JwksDocument,
+    verifier::{revoked_key_ids_are_usable, trusted_keys_are_usable},
+};
 use registry_platform_httputil::DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
 use url::Url;
 use zeroize::Zeroizing;
@@ -50,6 +53,7 @@ pub struct EvidenceClientConfig {
     pub(crate) base_url: Url,
     pub(crate) token_provider: Arc<dyn TokenProvider>,
     pub(crate) trusted_jwks: JwksDocument,
+    pub(crate) revoked_key_ids: Vec<String>,
     pub(crate) request_timeout: Duration,
     pub(crate) connect_timeout: Duration,
     pub(crate) user_agent: Option<String>,
@@ -70,11 +74,13 @@ impl EvidenceClientConfig {
         base_url: Url,
         token_provider: Arc<dyn TokenProvider>,
         trusted_jwks: JwksDocument,
+        revoked_key_ids: Vec<String>,
     ) -> Self {
         Self {
             base_url,
             token_provider,
             trusted_jwks,
+            revoked_key_ids,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
@@ -138,6 +144,12 @@ impl EvidenceClientConfig {
         &self.trusted_jwks
     }
 
+    /// Emergency service-key denylist applied before the pinned key set.
+    #[must_use]
+    pub fn revoked_key_ids(&self) -> &[String] {
+        &self.revoked_key_ids
+    }
+
     #[must_use]
     pub fn max_response_bytes(&self) -> u64 {
         self.max_response_bytes
@@ -192,6 +204,11 @@ impl EvidenceClientConfig {
                 "the pinned key set must be one the verifier can use",
             ));
         }
+        if revoked_key_ids_are_usable(&self.revoked_key_ids).is_err() {
+            return Err(EvidenceClientError::configuration(
+                "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound",
+            ));
+        }
         if self.max_response_bytes == 0 || self.max_metadata_bytes == 0 {
             return Err(EvidenceClientError::configuration(
                 "the response bounds must allow at least one byte",
@@ -233,6 +250,7 @@ mod tests {
             Url::parse(base_url).expect("the test URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             one_key(),
+            Vec::new(),
         )
     }
 
@@ -241,10 +259,12 @@ mod tests {
     fn one_key() -> JwksDocument {
         JwksDocument {
             keys: vec![serde_json::json!({
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "kid": "test-key",
-                "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "kty": "EC",
+                "crv": "P-256",
+                "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+                "alg": "ES256",
+                "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
             })],
         }
     }
@@ -361,6 +381,26 @@ mod tests {
                 "the pinned key set must be one the verifier can use"
             )
         );
+    }
+
+    #[test]
+    fn an_unusable_revocation_list_is_refused_at_construction() {
+        for revoked_key_ids in [
+            vec!["not-a-thumbprint".to_owned()],
+            vec![
+                "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned(),
+                "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned(),
+            ],
+        ] {
+            let mut config = config("https://evidence.example.org");
+            config.revoked_key_ids = revoked_key_ids;
+            assert_eq!(
+                config.validate().expect_err("the denylist is refused"),
+                EvidenceClientError::configuration(
+                    "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound"
+                )
+            );
+        }
     }
 
     /// Emptiness is only one of the ways a pinned set can be unusable, and every

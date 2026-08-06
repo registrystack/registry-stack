@@ -26,7 +26,7 @@ import registry_evidence_client as revc  # noqa: E402
 class ConstructionTest(unittest.TestCase):
     def test_a_non_https_non_loopback_base_url_is_refused(self):
         with self.assertRaises(revc.ConfigurationError) as raised:
-            revc.EvidenceClient("http://example.org", fixtures.VALID_JWKS, "test-token")
+            revc.EvidenceClient("http://example.org", fixtures.VALID_JWKS, [], "test-token")
         error = raised.exception
         self.assertEqual(error.kind, "configuration")
         # A caller branches on `kind`, never by parsing `str(error)`: the
@@ -35,13 +35,23 @@ class ConstructionTest(unittest.TestCase):
 
     def test_an_empty_key_set_is_refused(self):
         with self.assertRaises(revc.ConfigurationError) as raised:
-            revc.EvidenceClient("https://example.org", {"keys": []}, "test-token")
+            revc.EvidenceClient("https://example.org", {"keys": []}, [], "test-token")
+        self.assertEqual(raised.exception.kind, "configuration")
+
+    def test_a_malformed_revoked_key_identifier_is_refused(self):
+        with self.assertRaises(revc.ConfigurationError) as raised:
+            revc.EvidenceClient(
+                "https://example.org",
+                fixtures.VALID_JWKS,
+                ["not-a-thumbprint"],
+                "test-token",
+            )
         self.assertEqual(raised.exception.kind, "configuration")
 
     def test_a_base_url_with_an_empty_path_segment_is_refused(self):
         with self.assertRaises(revc.ConfigurationError) as raised:
             revc.EvidenceClient(
-                "https://example.org/a//b", fixtures.VALID_JWKS, "test-token"
+                "https://example.org/a//b", fixtures.VALID_JWKS, [], "test-token"
             )
         self.assertEqual(raised.exception.kind, "configuration")
 
@@ -53,7 +63,7 @@ class ConstructionTest(unittest.TestCase):
         cyclic = {}
         cyclic["self"] = cyclic
         with self.assertRaises(revc.ConfigurationError) as raised:
-            revc.EvidenceClient("https://example.org", cyclic, "test-token")
+            revc.EvidenceClient("https://example.org", cyclic, [], "test-token")
         self.assertEqual(raised.exception.kind, "configuration")
 
     def test_a_loopback_http_base_url_is_accepted(self):
@@ -61,13 +71,13 @@ class ConstructionTest(unittest.TestCase):
         # the specific rules, not "any base URL fails". Port 1 is never
         # connected to here; construction never performs I/O.
         client = revc.EvidenceClient(
-            "http://127.0.0.1:1", fixtures.VALID_JWKS, "test-token"
+            "http://127.0.0.1:1", fixtures.VALID_JWKS, [], "test-token"
         )
         self.assertIsInstance(client, revc.EvidenceClient)
 
     def test_every_exception_carries_every_stable_attribute(self):
         with self.assertRaises(revc.EvidenceClientError) as raised:
-            revc.EvidenceClient("http://example.org", fixtures.VALID_JWKS, "test-token")
+            revc.EvidenceClient("http://example.org", fixtures.VALID_JWKS, [], "test-token")
         for attribute in (
             "kind",
             "status",

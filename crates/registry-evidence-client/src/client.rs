@@ -166,7 +166,7 @@ impl EvidenceClient {
         &self,
         spec: EvidenceRequestSpec,
     ) -> Result<PreparedEvidenceRequest, EvidenceClientError> {
-        PreparedEvidenceRequest::new(spec)
+        PreparedEvidenceRequest::new_with_revoked_key_ids(spec, self.config.revoked_key_ids.clone())
     }
 
     /// Read the request shapes this requester is entitled to send.
@@ -311,7 +311,7 @@ impl EvidenceClient {
         response: &RawEvidenceResponse,
         now: DateTime<Utc>,
     ) -> Result<VerifiedEvidence, EvidenceClientError> {
-        let policy_document = match prepared.subject_expectations() {
+        let mut policy_document = match prepared.subject_expectations() {
             SubjectExpectations::Pinned(_) => prepared.policy_document().clone(),
             // Adopt the response's own role-bound bindings as expectations, then
             // let the ordinary verifier apply the whole policy. Nothing else is
@@ -322,6 +322,13 @@ impl EvidenceClient {
                 prepared.policy_with_subjects(untrusted_subject_bindings(&response.body))
             }
         };
+        // The client's current trusted denylist wins over the retained policy
+        // and the pinned JWKS. Reconstructing a client after an emergency
+        // revocation must refuse an older response even when both retained
+        // artifacts still name the compromised key.
+        policy_document
+            .revoked_key_ids
+            .clone_from(&self.config.revoked_key_ids);
         let policy = policy_document.into_policy(now);
         let evidence = verify_flattened_jws(&response.body, &self.config.trusted_jwks, &policy)
             .map_err(EvidenceClientError::Verification)?;
@@ -577,6 +584,7 @@ mod tests {
             Url::parse(base_url).expect("the base URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             fixture.trusted_jwks.clone(),
+            Vec::new(),
         )
     }
 
@@ -837,6 +845,33 @@ mod tests {
                 )
                 .expect_err("the response is refused"),
             EvidenceClientError::Verification(VerificationError::Time)
+        );
+    }
+
+    #[test]
+    fn a_revoked_identifier_overrides_the_still_pinned_key() {
+        let fixture = signed_evidence();
+        let key_id = fixture.trusted_jwks.keys[0]["kid"]
+            .as_str()
+            .expect("the fixture key has an identifier")
+            .to_owned();
+        let client = EvidenceClient::new(EvidenceClientConfig::new(
+            Url::parse("https://evidence.example.org").expect("the base URL parses"),
+            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+            fixture.trusted_jwks.clone(),
+            vec![key_id.clone()],
+        ))
+        .expect("the denylisted cached key is valid configuration");
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the request is prepared");
+        assert_eq!(prepared.policy_document().revoked_key_ids, [key_id]);
+        let response = raw(fixture.sign(prepared.request_nonce()));
+        assert_eq!(
+            client
+                .verify_as_of(&prepared, &response, fixture.now)
+                .expect_err("the revoked key is refused before cached selection"),
+            EvidenceClientError::Verification(VerificationError::Key)
         );
     }
 

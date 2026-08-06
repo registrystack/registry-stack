@@ -40,6 +40,7 @@ test('a prepared request round-trips through send and verify against a live stub
     const client = new EvidenceClient({
       baseUrl: stub.baseUrl,
       trustedJwks: signingKey.jwks,
+      revokedKeyIds: [],
       token: { static: 'happy-path-token' },
     });
 
@@ -67,6 +68,7 @@ test('requestAndVerify performs the same round trip in one call', async () => {
     const client = new EvidenceClient({
       baseUrl: stub.baseUrl,
       trustedJwks: signingKey.jwks,
+      revokedKeyIds: [],
       token: { static: 'happy-path-token' },
     });
 
@@ -92,6 +94,7 @@ test('a second send on the same prepared request is refused locally, and the stu
     const client = new EvidenceClient({
       baseUrl: stub.baseUrl,
       trustedJwks: signingKey.jwks,
+      revokedKeyIds: [],
       token: { static: 'one-send-guard-token' },
     });
 

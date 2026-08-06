@@ -8,13 +8,10 @@
 //! bytes, the signing input, the SD-JWT VC issuance shape, and the bound on the
 //! number of published keys.
 //!
-//! They deliberately omit the runtime's issuer-side configuration guards: key
-//! identifier validation, the check that the published key repeats the
-//! provider's algorithm and key identifier, and the startup sign-and-verify
-//! self-test. Each of those refuses a misconfigured deployment before it signs
-//! anything, and a fixture signer is built in-process from a known good test
-//! key, so their absence cannot weaken what these tests prove. The runtime
-//! signer is verified against this crate by the runtime's own suite.
+//! They deliberately omit the runtime's provider-readiness and startup
+//! sign-and-verify probes. A fixture signer is built in-process from a known
+//! good test key, so their absence cannot weaken what these tests prove. The
+//! runtime signer is verified against this crate by the runtime's own suite.
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -66,10 +63,15 @@ impl EvidenceSigner {
         provider: Arc<dyn SigningProvider>,
         configured_active_key_id: &str,
     ) -> Result<Self, FixtureSigningError> {
-        if provider.algorithm() != SigningAlgorithm::EdDsa {
+        if provider.algorithm() != SigningAlgorithm::Es256 {
             return Err(FixtureSigningError::Algorithm);
         }
-        if provider.key_id() != configured_active_key_id {
+        let public = provider.public_jwk();
+        if provider.key_id() != configured_active_key_id
+            || public.algorithm().ok() != Some(SigningAlgorithm::Es256)
+            || public.kid.as_deref() != Some(provider.key_id())
+            || public.jkt().ok().as_deref() != Some(provider.key_id())
+        {
             return Err(FixtureSigningError::ActiveKeyId);
         }
         Ok(Self { provider })
@@ -86,7 +88,7 @@ impl EvidenceSigner {
         let payload =
             serde_json::to_vec(evidence).map_err(|_| FixtureSigningError::Serialization)?;
         let protected = serde_json::to_vec(&ProtectedHeader {
-            alg: "EdDSA",
+            alg: "ES256",
             kid: self.provider.key_id(),
             typ: EVIDENCE_JWS_TYP,
             cty: EVIDENCE_JWS_CTY,
@@ -132,14 +134,14 @@ pub fn jwks_document(
         if keys.len() == MAX_PUBLISHED_KEYS {
             return Err(FixtureSigningError::PublishedKey);
         }
-        if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+        if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
             return Err(FixtureSigningError::Algorithm);
         }
         let key_id = key
             .kid
             .as_deref()
             .ok_or(FixtureSigningError::PublishedKey)?;
-        if !seen.insert(key_id.to_owned()) {
+        if key.jkt().ok().as_deref() != Some(key_id) || !seen.insert(key_id.to_owned()) {
             return Err(FixtureSigningError::PublishedKey);
         }
         keys.push(serde_json::to_value(key).map_err(|_| FixtureSigningError::Serialization)?);
@@ -149,30 +151,42 @@ pub fn jwks_document(
 
 #[cfg(test)]
 mod tests {
+    use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
+
     use super::*;
 
-    const PUBLIC_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
+    fn public_jwk(index: u8) -> PublicJwk {
+        let mut scalar = [0_u8; 32];
+        scalar[31] = index
+            .checked_add(1)
+            .expect("test key index remains bounded");
+        let secret = SecretKey::from_slice(&scalar).expect("test scalar is valid");
+        let encoded = secret.public_key().to_encoded_point(false);
+        let mut key = PublicJwk {
+            kty: "EC".to_owned(),
+            kid: None,
+            alg: Some("ES256".to_owned()),
+            crv: Some("P-256".to_owned()),
+            x: Some(URL_SAFE_NO_PAD.encode(encoded.x().expect("x coordinate"))),
+            y: Some(URL_SAFE_NO_PAD.encode(encoded.y().expect("y coordinate"))),
+            n: None,
+            e: None,
+        };
+        key.kid = Some(key.jkt().expect("thumbprint computes"));
+        key
+    }
 
     /// The fixture key set publishes the same maximum number of keys as the
     /// runtime, so a trusted set built here cannot exceed what a deployment can
     /// serve.
     #[test]
     fn published_key_set_stops_at_the_runtime_bound() {
-        let active: PublicJwk = serde_json::from_str(PUBLIC_JWK).expect("test key parses");
-
-        let retired = (0..MAX_PUBLISHED_KEYS - 1).map(|index| {
-            let mut key = active.clone();
-            key.kid = Some(format!("retired-evidence-key-{index:02}"));
-            key
-        });
+        let active = public_jwk(0);
+        let retired = (1..MAX_PUBLISHED_KEYS as u8).map(public_jwk);
         let boundary = jwks_document(active.clone(), retired).expect("the bound itself is allowed");
         assert_eq!(boundary.keys.len(), MAX_PUBLISHED_KEYS);
 
-        let too_many = (0..MAX_PUBLISHED_KEYS).map(|index| {
-            let mut key = active.clone();
-            key.kid = Some(format!("excess-evidence-key-{index:02}"));
-            key
-        });
+        let too_many = (1..=MAX_PUBLISHED_KEYS as u8).map(public_jwk);
         assert!(matches!(
             jwks_document(active.clone(), too_many),
             Err(FixtureSigningError::PublishedKey)

@@ -35,21 +35,23 @@ use std::{fs, path::Path};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use ed25519_dalek::{Signer, SigningKey};
 use evidence_client_sdk::{
     AssuranceProfile, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
     SupportedValue,
+};
+use p256::{
+    ecdsa::{signature::Signer, Signature, SigningKey},
+    elliptic_curve::rand_core::OsRng,
 };
 use pyo3::prelude::*;
 use registry_evidence_verifier::{
     EVIDENCE_JWS_CTY, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
 };
+use registry_platform_crypto::PublicJwk;
 use wiremock::{
     matchers::{method, path as path_matcher},
     Mock, MockServer, ResponseTemplate,
 };
-
-const KEY_ID: &str = "evidence-python-live-key-1";
 
 /// The instant the golden fixture is signed for, restated from
 /// `tests/golden_fixture.rs` rather than shared with it: every file under
@@ -83,25 +85,35 @@ fn request_spec_json() -> serde_json::Value {
     })
 }
 
-/// A fresh Ed25519 key, generated and discarded within one test. Distinct
+/// A fresh P-256 key, generated and discarded within one test. Distinct
 /// from the golden fixture's committed key: these tests need to sign a
 /// response for a nonce that does not exist until `prepare()` runs, so they
 /// cannot use a response signed ahead of time.
 fn fresh_signing_key() -> SigningKey {
-    let mut seed = [0_u8; 32];
-    getrandom::fill(&mut seed).expect("the host supplies randomness");
-    SigningKey::from_bytes(&seed)
+    SigningKey::random(&mut OsRng)
+}
+
+fn public_jwk(signing_key: &SigningKey) -> PublicJwk {
+    let point = signing_key.verifying_key().to_encoded_point(false);
+    let mut key = PublicJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        x: point.x().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        y: point.y().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        n: None,
+        e: None,
+    };
+    key.kid = Some(key.jkt().expect("the thumbprint computes"));
+    key
 }
 
 fn trusted_jwks_json(signing_key: &SigningKey) -> serde_json::Value {
     let jwks = JwksDocument {
-        keys: vec![serde_json::json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "alg": "EdDSA",
-            "kid": KEY_ID,
-            "x": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
-        })],
+        keys: vec![
+            serde_json::to_value(public_jwk(signing_key)).expect("the public key serializes")
+        ],
     };
     serde_json::to_value(jwks).expect("the key set serializes")
 }
@@ -156,13 +168,16 @@ struct FlattenedJwsBody {
 /// Sign synchronously with the raw key, unlike the golden fixture's own
 /// signer: mounting has to happen after `prepare()` names a nonce, and by
 /// then this test is past the one async setup step it allows itself (see the
-/// module doc comment), so the signature is computed with `ed25519_dalek`
+/// module doc comment), so the signature is computed with `p256`
 /// directly rather than through the async `SigningProvider` trait.
 fn sign(evidence: &Evidence, signing_key: &SigningKey) -> Vec<u8> {
     let payload = serde_json::to_vec(evidence).expect("evidence serializes");
+    let key_id = public_jwk(signing_key)
+        .kid
+        .expect("the key identifier is derived");
     let protected = serde_json::to_vec(&ProtectedHeader {
-        alg: "EdDSA",
-        kid: KEY_ID,
+        alg: "ES256",
+        kid: &key_id,
         typ: EVIDENCE_JWS_TYP,
         cty: EVIDENCE_JWS_CTY,
     })
@@ -171,7 +186,7 @@ fn sign(evidence: &Evidence, signing_key: &SigningKey) -> Vec<u8> {
     let protected = URL_SAFE_NO_PAD.encode(protected);
     let payload = URL_SAFE_NO_PAD.encode(payload);
     let signing_input = format!("{protected}.{payload}");
-    let signature = signing_key.sign(signing_input.as_bytes());
+    let signature: Signature = signing_key.sign(signing_input.as_bytes());
 
     serde_json::to_vec(&FlattenedJwsBody {
         protected,
@@ -222,6 +237,7 @@ fn round_trip_through_send_and_verify() {
             .call1((
                 base_url.as_str(),
                 python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
                 "test-token",
             ))
             .expect("the client is constructed");
@@ -297,6 +313,7 @@ fn request_and_verify_performs_the_same_round_trip() {
             .call1((
                 base_url.as_str(),
                 python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
                 "test-token",
             ))
             .expect("the client is constructed");
@@ -352,6 +369,7 @@ fn a_second_send_is_refused_without_reaching_the_deployment() {
             .call1((
                 base_url.as_str(),
                 python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
                 "test-token",
             ))
             .expect("the client is constructed");
@@ -460,6 +478,7 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
             .call1((
                 base_url.as_str(),
                 python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
                 "test-token",
             ))
             .expect("the client is constructed");

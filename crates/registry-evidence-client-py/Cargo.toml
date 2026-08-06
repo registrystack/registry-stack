@@ -48,6 +48,7 @@ pyo3 = { workspace = true, features = ["auto-initialize"] }
 base64.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
+p256.workspace = true
 # The committed policy fixture stands for a relying party's own verification
 # policy document, so the tests validate it against the frozen contract that
 # governs one. `jsonschema` compiles that contract and `serde_norway` reads it.

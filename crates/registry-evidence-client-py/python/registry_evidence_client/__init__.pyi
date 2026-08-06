@@ -128,6 +128,7 @@ class EvidenceClient:
         self,
         base_url: str,
         trusted_jwks: Any,
+        revoked_key_ids: Sequence[str],
         token: Any,
         request_timeout_seconds: Optional[float] = ...,
         connect_timeout_seconds: Optional[float] = ...,

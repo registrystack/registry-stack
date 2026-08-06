@@ -43,7 +43,7 @@ class OneSendGuardTest(unittest.TestCase):
 
     def test_a_second_send_is_refused_without_reaching_the_network(self):
         client = revc.EvidenceClient(
-            self.server.base_url, fixtures.VALID_JWKS, "test-token"
+            self.server.base_url, fixtures.VALID_JWKS, [], "test-token"
         )
         prepared = client.prepare(fixtures.request_spec())
 

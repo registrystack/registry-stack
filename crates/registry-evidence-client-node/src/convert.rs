@@ -87,6 +87,25 @@ fn required_u64(object: &Map<String, Value>, field: &str) -> Result<u64, Convers
         .ok_or_else(|| ConversionError::new(format!("`{field}` must be a non-negative integer")))
 }
 
+fn required_string_array(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Vec<String>, ConversionError> {
+    let values = object
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| ConversionError::new(format!("`{field}` must be an array of strings")))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ConversionError::new(format!("`{field}` must contain only strings")))
+        })
+        .collect()
+}
+
 fn optional_string(
     object: &Map<String, Value>,
     field: &str,
@@ -418,10 +437,13 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
                 "`trustedJwks` is invalid: {error}"
             )))
         })?;
+    let revoked_key_ids =
+        required_string_array(object, "revokedKeyIds").map_err(ConfigError::Shape)?;
 
     let token_provider = token_provider_from_json(object)?;
 
-    let mut config = EvidenceClientConfig::new(base_url, token_provider, trusted_jwks);
+    let mut config =
+        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
 
     if let Some(millis) = optional_u64(object, "requestTimeoutMs").map_err(ConfigError::Shape)? {
         config = config.with_request_timeout(Duration::from_millis(millis));
@@ -790,10 +812,12 @@ mod tests {
     fn one_key_jwks_json() -> Value {
         serde_json::json!({
             "keys": [{
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "kid": "test-key",
-                "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "kty": "EC",
+                "crv": "P-256",
+                "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+                "alg": "ES256",
+                "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
             }],
         })
     }
@@ -818,6 +842,7 @@ mod tests {
         serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": { "static": "header-safe-token" },
         })
     }
@@ -835,6 +860,7 @@ mod tests {
         let config_json = serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
@@ -855,6 +881,7 @@ mod tests {
         let config_json = serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": {
                 "static": "header-safe-token",
                 "privateKeyJwt": {
@@ -916,6 +943,7 @@ mod tests {
         let config_json = serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
@@ -940,6 +968,7 @@ mod tests {
         let config_json = serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",
@@ -1235,6 +1264,7 @@ mod tests {
         let config_json = serde_json::json!({
             "baseUrl": "https://evidence.example.org",
             "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
             "token": {
                 "privateKeyJwt": {
                     "tokenEndpoint": "https://issuer.example.org/token",

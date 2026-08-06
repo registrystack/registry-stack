@@ -61,7 +61,7 @@ class ConcurrencyTest(unittest.TestCase):
         # elapsed time it measures is the two `discover()` calls themselves,
         # not construction plus those calls.
         clients = [
-            revc.EvidenceClient(server.base_url, fixtures.VALID_JWKS, "test-token")
+            revc.EvidenceClient(server.base_url, fixtures.VALID_JWKS, [], "test-token")
             for _ in range(2)
         ]
 
@@ -144,7 +144,7 @@ class ConstructionGilReleaseTest(unittest.TestCase):
         base_url = "http://127.0.0.1:1"
 
         def build_client() -> None:
-            revc.EvidenceClient(base_url, fixtures.VALID_JWKS, "test-token")
+            revc.EvidenceClient(base_url, fixtures.VALID_JWKS, [], "test-token")
 
         def spin_observer(
             counter: list[int],

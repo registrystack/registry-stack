@@ -3,9 +3,9 @@
 /** A relying party's connection to one Evidence deployment. */
 export declare class EvidenceClient {
   /**
-   * Build a client for one deployment. `trustedJwks` is mandatory; a key set
-   * the verifier could never use is refused, exactly as the Rust
-   * configuration refuses it.
+   * Build a client for one deployment. `trustedJwks` and `revokedKeyIds` are
+   * mandatory trust inputs. A key set or revoked-key list the verifier could
+   * never use is refused, exactly as the Rust configuration refuses it.
    *
    * `maxResponseBytes` bounds the signed response `send` reads.
    * `maxMetadataBytes` bounds the documents `discover` and `fetchJwks` read,

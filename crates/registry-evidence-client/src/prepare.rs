@@ -166,7 +166,10 @@ pub struct PreparedEvidenceRequest {
 
 impl PreparedEvidenceRequest {
     /// Validate a specification, generate its nonce, and close its policy.
-    pub(crate) fn new(spec: EvidenceRequestSpec) -> Result<Self, EvidenceClientError> {
+    pub(crate) fn new_with_revoked_key_ids(
+        spec: EvidenceRequestSpec,
+        revoked_key_ids: Vec<String>,
+    ) -> Result<Self, EvidenceClientError> {
         validate(&spec)?;
         let nonce = RequestNonce::generate()?;
 
@@ -208,6 +211,7 @@ impl PreparedEvidenceRequest {
             request_nonce: nonce.as_str().to_owned(),
             expected_subjects,
             expected_outputs: spec.expected_outputs,
+            revoked_key_ids,
             maximum_assertion_lifetime_seconds: spec.maximum_assertion_lifetime_seconds,
             clock_skew_seconds: spec.clock_skew_seconds,
         };
@@ -217,6 +221,11 @@ impl PreparedEvidenceRequest {
             subject_expectations: spec.subject_expectations,
             sent: AtomicBool::new(false),
         })
+    }
+
+    #[cfg(test)]
+    fn new(spec: EvidenceRequestSpec) -> Result<Self, EvidenceClientError> {
+        Self::new_with_revoked_key_ids(spec, Vec::new())
     }
 
     /// The nonce this request carries. Retain it with the transaction record:
@@ -611,6 +620,7 @@ mod tests {
                     "concept": "urn:example:client:concept:status-holds",
                     "form": "boolean",
                 }],
+                "revokedKeyIds": [],
                 "maximumAssertionLifetimeSeconds": 300,
                 "clockSkewSeconds": 60,
             })

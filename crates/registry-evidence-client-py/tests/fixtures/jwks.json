@@ -1,11 +1,12 @@
 {
   "keys": [
     {
-      "alg": "EdDSA",
-      "crv": "Ed25519",
-      "kid": "evidence-python-fixture-key-1",
-      "kty": "OKP",
-      "x": "uv8kus_GPzFwIEsLwrmF1TPFSC9CMkk51U8pxkO2SeM"
+      "alg": "ES256",
+      "crv": "P-256",
+      "kid": "JT1F_hSwUOPmolCSjv4Xiqn8Nh2fELjJnj-6uygiQ9w",
+      "kty": "EC",
+      "x": "vO5Qlv7KmONHNfqNQ2Ka5KwF1JG3_hIttdZ3WW04Kq8",
+      "y": "wYL2xh2g9rQEEnY9VRN2La5otbFRsDqgb_nJy3IKTNM"
     }
   ]
 }

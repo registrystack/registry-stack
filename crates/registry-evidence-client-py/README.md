@@ -21,7 +21,7 @@ Python threads keep running.
 ```python
 from registry_evidence_client import EvidenceClient
 
-client = EvidenceClient(base_url, trusted_jwks, token, ...)
+client = EvidenceClient(base_url, trusted_jwks, revoked_key_ids, token, ...)
 
 prepared = client.prepare(spec)              # synchronous, no I/O
 definitions = client.discover()
@@ -35,6 +35,11 @@ verified = client.verify_as_of(prepared, response, as_of_unix_seconds)
 `token` is either a bare string (a static token) or a mapping with exactly one
 key, `"private_key_jwt"`. There is no caller-supplied token provider; that is
 out of scope for this binding, same as the Node binding.
+
+`trusted_jwks` and `revoked_key_ids` are both required trust inputs.
+`revoked_key_ids` contains current service-key RFC 7638 thumbprints and
+overrides a matching key even when it remains in `trusted_jwks` or in an older
+prepared request's policy.
 
 ## Design notes
 

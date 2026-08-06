@@ -35,6 +35,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
+use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence::{runtime::EvidenceRuntime, server};
 use registry_evidence_client::{
     AssuranceProfile, ConceptForm, DefinitionCardinality, DefinitionKind, EvidenceClient,
@@ -47,7 +48,7 @@ use registry_mint::{
     config::MintConfig,
     server::{self as mint_server, MintService},
 };
-use registry_platform_crypto::{sign, PrivateJwk};
+use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use serde_json::{json, Value};
 use url::Url;
 use wiremock::{
@@ -59,7 +60,7 @@ use wiremock::{
 const TOKEN_AUDIENCE: &str = "evidence-fixture";
 const CONFIGURED_TAG: &str = "fixture-agency";
 const REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
-const SIGNING_KEY_ID: &str = "fixture-key-2026-01";
+const FIXTURE_SIGNING_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 
 /// Vocabulary this suite chooses.
 const RELYING_AUDIENCE: &str = "https://relying.invalid/procedure";
@@ -72,7 +73,6 @@ const SOURCE_BEARER: &str = "source-bearer-canary";
 /// credentials it issues with.
 const CLIENT_ID: &str = "client-suite-relying-party";
 const CLIENT_KEY_ID: &str = "client-suite-client-key";
-const ISSUER_KEY_ID: &str = "client-suite-issuer-key";
 
 /// The shortest access token lifetime the authorization server accepts. The
 /// refresh margin case needs a margin wider than a whole credential's life.
@@ -275,7 +275,10 @@ async fn the_published_key_set_is_the_deployments_own() {
 
     assert_eq!(&published, deployment.runtime.jwks());
     assert_eq!(published.keys.len(), 1);
-    assert_eq!(published.keys[0]["kid"], json!(SIGNING_KEY_ID));
+    let published_key: PublicJwk =
+        serde_json::from_value(published.keys[0].clone()).expect("the published key parses");
+    let thumbprint = published_key.jkt().expect("the thumbprint computes");
+    assert_eq!(published_key.kid.as_deref(), Some(thumbprint.as_str()));
     assert_eq!(
         published.keys[0].get("d"),
         None,
@@ -441,6 +444,7 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
             Url::parse(&replay.uri())?,
             Arc::new(StaticToken::new(deployment.token())?),
             deployment.runtime.jwks().clone(),
+            Vec::new(),
         ))?;
         // A prepared request is good for one send, and the one above is spent,
         // so the replay leg carries its own. The media type is refused before
@@ -819,6 +823,7 @@ impl Deployment {
             self.base_url.clone(),
             token_provider,
             self.runtime.jwks().clone(),
+            Vec::new(),
         ))
         .expect("the client configuration is usable")
     }
@@ -828,6 +833,7 @@ impl Deployment {
             self.base_url.clone(),
             Arc::new(StaticToken::new(access_token).expect("the credential is header-safe")),
             self.runtime.jwks().clone(),
+            Vec::new(),
         );
         if let Some(max_response_bytes) = max_response_bytes {
             config = config.with_max_response_bytes(max_response_bytes);
@@ -852,7 +858,7 @@ impl Deployment {
             "aud": TOKEN_AUDIENCE,
             "sub": PRINCIPAL,
             "iat": now - 1,
-            "exp": now + 3600,
+            "exp": now + 60,
             "evidence_tags": requester_tags,
             "evidence_audience": RELYING_AUDIENCE,
         });
@@ -937,7 +943,25 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("the secret root is owner-only");
     copy_tree(&fixture_root(), &bundle_root);
-    rewrite_for_local_profile(&bundle_root, &source.uri(), &issuer);
+    let (signing_key, signing_public) = service_key();
+    let signing_key_id = signing_public
+        .kid
+        .as_deref()
+        .expect("the service key has a thumbprint");
+    rewrite_for_local_profile(&bundle_root, &source.uri(), &issuer, signing_key_id);
+    fs::remove_file(
+        bundle_root
+            .join("public-keys")
+            .join(format!("{FIXTURE_SIGNING_KEY_ID}.jwk.json")),
+    )
+    .expect("remove the tracked fixture public key");
+    fs::write(
+        bundle_root
+            .join("public-keys")
+            .join(format!("{signing_key_id}.jwk.json")),
+        serde_json::to_vec(&signing_public).expect("the public key serializes"),
+    )
+    .expect("write the staged Evidence public key");
 
     write_secret(
         &secret_root,
@@ -949,7 +973,7 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
         "subject-binding-key",
         "subject-binding-secret-canary-32-bytes-minimum",
     );
-    write_secret(&secret_root, "signing-key", &private_jwk(SIGNING_KEY_ID));
+    write_secret(&secret_root, "signing-key", &signing_key);
     write_secret(&secret_root, "source-a-token", SOURCE_BEARER);
     fs::write(
         &runtime_path,
@@ -1134,7 +1158,18 @@ async fn start_token_issuer() -> TokenIssuer {
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("the issuer secret root is owner-only");
     fs::create_dir(root.join("clients")).expect("create the client registry");
-    write_secret(&secret_root, "signing.jwk", &private_jwk(ISSUER_KEY_ID));
+    fs::create_dir(root.join("public-keys")).expect("create the issuer public-key directory");
+    let (issuer_signing_key, issuer_public_key) = service_key();
+    let issuer_key_id = issuer_public_key
+        .kid
+        .as_deref()
+        .expect("the Mint service key has a thumbprint");
+    write_secret(&secret_root, "signing.jwk", &issuer_signing_key);
+    fs::write(
+        root.join(format!("public-keys/{issuer_key_id}.jwk.json")),
+        serde_json::to_vec(&issuer_public_key).expect("the issuer public key serializes"),
+    )
+    .expect("write the issuer public key");
     write_secret(
         &secret_root,
         "audit-hash-key",
@@ -1164,13 +1199,20 @@ validationMode: supervised-local-development
 issuer: {origin}
 listener: {{address: 127.0.0.1, port: {port}}}
 signing:
-  algorithm: EdDSA
-  activeKeyId: {ISSUER_KEY_ID}
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{issuer_key_id}.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file:
+    root: {secret_root}
 audit:
   path: audit/decisions.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hash-key
+  hashKeyRef: secret:file/audit-hash-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [{TOKEN_AUDIENCE}]
@@ -1183,10 +1225,12 @@ accessTokens:
     grantAuthority: evidence_authority
 clientAssertion:
   audience: {token_endpoint}
+  maximumLifetimeSeconds: 300
   algorithms: [EdDSA]
 clients:
   directory: clients
-"#
+"#,
+            secret_root = secret_root.display(),
         ),
     )
     .expect("write the issuer configuration");
@@ -1236,7 +1280,12 @@ fn fixture_root() -> PathBuf {
 /// The local profile is what permits a loopback token issuer. Every other
 /// security decision in the bundle, including authentication, authorization,
 /// selector validation, subject binding, signing, and audit, is unchanged.
-fn rewrite_for_local_profile(bundle_root: &Path, source_origin: &str, issuer_origin: &str) {
+fn rewrite_for_local_profile(
+    bundle_root: &Path,
+    source_origin: &str,
+    issuer_origin: &str,
+    signing_key_id: &str,
+) {
     let configuration_path = bundle_root.join("evidence.yaml");
     let mut document =
         fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
@@ -1264,6 +1313,18 @@ fn rewrite_for_local_profile(bundle_root: &Path, source_origin: &str, issuer_ori
         &format!("jwksUri: {issuer_origin}/.well-known/jwks.json"),
         1,
     );
+    replace_exact(
+        &mut document,
+        "algorithms: [ES256]",
+        "algorithms: [EdDSA, ES256]",
+        1,
+    );
+    replace_exact(
+        &mut document,
+        &format!("activePublicJwkFile: public-keys/{FIXTURE_SIGNING_KEY_ID}.jwk.json"),
+        &format!("activePublicJwkFile: public-keys/{signing_key_id}.jwk.json"),
+        1,
+    );
     fs::write(&configuration_path, document).expect("the local configuration is written");
 }
 
@@ -1288,6 +1349,9 @@ listener:
 secretProviders:
   file:
     root: {secrets}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
 auditStorage:
   path: {audit}
   maximumFileBytes: 10485760
@@ -1301,8 +1365,8 @@ outboundTls:
     )
 }
 
-/// A fresh Ed25519 private JWK under the identifier the reader expects.
-fn private_jwk(key_id: &str) -> String {
+/// A fresh Ed25519 private JWK for an externally owned client or token issuer.
+fn private_client_jwk(key_id: &str) -> String {
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).expect("the test host supplies randomness");
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
@@ -1318,7 +1382,38 @@ fn private_jwk(key_id: &str) -> String {
 }
 
 fn generate_key(key_id: &str) -> PrivateJwk {
-    PrivateJwk::parse(&private_jwk(key_id)).expect("the generated key parses")
+    PrivateJwk::parse(&private_client_jwk(key_id)).expect("the generated key parses")
+}
+
+/// A fresh ES256 service key whose identifier is its RFC 7638 thumbprint.
+fn service_key() -> (String, PublicJwk) {
+    let signing_key = SigningKey::random(&mut OsRng);
+    let point = signing_key.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(point.x().expect("the public point has x"));
+    let y = URL_SAFE_NO_PAD.encode(point.y().expect("the public point has y"));
+    let mut public = PublicJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        x: Some(x.clone()),
+        y: Some(y.clone()),
+        n: None,
+        e: None,
+    };
+    let key_id = public.jkt().expect("the thumbprint computes");
+    public.kid = Some(key_id.clone());
+    let private = json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "kid": key_id,
+        "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        "x": x,
+        "y": y,
+    })
+    .to_string();
+    (private, public)
 }
 
 fn replace_exact(document: &mut String, from: &str, to: &str, expected: usize) {

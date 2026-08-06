@@ -47,7 +47,7 @@ class DiscoveryTest(unittest.TestCase):
 
     def _client(self, **bounds):
         return revc.EvidenceClient(
-            self.server.base_url, fixtures.VALID_JWKS, "test-token", **bounds
+            self.server.base_url, fixtures.VALID_JWKS, [], "test-token", **bounds
         )
 
     def _serve_definitions(self) -> bytes:

@@ -48,6 +48,7 @@ function clientAgainst(stub, bounds = {}) {
   return new EvidenceClient({
     baseUrl: stub.baseUrl,
     trustedJwks: GOLDEN_JWKS,
+    revokedKeyIds: [],
     token: { static: 'discovery-test-token' },
     ...bounds,
   });
