@@ -162,7 +162,6 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
         "generated/audit/mint.jsonl",
         "generated/keys/mint-audit-hmac-key",
         "generated/keys/mint-private.jwk",
-        "generated/keys/mint-public.jwk.json",
         "generated/keys/holder-private.jwk",
         "generated/keys/holder-public.jwk.json",
         "generated/keys/caller-private.jwk",
@@ -173,17 +172,31 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
     ] {
         assert_mode(&dev.join(path), 0o600);
     }
+    let mint_private_path = dev.join("generated/keys/mint-private.jwk");
+    let mint_private: Value =
+        serde_json::from_slice(&fs::read(&mint_private_path).expect("generated Mint private JWK"))
+            .expect("generated Mint private JWK parses");
+    let mint_kid = mint_private["kid"]
+        .as_str()
+        .expect("generated Mint private JWK has a kid");
+    let mint_public_path = dev.join(format!("generated/keys/{mint_kid}.jwk.json"));
+    assert_mode(&mint_public_path, 0o600);
     for name in ["mint", "caller", "holder"] {
-        let private: Value = serde_json::from_slice(
-            &fs::read(dev.join(format!("generated/keys/{name}-private.jwk")))
-                .expect("generated private JWK"),
-        )
-        .expect("generated private JWK parses");
-        let public: Value = serde_json::from_slice(
-            &fs::read(dev.join(format!("generated/keys/{name}-public.jwk.json")))
-                .expect("generated public JWK"),
-        )
-        .expect("generated public JWK parses");
+        let private_path = dev.join(format!("generated/keys/{name}-private.jwk"));
+        let private: Value = if name == "mint" {
+            mint_private.clone()
+        } else {
+            serde_json::from_slice(&fs::read(private_path).expect("generated private JWK"))
+                .expect("generated private JWK parses")
+        };
+        let public_path = if name == "mint" {
+            mint_public_path.clone()
+        } else {
+            dev.join(format!("generated/keys/{name}-public.jwk.json"))
+        };
+        let public: Value =
+            serde_json::from_slice(&fs::read(public_path).expect("generated public JWK"))
+                .expect("generated public JWK parses");
         assert_eq!(private["kty"], "EC");
         assert_eq!(private["crv"], "P-256");
         assert_eq!(private["alg"], "ES256");
