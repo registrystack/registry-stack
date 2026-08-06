@@ -596,7 +596,10 @@ async fn execute_response(
             policy.evidence_type = requirement.evidence_type.clone();
             policy.purpose = resolved.purpose.clone();
             policy.audience = AUDIENCE.to_owned();
-            policy.configuration_revision = bundle.revision().to_owned();
+            policy.configuration_revision = bundle
+                .configuration_revision(&requirement.id)
+                .unwrap_or_else(|| panic!("{label}: the requirement has no configuration revision"))
+                .to_owned();
             let verified = verify_flattened_jws(
                 &serde_json::to_vec(&signed)
                     .unwrap_or_else(|_| panic!("{label}: signed evidence encoding failed")),

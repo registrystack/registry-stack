@@ -393,7 +393,11 @@ async fn every_selector_profile_runs_the_complete_signed_service_path() {
         policy.evidence_type = requirement.evidence_type.clone();
         policy.purpose = request.purpose.clone();
         policy.audience = EVIDENCE_AUDIENCE.to_owned();
-        policy.configuration_revision = service.bundle.revision().to_owned();
+        policy.configuration_revision = service
+            .bundle
+            .configuration_revision(&request.requirement)
+            .expect("the requirement has a configuration revision")
+            .to_owned();
         let evidence = verify_flattened_jws(
             &serialized,
             &jwks_document(service.signer.public_jwk(), []).expect("JWKS builds"),

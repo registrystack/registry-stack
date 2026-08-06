@@ -663,6 +663,16 @@ release, bundle bytes and revision are identical. The copied runtime is
 environment-specific and has its own revision; it is not part of the bundle
 revision or signed `configurationRevision`.
 
+The bundle revision identifies the whole reviewed bundle and is what an operator
+records at approval. A signed `configurationRevision` is narrower: it covers
+only the configuration and artifacts one requirement depends on. Editing a
+requirement, its source, one of its selector profiles, an authority grant naming
+it, or any script, schema, codelist, or fixture file those reach changes that
+requirement's revision. Retired public verification keys stay in every
+requirement's closure, so key rollover still changes every revision. An edit
+outside a requirement's closure leaves its revision unchanged, so it does not
+force every relying party to re-review.
+
 After approval, transfer the exact candidate, provision independent owner-only
 secrets under the configured secret root, make bundle and runtime non-writable
 to the service identity, and run the grouped handoff once whenever candidate
@@ -694,7 +704,8 @@ Docker Compose is a documented adapter rather than build output. It mounts the
 candidate bundle unchanged and read-only; mounts a distinct container runtime,
 secrets, and persistent audit storage separately; binds Evidence privately; and
 keeps TLS and public routing operator-controlled. The Compose runtime has its
-own revision while assertions continue to carry the unchanged bundle revision.
+own revision while assertions continue to carry their unchanged per-requirement
+configuration revisions.
 When Mint shares that network, retain its public HTTPS issuer and JWKS URI;
 internal plain-HTTP service names do not replace them.
 
@@ -706,5 +717,7 @@ The consumer then calls authenticated `GET /v1/evidence-definitions` and uses
 one returned complete requirement, purpose, concept, role, selector, and value
 origin shape. The endpoint does not publish the whole bundle, source internals,
 authority tags, secrets, selector values, or unrelated definitions. A change
-to an offered contract changes the returned `configurationRevision` and needs
-a coordinated rollout; clients do not infer alternatives from runtime errors.
+to an offered contract changes that definition's returned
+`configurationRevision` and needs a coordinated rollout with the relying parties
+consuming that requirement; clients do not infer alternatives from runtime
+errors.

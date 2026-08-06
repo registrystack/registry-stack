@@ -241,7 +241,6 @@ PY
 ```json
 {
   "assuranceProfile": "local",
-  "configurationRevision": "sha256:<revision>",
   "definitions": [
     {
       "concepts": [
@@ -250,6 +249,7 @@ PY
           "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult"
         }
       ],
+      "configurationRevision": "sha256:<revision>",
       "evidenceType": "urn:registrystack:evidence:local:evidence-type:adult-status",
       "kind": "criterion",
       "purpose": "age-check",
@@ -352,7 +352,10 @@ document = json.dumps(
         "evidence_type": definition["evidenceType"],
         "issued_by": published["issuedBy"],
         "provided_by": published["providedBy"],
-        "configuration_revision": published["configurationRevision"],
+        # Published per requirement, so it is read from this definition. It
+        # covers only what this requirement depends on: an unrelated bundle edit
+        # leaves it unchanged, and this procedure keeps verifying.
+        "configuration_revision": definition["configurationRevision"],
         "expected_assurance_profile": published["assuranceProfile"],
         "audience": AUDIENCE,
         "expected_outputs": EXPECTED_OUTPUTS,
@@ -439,9 +442,10 @@ restating them, so a changed request shape cannot pass review and then reach a r
 `subject_expectations` is absent from the file because it is per-request: it is what the application
 already knows about the subject in front of it.
 
-Regenerating this file is a review step, not a retry. The revision covers the deployment's entire
-governed configuration, so it moves whenever an operator changes any of it, and verification then
-fails until someone has looked at what changed. When that happens, keep the reviewed copy, write a
+Regenerating this file is a review step, not a retry. The revision covers this requirement's own
+governed configuration, so it moves when an operator changes something this requirement depends on,
+and verification then fails until someone has looked at what changed. A change elsewhere in the
+deployment leaves it alone. When it does move, keep the reviewed copy, write a
 new one, and `diff` them before accepting: a changed revision alone is routine, while a changed
 `evidence_type`, `issued_by`, concept set, or `published_shape` means the question, or the way it
 must be asked, moved.

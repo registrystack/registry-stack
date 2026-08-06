@@ -74,7 +74,6 @@ pub struct EvidenceRequest {
 pub struct EvidenceDefinitions {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
-    pub configuration_revision: String,
     pub issued_by: String,
     pub provided_by: String,
     pub definitions: Vec<EvidenceDefinition>,
@@ -84,6 +83,10 @@ pub struct EvidenceDefinitions {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinition {
     pub requirement: String,
+    /// The revision an assertion for this requirement carries. It covers this
+    /// requirement's own configuration and artifact closure, so a relying party
+    /// pins one requirement without depending on the rest of the deployment.
+    pub configuration_revision: String,
     pub kind: String,
     pub evidence_type: String,
     pub purpose: String,
@@ -407,10 +410,18 @@ mod tests {
         let definitions = EvidenceDefinitions {
             schema: "protected-discovery-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
-            configuration_revision: "protected-discovery-revision-canary".to_owned(),
             issued_by: "protected-discovery-issuer-canary".to_owned(),
             provided_by: "protected-discovery-provider-canary".to_owned(),
-            definitions: Vec::new(),
+            definitions: vec![EvidenceDefinition {
+                requirement: "protected-discovery-requirement-canary".to_owned(),
+                configuration_revision: "protected-discovery-revision-canary".to_owned(),
+                kind: "protected-discovery-kind-canary".to_owned(),
+                evidence_type: "protected-discovery-type-canary".to_owned(),
+                purpose: "protected-discovery-purpose-canary".to_owned(),
+                reference_frameworks: vec!["protected-discovery-framework-canary".to_owned()],
+                subjects: Vec::new(),
+                concepts: Vec::new(),
+            }],
         };
 
         let unsigned_envelope = UnsignedEvidenceEnvelope {

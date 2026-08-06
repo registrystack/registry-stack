@@ -1653,7 +1653,12 @@ async fn sign_and_verify_fixture_evidence(
     policy.evidence_type = requirement.evidence_type.clone();
     policy.purpose = resolved.purpose.clone();
     policy.audience = OFFLINE_AUDIENCE.to_owned();
-    policy.configuration_revision = bundle.revision().to_owned();
+    policy.configuration_revision = bundle
+        .configuration_revision(&requirement.id)
+        .ok_or(CliError(
+            "fixture requirement has no configuration revision",
+        ))?
+        .to_owned();
     let verified = verify_flattened_jws(
         &serde_json::to_vec(&signed)
             .map_err(|_| CliError("fixture signed evidence is not representable"))?,

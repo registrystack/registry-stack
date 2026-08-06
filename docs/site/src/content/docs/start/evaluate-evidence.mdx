@@ -125,7 +125,7 @@ reviewed bundle unchanged, then mounts a separate container runtime, secret
 root, and persistent audit volume. It binds Evidence Gateway to a private
 Compose-network address and puts operator-controlled TLS in front. Only the
 runtime revision changes when container paths or listener bindings change;
-the bundle revision remains the assertion `configurationRevision`.
+each requirement's `configurationRevision` stays what its assertions carry.
 The [Evidence Gateway candidate Compose guide](../../tutorials/integrate-evidence-candidate-with-docker-compose/)
 covers that shape. Registry Mint remains optional when the deployment has no
 suitable OIDC issuer.

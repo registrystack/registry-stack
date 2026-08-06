@@ -116,9 +116,10 @@ an audit event.
 
 The bundle revision covers exact bundle bytes and remains the same in host and Compose deployments.
 The runtime revision covers exact runtime bytes and bound private CA files, so it changes with
-container paths, listener bindings, or trust files. Signed assertions carry the bundle revision as
-`configurationRevision`, never the runtime revision. Neither revision contains secret values or
-audit contents.
+container paths, listener bindings, or trust files. A configuration revision is narrower than either:
+it covers one requirement's own configuration and artifacts. Signed assertions carry the revision of
+the requirement they answer as `configurationRevision`, never the runtime or bundle revision. No
+revision contains secret values or audit contents.
 
 ## Add optional Mint
 

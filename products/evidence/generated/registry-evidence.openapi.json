@@ -176,6 +176,10 @@
             "type": "array",
             "uniqueItems": true
           },
+          "configurationRevision": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
           "evidenceType": {
             "format": "uri",
             "maxLength": 512,
@@ -221,6 +225,7 @@
         },
         "required": [
           "requirement",
+          "configurationRevision",
           "kind",
           "evidenceType",
           "purpose",
@@ -328,10 +333,6 @@
             ],
             "type": "string"
           },
-          "configurationRevision": {
-            "pattern": "^sha256:[a-f0-9]{64}$",
-            "type": "string"
-          },
           "definitions": {
             "items": {
               "$ref": "#/components/schemas/EvidenceDefinition"
@@ -360,7 +361,6 @@
         "required": [
           "schema",
           "assuranceProfile",
-          "configurationRevision",
           "issuedBy",
           "providedBy",
           "definitions"

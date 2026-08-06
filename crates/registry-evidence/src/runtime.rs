@@ -604,7 +604,6 @@ impl EvidenceRuntime {
         let response = EvidenceDefinitions {
             schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle().config.assurance_profile,
-            configuration_revision: self.bundle().revision().to_owned(),
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
             definitions,
@@ -673,8 +672,15 @@ impl EvidenceRuntime {
             })
             .collect();
 
+        let configuration_revision = self
+            .bundle()
+            .configuration_revision(&requirement.id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-requirement"))?
+            .to_owned();
+
         Ok(EvidenceDefinition {
             requirement: requirement.id.clone(),
+            configuration_revision,
             kind: requirement_kind_name(requirement.kind).to_owned(),
             evidence_type: requirement.evidence_type.clone(),
             purpose: request.purpose.clone(),

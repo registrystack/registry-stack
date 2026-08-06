@@ -535,7 +535,11 @@ impl OfflineKernel {
             valid_until,
             purpose: input.purpose.to_owned(),
             audience: input.audience.to_owned(),
-            configuration_revision: self.bundle.revision().to_owned(),
+            configuration_revision: self
+                .bundle
+                .configuration_revision(&requirement.id)
+                .ok_or(KernelError::Requirement)?
+                .to_owned(),
             subjects: input.subjects,
             supported_values: values.0,
         })

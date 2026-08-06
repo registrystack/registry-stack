@@ -447,8 +447,8 @@ Rust accepts `array<DerivedConceptValue>` only when:
 - codelist, cardinality, string, collection, and total-result limits pass.
 
 Rhai never creates the Evidence identifier, issuer, provider, requirement,
-Evidence Type, purpose, audience, subject bindings, timestamps, bundle revision,
-JWS headers, signature, or audit record.
+Evidence Type, purpose, audience, subject bindings, timestamps, configuration
+revision, JWS headers, signature, or audit record.
 
 ## Version-one acceptance definition set
 

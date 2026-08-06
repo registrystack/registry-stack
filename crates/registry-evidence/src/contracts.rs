@@ -335,12 +335,11 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "configurationRevision", "issuedBy", "providedBy", "definitions"
+            "schema", "assuranceProfile", "issuedBy", "providedBy", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
-            "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "definitions": {
@@ -352,11 +351,12 @@ fn definitions_schema() -> Value {
             "definition": {
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "requirement", "kind", "evidenceType", "purpose",
+                    "requirement", "configurationRevision", "kind", "evidenceType", "purpose",
                     "referenceFrameworks", "subjects", "concepts"
                 ],
                 "properties": {
                     "requirement": {"type": "string", "format": "uri", "maxLength": 512},
+                    "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
                     "kind": {"enum": ["criterion", "information-requirement", "constraint"]},
                     "evidenceType": {"type": "string", "format": "uri", "maxLength": 512},
                     "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
@@ -1329,11 +1329,11 @@ mod tests {
                 json!({
                     "schema": "registry.evidence-definitions/v1",
                     "assuranceProfile": "evidence-grade",
-                    "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
                     "definitions": [{
                         "requirement": "urn:example:requirement:v1",
+                        "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                         "kind": "criterion",
                         "evidenceType": "urn:example:evidence-type:v1",
                         "purpose": "casework",

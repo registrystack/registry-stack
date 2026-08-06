@@ -839,7 +839,7 @@ the unsigned envelope:
   "validUntil": "2026-08-03T12:00:00Z",
   "purpose": "benefit-eligibility",
   "audience": "urn:example:agency:benefits",
-  "configurationRevision": "sha256:bundle-digest",
+  "configurationRevision": "sha256:requirement-digest",
   "subjects": [
     {
       "role": "subject",
@@ -913,9 +913,9 @@ audit, or public errors. Configuration and key state do not hot reload.
 The published JWKS is key discovery, not a trust anchor. A verifier obtains the provider identity and JWKS location through trusted deployment configuration or governed metadata, then allowlists the algorithm and resolves `kid` only within that trusted key set. It never follows a message-provided `jku`, `x5u`, or equivalent remote key URL.
 
 The signature covers the request nonce, issuer, technical provider, Evidence
-Type, requirement revision, purpose, audience, role-bound subjects, Supported
-Values, bundle revision, evidence identifier, and all observation and validity
-times because those fields are inside the payload.
+Type, requirement, purpose, audience, role-bound subjects, Supported Values, the
+requirement's configuration revision, evidence identifier, and all observation
+and validity times because those fields are inside the payload.
 
 Verification proves that the technical provider controlling the referenced key signed the exact payload. It does not by itself prove the source fact is true, confer legal notarization, create a qualified electronic signature, or turn the assertion into a holder credential. Governance must establish that the technical provider is authorized to produce evidence for the named legal issuer.
 
@@ -1036,7 +1036,8 @@ another requester is not entitled to know.
 
 `GET /v1/evidence-definitions` authenticates the caller and returns only
 complete request shapes that match exactly one authority path. Each item
-contains bundle revision, issuer, provider, requirement, Evidence Type,
+contains the requirement's configuration revision, issuer, provider,
+requirement, Evidence Type,
 purpose, reference frameworks, output concepts and forms, complete subject
 roles, selector profiles, value origins, and safe selector field types and
 bounds. Controlled-code fields expose the governed scheme identity and

@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
-use registry_platform_crypto::{PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm};
+use registry_platform_crypto::{
+    canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
+};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -19,8 +21,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::config::{
-    ArtifactPath, ConceptForm, EvidenceConfig, OrderedMap, RuntimeConfig, SchemaFault,
-    SelectorField,
+    ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
+    RuntimeConfig, SchemaFault, SelectorField,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -33,6 +35,11 @@ const CONFIG_FILE: &str = "evidence.yaml";
 const RUNTIME_FILE: &str = "runtime.yaml";
 const REVISION_DOMAIN: &[u8] = b"registry.evidence.bundle-revision/v1\0";
 const RUNTIME_REVISION_DOMAIN: &[u8] = b"registry.evidence.runtime-revision/v1\0";
+const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revision/v1\0";
+/// Path the canonical configuration projection takes inside a requirement's
+/// closure. An artifact path can hold no `#`, so this can never collide with a
+/// bundle file.
+const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 const ALLOWED_DIRECTORIES: [&str; 6] = [
     "adapters",
@@ -242,6 +249,7 @@ pub struct Bundle {
     root: PathBuf,
     pub config: EvidenceConfig,
     revision: String,
+    requirement_revisions: BTreeMap<String, String>,
     files: BTreeMap<String, Vec<u8>>,
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
@@ -369,11 +377,13 @@ impl Bundle {
         let fixtures = load_fixtures(&config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let revision = compute_revision(&files)?;
+        let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
         Ok(Self {
             root: root.to_path_buf(),
             config,
             revision,
+            requirement_revisions,
             files,
             scripts,
             fact_schemas,
@@ -388,12 +398,26 @@ impl Bundle {
         &self.root
     }
 
-    pub fn configuration_revision(&self) -> &str {
-        &self.revision
+    /// The configuration revision an assertion for one requirement carries.
+    ///
+    /// It covers this requirement's own closure: the canonical projection of the
+    /// configuration it depends on, and the exact bytes of every artifact it
+    /// reaches. An edit that cannot change this requirement's assertions leaves
+    /// it alone, so a relying party pinning it is not broken by a deployment's
+    /// unrelated work. `None` names a requirement the bundle does not configure.
+    pub fn configuration_revision(&self, requirement_id: &str) -> Option<&str> {
+        self.requirement_revisions
+            .get(requirement_id)
+            .map(String::as_str)
     }
 
+    /// The digest of every file in the deployment bundle.
+    ///
+    /// This is the deployment's own identity, for audit, status, and operator
+    /// diagnostics. It is not what an assertion carries: see
+    /// [`Bundle::configuration_revision`].
     pub fn revision(&self) -> &str {
-        self.configuration_revision()
+        &self.revision
     }
 
     pub fn artifact(&self, path: &str) -> Option<&[u8]> {
@@ -726,8 +750,8 @@ fn validate_file_closure(
     for path in &config.signing.published_public_jwk_files {
         expected.insert(path.as_str().to_owned());
     }
-    expected.extend(reviewed_schema_paths(config, files)?);
-    expected.extend(reviewed_bucket_codelist_paths(config, files)?);
+    expected.extend(reviewed_schema_paths(all_concepts(config), files)?);
+    expected.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let present: BTreeSet<&str> = files.keys().map(String::as_str).collect();
     let referenced: BTreeSet<&str> = expected.iter().map(String::as_str).collect();
     if let Some(missing) = referenced.difference(&present).next() {
@@ -745,14 +769,19 @@ fn validate_file_closure(
     Ok(())
 }
 
-fn reviewed_bucket_codelist_paths(
-    config: &EvidenceConfig,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeSet<String>, BundleError> {
-    let declarations = config
+/// Every concept the configuration declares, in configuration order.
+fn all_concepts(config: &EvidenceConfig) -> impl Iterator<Item = &ConceptConfig> {
+    config
         .requirements
         .iter()
         .flat_map(|requirement| &requirement.concepts)
+}
+
+fn reviewed_bucket_codelist_paths<'a>(
+    concepts: impl Iterator<Item = &'a ConceptConfig>,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeSet<String>, BundleError> {
+    let declarations = concepts
         .filter(|concept| {
             matches!(
                 concept.form,
@@ -791,14 +820,11 @@ fn reviewed_bucket_codelist_paths(
     Ok(paths)
 }
 
-fn reviewed_schema_paths(
-    config: &EvidenceConfig,
+fn reviewed_schema_paths<'a>(
+    concepts: impl Iterator<Item = &'a ConceptConfig>,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeSet<String>, BundleError> {
-    let identifiers = config
-        .requirements
-        .iter()
-        .flat_map(|requirement| &requirement.concepts)
+    let identifiers = concepts
         .filter(|concept| concept.form == ConceptForm::ReviewedStructuredValue)
         .map(|concept| concept_constraint_string(&concept.constraints, "schema"))
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -1006,7 +1032,7 @@ fn load_fact_schemas(
         })
         .map(ToOwned::to_owned)
         .collect::<BTreeSet<_>>();
-    paths.extend(reviewed_schema_paths(config, files)?);
+    paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
     let mut schemas = BTreeMap::new();
     for path in paths {
         let role = if parameter_paths.contains(path.as_str()) {
@@ -1410,7 +1436,7 @@ fn load_codelists(
             }
         }
     }
-    paths.extend(reviewed_bucket_codelist_paths(config, files)?);
+    paths.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let mut codelists = BTreeMap::new();
     for path in paths {
         let codelist = load_codelist(&path, files).map_err(|error| error.in_artifact(&path))?;
@@ -2006,6 +2032,213 @@ fn compute_revision(files: &BTreeMap<String, Vec<u8>>) -> Result<String, BundleE
     compute_named_revision(REVISION_DOMAIN, files)
 }
 
+/// One configuration revision per configured requirement.
+///
+/// Each digest covers exactly what can change that requirement's assertions:
+/// the canonical projection of the configuration it depends on, and the exact
+/// bytes of every artifact it reaches. Requirements in one bundle therefore no
+/// longer share a revision, so an edit that serves one of them does not
+/// invalidate the revision a relying party pinned for another.
+fn compute_requirement_revisions(
+    config: &EvidenceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, String>, BundleError> {
+    let mut revisions = BTreeMap::new();
+    for requirement in &config.requirements {
+        let mut closure = BTreeMap::from([(
+            PROJECTION_PATH.to_owned(),
+            canonical_projection(config, requirement)?,
+        )]);
+        for path in requirement_artifact_paths(config, requirement, files)? {
+            // The bundle-wide closure check ran first, so a referenced artifact
+            // is present. A miss here would silently shrink the digest, so it
+            // fails instead.
+            let bytes = files.get(&path).ok_or_else(|| {
+                unknown_file(
+                    &path,
+                    "the requirement references an artifact the bundle does not contain",
+                )
+            })?;
+            closure.insert(path, bytes.clone());
+        }
+        revisions.insert(
+            requirement.id.clone(),
+            compute_named_revision(REQUIREMENT_REVISION_DOMAIN, &closure)?,
+        );
+    }
+    Ok(revisions)
+}
+
+/// Every bundle artifact one requirement reaches.
+///
+/// This is the bundle-wide closure of [`validate_file_closure`] restricted to
+/// one requirement: its own derivation script, fixtures, concept codelists,
+/// reviewed schemas and bucket codelists, the artifacts of the single source it
+/// names, and the codelists of the selector profiles its subject roles and
+/// grants use. The retired public signing keys are deployment-wide and stay in
+/// every requirement's closure, so this narrows nothing beyond separating one
+/// requirement from another.
+fn requirement_artifact_paths(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeSet<String>, BundleError> {
+    let mut paths = BTreeSet::new();
+    let source = config.sources.get(&requirement.source).ok_or_else(|| {
+        invalid_artifact("the requirement names a source the configuration does not define")
+    })?;
+    paths.insert(source.request.prepare_script.as_str().to_owned());
+    paths.insert(source.extract_script.as_str().to_owned());
+    paths.insert(source.request.adapter_parameters_schema.as_str().to_owned());
+    paths.insert(source.response_schema.as_str().to_owned());
+    paths.insert(source.fact_schema.as_str().to_owned());
+    paths.insert(requirement.derivation.script.as_str().to_owned());
+    if let Some(fixtures) = &requirement.fixtures {
+        paths.insert(fixtures.as_str().to_owned());
+    }
+    for concept in &requirement.concepts {
+        if matches!(
+            concept.form,
+            ConceptForm::ControlledCode
+                | ConceptForm::ControlledCategory
+                | ConceptForm::ControlledCodeList
+        ) {
+            paths.insert(concept_codelist_path(&concept.constraints)?.to_owned());
+        }
+    }
+    for name in requirement_selector_profiles(config, requirement) {
+        let profile = config.selector_profiles.get(&name).ok_or_else(|| {
+            invalid_artifact(
+                "the requirement names a selector profile the configuration does not define",
+            )
+        })?;
+        for (_, field) in profile.fields.iter() {
+            if let SelectorField::ControlledCode { codelist, .. } = field {
+                paths.insert(codelist.as_str().to_owned());
+            }
+        }
+    }
+    for path in &config.signing.retired_public_jwk_files {
+        paths.insert(path.as_str().to_owned());
+    }
+    paths.extend(reviewed_schema_paths(requirement.concepts.iter(), files)?);
+    paths.extend(reviewed_bucket_codelist_paths(
+        requirement.concepts.iter(),
+        files,
+    )?);
+    Ok(paths)
+}
+
+/// The selector profiles one requirement can be served through: those its
+/// subject roles declare, and those a grant for it names.
+fn requirement_selector_profiles(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = requirement
+        .subject_roles
+        .iter()
+        .flat_map(|role| role.selector_profiles.iter().cloned())
+        .collect();
+    for (_, profile) in config.authority_profiles.iter() {
+        for grant in &profile.grants {
+            if grant.requirement == requirement.id {
+                names.extend(
+                    grant
+                        .subjects
+                        .iter()
+                        .map(|subject| subject.selector_profile.clone()),
+                );
+            }
+        }
+    }
+    names
+}
+
+/// The configuration one requirement depends on, in the canonical form its
+/// revision digest covers.
+///
+/// The projection starts from the complete parsed configuration and replaces
+/// only the four members that hold per-requirement configuration, keeping this
+/// requirement's own entries: the requirement itself, the single source it
+/// names, the selector profiles it can be served through, and the authority
+/// grants that offer it. Every other member is kept exactly as configured, so a
+/// configuration member added later is covered without revisiting this
+/// projection.
+///
+/// Starting from the parsed configuration rather than the file bytes is what
+/// makes the projection possible at all, and it is faithful because the
+/// configuration types reject an unknown member: nothing in the reviewed file
+/// can be dropped by parsing it. Comments and formatting are not covered,
+/// because neither can change an assertion.
+fn canonical_projection(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+) -> Result<Vec<u8>, BundleError> {
+    let mut document = serde_json::to_value(config)
+        .map_err(|_| invalid_artifact("the configuration does not project"))?;
+    let members = document
+        .as_object_mut()
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    let requirement_value = serde_json::to_value(requirement)
+        .map_err(|_| invalid_artifact("the requirement does not project"))?;
+    members.insert(
+        "requirements".to_owned(),
+        JsonValue::Array(vec![requirement_value]),
+    );
+    let profiles = requirement_selector_profiles(config, requirement);
+    retain_members(members, "sources", |name| name == requirement.source)?;
+    retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
+    project_authority_profiles(members, &requirement.id)?;
+    // RFC 8785 canonicalization, shared with the rest of the stack, so a
+    // revision depends on the configuration alone. No dependency's member
+    // ordering or number formatting can silently change one.
+    canonicalize_json(&document)
+        .map_err(|_| invalid_artifact("the projection does not canonicalize"))
+}
+
+/// Keep only the named members of one projected configuration mapping.
+fn retain_members(
+    members: &mut JsonMap<String, JsonValue>,
+    member: &str,
+    keep: impl Fn(&str) -> bool,
+) -> Result<(), BundleError> {
+    let mapping = members
+        .get_mut(member)
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    mapping.retain(|name, _| keep(name));
+    Ok(())
+}
+
+/// Keep only the grants that offer one requirement, and only the authority
+/// profiles left holding at least one of them.
+fn project_authority_profiles(
+    members: &mut JsonMap<String, JsonValue>,
+    requirement_id: &str,
+) -> Result<(), BundleError> {
+    let profiles = members
+        .get_mut("authorityProfiles")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    for (_, profile) in profiles.iter_mut() {
+        let grants = profile
+            .get_mut("grants")
+            .and_then(JsonValue::as_array_mut)
+            .ok_or_else(|| invalid_artifact("an authority profile does not project"))?;
+        grants.retain(|grant| {
+            grant.get("requirement").and_then(JsonValue::as_str) == Some(requirement_id)
+        });
+    }
+    profiles.retain(|_, profile| {
+        profile
+            .get("grants")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|grants| !grants.is_empty())
+    });
+    Ok(())
+}
+
 fn compute_named_revision(
     domain: &[u8],
     files: &BTreeMap<String, Vec<u8>>,
@@ -2107,6 +2340,186 @@ mod tests {
             ("schemas/other.yaml".to_owned(), b"type: object\n".to_vec()),
         ]);
         assert_ne!(compute_revision(&first), compute_revision(&renamed));
+    }
+
+    /// The revision every configured requirement carries, keyed by requirement.
+    #[cfg(unix)]
+    fn requirement_revisions(root: &Path) -> BTreeMap<String, String> {
+        let bundle = Bundle::load(root).expect("the acceptance bundle loads");
+        bundle
+            .config
+            .requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.id.clone(),
+                    bundle
+                        .configuration_revision(&requirement.id)
+                        .expect("a configured requirement has a revision")
+                        .to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Load the multi-requirement acceptance bundle, apply one edit to its
+    /// configuration or artifacts, and answer the revisions before and after.
+    #[cfg(unix)]
+    fn revisions_across_edit(
+        edit: impl FnOnce(&Path),
+    ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let before = requirement_revisions(directory.path());
+
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        edit(directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let after = requirement_revisions(directory.path());
+        (before, after)
+    }
+
+    /// The point of scoping a revision per requirement: an edit that serves one
+    /// requirement leaves the revision every other relying party pinned alone.
+    /// Before this, one shared bundle digest meant any byte change anywhere
+    /// broke every relying party at once, with nothing but an opaque policy
+    /// failure to explain it.
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_for_one_requirement_leaves_the_other_revisions_alone() {
+        const EDITED: &str = "urn:example:fixture:requirement:residence-region:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let script = root.join("derivations/residence-region.rhai");
+            let text = fs::read_to_string(&script).expect("the derivation reads");
+            fs::write(&script, format!("{text}\n// reviewed again\n"))
+                .expect("the derivation writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` was not edited and keeps its revision"
+                );
+            }
+        }
+    }
+
+    /// The same isolation for the configuration file itself, which is the churn
+    /// a whole-file digest cannot avoid: every requirement is configured in one
+    /// `evidence.yaml`, so onboarding or retuning one of them used to invalidate
+    /// all of them.
+    #[cfg(unix)]
+    #[test]
+    fn a_configuration_edit_for_one_requirement_leaves_the_other_revisions_alone() {
+        const EDITED: &str = "urn:example:fixture:requirement:professional-licence-status:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            // The only requirement configured with this validity is the edited
+            // one, so the replacement cannot reach a sibling.
+            assert_eq!(text.matches("validitySeconds: 43200").count(), 1);
+            fs::write(
+                &path,
+                text.replace("validitySeconds: 43200", "validitySeconds: 43201"),
+            )
+            .expect("the configuration writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` was not edited and keeps its revision"
+                );
+            }
+        }
+    }
+
+    /// Isolation between requirements is the only narrowing. A deployment-wide
+    /// edit still changes every requirement's revision, so nothing that can
+    /// change an assertion has stopped being covered.
+    #[cfg(unix)]
+    #[test]
+    fn a_deployment_wide_edit_changes_every_requirement_revision() {
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            assert_eq!(text.matches("keyVersion: 1").count(), 1);
+            fs::write(&path, text.replace("keyVersion: 1", "keyVersion: 2"))
+                .expect("the configuration writes");
+        });
+
+        assert_eq!(before.len(), 4);
+        for (requirement, revision) in &before {
+            assert_ne!(
+                revision, &after[requirement],
+                "`{requirement}` depends on the edited deployment configuration"
+            );
+        }
+    }
+
+    /// The projection keeps every configuration member. A member it dropped
+    /// would stop being covered by any revision, which is a silently narrower
+    /// tripwire rather than a visible failure, so the member list is asserted
+    /// against the configuration itself instead of a copy of it.
+    #[cfg(unix)]
+    #[test]
+    fn the_projection_covers_every_configuration_member() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the acceptance bundle loads");
+
+        let configured = serde_json::to_value(&bundle.config).expect("the configuration projects");
+        let projected: JsonValue = serde_json::from_slice(
+            &canonical_projection(&bundle.config, &bundle.config.requirements[0])
+                .expect("the projection is canonical JSON"),
+        )
+        .expect("the projection parses");
+
+        assert_eq!(
+            projected
+                .as_object()
+                .expect("the projection is a mapping")
+                .keys()
+                .collect::<BTreeSet<_>>(),
+            configured
+                .as_object()
+                .expect("the configuration is a mapping")
+                .keys()
+                .collect::<BTreeSet<_>>()
+        );
+        // Only the four per-requirement members are narrowed, and each keeps
+        // exactly what this requirement reaches.
+        assert_eq!(projected["requirements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(projected["sources"].as_object().map(JsonMap::len), Some(1));
+        assert!(projected["sources"].get("source-a").is_some());
+    }
+
+    /// A revision must depend on the configuration alone. Canonical JSON is
+    /// what keeps it independent of the member ordering a dependency happens to
+    /// use, so a feature selection somewhere in the tree cannot invalidate every
+    /// pinned revision without a configuration change.
+    #[cfg(unix)]
+    #[test]
+    fn the_projection_is_already_canonical() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the acceptance bundle loads");
+
+        let projection = canonical_projection(&bundle.config, &bundle.config.requirements[0])
+            .expect("the projection is canonical JSON");
+        let reparsed: JsonValue =
+            serde_json::from_slice(&projection).expect("the projection parses");
+        assert_eq!(
+            canonicalize_json(&reparsed).expect("the parsed projection canonicalizes"),
+            projection
+        );
     }
 
     #[test]
@@ -2232,8 +2645,11 @@ mod tests {
             set_tree_mode(directory.path(), 0o555, 0o444);
 
             let bundle = Bundle::load(directory.path()).expect("bundle loads");
-            assert!(bundle.configuration_revision().starts_with("sha256:"));
-            assert_eq!(bundle.configuration_revision().len(), 71);
+            let revision = bundle
+                .configuration_revision(&bundle.config.requirements[0].id)
+                .expect("the configured requirement has a revision");
+            assert!(revision.starts_with("sha256:"));
+            assert_eq!(revision.len(), 71);
             assert_eq!(bundle.scripts.len(), 3);
             assert_eq!(bundle.fact_schemas.len(), 3);
             assert_eq!(bundle.fixtures.len(), 1);

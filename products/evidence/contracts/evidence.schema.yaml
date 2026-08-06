@@ -36,7 +36,13 @@ properties:
   validUntil: {type: string, format: date-time}
   purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
   audience: {type: string, format: uri, maxLength: 512}
-  configurationRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  configurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+    description: >-
+      The revision of the configuration and artifact closure this requirement's
+      evaluation reached. It is scoped to the requirement, not to the whole
+      deployment, so an edit that cannot change this assertion leaves it alone.
   subjects:
     type: array
     minItems: 1
