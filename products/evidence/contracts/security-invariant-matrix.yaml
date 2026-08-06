@@ -223,7 +223,7 @@ cross_cutting:
     negative_test: sec-request-preparation-closed
   runtime_ownership_split:
     threat: An environment-specific runtime file silently changes governed authorization, disclosure, source authority, signing, or audit policy.
-    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit-storage, and logical private-CA bindings and has an independent immutable digest.
+    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit-storage, signer transport and pinned version, and logical private-CA bindings; the signer must exactly match the governed active public JWK and the runtime has an independent immutable digest.
     negative_test: sec-runtime-cannot-override-governed-bundle
   outbound_tls_and_proxy:
     threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.
@@ -271,8 +271,16 @@ cross_cutting:
     negative_test: sec-sd-jwt-format-requires-bundle-and-grant
   sd_jwt_vc_holder_key_closed:
     threat: A caller-supplied holder key smuggles private key material, a non-allowlisted algorithm, or an unparseable body into a signed credential.
-    enforcement: The optional holder key must be a public OKP Ed25519 JWK; any private member, other key type or curve, or malformed body fails before credential acquisition and source access, and the rejection never echoes the submitted key material.
+    enforcement: The optional holder key must be a closed public EC P-256 JWK with exact x and y coordinates and optional ES256 alg and wallet-owned kid; any private or unknown member, other key type or curve, or malformed body fails before credential acquisition and source access, and the rejection never echoes the submitted key material.
     negative_test: sec-sd-jwt-holder-key-closed
+  signing_key_governance:
+    threat: A configured kid is detached from its public key, a compromised key remains usable through a cached key set, or exported local private material is used for deployable assurance.
+    enforcement: Service keys are exact ES256 P-256 public JWKs whose kid is their RFC 7638 thumbprint; active, published, and revoked sets are disjoint; production and evidence-grade require pinned-version Transit over a workload-local Unix socket and reject denied identifiers before key selection.
+    negative_test: sec-service-key-governance
+  audit_key_epoch:
+    threat: A replacement audit master is appended to an existing keyed chain, making one apparent chain depend on two unrecorded key histories.
+    enforcement: Audit chain and identifier keys are HKDF-separated from one master. Changing the master or hashKeyVersion requires a stopped, archived old epoch and a fresh audit path; the runtime rejects the replacement master against an existing chain.
+    negative_test: sec-audit-key-epoch
   sd_jwt_vc_claims_closed:
     threat: A claim outside the profile, such as a status reference, an audience restriction, or a smuggled selector value, reaches a relying party under a valid signature.
     enforcement: The published claim set is closed to the issuer-owned and always-disclosed names plus the declared disclosures; the verifier rejects any other member instead of ignoring it.

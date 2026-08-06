@@ -14,7 +14,7 @@ use std::{
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
 use clap::{ArgGroup, Parser, Subcommand};
-use ed25519_dalek::SigningKey;
+use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
     audit::{
@@ -56,7 +56,9 @@ use registry_evidence::{
         EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
     },
 };
-use registry_platform_audit::{AuditHashSecret, OptionalHashHex};
+use registry_platform_audit::{
+    AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
@@ -91,6 +93,20 @@ enum Command {
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
         /// Bundle-relative fixture path referenced by exactly one requirement.
+        #[arg(long)]
+        fixture: PathBuf,
+    },
+    /// Internal Evidencectl seam for bundle-only semantic validation.
+    #[command(hide = true)]
+    BundleCheck {
+        #[arg(long)]
+        bundle: PathBuf,
+    },
+    /// Internal Evidencectl seam for bundle-only fixture evaluation.
+    #[command(hide = true)]
+    BundleEvaluate {
+        #[arg(long)]
+        bundle: PathBuf,
         #[arg(long)]
         fixture: PathBuf,
     },
@@ -242,7 +258,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 &runtime.config.secret_providers.file.root,
             )
             .map_err(|_| runtime_initialization_error(RuntimeInitializationError::Secrets))?;
-            validate_secret_material(&bundle, &secrets)
+            validate_secret_material(&bundle, &runtime.config, &secrets)
                 .await
                 .map_err(runtime_initialization_error)?;
             println!(
@@ -260,7 +276,32 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let kernel = OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|_| CliError("fixture bundle compilation failed"))?;
             let source_plans = compile_source_plans(&bundle.config, &runtime)?;
-            let summary = evaluate_fixture(&bundle, &kernel, &source_plans, &fixture).await?;
+            let summary = evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true).await?;
+            println!(
+                "Evidence fixture passed ({} evaluated cases)",
+                summary.evaluated_cases
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::BundleCheck { bundle } => {
+            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            OfflineKernel::compile(Arc::clone(&bundle))
+                .map_err(|_| CliError("bundle compilation failed"))?;
+            let _source_plans = compile_bundle_source_plans(&bundle.config)?;
+            println!(
+                "Evidence bundle {} passed check ({} requirements)",
+                bundle.revision(),
+                bundle.config.requirements.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::BundleEvaluate { bundle, fixture } => {
+            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            let kernel = OfflineKernel::compile(Arc::clone(&bundle))
+                .map_err(|_| CliError("fixture bundle compilation failed"))?;
+            let source_plans = compile_bundle_source_plans(&bundle.config)?;
+            let summary =
+                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false).await?;
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
                 summary.evaluated_cases
@@ -392,6 +433,27 @@ fn compile_source_plans_with_runtime(
             &allowed_selector_sets,
             outbound_tls,
             ca_bundles,
+            Arc::clone(&secrets),
+        )
+        .map_err(|_| CliError("source plan compilation failed"))?;
+        plans.insert(source_id.to_owned(), plan);
+    }
+    Ok(plans)
+}
+
+fn compile_bundle_source_plans(
+    config: &EvidenceConfig,
+) -> Result<BTreeMap<String, SourceExecutor>, CliError> {
+    let secrets = Arc::new(
+        SecretResolver::new([SecretProvider::File], "/")
+            .map_err(|_| CliError("source plan compilation failed"))?,
+    );
+    let mut plans = BTreeMap::new();
+    for (source_id, source) in config.sources.iter() {
+        let allowed_selector_sets = config.source_selector_sets(source_id);
+        let plan = SourceExecutor::new_for_offline_fixture(
+            source,
+            &allowed_selector_sets,
             Arc::clone(&secrets),
         )
         .map_err(|_| CliError("source plan compilation failed"))?;
@@ -636,8 +698,8 @@ fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, C
     let audit_secret = secrets
         .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
-        .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let master_secret =
+        derived_audit_chain_secret(audit_secret.expose_secret()).map_err(|_| LOCAL_AUDIT_FAILED)?;
     let view = verified_last_local_audit_operation(
         Path::new(&deployment.runtime.config.audit_storage.path),
         &master_secret,
@@ -787,7 +849,7 @@ fn run_verify_audit(runtime_path: &Path) -> Result<ExitCode, CommandError> {
     let audit_secret = secrets
         .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| CliError("audit verification secret resolution failed"))?;
-    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
+    let master_secret = derived_audit_chain_secret(audit_secret.expose_secret())
         .map_err(|_| CliError("audit verification secret is invalid"))?;
     verify_audit_with_secret(
         Path::new(&deployment.runtime.config.audit_storage.path),
@@ -814,6 +876,16 @@ fn verify_audit_with_secret(
             println!("{detail}");
             Err(CommandError::Cli(class))
         }
+    }
+}
+
+fn derived_audit_chain_secret(master_secret: &[u8]) -> Result<AuditHashSecret, ()> {
+    let profile =
+        AuditChainProfile::production_from_secret_bytes(Zeroizing::new(master_secret.to_vec()))
+            .map_err(|_| ())?;
+    match profile.hasher() {
+        AuditChainHasher::Keyed(secret) => Ok(secret),
+        AuditChainHasher::UnkeyedDevOnly => Err(()),
     }
 }
 
@@ -867,8 +939,13 @@ async fn evaluate_fixture(
     kernel: &OfflineKernel,
     source_plans: &BTreeMap<String, SourceExecutor>,
     fixture_path: &Path,
+    exercise_signing: bool,
 ) -> Result<FixtureSummary, CliError> {
-    let signer = offline_fixture_signer().await?;
+    let signer = if exercise_signing {
+        Some(offline_fixture_signer().await?)
+    } else {
+        None
+    };
     let fixture_name = safe_fixture_name(fixture_path)?;
     let referenced = bundle
         .config
@@ -909,7 +986,7 @@ async fn evaluate_fixture(
                 bundle,
                 kernel,
                 source_plans,
-                &signer,
+                signer.as_ref(),
                 requirement,
                 object,
             )
@@ -1029,7 +1106,7 @@ async fn evaluate_fixture(
                     sign_and_verify_fixture_evidence(
                         bundle,
                         kernel,
-                        &signer,
+                        signer.as_ref(),
                         requirement,
                         &resolved,
                         values,
@@ -1073,7 +1150,7 @@ async fn evaluate_reference_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
     source_plans: &BTreeMap<String, SourceExecutor>,
-    signer: &EvidenceSigner,
+    signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
     fixture: &JsonMap<String, Value>,
 ) -> Result<FixtureSummary, CliError> {
@@ -1366,7 +1443,7 @@ async fn evaluate_reference_fixture(
 struct ReferenceResponseContext<'a> {
     bundle: &'a Bundle,
     kernel: &'a OfflineKernel,
-    signer: &'a EvidenceSigner,
+    signer: Option<&'a EvidenceSigner>,
     requirement: &'a registry_evidence::config::RequirementConfig,
     resolved: &'a ResolvedAuthorization,
 }
@@ -1505,7 +1582,7 @@ async fn validate_reference_response(
 async fn sign_and_verify_fixture_evidence(
     bundle: &Bundle,
     kernel: &OfflineKernel,
-    signer: &EvidenceSigner,
+    signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
     resolved: &ResolvedAuthorization,
     values: ValidatedValues,
@@ -1546,6 +1623,10 @@ async fn sign_and_verify_fixture_evidence(
             },
         )
         .map_err(|_| CliError("fixture evidence construction failed"))?;
+    let Some(signer) = signer else {
+        return serde_json::to_value(evidence)
+            .map_err(|_| CliError("fixture evidence is not representable"));
+    };
     let signed = signer
         .sign_json(&evidence)
         .await
@@ -1580,18 +1661,29 @@ async fn sign_and_verify_fixture_evidence(
 async fn offline_fixture_signer() -> Result<EvidenceSigner, CliError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-    const KEY_ID: &str = "offline-fixture-signing-key";
-    let signing_key = SigningKey::generate(&mut OsRng);
+    let signing_key = SigningKey::random(&mut OsRng);
     let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public_bytes = signing_key.verifying_key().to_bytes();
-    let private_jwk = PrivateJwk {
-        kty: "OKP".to_owned(),
-        kid: Some(KEY_ID.to_owned()),
-        alg: Some("EdDSA".to_owned()),
-        crv: Some("Ed25519".to_owned()),
-        d: Some(URL_SAFE_NO_PAD.encode(private_bytes.as_slice())),
-        x: Some(URL_SAFE_NO_PAD.encode(public_bytes)),
-        y: None,
+    let public = signing_key.verifying_key().to_encoded_point(false);
+    let mut private_jwk = PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(&private_bytes[..])),
+        x: Some(
+            URL_SAFE_NO_PAD.encode(
+                public
+                    .x()
+                    .ok_or(CliError("offline fixture public key is invalid"))?,
+            ),
+        ),
+        y: Some(
+            URL_SAFE_NO_PAD.encode(
+                public
+                    .y()
+                    .ok_or(CliError("offline fixture public key is invalid"))?,
+            ),
+        ),
         n: None,
         e: None,
         p: None,
@@ -1600,11 +1692,16 @@ async fn offline_fixture_signer() -> Result<EvidenceSigner, CliError> {
         dq: None,
         qi: None,
     };
+    let key_id = private_jwk
+        .public()
+        .jkt()
+        .map_err(|_| CliError("offline fixture key identifier derivation failed"))?;
+    private_jwk.kid = Some(key_id.clone());
     let provider = Arc::new(
         LocalJwkSigner::new(private_jwk)
             .map_err(|_| CliError("offline fixture signer initialization failed"))?,
     );
-    EvidenceSigner::initialize(provider, KEY_ID)
+    EvidenceSigner::initialize(provider, &key_id)
         .await
         .map_err(|_| CliError("offline fixture signer self-test failed"))
 }
@@ -2664,6 +2761,8 @@ mod tests {
     fn local_shell_seams_are_hidden_from_adopter_help() {
         let command = Cli::command();
         for name in [
+            "bundle-check",
+            "bundle-evaluate",
             "prepare-local-verification-context",
             "verify-local-response",
             "local-audit-last-operation",
@@ -2820,6 +2919,7 @@ mod tests {
              expectedOutputs:\n\
              \x20 - concept: urn:example:concept\n\
              \x20   {form}\n\
+             revokedKeyIds: []\n\
              maximumAssertionLifetimeSeconds: 86400\n\
              clockSkewSeconds: 30\n",
             binding = "A".repeat(43),
@@ -3085,8 +3185,8 @@ mod tests {
     }
 
     fn test_audit_secret() -> AuditHashSecret {
-        AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
-            .expect("audit secret builds")
+        derived_audit_chain_secret(b"0123456789abcdef0123456789abcdef")
+            .expect("audit chain secret derives")
     }
 
     fn test_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
@@ -3311,7 +3411,7 @@ mod tests {
                 .expect("cases")
                 .len();
             assert_eq!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture).await,
+                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
                 Ok(FixtureSummary {
                     evaluated_cases: expected_cases,
                 }),
@@ -3352,7 +3452,7 @@ mod tests {
                     .as_str(),
             );
             assert!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture)
+                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true)
                     .await
                     .is_ok(),
                 "combined acceptance fixture failed"
@@ -3421,7 +3521,7 @@ mod tests {
                     .expect("cases")
                     .len();
                 assert_eq!(
-                    evaluate_fixture(&bundle, &kernel, &source_plans, fixture).await,
+                    evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
                     Ok(FixtureSummary {
                         evaluated_cases: expected_cases,
                     }),

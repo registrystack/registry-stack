@@ -129,7 +129,12 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Check { config } => {
             let config = MintConfig::load(&config)
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
-            let clients = MintService::check(&config)
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("the async runtime could not start: {error}"))?;
+            let clients = runtime
+                .block_on(MintService::check(&config))
                 .map_err(|error| format!("the configuration cannot be served: {error}"))?;
             tracing::info!(
                 target: "registry_mint",
@@ -156,7 +161,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::VerifyAudit { config } => {
             let config = MintConfig::load(&config)
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
-            let summary = MintAuditLog::verify(&config.audit)
+            let summary = MintAuditLog::verify(&config.audit, &config.secret_providers)
                 .map_err(|error| format!("the audit chain did not verify: {error}"))?;
             let sealed_sequence = match (summary.first_sequence, summary.last_sequence) {
                 (Some(first), Some(last)) => format!("{first}-{last}"),

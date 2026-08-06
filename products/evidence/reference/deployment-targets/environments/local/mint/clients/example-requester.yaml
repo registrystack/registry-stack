@@ -1,0 +1,6 @@
+clientId: example-requester-local
+principal: urn:example:principal:requester
+evidenceAudience: https://relying-party.local.example.org
+requesterTags: [example-requester]
+keys:
+  - {kty: OKP, crv: Ed25519, alg: EdDSA, kid: example-client-local-key, x: k61ZMTVQ46byu1FIuIPwG5kqnOl4NLZPPD9dB1zuov0}

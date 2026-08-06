@@ -778,6 +778,12 @@ pub struct TokenVerifierConfig {
     pub scope_separator: char,
     pub scope_map: Option<HashMap<String, Vec<String>>>,
     pub allowed_clients: Vec<String>,
+    /// Issuer key identifiers that must be rejected even when the key remains
+    /// published or cached. Empty preserves the normal JWKS selection policy.
+    pub denied_kids: HashSet<String>,
+    /// Maximum permitted interval between a token's `iat` and `exp` claims.
+    /// When set, both claims are required.
+    pub max_token_lifetime: Option<Duration>,
     pub leeway: Duration,
 }
 
@@ -807,6 +813,8 @@ impl TokenVerifierConfig {
             scope_separator: ' ',
             scope_map: None,
             allowed_clients: Vec::new(),
+            denied_kids: HashSet::new(),
+            max_token_lifetime: None,
             leeway: Duration::ZERO,
         }
     }
@@ -842,6 +850,18 @@ impl TokenVerifierConfig {
     #[must_use]
     pub fn with_allowed_clients(mut self, allowed_clients: Vec<String>) -> Self {
         self.allowed_clients = allowed_clients;
+        self
+    }
+
+    #[must_use]
+    pub fn with_denied_kids(mut self, denied_kids: HashSet<String>) -> Self {
+        self.denied_kids = denied_kids;
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_token_lifetime(mut self, max_token_lifetime: Option<Duration>) -> Self {
+        self.max_token_lifetime = max_token_lifetime;
         self
     }
 
@@ -962,6 +982,7 @@ impl TokenVerifier {
         }
         enforce_typ(header.typ.as_deref(), &self.allowed_access_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
+        self.enforce_kid_allowed(&kid)?;
         let key = self
             .fetcher
             .key_for_kid_matching_alg(&kid, header.alg)
@@ -978,6 +999,7 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        self.enforce_max_token_lifetime(&data.claims)?;
         let matched_client = if enforce_client {
             self.match_client(&data.claims)?
         } else {
@@ -998,6 +1020,7 @@ impl TokenVerifier {
         }
         enforce_optional_typ(header.typ.as_deref(), &self.allowed_id_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
+        self.enforce_kid_allowed(&kid)?;
         let key = self
             .fetcher
             .key_for_kid_matching_alg(&kid, header.alg)
@@ -1015,6 +1038,7 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        self.enforce_max_token_lifetime(&data.claims)?;
         self.enforce_present_azp(&data.claims)?;
         self.enforce_multi_audience_azp(&data.claims, &audiences)?;
         let matched_client = self.match_client(&data.claims).ok().flatten();
@@ -1056,6 +1080,7 @@ impl TokenVerifier {
         }
         enforce_optional_typ(header.typ.as_deref(), &self.allowed_userinfo_typ)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
+        self.enforce_kid_allowed(&kid)?;
         let key = self
             .fetcher
             .key_for_kid_matching_alg(&kid, header.alg)
@@ -1072,6 +1097,7 @@ impl TokenVerifier {
         }
         let data = decode::<Claims>(userinfo_jwt, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, userinfo_jwt))?;
+        self.enforce_max_token_lifetime(&data.claims)?;
         let issuer = data
             .claims
             .iss
@@ -1101,6 +1127,34 @@ impl TokenVerifier {
             return Err(OidcError::InvalidToken);
         }
         Ok(data.claims)
+    }
+
+    fn enforce_kid_allowed(&self, kid: &str) -> Result<(), OidcError> {
+        if self.config.denied_kids.contains(kid) {
+            // Treat an explicitly denied key like any other unavailable key so
+            // callers cannot distinguish incident-response policy from normal
+            // key rotation. This check deliberately precedes JWKS cache access.
+            return Err(OidcError::UnknownKid);
+        }
+        Ok(())
+    }
+
+    fn enforce_max_token_lifetime(&self, claims: &Claims) -> Result<(), OidcError> {
+        let Some(max_token_lifetime) = self.config.max_token_lifetime else {
+            return Ok(());
+        };
+        let iat = claims.iat.ok_or(OidcError::InvalidToken)?;
+        let exp = claims.exp.ok_or(OidcError::InvalidToken)?;
+        let lifetime_seconds = exp
+            .checked_sub(iat)
+            .filter(|seconds| *seconds > 0)
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .ok_or(OidcError::InvalidToken)?;
+        if Duration::from_secs(lifetime_seconds) > max_token_lifetime {
+            return Err(OidcError::InvalidToken);
+        }
+
+        Ok(())
     }
 
     fn id_token_audiences(&self) -> Vec<String> {
@@ -1523,7 +1577,15 @@ mod tests {
         assert_eq!(config.scope_claim, "permissions");
         assert_eq!(config.scope_separator, ',');
         assert_eq!(config.allowed_clients, vec!["client-a"]);
+        assert!(config.denied_kids.is_empty());
+        assert_eq!(config.max_token_lifetime, None);
         assert_eq!(config.leeway, Duration::from_secs(30));
+
+        let hardened = config
+            .with_denied_kids(HashSet::from(["retired-key".to_string()]))
+            .with_max_token_lifetime(Some(Duration::from_secs(300)));
+        assert!(hardened.denied_kids.contains("retired-key"));
+        assert_eq!(hardened.max_token_lifetime, Some(Duration::from_secs(300)));
     }
 
     fn rsa_jwk_with_modulus_bytes(kid: &str, modulus_bytes: usize) -> Jwk {
@@ -1607,6 +1669,8 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients,
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -1712,6 +1776,8 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -1737,6 +1803,8 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: vec!["client-a".to_string()],
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -1806,6 +1874,8 @@ mod tests {
                     vec!["social_protection_registry:rows".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -1849,6 +1919,8 @@ mod tests {
                     vec!["social_protection_registry:rows".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -1955,6 +2027,8 @@ mod tests {
                         vec!["social_protection_registry:rows".to_string()],
                     )])),
                     allowed_clients: Vec::new(),
+                    denied_kids: HashSet::new(),
+                    max_token_lifetime: None,
                     leeway: Duration::from_secs(60),
                 },
                 Arc::clone(&fetcher),
@@ -1986,6 +2060,8 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -2027,6 +2103,8 @@ mod tests {
                     vec!["registry:writer".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -2073,6 +2151,8 @@ mod tests {
                     vec!["registry:admin".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -2161,6 +2241,8 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
             },
             fetcher,
@@ -2195,6 +2277,121 @@ mod tests {
         assert!(matches!(
             verifier.verify(&token).await,
             Err(OidcError::MissingKid)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_rejects_denied_kid_before_jwks_lookup() {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["registry-api".to_string()],
+                vec![Algorithm::EdDSA],
+                vec!["JWT".to_string()],
+            )
+            .with_denied_kids(HashSet::from(["denied-kid".to_string()])),
+            fetcher,
+        );
+        let token = unsigned_token(
+            json!({ "alg": "EdDSA", "typ": "JWT", "kid": "denied-kid" }),
+            json!({ "iss": "https://issuer.example", "aud": "registry-api", "exp": 4_102_444_800_i64 }),
+        );
+
+        assert!(matches!(
+            verifier.verify(&token).await,
+            Err(OidcError::UnknownKid)
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_max_token_lifetime_rejects_missing_or_invalid_time_bounds() {
+        let secret = b"registry-platform-oidc-lifetime-secret";
+        let document = Arc::new(RwLock::new(jwks_with_oct_key("kid", secret)));
+        let jwks_uri = serve_jwks(document, Arc::new(AtomicUsize::new(0))).await;
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            jwks_test_config(),
+            FetchUrlPolicy::dev(),
+        ));
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["registry-api".to_string()],
+                vec![Algorithm::HS256],
+                vec!["at+jwt".to_string()],
+            )
+            .with_leeway(Duration::from_secs(60))
+            .with_max_token_lifetime(Some(Duration::from_secs(300))),
+            fetcher,
+        );
+        let valid_exp = 4_102_444_800_i64;
+
+        let mut valid_claims = test_claims(
+            Some("https://issuer.example"),
+            Some("registry-api"),
+            Some("subject-1"),
+        );
+        valid_claims.iat = Some(valid_exp - 300);
+        valid_claims.exp = Some(valid_exp);
+        let valid = signed_hs256_token("kid", valid_claims, secret, Some("at+jwt"));
+        verifier
+            .verify(&valid)
+            .await
+            .expect("token at the configured lifetime boundary verifies");
+
+        let mut missing_iat_claims = test_claims(
+            Some("https://issuer.example"),
+            Some("registry-api"),
+            Some("subject-1"),
+        );
+        missing_iat_claims.exp = Some(valid_exp);
+        let missing_iat = signed_hs256_token("kid", missing_iat_claims, secret, Some("at+jwt"));
+        assert!(matches!(
+            verifier.verify(&missing_iat).await,
+            Err(OidcError::InvalidToken)
+        ));
+
+        let mut missing_exp_claims = test_claims(
+            Some("https://issuer.example"),
+            Some("registry-api"),
+            Some("subject-1"),
+        );
+        missing_exp_claims.iat = Some(valid_exp - 300);
+        missing_exp_claims.exp = None;
+        let missing_exp = signed_hs256_token("kid", missing_exp_claims, secret, Some("at+jwt"));
+        assert!(matches!(
+            verifier.verify(&missing_exp).await,
+            Err(OidcError::InvalidToken)
+        ));
+
+        let mut non_positive_claims = test_claims(
+            Some("https://issuer.example"),
+            Some("registry-api"),
+            Some("subject-1"),
+        );
+        non_positive_claims.iat = Some(valid_exp);
+        non_positive_claims.exp = Some(valid_exp);
+        let non_positive = signed_hs256_token("kid", non_positive_claims, secret, Some("at+jwt"));
+        assert!(matches!(
+            verifier.verify(&non_positive).await,
+            Err(OidcError::InvalidToken)
+        ));
+
+        let mut overlong_claims = test_claims(
+            Some("https://issuer.example"),
+            Some("registry-api"),
+            Some("subject-1"),
+        );
+        overlong_claims.iat = Some(valid_exp - 301);
+        overlong_claims.exp = Some(valid_exp);
+        let overlong = signed_hs256_token("kid", overlong_claims, secret, Some("at+jwt"));
+        assert!(matches!(
+            verifier.verify(&overlong).await,
+            Err(OidcError::InvalidToken)
         ));
     }
 

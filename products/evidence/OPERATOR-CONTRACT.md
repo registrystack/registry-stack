@@ -25,8 +25,12 @@ The supported native deployment has:
   references;
 - optional credential-free source access only for `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
-- one active EdDSA reference signing key, flattened JWS JSON success responses,
-  and public key discovery at `/.well-known/evidence/jwks.json`;
+- one active ES256/P-256 service signing key whose `kid` is its RFC 7638
+  thumbprint, explicit published and revoked key sets, flattened JWS JSON
+  success responses, and public key discovery at
+  `/.well-known/evidence/jwks.json`;
+- a non-exportable, pinned-version Vault/OpenBao Transit key reached through a
+  workload-local Unix-socket proxy for production and evidence-grade serving;
 - keyed JSONL audit on storage whose durability the operator has explicitly
   established;
 - production HTTPS exposure, dependency timeouts, per-source concurrency
@@ -60,8 +64,9 @@ clients unbound tokens.
 The operator supplies one atomic bundle containing the approved YAML,
 preparation scripts, extraction scripts, derivation scripts, schemas, codelists,
 mappings, and fixtures. A separate closed `runtime.yaml` binds the bundle to
-one listener, bundle directory, secret root, audit destination, and local TLS
-trust files. The runtime file cannot override service identity, trust domain,
+one listener, bundle directory, secret root, audit destination, signer
+transport and pinned version, and local TLS trust files. The runtime file
+cannot override service identity, trust domain,
 authentication, authority, sources, request policy, scripts, disclosure, rate
 limits, signing policy, or audit fail-closed behavior. The two content hashes
 identify the exact loaded inputs but are not trust decisions. The operator
@@ -95,11 +100,12 @@ unsafe bundle safe.
 `evidencectl build` compiles an editable project and one explicit production
 target into a new candidate directory. It is a create-only authoring command,
 not an approval, promotion, deployment, key-generation, caller-registration,
-or service-start command. It runs the real `evidence` binary against private
-temporary validation material before atomically publishing a candidate with a
-copied `runtime.yaml` and one closed `bundle/`. The candidate contains no
-production private key, credential, token, local request, audit entry, or
-source response.
+or service-start command. It runs the real `evidence` binary through its
+bundle-only validation entry point and evaluates every referenced fixture
+without generating a temporary signing key or other validation secret. It then
+atomically publishes a candidate with a copied `runtime.yaml` and one closed
+`bundle/`. The candidate contains no production private key, credential, token,
+local request, audit entry, or source response.
 
 The operator reviews and transfers the exact candidate, records its bundle
 revision, and independently provisions the signing key, audit HMAC key,
@@ -145,6 +151,43 @@ Mint retains its public HTTPS issuer and JWKS URI: internal plain-HTTP service
 names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
 binaries, not generated containers or orchestrator manifests.
+
+### Git-managed environments
+
+Use one protected branch and complete named environment targets. The maintained
+reference layout is under
+[`reference/deployment-targets/`](reference/deployment-targets/):
+
+```text
+shared/
+  evidence-project/
+environments/
+  local/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+  staging/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+  production/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+```
+
+Shared Evidence questions, scripts, schemas, and fixtures are authored once.
+Each environment target is nevertheless complete. It contains its own service
+identity, issuer, endpoints, audiences, public keys, runtime paths, pinned
+Transit versions, and logical secret references. There are no overlays,
+environment branches, symlinks, runtime substitutions, or inherited defaults.
+Promote a reviewed source revision, then build separate staging and production
+candidates from their complete targets.
+
+Git contains public JWKs and non-secret Transit proxy and policy configuration.
+It never contains private JWKs, HMAC masters, provider tokens, auto-auth
+credentials, access tokens, live responses, or real identifiers. A target
+template uses conspicuous replacement values and is not deployable until those
+values and public JWKs have been reviewed and replaced.
 
 ## Discovery of available evidence
 
@@ -319,8 +362,8 @@ different audience yields a different identifier and the credential is not a
 general-purpose multi-verifier credential.
 
 A request may carry an optional `holderKey`, which is echoed into the `cnf`
-claim and is meaningful only for the SD-JWT VC format. Only a public OKP
-Ed25519 JWK is accepted; an unacceptable key is rejected as a malformed request
+claim and is meaningful only for the SD-JWT VC format. Only a public EC P-256
+JWK is accepted; an unacceptable key is rejected as a malformed request
 alongside the nonce check, before authentication, credential acquisition, and
 source access. The key never reaches authorization, selectors, Rhai, sources,
 audit, or the signed-JWS payload. Evidence issues no key-binding JWT, requires
@@ -334,16 +377,25 @@ SD-JWT VC request to unsigned output or to the signed default.
 
 ## Secrets and keys
 
-Source credentials and private signing material are supplied only through the
-supported secret-reference mechanism. They do not appear in YAML values,
-Rhai, command arguments, environment dumps, logs, audit, errors, snapshots,
-or generated contracts. Private key parsing uses an explicit algorithm
-allowlist. Missing or failed signing is fail-closed and never releases an
-unsigned success response.
+Source credentials and local-authoring private signing material are supplied
+only through the supported secret-reference mechanism. Production and
+evidence-grade private signing material remains inside Vault/OpenBao Transit
+and is reached through a workload-local Unix-socket proxy. Provider tokens and
+auto-auth credentials stay in the proxy boundary and never enter Evidence.
+Secret material does not appear in bundle YAML values, Rhai, command arguments,
+environment dumps, logs, audit, errors, snapshots, or generated contracts.
+Private JWK parsing uses an explicit ES256/P-256 allowlist. Missing or failed
+signing is fail-closed and never releases an unsigned success response.
 
-The operator configures one active signing key and retains each retired public
-key in the published JWKS for at least the maximum assertion validity plus
-allowed clock skew. The JWKS is discovery, not a trust anchor. Verifiers obtain
+The operator commits one active public JWK and zero or more additionally
+published public JWKs. Every key is exact ES256/P-256 public material and its
+43-character `kid` is derived as its RFC 7638 thumbprint, never configured
+separately. Active and published identifiers are disjoint from
+`revokedKeyIds`. The JWKS contains only the active and published keys. During
+planned rotation, retain the predecessor for at least the maximum assertion
+validity plus allowed clock skew. Emergency revocation removes it immediately,
+and denylisting takes precedence over a cached key set. The JWKS is discovery,
+not a trust anchor. Verifiers obtain
 the provider identity and JWKS location through governed configuration, pin
 that trust, allowlist the expected algorithm, and resolve `kid` only within the
 trusted key set. They never follow a message-provided remote key URL.
@@ -353,6 +405,34 @@ the exact payload. It does not prove the source fact is true, confer legal
 notarization, create a qualified electronic signature, or create a holder
 credential. Governance establishes the provider's authority to act for the
 named legal issuer.
+
+### Service signing-key rotation
+
+Planned rotation is an overlap, switch, drain sequence:
+
+1. Create the next non-exportable Transit key version and export only its
+   public key.
+2. Commit that exact JWK under `public-keys/<thumbprint>.jwk.json` and add its
+   path to `publishedPublicJwkFiles`.
+3. Deploy and restart every replica so all of them publish both keys.
+4. Keep the named Transit key's minimum signing version low enough for both
+   pinned application versions. The ordinary Vault/OpenBao ACL grants the
+   named key path, not a request-body key version.
+5. Move the next path to `activePublicJwkFile`, keep the predecessor in
+   `publishedPublicJwkFiles`, pin `signer.keyVersion` to the next version, and
+   deploy and restart.
+6. After `maximumAssertionValiditySeconds + verifierClockSkewSeconds`, remove
+   the predecessor public key and raise the Transit key's minimum signing
+   version, or otherwise disable the predecessor provider-side.
+
+Emergency rotation has no overlap guarantee. First disable provider signing
+authority for the compromised version. Then remove its public JWK, add its
+thumbprint to `revokedKeyIds`, activate a replacement or leave the service
+unavailable, and restart every issuer and verifier that consumes the key set.
+If the compromised key issued Mint access tokens, add that Mint identifier to
+Evidence authentication `revokedKeyIds` in the same incident rollout. This
+shortens availability when necessary and is intentionally stronger than the
+ordinary validity window.
 
 ## Source and selector controls
 
@@ -462,6 +542,12 @@ rotation, and chain verification for the selected durable sink. A deployment
 profile may require more reviewed metadata or retention, but it cannot silently
 weaken the native privacy contract.
 
+The audit master feeds two HKDF-separated subkeys: one for chain integrity and
+one for identifier pseudonyms. The subject-binding master is a separate secret
+reference and must resolve to different bytes. This separation prevents a
+pseudonym oracle or subject-binding use from becoming a chain-MAC oracle while
+keeping the operator ceremony to two independent masters.
+
 Exactly one Evidence process may write a given audit path. The sink takes an
 exclusive OS advisory lock on `<auditStorage.path>.lock` at startup; a second
 process pointed at the same path fails at startup with a sink-locked error
@@ -490,6 +576,25 @@ incident procedures, and on whatever cadence their audit retention policy
 requires; it is what proves sealed history was not tampered with.
 
 ## Audit chain rotation and rollback
+
+Audit-segment rotation below keeps one key and one continuous epoch. Rotating
+the audit master is different and always starts a new epoch:
+
+1. Drain traffic and stop the sole writer.
+2. Run `evidence verify-audit`; record the old chain head, bundle revision,
+   runtime revision, path, and `hashKeyVersion` in the change record.
+3. Archive the old runtime, audit-master secret under its governed secret
+   controls, every segment, lock-file disposition, and recorded head together.
+4. Generate a fresh independent audit master, increment `hashKeyVersion`, and
+   select a fresh empty `auditStorage.path`. Do not rename or reuse the old
+   active path.
+5. Run `evidence check` and the full handoff checks, start the new process, and
+   route traffic only after readiness succeeds.
+
+Never append a new audit master to an existing chain. Startup with replacement
+master bytes against existing segments fails closed. Old and new epochs verify
+independently with their archived runtime and master; neither is a continuation
+of the other.
 
 `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a
 total ceiling on the chain. When an append would push the active segment past
@@ -768,19 +873,26 @@ The reference file-secret provider reads only regular, non-symlink files below
 the configured `secretProviders.file.root`. The secret root is operator-only and
 each secret file must be owned by the service identity with mode `0600`.
 Audit and subject-binding secret files contain independently generated raw key
-bytes and must each be at least 32 bytes. They are not decoded as base64 by the
-file provider. Source credentials retain their provider-defined lexical form.
-Signing material is an Ed25519 private JWK whose `kid` exactly matches
-`signing.activeKeyId`; only the public current key and configured retired public
-keys appear at the JWKS endpoint. The audit JSONL path must be on storage whose
+bytes, must each be at least 32 bytes, must use distinct references, and must
+resolve to distinct bytes. They are not decoded as base64 by the file provider.
+Source credentials retain their provider-defined lexical form. Local signing
+material is an ES256 P-256 private JWK whose public projection exactly matches
+`signing.activePublicJwkFile`. Production and evidence-grade runtime
+configuration instead names a Transit Unix socket, mount, key name, pinned
+nonzero version, and bounded timeout. Transit metadata must report
+`ecdsa-p256`, signing enabled, `derived=false`, `exportable=false`, and
+`allow_plaintext_backup=false`, and its public key must exactly match the
+governed active public JWK. Only active and published non-revoked public keys
+appear at the JWKS endpoint. The audit JSONL path must be on storage whose
 append durability, permissions, capacity, backup, restore, retention, and keyed
 chain verification the operator owns.
 
 `evidence check` validates and compiles the complete bundle, and resolves and
-validates the mounted audit, subject-binding, and signing secret material
-exactly as startup does, without opening the audit chain. A deployment whose
-secret material startup would refuse, including a signing key whose `kid` does
-not match `signing.activeKeyId`, fails check. Source credentials are not
+validates the mounted audit, subject-binding, and signer exactly as startup
+does, including the asynchronous provider sign-and-verify test, without
+opening the audit chain. A deployment whose secret or provider material
+startup would refuse, including a signer whose public key differs from
+`signing.activePublicJwkFile`, fails check. Source credentials are not
 resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
@@ -813,9 +925,10 @@ evidence serve
 ```
 
 Startup confirms that the immutable bundle compiled, runtime ownership and
-every local path/trust binding validated, mounted secret files and signing
-material parsed, and the audit chain opened and verified. Readiness rechecks
-the subject-binding key, signing provider, pinned audit sink, and every source
+every local path/trust binding validated, mounted secret files and signer
+metadata parsed, the active public key matched, the signer completed its
+sign-and-verify test, and the audit chain opened and verified. Readiness
+rechecks the subject-binding key, signing provider, pinned audit sink, and every source
 credential. Basic, static Bearer, and static API-key credentials are checked
 locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
@@ -869,8 +982,10 @@ format under [response formats](#response-formats). No public or
 cross-requester catalog is supported.
 
 `GET /.well-known/jwt-vc-issuer` is unauthenticated discovery for the SD-JWT VC
-format. It publishes the configured provider identity and the same public key
-set as `/.well-known/evidence/jwks.json`, and nothing else. It is served
+format. It publishes the exact configured provider identity as `issuer` and
+that origin plus `/.well-known/evidence/jwks.json` as `jwks_uri`, and nothing
+else. It does not inline the key set. Outside local assurance, enabling the
+format requires `service.providerId` to be a stable HTTPS origin. Metadata is served
 whether or not any grant enables the credential format, it never reveals which
 requesters or requirements do, and it is discovery rather than a trust anchor
 on exactly the terms in [secrets and keys](#secrets-and-keys).
@@ -899,7 +1014,8 @@ One end-to-end measurement is kept in the repository so capacity planning
 starts from a number rather than an estimate. It drives the real router over
 real sockets, and every request in it runs token verification, rate limiting,
 Rhai request preparation, one outbound source call, Rhai extraction, evidence
-construction, Ed25519 signing, and both durable audit appends.
+construction, in-process ES256 signing, and both durable audit appends. It does
+not model the latency or availability of an external Transit deployment.
 
 | Measurement | Value |
 |---|---|
@@ -1009,9 +1125,11 @@ A relying party or operator re-verifies a stored signed response offline with
 `evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]`.
 The pinned JWKS file is the complete trust set and the policy document carries
 every expectation from independent trusted state: the retained request nonce,
-the expected assurance profile, role-bound subject bindings, and output contract,
-under
+the expected assurance profile, role-bound subject bindings, output contract,
+and explicit `revokedKeyIds` denylist under
 [`contracts/verification-policy.schema.yaml`](contracts/verification-policy.schema.yaml).
+A denied identifier fails before a key is selected even if the pinned file
+still contains it.
 The command performs no network access, reports cryptographic authenticity
 separately from current validity, and exits 0 only when both hold; an
 authentic but expired response exits 3. Every failed policy comparison reports

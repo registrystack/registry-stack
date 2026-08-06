@@ -1,0 +1,22 @@
+version: 1
+bundleDirectory: /srv/registry-evidence/production/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/registry-evidence/secrets}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 12
+  timeoutMilliseconds: 2000
+auditStorage: {path: /var/lib/registry-evidence/production/evidence.jsonl, maximumFileBytes: 1073741824}
+outboundTls: {systemRoots: true, trustProfiles: {}}

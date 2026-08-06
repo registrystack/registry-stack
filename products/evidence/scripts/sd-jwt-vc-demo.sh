@@ -7,8 +7,8 @@
 # outside products/evidence/.sd-jwt-vc-demo/.
 #
 # The steps are the ones a relying party actually performs: request the signed
-# default, request the same assertion as an SD-JWT VC, fetch the issuer's keys
-# from the published metadata route, and re-verify the stored credential
+# default, request the same assertion as an SD-JWT VC, fetch the issuer metadata
+# and governed keys, and re-verify the stored credential
 # offline against a policy built from the accepted transaction.
 set -euo pipefail
 
@@ -143,7 +143,7 @@ set -a
 . "$state_root/session.env"
 set +a
 
-printf '1. Fetch the issuer keys from the published metadata route (no token)\n'
+printf '1. Fetch the exact issuer metadata and its governed key set (no token)\n'
 run_curl "$(
   cat <<CURL_CONFIG
 url = "$base_url/.well-known/jwt-vc-issuer"
@@ -155,8 +155,24 @@ show-error
 fail-with-body
 CURL_CONFIG
 )"
-jq '{keys: .jwks.keys}' "$state_root/issuer-metadata.json" >"$state_root/trusted.jwks.json"
+expected_issuer='urn:example:fixture:provider:evidence'
+expected_jwks_uri="$expected_issuer/.well-known/evidence/jwks.json"
+jq -e --arg issuer "$expected_issuer" --arg jwks_uri "$expected_jwks_uri" \
+  '. == {issuer: $issuer, jwks_uri: $jwks_uri}' \
+  "$state_root/issuer-metadata.json" >/dev/null
 printf '   issuer: %s\n' "$(jq -r .issuer "$state_root/issuer-metadata.json")"
+printf '   jwks_uri: %s\n' "$(jq -r .jwks_uri "$state_root/issuer-metadata.json")"
+run_curl "$(
+  cat <<CURL_CONFIG
+url = "$base_url/.well-known/evidence/jwks.json"
+header = "Accept: application/json"
+output = "$state_root/trusted.jwks.json"
+write-out = "   HTTP %{http_code} %{content_type}\n"
+silent
+show-error
+fail-with-body
+CURL_CONFIG
+)"
 
 printf '2. Request the signed default (Accept: application/jose+json)\n'
 run_curl "$(

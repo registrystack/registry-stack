@@ -192,12 +192,13 @@ a bad token receives, with the reason recorded only in the deployment's own log.
 
 **Operator to signing key material, and consumer to the published key set.** Private signing
 material is core-owned and stays out of bundle values, Rhai, logs, audit, and errors
-(`V1-I23`). It reaches the process only through the secret-reference mechanism, resolved by a
-file provider that accepts only a regular, owner-only, non-symlink, single-hard-link file of
-the expected mode and size. Version 1 has exactly one secret provider, the file provider: there
-is no hardware-module option, so custody is a property of the host rather than of the runtime.
-The operator configures one active EdDSA key whose `kid` matches `signing.activeKeyId`, and
-retains each retired public key in the published JWKS for at least the maximum assertion
+(`V1-I23`). Local development resolves a private JWK through the file secret provider, which
+accepts only a regular, owner-only, non-symlink, single-hard-link file of the expected mode and
+size. Production and evidence-grade deployments instead sign through a workload-local
+Vault/OpenBao Transit proxy over a Unix socket, so the process receives no provider token or
+exportable private key.
+The operator governs one active ES256/P-256 public JWK whose `kid` is its RFC 7638
+thumbprint, and retains each previous public key in the published JWKS for at least the maximum assertion
 validity plus allowed clock skew. Signing is mandatory and fail-closed: a missing or failed
 signer returns a safe transient failure and never falls back to unsigned output (`V1-I22`).
 
@@ -333,11 +334,10 @@ threat model must weigh.
 These are the risks the design does *not* close:
 
 - Key custody is not certified by health checks: Readiness, liveness, and offline validation
-  confirm that key material parses and that its file ownership and mode are what the contract
-  requires. They do not certify production-grade custody. Evidence Gateway Version 1 has one secret
-  provider, the file provider, and no hardware-module option, so a deployment using
-  demo-generated or long-lived software keys can be reachable and internally consistent yet not
-  production-secure. Custody, rotation, and provider approval remain operator responsibilities.
+  confirm that governed key material and the selected signer agree. They do not independently
+  certify the Transit service, workload-local proxy, or operator policy. A local-assurance
+  deployment using demo-generated software keys can be reachable and internally consistent yet
+  not production-secure. Custody, rotation, and provider approval remain operator responsibilities.
 - The combined disclosure surface is a human review: The runtime validates one bundle at
   startup and refuses two simultaneously enabled requirements that declare the same disclosure
   family, but a declared family is a trusted operator attestation, not a semantic classifier.

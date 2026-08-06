@@ -22,8 +22,6 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
-use rand_core::OsRng;
 use registry_evidence::bundle::Bundle;
 use registry_evidence::config::{PreparationChannelPolicy, PreparationLimits, SourceConfig};
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
@@ -42,7 +40,6 @@ use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use zeroize::Zeroizing;
 
 /// The Relay-shaped protected read for one synthetic record: the templated
 /// `/v1/datasets/{dataset_id}/entities/{entity}/records/{id}` path with
@@ -236,26 +233,9 @@ fn make_fixture_bundle_read_only(path: &Path) {
 }
 
 async fn fixture_signer() -> EvidenceSigner {
-    const KEY_ID: &str = "relay-composition-evidence-key";
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public_bytes = signing_key.verifying_key().to_bytes();
-    let private = PrivateJwk {
-        kty: "OKP".to_owned(),
-        kid: Some(KEY_ID.to_owned()),
-        alg: Some("EdDSA".to_owned()),
-        crv: Some("Ed25519".to_owned()),
-        d: Some(URL_SAFE_NO_PAD.encode(private_bytes.as_slice())),
-        x: Some(URL_SAFE_NO_PAD.encode(public_bytes)),
-        y: None,
-        n: None,
-        e: None,
-        p: None,
-        q: None,
-        dp: None,
-        dq: None,
-        qi: None,
-    };
+    const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("fixture key parses");
     let provider = Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
     EvidenceSigner::initialize(provider, KEY_ID)
         .await

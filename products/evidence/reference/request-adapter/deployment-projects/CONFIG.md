@@ -7,7 +7,8 @@ Evidence starts from two closed, startup-only inputs:
 1. `bundle/evidence.yaml` and its referenced bundle files define governed
    evidence semantics and source authority.
 2. `runtime.yaml` binds that bundle to one process, filesystem, listener, audit
-   destination, secret mount, and local TLS trust files.
+   destination, secret mount, signer transport and pinned version, and local
+   TLS trust files.
 
 Both inputs are reviewed, validated completely before readiness, mounted
 read-only, and immutable for the process lifetime. Evidence computes stable
@@ -31,7 +32,8 @@ Most adopters should need to edit only:
 - one derivation script per requirement;
 - the closed parameter and fact schemas beside those scripts;
 - sanitized fixtures;
-- process-local paths and listener settings in `runtime.yaml`; and
+- process-local paths, listener settings, and signer bindings in `runtime.yaml`;
+  and
 - secret and private-CA files outside the project.
 
 Changing Rust, defining a source-product plugin, or adding a product-specific
@@ -122,16 +124,18 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.requesterTagsClaim` | yes | Claim containing the requester tags matched against an authority profile. |
 | `authentication.evidenceAudienceClaim` | yes | Claim containing the exact evidence audience. The public request cannot choose another audience. |
 | `authentication.grantIdClaim`, `authentication.grantAuthorityClaim` | yes | Claims used only when an `authenticated-grant` origin is selected. The authority must equal the matched authority-profile id. |
+| `authentication.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
+| `authentication.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
 | `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
 
 ### Audit, subject binding, rates, and signing
 
 | Section | Required fields and rule |
 |---|---|
-| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced file contains at least 32 raw secret bytes. The runtime file owns storage location. |
-| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced file contains at least 32 raw secret bytes. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
+| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
+| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
-| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: EdDSA`, `activeKeyId`, file-only `activeKeyRef`, `retiredPublicJwkFiles`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Missing signing material fails readiness; there is no unsigned fallback. |
+| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
 
 ### Selector profiles
@@ -354,8 +358,8 @@ header with `typ: at+jwt`; `application/at+jwt` requires that exact alternative.
 A sanitized shape for the reference projects is:
 
 ```json
-{"alg":"EdDSA","kid":"deployment-key-id","typ":"at+jwt"}
-{"iss":"https://identity.example","aud":"registry-evidence","exp":2000000000,"sub":"service-client","evidence_tags":["approved-requester"],"evidence_audience":"https://consumer.example"}
+{"alg":"ES256","kid":"issuer-owned-key-id","typ":"at+jwt"}
+{"iss":"https://identity.example","aud":"registry-evidence","iat":1999999700,"exp":2000000000,"sub":"service-client","evidence_tags":["approved-requester"],"evidence_audience":"https://consumer.example"}
 ```
 
 These are decoded shapes, not usable tokens. The configured issuer, audience,
@@ -500,9 +504,9 @@ allowed_outputs: [REGION-NORTH, REGION-SOUTH]
 
 Each document has 1 through 4,096 unique bounded codes. A mapping output must
 appear in `allowed_outputs`. Referencing configuration repeats the exact
-artifact version and startup rejects a mismatch. Retired public keys live only
-under `public-keys/` as public JWK JSON files; active private key material is a
-secret and never a bundle artifact.
+artifact version and startup rejects a mismatch. Active and temporarily
+published service keys live under `public-keys/` as exact public P-256 JWK JSON
+files. Private signing material is never a bundle artifact.
 
 ## Runtime configuration
 
@@ -523,6 +527,13 @@ listener:
 secretProviders:
   file:
     root: /run/secrets/registry-evidence
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -546,6 +557,7 @@ outboundTls:
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
 | `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, owner-only files below this root are accepted. |
+| `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
 | `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the closed bound fails audit writes and therefore fails closed. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
@@ -580,8 +592,8 @@ credentials to another authority.
 - Prefer literal map/array traversal. Dots in provider keys are literal. If a
   deployment must parameterize a nested path, pass a bounded array of literal
   segments and implement a bounded same-file helper.
-- Keep one governed bundle per evidence policy revision and one runtime file per
-  environment. Never use environment variables or command arguments to
+- Keep one complete governed bundle and runtime target per environment. Never
+  use overlays, symlinks, environment variables, or command arguments to
   override governed fields.
 - Run every fixture before accepting either input and again before deploying a
   changed bundle, runtime file, script, schema, codelist, CA file, or secret
@@ -591,7 +603,10 @@ credentials to another authority.
 
 Treat an editable project like reviewed source code. `evidencectl new` creates
 empty `selectors/`, `sources/`, `adapters/`, `schemas/`, `questions/`,
-`derivations/`, and `fixtures/` directories. It creates no deployment input.
+`derivations/`, and `fixtures/` directories plus owner-only disposable local
+P-256 Evidence signing material and distinct audit and subject-binding masters.
+It creates no deployment input. `evidencectl dev` creates session-scoped P-256
+Mint, caller, and holder keys automatically.
 While authoring, use only synthetic responses and selectors. Add the smallest
 provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
 then add exact positive, legitimate-false, boundary, unresolved,
@@ -605,36 +620,41 @@ block, stable concept identifiers, and exactly one project-relative
 invents requirement, framework, Evidence Type, concept, or disclosure-family
 URIs.
 
-Create one explicit `deployment-targets/production/` directory containing
-`governance.yaml` and `runtime.yaml`. `governance.yaml` is closed, has
-`version: 1` and `assuranceProfile: production`, and supplies the existing
-bundle-shaped service, issuer, authentication, audit, subject-binding,
-rate-limit, signing, response-format, and authority-profile values. It may not
-contain selectors, sources, or requirements, which the compiler obtains from
-the editable project. It permits logical `secret:file/<name>` references only,
-never secret values or absolute secret paths. `runtime.yaml` is the ordinary
-closed runtime document; the build copies its bytes unchanged and the target
-host remains authoritative for path, owner, permission, secret, and private-CA
-validation.
+Create explicit `deployment-targets/<environment>/` directories containing
+complete `governance.yaml` and `runtime.yaml` documents plus every governed
+public JWK referenced by governance under `public-keys/`. `governance.yaml` is
+closed, has `version: 1`, and supplies the existing bundle-shaped service,
+issuer, authentication, audit, subject-binding, rate-limit, signing,
+response-format, and authority-profile values. It may not contain selectors,
+sources, or requirements, which the compiler obtains from the editable
+project. It permits logical `secret:file/<name>` references only, never secret
+values or absolute secret paths. `runtime.yaml` is the ordinary closed runtime
+document; the build copies its bytes unchanged and the target host remains
+authoritative for path, owner, permission, secret, private-CA, and Transit
+validation. Staging and production are separate complete targets built from
+the same reviewed source revision. They are not overlays and do not inherit
+from each other. Ready-to-copy layouts and Transit proxy-policy examples are
+under [`../../deployment-targets/`](../../deployment-targets/).
 
 Run the create-only compiler with explicit target and output paths:
 
 ```sh
 evidencectl build \
   --project <editable-project> \
-  --target <editable-project>/deployment-targets/production \
+  --target <editable-project>/deployment-targets/<environment> \
   --output <new-candidate-directory>
 ```
 
 The compiler follows no authored symlink, accepts no reference outside allowed
 project directories, rejects unreferenced generated artifacts, and removes only
 its own failed private staging. It requires authenticated HTTPS sources,
-complete authority, resolved review markers, complete governance, and complete
-fixtures. It validates the unpublished bundle with private temporary secrets
-through the real `evidence` binary, runs every fixture, and publishes nothing
-on failure. It makes no identity-provider, source-data, or Mint call; opens no
-listener; and writes no production audit event. The editable project and
-`.evidence` local state remain unchanged.
+complete authority, resolved review markers, complete governance, governed
+public keys, and complete fixtures. It delegates its internal bundle-only check
+and every fixture to the real `evidence` binary without generating a temporary
+signing key or other validation secret, and publishes nothing on failure. It
+makes no identity-provider, source-data, or Mint call; opens no listener; and
+writes no production audit event. The editable project and `.evidence` local
+state remain unchanged.
 
 The candidate contains `runtime.yaml` and `bundle/`, including only referenced
 adapters, derivations, schemas, codelists, fixtures, and public keys. Given

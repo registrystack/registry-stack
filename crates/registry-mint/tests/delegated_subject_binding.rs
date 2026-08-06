@@ -26,18 +26,18 @@ use registry_mint::{
     server::{build_app, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS, ON_BEHALF_OF_CLAIM,
 };
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use serde_json::{json, Value};
 
 /// These four must agree with `demo/evidence-bundle/evidence.yaml`. If they ever
 /// drift, this test is the thing that says so.
-const ISSUER: &str = "https://localhost:8443";
+const ISSUER: &str = "http://127.0.0.1:8443";
 const EVIDENCE_AUDIENCE: &str = "evidence.demo.invalid";
 const ACTOR_CLAIM: &str = "evidence_actor";
 const REQUIREMENT: &str = "urn:example:demo:requirement:residence-region:v1";
 const PURPOSE: &str = "demo-routing";
-const ASSERTION_AUDIENCE: &str = "https://localhost:8443/token";
+const ASSERTION_AUDIENCE: &str = "http://127.0.0.1:8443/token";
 
 const AGENT: &str = "urn:example:demo:agent:appointment-scheduler";
 
@@ -59,6 +59,23 @@ fn key_pair(seed: u8) -> (PrivateJwk, Value, Value) {
     (private, public, private_document)
 }
 
+fn service_key_pair(seed: u8) -> (Value, Value) {
+    let scalar = [seed; 32];
+    let signing = p256::ecdsa::SigningKey::from_slice(&scalar).expect("valid P-256 scalar");
+    let encoded = signing.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("uncompressed x"));
+    let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("uncompressed y"));
+    let bare = PublicJwk::parse(
+        &json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y}).to_string(),
+    )
+    .expect("public JWK parses");
+    let kid = bare.jkt().expect("thumbprint computes");
+    (
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y}),
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y, "d":URL_SAFE_NO_PAD.encode(scalar)}),
+    )
+}
+
 struct Deployment {
     _directory: tempfile::TempDir,
     service: Arc<MintService>,
@@ -72,8 +89,18 @@ async fn deployment() -> Deployment {
     let root = directory.path();
     fs::create_dir(root.join("secrets")).expect("create secrets directory");
     fs::create_dir(root.join("clients")).expect("create clients directory");
+    fs::create_dir(root.join("public-keys")).expect("create public key directory");
 
-    let (_, _, signing_document) = key_pair(9);
+    let (signing_public, signing_document) = service_key_pair(9);
+    let public_file = format!(
+        "{}.jwk.json",
+        signing_public["kid"].as_str().expect("service key id")
+    );
+    fs::write(
+        root.join("public-keys").join(&public_file),
+        signing_public.to_string(),
+    )
+    .expect("write governed public key");
     let signing_path = root.join("secrets/signing.jwk");
     fs::write(&signing_path, signing_document.to_string()).expect("write signing key");
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
@@ -111,16 +138,23 @@ async fn deployment() -> Deployment {
         format!(
             r#"
 version: 1
+validationMode: supervised-local-development
 issuer: {ISSUER}
-listener: {{address: 127.0.0.1, port: 0}}
+listener: {{address: 127.0.0.1, port: 8443}}
 signing:
-  algorithm: EdDSA
-  activeKeyId: key-9
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{public_file}
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file: {{root: {}}}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [{EVIDENCE_AUDIENCE}]
@@ -137,7 +171,8 @@ clientAssertion:
   algorithms: [EdDSA]
 clients:
   directory: clients
-"#
+"#,
+            root.join("secrets").display()
         ),
     )
     .expect("write config");
@@ -225,7 +260,7 @@ fn evidence_authenticator(jwks: &Value) -> Authenticator {
     let verifier_config = TokenVerifierConfig::access_token_profile(
         ISSUER.to_owned(),
         vec![EVIDENCE_AUDIENCE.to_owned()],
-        vec![jsonwebtoken::Algorithm::EdDSA],
+        vec![jsonwebtoken::Algorithm::ES256],
         vec!["at+jwt".to_owned()],
     );
     Authenticator::new(

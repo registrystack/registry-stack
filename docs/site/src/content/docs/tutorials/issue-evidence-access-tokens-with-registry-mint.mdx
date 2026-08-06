@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - operator
@@ -36,21 +36,25 @@ caller, and released `mint` and `evidencectl` binaries. Mint serves one active p
 Its client-assertion replay cache is memory-only and clears when the process restarts. Do not make a
 high-availability or durable replay-protection claim for this deployment shape.
 
-Generate Mint's signing key independently from Evidence Gateway's signing key. Keep it owner-only outside
-the Evidence Gateway candidate.
+Create Mint's signing key independently from Evidence Gateway's signing key. Strict deployments keep
+the non-exportable private key in Vault or OpenBao Transit and expose only a workload-local Unix
+socket to Mint.
 
 ## Author Mint separately
 
-Create a Mint directory beside, not inside, the Evidence Gateway candidate:
+Create a complete Mint target beside the Evidence Gateway target in the deployment repository:
 
 ```text
-mint/
+environments/production/mint/
   mint.yaml
   clients/
     <client>.yaml
-  secrets/
-    <mint-signing-private-jwk>
+  public-keys/
+    <mint-thumbprint>.jwk.json
 ```
+
+Git contains the public service JWK and public client registrations. Keep the Mint audit HMAC key,
+provider token, auto-auth credentials, client private keys, and issued tokens outside Git.
 
 Set Mint's `issuer` to its public HTTPS identity. Configure its listener on a private address and
 let operator-controlled routing or split DNS resolve the public HTTPS issuer inside the private
@@ -59,12 +63,21 @@ network. Do not replace Evidence Gateway's issuer or JWKS URI with an internal p
 Register each client with its public JWK, reviewed principal, requester tags, evidence audience,
 and optional grant. Mint writes authority from this registration, never from the client's request.
 
+Set `validationMode: strict`. Configure `signing.activePublicJwkFile` with the exact public P-256
+JWK, and configure `signer.kind: transit` with the workload-local socket, Transit mount, key name,
+pinned nonzero version, and bounded timeout. Follow
+[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+to create the key, proxy identity, socket, and least-privilege policy. Mint receives no provider
+token or private signing key.
+
 ## Check the two configurations
 
-Validate Mint without opening a listener:
+Start the workload-local Mint proxy, then validate Mint without opening a listener. `mint check`
+performs the provider metadata and sign-and-verify self-test, so a strict configuration fails when
+the proxy is unavailable:
 
 ```sh
-mint check --config "<mint-directory>/mint.yaml"
+mint check --config "<deployment-repository>/environments/production/mint/mint.yaml"
 ```
 
 Then compare the completed Evidence Gateway candidate with Mint. This check is read-only and does not copy
@@ -73,7 +86,7 @@ or modify either project:
 ```sh
 evidencectl doctor \
   --project "<candidate>" \
-  --mint-config "<mint-directory>/mint.yaml"
+  --mint-config "<deployment-repository>/environments/production/mint/mint.yaml"
 ```
 
 The paired check compares issuer, JWKS URI, audiences, admitted algorithm and token type, plus the
@@ -86,8 +99,10 @@ register a client.
 Start Mint behind operator-controlled TLS, keeping the Mint listener private:
 
 ```sh
-mint serve --config "<mint-directory>/mint.yaml"
+mint serve --config "<deployment-repository>/environments/production/mint/mint.yaml"
 ```
+
+Route token requests only after Mint's `/ready` endpoint reports ready.
 
 Use a registered caller's own private JWK to request one access token over the public HTTPS
 identity. The token is written to standard output only. Store it in an owner-only local file for
@@ -122,5 +137,6 @@ rm -f "<owner-only-token-file>"
 ## Next
 
 - [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
 - [Configure Registry Mint](../../configure/mint/)
 - [Registry Mint reference](../../reference/mint/)

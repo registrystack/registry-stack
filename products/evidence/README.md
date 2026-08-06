@@ -17,8 +17,9 @@ signed response without the runtime. A process may host multiple evidence
 definitions only when they share that trust domain. Governed configuration, Rhai
 scripts, schemas, codelists, and fixtures are one trusted, immutable,
 startup-only evidence bundle. A separate closed runtime file owns only
-process-local listener, filesystem, audit-storage, secret-mount, and TLS-trust
-bindings and cannot override governed semantics.
+process-local listener, filesystem, audit-storage, secret-mount, signer
+transport and pinned version, and TLS-trust bindings. It cannot override
+governed semantics or the governed active public key.
 
 The following contracts define and verify the implemented Version 1 boundary:
 
@@ -89,10 +90,12 @@ by the same source-product and domain-neutrality checks as the runtime.
 
 `evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
 OpenAPI document exactly as `source.openapi.yaml` and creates empty
-`questions/`, `derivations/`, and `fixtures/` directories. `--generate-keys`
-adds owner-only disposable local key material that is not bound to a runtime.
-The command does not select an API operation, invent a question, fixture,
-policy, production target, Mint configuration, or deployable bundle.
+`questions/`, `derivations/`, and `fixtures/` directories. It always creates
+owner-only disposable local P-256 Evidence signing material plus distinct audit
+and subject-binding masters. The command does not select an API operation,
+invent a question, fixture, policy, production target, Mint configuration, or
+deployable bundle. `evidencectl dev` additionally creates session-scoped P-256
+Mint, caller, and holder keys so the local happy path needs no key ceremony.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema
@@ -120,27 +123,31 @@ that metadata, stable concept identifiers, and one project-relative fixture.
 It never invents requirement, framework, Evidence Type, concept, or
 disclosure-family URIs.
 
-The explicit production target contains only `governance.yaml` and
-`runtime.yaml`. The former contributes the bundle-owned service,
-authentication, audit, signing, rate-limit, response-format, and authority
-values; it may not override compiler-owned selectors, sources, or requirements.
-The latter is copied unchanged and binds the completed candidate to one target
-host. Secret values and absolute secret paths do not belong in either authored
-governance input.
+Each explicit `deployment-targets/<environment>/` target contains a complete
+`governance.yaml`, `runtime.yaml`, and every governed public JWK referenced by
+that governance document under `public-keys/`. Governance contributes the
+bundle-owned service, authentication, audit, signing, rate-limit,
+response-format, and authority values; it may not override compiler-owned
+selectors, sources, or requirements. Runtime is copied unchanged and binds the
+completed candidate to one target host. Targets are independent complete
+inputs, not overlays. Secret values and absolute secret paths do not belong in
+authored governance input.
 
-`evidencectl build --project <editable-project> --target <production-target>
+`evidencectl build --project <editable-project> --target <environment-target>
 --output <new-candidate-directory>` is create-only. It reads regular files
-without following symlinks, compiles one closed bundle, uses private temporary
-validation material, runs `evidence check` and every referenced fixture through
-the real `evidence` binary, and publishes atomically only on success. It makes
-no network request, opens no listener, writes no production audit event, and
-never copies local `.evidence` state, credentials, tokens, responses, or
-private keys into the candidate.
+without following symlinks, compiles one closed bundle, and delegates its
+internal bundle-only check and every referenced fixture to the real `evidence`
+binary. No temporary signing key or other validation secret is generated. The
+candidate is published atomically only on success. The build makes no network
+request, opens no listener, writes no production audit event, and never copies
+local `.evidence` state, credentials, tokens, responses, or private keys into
+the candidate.
 
 The candidate contains `runtime.yaml` and `bundle/`; the bundle may contain
 adapters, derivations, schemas, codelists, fixtures, and public keys where
-referenced. The operator independently provisions the signing, audit,
-subject-binding, and source secrets, then runs one grouped handoff:
+referenced. The operator independently provisions the Transit key and
+workload-local proxy, plus audit, subject-binding, and source secrets, then
+runs one grouped handoff:
 
 ```sh
 evidencectl doctor --project '<candidate>'
@@ -305,7 +312,7 @@ cannot process JWS. It is never later-verifiable evidence and never a fallback
 when signing fails.
 
 The SD-JWT VC format is a second encoding of the one stateless assertion the
-signed default carries, under the frozen profile in
+signed default carries, under the frozen RFC 9901 and SD-JWT VC draft 18 profile in
 [the SD-JWT VC profile](contracts/sd-jwt-vc-profile.yaml). It is not a
 credential lifecycle: no issuance session, no holder binding ceremony, no
 status list, no revocation, and no presentation or key-binding verification. The

@@ -6,13 +6,13 @@
       "properties": {
         "alg": {
           "enum": [
-            "EdDSA"
+            "ES256"
           ],
           "type": "string"
         },
         "crv": {
           "enum": [
-            "Ed25519"
+            "P-256"
           ],
           "type": "string"
         },
@@ -23,11 +23,15 @@
         },
         "kty": {
           "enum": [
-            "OKP"
+            "EC"
           ],
           "type": "string"
         },
         "x": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "y": {
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
         }
@@ -35,7 +39,8 @@
       "required": [
         "kty",
         "crv",
-        "x"
+        "x",
+        "y"
       ],
       "type": "object"
     },

@@ -117,9 +117,10 @@ Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-eviden
 - Readiness does not prove a source returns data: neither startup nor readiness sends an
   evidence-data request or probes a source data endpoint. A ready service is one whose credentials,
   trust bindings, signing provider, and audit sink resolved, not one whose sources are answering.
-- One secret provider: the reference file provider is the only one. There is no hardware
-  security module or PKCS#11 option, so signing-key custody is a property of the host, its disk,
-  its backups, and its operators.
+- Two deliberately narrow signing modes: local assurance uses a file-backed private JWK;
+  production and evidence-grade assurance use Vault/OpenBao Transit through a workload-local
+  Unix-socket proxy. There is no PKCS#11 adapter, cloud-KMS abstraction, provider registry, or
+  plugin system.
 
 ## Registry Mint limits
 

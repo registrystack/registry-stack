@@ -114,7 +114,7 @@ Reuse selected shared primitives without inheriting another product model:
 | Crate | Version-one use |
 |---|---|
 | `registry-platform-audit` | Keyed chain integrity, scoped pseudonymization, JSONL sink, and chain verification |
-| `registry-platform-crypto` | `SigningProvider`, protected JWK handling, signing, and public JWK publication |
+| `registry-platform-crypto` | `SigningProvider`, protected JWK handling, ES256 signing, RFC 7638 identifiers, and workload-local Transit signing |
 | `registry-platform-oidc` | Strict access-token and JWKS verification for the reference authentication profile |
 | `registry-platform-httpsec` | Security response headers where the existing contract fits |
 | `registry-platform-httputil` | Bounded source-response body reads |
@@ -127,8 +127,10 @@ Evidence must not depend on `registry-notary*`, `registry-platform-pdp`,
 The governed bundle and closed operator runtime file are trusted and
 startup-only. Use typed YAML and explicit secret references. Runtime
 configuration binds only process-local listener, filesystem, audit-storage,
-secret-mount, and TLS-trust paths; it is not an override layer. Do not expand
-private key material or source credentials into either parsed YAML document.
+secret-mount, signer transport and pinned version, and TLS-trust paths; it is
+not an override layer and cannot change the governed active public key. Do not
+expand private key material or source credentials into either parsed YAML
+document.
 
 ## Reference implementation defaults
 
@@ -145,7 +147,7 @@ must use them:
 | Source | One fixed HTTP JSON data request using field projection and denied redirects |
 | Source authentication | Secret-referenced Basic, static Bearer, static API-key header, or OAuth 2.0 client credentials; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin |
 | Audit | `registry-platform-audit` JSONL sink on explicitly durable storage, fail-closed |
-| Signing | Flattened JWS JSON with one active EdDSA key and a public JWKS endpoint |
+| Signing | Flattened JWS JSON with one active ES256/P-256 key, RFC 7638 `kid`, explicit published and revoked sets, and a public JWKS endpoint |
 | Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it |
 | Evidence storage | None |
 | Runtime mutation | None |
@@ -219,10 +221,11 @@ fixtures/
 ```
 
 The separate `runtime.yaml` binds the bundle directory, listener, secret root,
-audit destination, and logical TLS trust profiles to local paths. The bundle
-and runtime hashes identify the exact inputs loaded by the process. They do not
-prove trust. Deployment controls establish trust by mounting both reviewed
-inputs read-only and starting a new process for a new revision.
+audit destination, signer transport and pinned key version, and logical TLS
+trust profiles to local paths. The bundle and runtime hashes identify the exact
+inputs loaded by the process. They do not prove trust. Deployment controls
+establish trust by mounting both reviewed inputs read-only and starting a new
+process for a new revision.
 
 Bundle checking must validate:
 
@@ -582,9 +585,12 @@ reaches logs, audit, errors, or disk.
 - Write the pseudonymized access-attempt audit durably before source access and
   the disclosure-release audit durably after final response serialization and
   before release.
-- Resolve production signing keys, create the exact flattened JWS JSON
-  response, publish public JWKS, and define key rollover and retired-key
-  availability.
+- Bind local assurance to a local P-256 private JWK and production or
+  evidence-grade assurance to a pinned-version Vault/OpenBao Transit signer
+  through a workload-local Unix socket with no provider token in Evidence.
+- Create the exact ES256 flattened JWS JSON response, derive the RFC 7638
+  `kid`, publish active and planned-rotation keys, apply revoked identifiers
+  before key selection, and define planned and emergency rotation windows.
 - Bind enabled response formats into the immutable bundle and allowed formats
   into every authority grant; signed JWS remains mandatory and default.
 - Run every acceptance definition through these boundaries.
@@ -693,12 +699,12 @@ follow-up issue.
 | Source minimization | Rust makes exactly one evidence-data request with fixed transport authority, fixed or closed selector-bound path, fixed non-secret headers, bounded reviewed query/body rendering, and an explicit client-side response projection. It declares `source-derived`, `field-projected`, or `record-transformed` honestly, enforces response, time, redirect, pagination, TLS trust, concurrency, and ambient-proxy denial, and never persists a source response. Basic, static Bearer, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
 | Privacy and audit | Access-attempt audit is durably accepted before source access. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records the closed response-protection mode and a signing key only for JWS, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
-| Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable current and retired public keys. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
+| Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
 | Failure and operations | Stable safe errors, reviewed existence-disclosure semantics, public collapse of `no_match` and `ambiguous` by default, request limits, per-principal and failed-selector-attempt rate controls, authenticated requester-scoped discovery, health, readiness, dependency timeouts, and graceful shutdown work without exposing protected data. Discovery performs no source access and exposes no source plan, scripts, credentials, internal authority metadata, selector values, codelist values, or unrelated definitions. Readiness fails for missing bundle, selector binding, credential, audit, or signing dependencies required by the configured deployment. |
 | Multiple definitions | All four definitions run concurrently in one process and one trust domain without script state, limits, identifiers, subjects, source responses, audit context, or results crossing definition boundaries. Unsafe combined disclosure and mutually distrustful issuer configurations are rejected. |
 | Verification evidence | Focused invariant tests, all package tests, contract drift checks, dependency policy, formatting, package and workspace check, Clippy with warnings denied, and workspace tests pass. Security-sensitive behavior has a named threat, enforcement point, and negative test. |
 | Local compatibility smoke | After deterministic mocks pass, the read-only DHIS2 and OpenCRVS smoke tests are attempted when local credentials and approved demo selectors are available. Unavailability may be recorded as inconclusive; authenticated schema drift or excess disclosure is investigated and cannot be ignored. No credential or live-data artifact enters the repository or test output. |
-| Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, and complete DHIS2/OpenCRVS-shaped projects without editing Rust. An operator can independently bind the immutable governed bundle to listener, secret, audit, and private-CA paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, signing rollover, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
+| Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, and complete DHIS2/OpenCRVS-shaped projects without editing Rust. An operator can independently bind the immutable governed bundle to listener, secret, audit, private-CA, and Transit proxy paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, planned and emergency signing rotation, audit epochs, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
 | Production build | An editable project remains local until its author supplies exact governance metadata, stable concept identifiers, and one synthetic fixture per question. `evidencectl build` consumes one explicit closed production target, follows no symlink or outside-project reference, creates no secret or runtime residue, delegates bundle validation and every fixture to the real `evidence` binary, atomically publishes only a complete candidate, and reproduces identical bundle bytes and revision from identical inputs. It creates no keys, callers, approvals, deployments, or network side effects. |
 | Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor`, `evidencectl fixtures run`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit events pass `evidence verify-audit`. |
 | Optional Mint pairing | External HTTPS OIDC builds without Mint. When Mint is selected, `mint check`, the paired read-only doctor check, registered-client token acquisition, and Evidence acceptance pass. Issuer, JWKS URI, audience, algorithm, token type, and all configured claim-name mismatches fail generically without keys, tokens, credentials, selectors, or source values in output. Mint remains a single process with a memory-only replay cache. |

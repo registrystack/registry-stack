@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -47,24 +47,28 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 
 ## Keys and custody
 
-- Evidence Gateway: configure exactly one active signing key, an Ed25519 private JWK whose `kid` matches
-  `signing.activeKeyId` in the governed bundle. `evidence check` refuses a deployment whose signing
-  material startup would refuse, including a `kid` mismatch.
-- Evidence Gateway: supply every private key and source credential through a `secret:file/<name>`
-  reference resolved under `secretProviders.file.root`, never as a YAML value, a command argument,
-  or an environment dump. The file provider reads only regular, non-symlink files below that root,
-  each owned by the service identity at mode `0600`, and it checks owner, mode, no-follow, link
-  count, and open-file identity. Keep the secret root itself operator-only.
+- Evidence Gateway: configure one active ES256 P-256 public JWK with a derived RFC 7638 thumbprint
+  `kid`, plus only the public overlap keys needed for current assertions. `evidence check` refuses a
+  revoked, malformed, or mismatched active signer.
+- Evidence Gateway: supply local-assurance private JWKs, HMAC keys, and source credentials through a
+  `secret:file/<name>` reference resolved under `secretProviders.file.root`, never as a YAML value,
+  a command argument, or an environment dump. The file provider reads only regular, non-symlink
+  files below that root, each owned by the service identity at mode `0600`, and checks owner, mode,
+  no-follow, link count, and open-file identity. Keep the secret root itself operator-only. Strict
+  deployments receive only a Transit Unix socket for signing.
 - Evidence Gateway: give the audit hash key and the subject-binding key independently generated raw key
   material of at least 32 bytes each. The file provider does not base64-decode them, so write raw
   bytes rather than an encoded string.
-- Evidence Gateway: rotate a signing key by starting a new revision with the new active key and keeping
-  the retired public JWK published for at least the maximum assertion validity plus the allowed
-  clock skew. Do not remove a public key a stored assertion still needs.
-- Evidence Gateway Version 1 has exactly one secret provider, the file provider. There is no
-  hardware-security-module or PKCS#11 option, so key custody is a property of the host, its disk,
-  its backups, and its operators. Treat that as a deployment control you own, not one the runtime
-  provides. See [Move Evidence Gateway to production signing](../../tutorials/move-evidence-to-production-signing/).
+- Evidence Gateway: rotate a signing key by first publishing its next public JWK, then changing the
+  active public JWK and pinned Transit key version, while retaining the old public key for at least
+  maximum assertion validity plus allowed clock skew. Do not remove a public key a stored assertion
+  still needs. Follow
+  [Rotate Evidence Gateway signing keys](../../tutorials/rotate-evidence-signing-keys/).
+- Evidence Gateway: use a workload-local Vault or OpenBao Transit proxy over a Unix socket in
+  production and evidence-grade deployments. Require P-256, signing enabled, non-exportable key
+  material, plaintext backup disabled, and an exact governed public-key match. Local JWK signing is
+  for local assurance only. See
+  [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
 - Relay: confirm every env-backed `fingerprint.name` referenced in config exists in the runtime
   environment, and that no raw key, fingerprint, private JWK, or full environment dump reaches a
   log line; see the production checklist in the
@@ -72,9 +76,9 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 - Relay: keep the OIDC algorithm allowlist to what the deployment actually uses. `HS*` and `none`
   are absent from the configuration type entirely; the default allowlist is RS256, ES256, and
   EdDSA. Evidence Gateway's own access-token allowlist is configured per bundle from the same three, while
-  its assertion signing is EdDSA only and not configurable.
-- Registry Mint, when the deployment runs it: hold Registry Mint's private JWK in an owner-only,
-  non-symlink file, and treat `clients.directory` as key material rather than configuration. Any
+  its assertion signing is fixed ES256.
+- Registry Mint, when the deployment runs it: use the same active, published, revoked P-256 service
+  key posture and Transit boundary as Evidence Gateway. Treat `clients.directory` as key material. Any
   file written there registers a client and the authority Registry Mint will assert for it, and a
   running process re-reads the directory on `SIGHUP` without a restart.
 - Registry Mint: generate its audit HMAC key independently from its signing key, give it at least
@@ -250,11 +254,12 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 
 - Know your private disclosure channel before you need it: see
   [Report a vulnerability](../report-a-vulnerability/).
-- Rotate a compromised Evidence Gateway signing key by deploying a new revision with a new active key,
-  keeping the compromised public key published only as long as stored assertions must still
-  verify, then removing it. Evidence Gateway defines no revocation, status list, or presentation-time
-  check, so a released assertion stays verifiable until its declared validity expires. Plan the
-  incident response around short validity windows rather than around recall.
+- Rotate a compromised Evidence Gateway signing key by disabling provider signing authority
+  immediately, removing its public JWK, adding its thumbprint to `signing.revokedKeyIds`, and
+  activating a checked replacement or leaving the service unavailable. Restart every affected
+  issuer and consumer.
+  Evidence Gateway defines no credential-status or lifecycle feature, so plan incident response
+  around short assertion validity windows and service-key denylisting rather than recall.
 - Rotate a compromised source credential or Registry Mint client key at the credential's own
   source and restart the affected process. Neither service reloads secret material in place.
 - Preserve the audit trail for post-incident review. For Evidence Gateway, take the whole audit directory

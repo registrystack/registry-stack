@@ -10,13 +10,15 @@ authentication:
   issuer: https://identity.gov.example
   audiences: [registry-evidence]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.gov.example/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit:
   format: keyed-jsonl
   hashSecretRef: secret:file/audit-hmac-key
@@ -31,12 +33,12 @@ rateLimits:
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: evidence-signing-2026-01
-  activeKeyRef: secret:file/signing-ed25519-private-jwk
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 responseFormats: [signed-jws]
 
@@ -227,7 +229,7 @@ requirements:
     referenceFrameworks: [urn:gov:example:framework:age-of-majority:v1]
     evidenceType: urn:gov:example:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/adult-status.rhai
       selectorInputs:
@@ -258,7 +260,7 @@ requirements:
         selectorProfiles: [civil-person-reference-v1]
     referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
     evidenceType: urn:gov:example:evidence-type:registered-parent-relationship:v1
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/registered-parent-relationship.rhai
       selectorInputs:
@@ -293,7 +295,7 @@ requirements:
         selectorProfiles: [opencrvs-tracking-id-v1]
     referenceFrameworks: [urn:gov:example:framework:civil-registration-parent-record:v1]
     evidenceType: urn:gov:example:evidence-type:registered-parent-references:v1
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/registered-parent-references.rhai
       selectorInputs:

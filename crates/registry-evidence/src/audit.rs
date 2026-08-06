@@ -16,11 +16,13 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
     verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
-    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, DurableSegmentedAuditLog,
+    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, AuditProfile,
+    DurableSegmentedAuditLog,
 };
 use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::config::AssuranceProfile;
 
@@ -376,9 +378,9 @@ impl EvidenceAuditLog {
             ))
             .into());
         }
-        let secret = AuditHashSecret::new(master_secret)?;
-        let chain_hasher = AuditChainHasher::keyed(secret.clone());
-        let key_hasher = AuditKeyHasher::Keyed(secret);
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
+        let chain_hasher = profile.chain_hasher();
+        let key_hasher = profile.key_hasher();
         let sink = Arc::new(
             DurableSegmentedAuditLog::initialize(path, maximum_file_bytes, chain_hasher).await?,
         );
@@ -676,18 +678,18 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
 /// exact verified envelopes in that one replay.
 pub fn verified_last_local_audit_operation(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
     verified_last_local_audit_operation_with_bounds(
         path,
-        master_secret,
+        chain_secret,
         LocalAuditInspectionBounds::DEFAULT,
     )
 }
 
 fn verified_last_local_audit_operation_with_bounds(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
     bounds: LocalAuditInspectionBounds,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
     if bounds.maximum_segments == 0
@@ -697,7 +699,7 @@ fn verified_last_local_audit_operation_with_bounds(
         return Err(EvidenceAuditError::Configuration);
     }
 
-    let hasher = AuditChainHasher::keyed(master_secret.clone());
+    let hasher = AuditChainHasher::keyed(chain_secret.clone());
     let mut collector = LocalAuditCollector::new(bounds);
     visit_stopped_segmented_audit_chain(
         path,
@@ -713,10 +715,10 @@ fn verified_last_local_audit_operation_with_bounds(
 /// Verify every retained segment, including the active segment when no writer is running.
 pub fn verify_audit_chain(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
 ) -> Result<AuditChainSummary, EvidenceAuditError> {
     let summary =
-        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(master_secret.clone()))
+        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(chain_secret.clone()))
             .map_err(map_platform_audit_error)?;
     Ok(AuditChainSummary {
         segments: summary.segments,
@@ -843,7 +845,7 @@ mod tests {
         release.decision = AuditDecision::Released;
         release.disclosed_concepts = Some(vec!["urn:example:fixture:concept:boolean-a".to_owned()]);
         release.evidence_id = Some("urn:example:fixture:evidence:001".to_owned());
-        release.signing_key_id = Some("fixture-key-2026-01".to_owned());
+        release.signing_key_id = Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
         release.duration_milliseconds = 12;
         release
             .validate_phase_fields()
@@ -865,7 +867,8 @@ mod tests {
             serde_json::to_value(&unsigned_release).expect("unsigned release event serializes"),
             fixture["unsigned_disclosure_release"]
         );
-        unsigned_release.signing_key_id = Some("fixture-key-2026-01".to_owned());
+        unsigned_release.signing_key_id =
+            Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
         assert!(matches!(
             unsigned_release.validate_phase_fields(),
             Err(EvidenceAuditError::InvalidEvent)
@@ -1179,6 +1182,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacement_master_cannot_append_to_an_existing_evidence_epoch() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let original = b"original-evidence-audit-master-32-bytes";
+        let replacement = b"replacement-audit-master-is-also-32-bytes";
+        {
+            let log = EvidenceAuditLog::initialize(&path, 64 * 1024, original.to_vec(), 1)
+                .await
+                .expect("original audit epoch initializes");
+            log.append(event(&log)).await.expect("event appends");
+        }
+
+        assert!(verify_audit_chain(&path, &chain_secret(replacement)).is_err());
+        assert!(
+            EvidenceAuditLog::initialize(&path, 64 * 1024, replacement.to_vec(), 1)
+                .await
+                .is_err(),
+            "replacement master bytes cannot append under the existing epoch configuration"
+        );
+        assert!(verify_audit_chain(&path, &chain_secret(original)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn archived_and_fresh_evidence_audit_epochs_verify_independently() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let archived_path = directory.path().join("audit-epoch-1.jsonl");
+        let fresh_path = directory.path().join("audit-epoch-2.jsonl");
+        let archived_master = b"archived-evidence-audit-master-32-bytes";
+        let fresh_master = b"fresh-evidence-audit-master-value-32-bytes";
+
+        {
+            let archived = EvidenceAuditLog::initialize(
+                &archived_path,
+                64 * 1024,
+                archived_master.to_vec(),
+                1,
+            )
+            .await
+            .expect("archived epoch initializes");
+            archived
+                .append(event(&archived))
+                .await
+                .expect("archived event appends");
+        }
+        {
+            let fresh =
+                EvidenceAuditLog::initialize(&fresh_path, 64 * 1024, fresh_master.to_vec(), 2)
+                    .await
+                    .expect("fresh epoch initializes");
+            fresh
+                .append(event(&fresh))
+                .await
+                .expect("fresh event appends");
+        }
+
+        assert!(verify_audit_chain(&archived_path, &chain_secret(archived_master)).is_ok());
+        assert!(verify_audit_chain(&fresh_path, &chain_secret(fresh_master)).is_ok());
+        assert!(verify_audit_chain(&archived_path, &chain_secret(fresh_master)).is_err());
+        assert!(verify_audit_chain(&fresh_path, &chain_secret(archived_master)).is_err());
+    }
+
+    #[tokio::test]
     async fn same_length_external_mutation_fails_readiness_and_future_appends() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
@@ -1282,9 +1347,17 @@ mod tests {
         );
     }
 
+    fn chain_secret(master: &[u8]) -> AuditHashSecret {
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master.to_vec()))
+            .expect("audit profile builds");
+        match profile.chain_hasher() {
+            AuditChainHasher::Keyed(secret) => secret,
+            AuditChainHasher::UnkeyedDevOnly => panic!("production profile must be keyed"),
+        }
+    }
+
     fn audit_secret() -> AuditHashSecret {
-        AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
-            .expect("audit secret builds")
+        chain_secret(b"0123456789abcdef0123456789abcdef")
     }
 
     fn local_access(log: &EvidenceAuditLog, operation: &str) -> EvidenceAuditEvent {

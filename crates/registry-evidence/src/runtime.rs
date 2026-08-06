@@ -6,12 +6,14 @@ use std::{
     path::Path,
     str,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
-use registry_platform_audit::{AuditError, AuditHashSecret};
-use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
+use registry_platform_audit::{AuditError, AuditProfile};
+use registry_platform_crypto::{
+    LocalJwkSigner, PrivateJwk, SigningProvider, TransitSigner, TransitSignerConfig,
+};
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
 
@@ -25,7 +27,8 @@ use crate::{
     bundle::{Bundle, DeploymentInputs},
     config::{
         AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind, ResponseFormat,
-        RuntimeConfig, SelectorField, SelectorInput, SubjectCardinality, ValueOrigin,
+        RuntimeConfig, RuntimeSignerConfig, SelectorField, SelectorInput, SubjectCardinality,
+        ValueOrigin,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection},
@@ -45,11 +48,12 @@ use crate::{
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
         ResolvedAuthorization, ResolvedSelectorValue,
     },
-    signing::{jwks_document, EvidenceSigner},
+    signing::EvidenceSigner,
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
+use zeroize::Zeroizing;
 
 const MAX_OPERATION_BYTES: usize = 128;
 
@@ -168,15 +172,21 @@ pub struct ValidatedVerificationMaterial {
 /// owns them.
 pub async fn validate_secret_material(
     bundle: &Bundle,
+    runtime: &RuntimeConfig,
     secrets: &SecretResolver,
 ) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
     let audit_secret = secrets
         .resolve(bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
-    AuditHashSecret::new(audit_secret.expose_secret().to_vec())
-        .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
+    AuditProfile::production_from_secret_bytes(Zeroizing::new(
+        audit_secret.expose_secret().to_vec(),
+    ))
+    .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
 
-    let verification = validate_verification_material(bundle, secrets).await?;
+    let verification = validate_verification_material(bundle, &runtime.signer, secrets).await?;
+    if audit_secret.expose_secret() == verification.subject_binding_secret.expose_secret() {
+        return Err(RuntimeInitializationError::Secrets);
+    }
 
     Ok(ValidatedSecretMaterial {
         audit_secret,
@@ -191,6 +201,7 @@ pub async fn validate_secret_material(
 /// source credentials and the audit boundary.
 pub async fn validate_verification_material(
     bundle: &Bundle,
+    signer_config: &RuntimeSignerConfig,
     secrets: &SecretResolver,
 ) -> Result<ValidatedVerificationMaterial, RuntimeInitializationError> {
     let subject_binding_secret = secrets
@@ -203,32 +214,52 @@ pub async fn validate_verification_material(
     )
     .map_err(|_| RuntimeInitializationError::Secrets)?;
 
-    let signing_secret = secrets
-        .resolve(bundle.config.signing.active_key_ref.as_str())
-        .map_err(|_| RuntimeInitializationError::Signing)?;
-    let signing_json = str::from_utf8(signing_secret.expose_secret())
-        .map_err(|_| RuntimeInitializationError::Signing)?;
-    let private_jwk =
-        PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
-    let provider = Arc::new(
-        LocalJwkSigner::new(private_jwk).map_err(|_| RuntimeInitializationError::Signing)?,
-    );
-    let signer = EvidenceSigner::initialize(provider, &bundle.config.signing.active_key_id)
+    let provider: Arc<dyn SigningProvider> = match signer_config {
+        RuntimeSignerConfig::LocalJwk { private_key_ref } => {
+            let signing_secret = secrets
+                .resolve(private_key_ref.as_str())
+                .map_err(|_| RuntimeInitializationError::Signing)?;
+            let signing_json = str::from_utf8(signing_secret.expose_secret())
+                .map_err(|_| RuntimeInitializationError::Signing)?;
+            let private_jwk =
+                PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
+            Arc::new(
+                LocalJwkSigner::new(private_jwk)
+                    .map_err(|_| RuntimeInitializationError::Signing)?,
+            )
+        }
+        RuntimeSignerConfig::Transit {
+            unix_socket_path,
+            mount,
+            key_name,
+            key_version,
+            timeout_milliseconds,
+        } => {
+            let config = TransitSignerConfig::new(
+                unix_socket_path,
+                mount,
+                key_name,
+                *key_version,
+                bundle.active_public_jwk.clone(),
+                Duration::from_millis(*timeout_milliseconds),
+            )
+            .map_err(|_| RuntimeInitializationError::Signing)?;
+            Arc::new(
+                TransitSigner::initialize(config)
+                    .await
+                    .map_err(|_| RuntimeInitializationError::Signing)?,
+            )
+        }
+    };
+    let signer = EvidenceSigner::initialize_governed(provider, &bundle.active_public_jwk)
         .await
         .map_err(|_| RuntimeInitializationError::Signing)?;
-    let retired = bundle
-        .retired_public_jwks
-        .values()
-        .map(|value| {
-            serde_json::to_string(value)
-                .map_err(|_| RuntimeInitializationError::Signing)
-                .and_then(|json| {
-                    PublicJwk::parse(&json).map_err(|_| RuntimeInitializationError::Signing)
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let jwks = jwks_document(signer.public_jwk(), retired)
-        .map_err(|_| RuntimeInitializationError::Signing)?;
+    let jwks = crate::signing::jwks_document_with_revocations(
+        signer.public_jwk(),
+        bundle.published_public_jwks.values().cloned(),
+        bundle.config.signing.revoked_key_ids.clone(),
+    )
+    .map_err(|_| RuntimeInitializationError::Signing)?;
 
     Ok(ValidatedVerificationMaterial {
         subject_binding_secret,
@@ -370,7 +401,7 @@ impl EvidenceRuntime {
             .map_err(|_| RuntimeInitializationError::Secrets)?,
         );
 
-        let material = validate_secret_material(&bundle, &secrets).await?;
+        let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
         let audit = EvidenceAuditLog::initialize(
             &runtime_config.audit_storage.path,
             runtime_config.audit_storage.maximum_file_bytes,
@@ -486,7 +517,7 @@ impl EvidenceRuntime {
             &self.bundle().config.service.trust_domain,
         )
         .is_err()
-            || !self.signer.ready()
+            || !self.signer.ensure_ready().await
             || !self.audit.ready().await
         {
             return false;
@@ -1150,8 +1181,9 @@ impl EvidenceRuntime {
                 )
             }
             ResponseFormat::UnsignedJson => {
-                // No signing operation runs, but the ordinary signing
-                // dependency must still be ready for the deployment.
+                // Unsigned output is never a recovery or fallback path for a
+                // failed signer. Signed requests still attempt the provider,
+                // which lets a recovered Transit dependency return to Ready.
                 if !self.signer.ready() {
                     self.append_failure(
                         &material,

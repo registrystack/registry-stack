@@ -9,7 +9,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -59,7 +59,7 @@ Inspect each surface for its own purpose:
 | Surface | Use | Boundary |
 | --- | --- | --- |
 | `GET /healthz` (Relay) or `GET /health` (Evidence Gateway, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist and its audit writer is healthy |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist, its audit writer is healthy, and its signing provider is available |
 | `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence Gateway and Registry Mint have no equivalent admin posture endpoint |
 | Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway and `mint verify-audit` for Mint |
 | `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
@@ -180,7 +180,7 @@ Relay's startup codes include:
 
 Evidence Gateway and Registry Mint have no equivalent stable startup-rejection codes: `evidence check` and
 `mint check` fail with a descriptive message instead, covered in
-[Rotate Evidence Gateway signing keys](../../../tutorials/move-evidence-to-production-signing/#validate-and-coordinate-consumer-approval)
+[Rotate Evidence Gateway signing keys](../../../tutorials/rotate-evidence-signing-keys/)
 and [Configure Registry Mint](../../../configure/mint/#troubleshooting).
 
 Correct the signer, binding, closed file set, product validation, or sequence.

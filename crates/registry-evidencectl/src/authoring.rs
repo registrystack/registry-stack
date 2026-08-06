@@ -37,7 +37,8 @@ const ACCESS_DIRECTORY: &str = "access";
 const ACCESS_POLICIES_DIRECTORY: &str = "policies";
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
-const SIGNING_KEY_ID: &str = "local-signing-key-1";
+const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
+const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
@@ -108,7 +109,11 @@ pub(crate) struct CompiledProductionProject {
 }
 
 enum CompileProfile {
-    Local(LocalServicePorts),
+    Local {
+        ports: LocalServicePorts,
+        active_public_jwk_file: String,
+        active_public_jwk: Vec<u8>,
+    },
     Production(Value),
 }
 
@@ -176,7 +181,15 @@ pub(crate) fn compile_local_project_with_ports(
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
     let inputs = read_inputs(&project_root, true)?;
-    let plan = compile_plan(inputs, CompileProfile::Local(ports))?;
+    let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
+    let plan = compile_plan(
+        inputs,
+        CompileProfile::Local {
+            ports,
+            active_public_jwk_file,
+            active_public_jwk,
+        },
+    )?;
     let compilation = write_plan(&project_root, staging_root, &plan, ports)?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
@@ -190,22 +203,31 @@ pub(crate) fn compile_local_project_with_ports(
     Ok(compilation)
 }
 
-/// Compile one complete production bundle into an unpublished private staging
-/// directory. The caller owns temporary runtime validation and publication.
+/// Compile one complete non-local deployment bundle into an unpublished private
+/// staging directory. The caller owns temporary runtime validation and publication.
 pub(crate) fn compile_production_project(
     project_root: &Path,
+    deployment_target_root: &Path,
     staging_root: &Path,
     governed_bundle: Value,
 ) -> Result<CompiledProductionProject> {
-    validate_plain_path_components(project_root, "production project")?;
+    validate_plain_path_components(project_root, "authoring project")?;
     let project_root = validate_project_root(project_root)?;
+    validate_plain_path_components(deployment_target_root, "deployment target")?;
+    let deployment_target_root = fs::canonicalize(deployment_target_root)
+        .context("resolving deployment target directory")?;
     validate_private_empty_staging(staging_root)?;
     let inputs = read_inputs(&project_root, false)?;
     validate_production_inputs(&project_root, &inputs)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
     reject_local_production_values(&plan.bundle)?;
     validate_production_sources(&plan.bundle)?;
-    let bundle_path = write_bundle(&project_root, staging_root, &plan)?;
+    let bundle_path = write_bundle(
+        &project_root,
+        Some(&deployment_target_root),
+        staging_root,
+        &plan,
+    )?;
     let fixture_paths = plan
         .questions
         .iter()
@@ -391,6 +413,7 @@ struct CompilePlan {
     questions: Vec<QuestionPlan>,
     access_policies: Vec<AuthoredAccessPolicy>,
     bundle: Value,
+    local_public_jwk: Option<(String, Vec<u8>)>,
 }
 
 struct QuestionPlan {
@@ -601,6 +624,26 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
     })
 }
 
+fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
+    let path = project_root
+        .join(SECRETS_DIRECTORY)
+        .join(LOCAL_SIGNING_PUBLIC_FILENAME);
+    let bytes = read_regular_file(&path, MAX_SOURCE_ARTIFACT_BYTES, "local signing public JWK")?;
+    let text = std::str::from_utf8(&bytes).context("local signing public JWK must be UTF-8")?;
+    let public = registry_platform_crypto::PublicJwk::parse(text)
+        .context("local signing public JWK must be a valid ES256 P-256 public JWK")?;
+    if public.algorithm().ok() != Some(registry_platform_crypto::SigningAlgorithm::Es256) {
+        bail!("local signing public JWK must use ES256 P-256");
+    }
+    let kid = public
+        .jkt()
+        .context("computing the local signing JWK thumbprint")?;
+    if public.kid.as_deref() != Some(kid.as_str()) {
+        bail!("local signing public JWK kid must equal its RFC 7638 thumbprint");
+    }
+    Ok((format!("public-keys/{kid}.jwk.json"), bytes))
+}
+
 fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
     for authored in &inputs.questions {
         let question = &authored.question;
@@ -623,11 +666,11 @@ fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()
             )
         {
             if uri.starts_with(LOCAL_URI_PREFIX) {
-                bail!("production governance must not use disposable local identifiers");
+                bail!("deployment governance must not use disposable local identifiers");
             }
         }
         let fixture = project_relative_fixture(project_root, &governance.fixtures)?;
-        let _ = read_regular_file(&fixture, MAX_SOURCE_ARTIFACT_BYTES, "production fixture")?;
+        let _ = read_regular_file(&fixture, MAX_SOURCE_ARTIFACT_BYTES, "deployment fixture")?;
     }
     Ok(())
 }
@@ -657,7 +700,7 @@ fn project_relative_fixture(project_root: &Path, value: &str) -> Result<PathBuf>
 fn reject_local_production_values(bundle: &Value) -> Result<()> {
     match bundle {
         Value::String(value) if value.starts_with(LOCAL_URI_PREFIX) => {
-            bail!("the production bundle contains a disposable local identifier")
+            bail!("the deployment bundle contains a disposable local identifier")
         }
         Value::Array(values) => {
             for value in values {
@@ -678,7 +721,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
     let sources = bundle
         .get("sources")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("the production bundle has no sources object"))?;
+        .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
     for source in sources.values() {
         let https = source
             .get("baseUrl")
@@ -1289,15 +1332,31 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
         )?);
     }
     let access_policies = inputs.access_policies;
-    let bundle = match profile {
-        CompileProfile::Local(ports) => render_local_bundle(&questions, &access_policies, ports),
-        CompileProfile::Production(governance) => render_production_bundle(&questions, governance)?,
-    };
-    Ok(CompilePlan {
-        questions,
-        access_policies,
-        bundle,
-    })
+    match profile {
+        CompileProfile::Local {
+            ports,
+            active_public_jwk_file,
+            active_public_jwk,
+        } => {
+            let bundle =
+                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file);
+            Ok(CompilePlan {
+                questions,
+                access_policies,
+                bundle,
+                local_public_jwk: Some((active_public_jwk_file, active_public_jwk)),
+            })
+        }
+        CompileProfile::Production(governance) => {
+            let bundle = render_production_bundle(&questions, governance)?;
+            Ok(CompilePlan {
+                questions,
+                access_policies,
+                bundle,
+                local_public_jwk: None,
+            })
+        }
+    }
 }
 
 fn compile_question_plan(
@@ -2666,6 +2725,7 @@ fn render_local_bundle(
     questions: &[QuestionPlan],
     access_policies: &[AuthoredAccessPolicy],
     ports: LocalServicePorts,
+    active_public_jwk_file: &str,
 ) -> Value {
     let mint_origin = ports.mint_origin();
     let selector_profiles = questions
@@ -2748,13 +2808,15 @@ fn render_local_bundle(
             "issuer": mint_origin,
             "audiences": [LOCAL_AUDIENCE],
             "tokenTypes": ["at+jwt"],
-            "algorithms": ["EdDSA"],
+            "algorithms": ["ES256"],
             "jwksUri": format!("{mint_origin}/.well-known/jwks.json"),
             "principalClaim": "sub",
             "requesterTagsClaim": "evidence_tags",
             "evidenceAudienceClaim": "evidence_audience",
             "grantIdClaim": "evidence_grant_id",
             "grantAuthorityClaim": "evidence_authority",
+            "maximumTokenLifetimeSeconds": 300,
+            "revokedKeyIds": [],
         },
         "audit": {
             "format": "keyed-jsonl",
@@ -2773,10 +2835,10 @@ fn render_local_bundle(
         },
         "signing": {
             "format": "flattened-jws-json",
-            "algorithm": "EdDSA",
-            "activeKeyId": SIGNING_KEY_ID,
-            "activeKeyRef": "secret:file/signing-ed25519-private-jwk",
-            "retiredPublicJwkFiles": [],
+            "algorithm": "ES256",
+            "activePublicJwkFile": active_public_jwk_file,
+            "publishedPublicJwkFiles": [],
+            "revokedKeyIds": [],
             "jwksPath": "/.well-known/evidence/jwks.json",
             "maximumAssertionValiditySeconds": 300,
             "verifierClockSkewSeconds": 30,
@@ -2792,7 +2854,7 @@ fn render_local_bundle(
 fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
     let object = governance
         .as_object_mut()
-        .ok_or_else(|| anyhow!("production governance must be an object"))?;
+        .ok_or_else(|| anyhow!("deployment governance must be an object"))?;
     object.insert(
         "selectorProfiles".to_owned(),
         Value::Object(Map::from_iter(
@@ -2831,7 +2893,7 @@ fn write_plan(
     plan: &CompilePlan,
     ports: LocalServicePorts,
 ) -> Result<CompiledProject> {
-    write_bundle(project_root, staging_root, plan)?;
+    write_bundle(project_root, None, staging_root, plan)?;
     create_private_directory(&staging_root.join("audit"))?;
 
     let canonical_staging = fs::canonicalize(staging_root)
@@ -2852,6 +2914,10 @@ fn write_plan(
             "shutdownGraceMilliseconds": 30000,
         },
         "secretProviders": {"file": {"root": secret_root.to_string_lossy()}},
+        "signer": {
+            "kind": "local-jwk",
+            "privateKeyRef": format!("secret:file/{LOCAL_SIGNING_PRIVATE_FILENAME}"),
+        },
         "auditStorage": {
             "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
             "maximumFileBytes": 1073741824_u64,
@@ -2908,7 +2974,12 @@ fn write_plan(
     })
 }
 
-fn write_bundle(project_root: &Path, staging_root: &Path, plan: &CompilePlan) -> Result<PathBuf> {
+fn write_bundle(
+    project_root: &Path,
+    deployment_target_root: Option<&Path>,
+    staging_root: &Path,
+    plan: &CompilePlan,
+) -> Result<PathBuf> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
     for directory in ["adapters", "derivations", "schemas"] {
@@ -2922,9 +2993,16 @@ fn write_bundle(project_root: &Path, staging_root: &Path, plan: &CompilePlan) ->
     {
         create_private_directory(&bundle.join("codelists"))?;
     }
+    if plan.local_public_jwk.is_some() {
+        create_private_directory(&bundle.join("public-keys"))?;
+    }
     write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
     let mut written_sources = BTreeSet::new();
     let mut written_paths = BTreeSet::from(["evidence.yaml".to_owned()]);
+    if let Some((path, bytes)) = &plan.local_public_jwk {
+        write_private_file(&bundle.join(path), bytes)?;
+        written_paths.insert(path.clone());
+    }
     for question in &plan.questions {
         if written_sources.insert(question.source_artifact_id.clone()) {
             if let Some(artifacts) = &question.authored_source_artifacts {
@@ -3008,7 +3086,7 @@ fn write_bundle(project_root: &Path, staging_root: &Path, plan: &CompilePlan) ->
                     project_root,
                     path,
                     MAX_SOURCE_ARTIFACT_BYTES,
-                    "production fixture",
+                    "deployment fixture",
                 )?;
                 ensure_generated_parent(&bundle, path)?;
                 write_private_file(&bundle.join(path), &bytes)?;
@@ -3017,11 +3095,20 @@ fn write_bundle(project_root: &Path, staging_root: &Path, plan: &CompilePlan) ->
     }
     for path in auxiliary_artifacts(&plan.bundle)? {
         if written_paths.insert(path.clone()) {
+            let artifact_root = if path.starts_with("public-keys/") {
+                deployment_target_root.unwrap_or(project_root)
+            } else {
+                project_root
+            };
             let bytes = read_project_artifact(
-                project_root,
+                artifact_root,
                 &path,
                 MAX_SOURCE_ARTIFACT_BYTES,
-                "referenced bundle artifact",
+                if path.starts_with("public-keys/") {
+                    "governed deployment public key"
+                } else {
+                    "referenced bundle artifact"
+                },
             )?;
             ensure_generated_parent(&bundle, &path)?;
             write_private_file(&bundle.join(path), &bytes)?;
@@ -3077,14 +3164,21 @@ fn auxiliary_artifacts(bundle: &Value) -> Result<Vec<String>> {
             }
         }
     }
+    if let Some(active) = bundle
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+    {
+        validate_auxiliary_artifact(active, "public-keys", ".jwk.json")?;
+        paths.insert(active.to_owned());
+    }
     if let Some(public_keys) = bundle
-        .pointer("/signing/retiredPublicJwkFiles")
+        .pointer("/signing/publishedPublicJwkFiles")
         .and_then(Value::as_array)
     {
         for value in public_keys {
             let path = value
                 .as_str()
-                .ok_or_else(|| anyhow!("retired public key paths must be strings"))?;
+                .ok_or_else(|| anyhow!("published public key paths must be strings"))?;
             validate_auxiliary_artifact(path, "public-keys", ".jwk.json")?;
             paths.insert(path.to_owned());
         }
@@ -3554,8 +3648,17 @@ properties:
             compiled.caller_evidence_audience,
             LOCAL_CALLER_EVIDENCE_AUDIENCE
         );
+        let mut generated = tree(&fixture.staging);
+        let public_key_index = generated
+            .iter()
+            .position(|path| path.starts_with("bundle/public-keys/") && path.ends_with(".jwk.json"))
+            .expect("one governed local public JWK");
+        let public_key = generated.remove(public_key_index);
+        assert!(public_key.starts_with("bundle/public-keys/"));
+        assert!(public_key.ends_with(".jwk.json"));
+        generated.retain(|path| path != "bundle/public-keys/");
         assert_eq!(
-            tree(&fixture.staging),
+            generated,
             vec![
                 "audit/",
                 "bundle/",
@@ -4025,8 +4128,8 @@ factSchema: schemas/source-facts.schema.yaml
             "signing": {},
             "authorityProfiles": {"authority": {"kind": "explicit-request"}},
         });
-        let project = fs::canonicalize(&fixture.project).expect("canonical production project");
-        let compiled = compile_production_project(&project, &fixture.staging, target)
+        let project = fs::canonicalize(&fixture.project).expect("canonical authoring project");
+        let compiled = compile_production_project(&project, &project, &fixture.staging, target)
             .expect("all neutral shapes compile through production");
         let bundle = compiled.bundle;
         let requirements = bundle["requirements"].as_array().expect("requirements");
@@ -4091,10 +4194,11 @@ factSchema: schemas/source-facts.schema.yaml
 
         assert_eq!(bundle["assuranceProfile"], "local");
         assert_eq!(bundle["authentication"]["issuer"], "http://127.0.0.1:8081");
-        assert_eq!(
-            bundle["signing"]["activeKeyRef"],
-            "secret:file/signing-ed25519-private-jwk"
-        );
+        assert_eq!(bundle["signing"]["algorithm"], "ES256");
+        let public_key = bundle["signing"]["activePublicJwkFile"]
+            .as_str()
+            .expect("active public JWK file");
+        assert!(fixture.staging.join("bundle").join(public_key).is_file());
         assert_eq!(
             requirement["id"],
             "urn:authority:requirement:adult-status:v1"
@@ -4884,11 +4988,6 @@ factSchema: schemas/family-facts.schema.yaml
             .map(PathBuf::from)
             .expect("set EVIDENCE_BIN to the built evidence binary");
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts generated inputs");
 
@@ -4896,20 +4995,10 @@ factSchema: schemas/family-facts.schema.yaml
         fixture.add_question(AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER);
         fixture.add_access_policy("age-checks", &["adult-status"]);
         fixture.add_access_policy("service-routing", &["age-bracket"]);
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts explicit access profiles");
 
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts the controlled category");
 
@@ -4923,21 +5012,11 @@ factSchema: schemas/family-facts.schema.yaml
                 "                  date_of_birth: {type: string, format: date}\n                  dose_count: {type: integer, minimum: 0, maximum: 20}",
             );
         let fixture = Fixture::new(&openapi, IMMUNIZATION_QUESTION, IMMUNIZATION_ANSWER, true);
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts multiple governed answers");
 
         let (openapi, question, answer) = punctuated_inputs();
         let fixture = Fixture::new(&openapi, &question, &answer, true);
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts safely quoted punctuated names");
 
@@ -4947,11 +5026,6 @@ factSchema: schemas/family-facts.schema.yaml
             MULTI_EVENT_ANSWER,
             true,
         );
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts nested repeated fact extraction");
 
@@ -4961,11 +5035,6 @@ factSchema: schemas/family-facts.schema.yaml
             RELATIONSHIP_ANSWER,
             true,
         );
-        crate::keygen::generate_scaffold_key_material(
-            &fixture.project.join("secrets"),
-            SIGNING_KEY_ID,
-        )
-        .expect("generate local keys");
         compile_local_project(&fixture.project, &fixture.staging, &evidence)
             .expect("real Evidence loader accepts multiple role-bound subjects");
     }
@@ -4998,6 +5067,8 @@ factSchema: schemas/family-facts.schema.yaml
             let mut secrets = fs::DirBuilder::new();
             secrets.mode(0o700);
             secrets.create(project.join("secrets")).expect("secrets");
+            crate::keygen::generate_scaffold_key_material(&project.join("secrets"))
+                .expect("local key material");
             fs::write(project.join(OPENAPI_FILE), openapi).expect("OpenAPI");
 
             let staging = root.path().join("staging");

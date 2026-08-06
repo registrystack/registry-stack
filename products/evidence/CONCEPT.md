@@ -22,7 +22,7 @@ An assertion may describe a property, classification, eligibility decision,
 status, or relationship involving one or more role-bound subjects. A national
 identifier is one possible selector, not a prerequisite.
 
-The service is deliberately narrower than a data governance platform, API gateway, identity-matching service, workflow engine, credential suite, or policy decision platform. One service process may host many evidence definitions when they share one operator-controlled trust domain. Governed configuration, scripts, schemas, codelists, and fixtures form one trusted, atomic evidence bundle. A separate closed runtime file binds that bundle to process-local listener, filesystem, audit-storage, secret-mount, and TLS-trust paths without overriding evidence semantics.
+The service is deliberately narrower than a data governance platform, API gateway, identity-matching service, workflow engine, credential suite, or policy decision platform. One service process may host many evidence definitions when they share one operator-controlled trust domain. Governed configuration, scripts, schemas, codelists, and fixtures form one trusted, atomic evidence bundle. A separate closed runtime file binds that bundle to process-local listener, filesystem, audit-storage, secret-mount, signer transport and pinned version, and TLS-trust paths without overriding evidence semantics or the governed active public key.
 
 JSON is the native API and evidence representation. Requirements and evidence are aligned with CCCEV, using a documented Evidence JSON profile rather than RDF or XML. YAML declares fixed requirements, authorization conditions, source requests, trusted derivation parameters, concepts, and disclosure forms. Trusted Rhai scripts execute inside the process to extract typed facts and derive declared concept values from a deterministic evaluation context. Rust retains control of authentication, authorization, networking, credentials, script capabilities and limits, output validation, disclosure enforcement, evidence construction, signing, and audit.
 
@@ -449,7 +449,8 @@ comparison diagnostic.
 
 Governed configuration, scripts, schemas, codelists, mappings, and fixtures form
 one atomic bundle. A separate closed runtime file owns only process-local
-listener, filesystem, audit-storage, secret-mount, and TLS-trust bindings. Both
+listener, filesystem, audit-storage, secret-mount, signer transport and pinned
+version, and TLS-trust bindings. Both
 inputs are startup-only, read-only, independently digested, and immutable for
 the process lifetime. Runtime configuration is not an override layer and cannot
 change service identity, trust domain, authentication or authority policy,
@@ -466,10 +467,14 @@ service:
   provider_id: urn:example:data-service:evidence
 
 signing:
-  format: jws-json
-  algorithm: EdDSA
-  key_ref: secret:evidence-signing-key
-  jwks_path: /.well-known/evidence/jwks.json
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/<rfc7638-thumbprint>.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
 
 issuer:
   id: urn:example:authority:population-registry
@@ -884,7 +889,26 @@ Runtime configuration cannot enable it. A signed request never falls back to
 unsigned output after a signing, key, serialization, audit, or dependency
 failure.
 
-The protected JWS header contains an allowlisted `alg`, a required `kid`, a media-type identifier, and the payload content type. Version one starts with one configured active signing key and publishes its public key through `/.well-known/evidence/jwks.json`. Retired public keys remain available for at least the maximum assertion validity plus allowed clock skew. Private key material is resolved through a secret or signing-provider reference and never appears in YAML, Rhai, logs, audit, or public errors.
+The protected JWS header contains an allowlisted `alg`, a required `kid`, a
+media-type identifier, and the payload content type. Version one uses ES256
+over P-256. Each service `kid` is the 43-character RFC 7638 thumbprint of its
+exact public JWK. The bundle governs one `activePublicJwkFile`, zero or more
+`publishedPublicJwkFiles`, and an explicit `revokedKeyIds` denylist. Active and
+published keys appear in `/.well-known/evidence/jwks.json`; a revoked
+identifier can be neither active nor published and is never returned. A
+predecessor remains published for at least the maximum assertion validity plus
+allowed clock skew during planned rotation. Emergency revocation removes it
+immediately, and denylisting takes precedence over cached key selection.
+
+Runtime signing is a separate process-local binding. Local assurance resolves
+one P-256 private JWK through `signer.kind: local-jwk`. Production and
+evidence-grade use `signer.kind: transit` over a workload-local Unix socket,
+with a pinned nonzero Vault/OpenBao Transit key version and no provider token
+in Evidence. Transit reports `ecdsa-p256`, signing enabled, `derived=false`,
+`exportable=false`, and `allow_plaintext_backup=false`. The provider public key
+must equal the governed active public JWK, and startup performs a sign-and-
+verify test. Private key material never appears in the bundle, Rhai, logs,
+audit, or public errors. Configuration and key state do not hot reload.
 
 The published JWKS is key discovery, not a trust anchor. A verifier obtains the provider identity and JWKS location through trusted deployment configuration or governed metadata, then allowlists the algorithm and resolves `kid` only within that trusted key set. It never follows a message-provided `jku`, `x5u`, or equivalent remote key URL.
 
@@ -1082,6 +1106,14 @@ prevents unnecessary cross-purpose linking and includes a key version for
 controlled rotation. Plain hashes and globally stable subject pseudonyms are
 prohibited.
 
+The audit chain key and identifier-pseudonym key are HKDF-separated subkeys of
+the audit master. The subject-binding master is a distinct reference and must
+also resolve to distinct bytes. Audit-master rotation starts a new epoch: stop
+and drain, verify and record the old head and both configuration revisions,
+archive the old runtime, master, segments, and head, then increment
+`hashKeyVersion`, select a fresh audit path, and restart only after the complete
+check. A new master is never appended to an existing chain.
+
 Two writes are fail-closed:
 
 1. The access-attempt event must be durably accepted before the first source read.
@@ -1235,12 +1267,12 @@ authorization decision, the same fixed source execution, the same bounded
 derivation, the same output validation, the same audience-scoped subject
 binding, the same durable access and disclosure-release audit ordering.
 
-The assertion is emitted as an IETF SD-JWT VC: an EdDSA-signed JWT carrying
-`_sd` digests, followed by the salted disclosures. The signing key, key
+The assertion is emitted under RFC 9901 and the pinned SD-JWT VC draft v18 as
+an ES256-signed JWT carrying `_sd` digests, followed by the salted disclosures. The signing key, key
 identifier, JWKS publication, and rotation rules are exactly those of the
 signed-JWS format. No second key and no second key ceremony are introduced.
 
-An optional caller-supplied holder public key becomes the `cnf` claim, so the
+An optional caller-supplied public P-256 JWK becomes the `cnf` claim, so the
 assertion can be presented later with key binding. Evidence issues; it does not
 receive, validate, or reason about presentations. Key-binding JWT validation is
 the relying party's responsibility.
@@ -1265,10 +1297,18 @@ verifiers, which is the property section 13 exists to prevent. A multi-verifier
 holder credential is a separate profile with its own privacy analysis, not an
 increment on this one.
 
-The consequence must be stated plainly in adopter-facing material. This profile
-produces a standards-conformant SD-JWT VC that a wallet can parse, hold, and
-present. It does not produce a credential that is meaningful to an arbitrary
-verifier.
+The consequence must be stated plainly in adopter-facing material. This
+profile targets RFC 9901 and the pinned SD-JWT VC draft v18 so a later wallet
+adapter can use the standard representation. Compatibility with any wallet's
+parsing, holding, or presentation behavior remains unclaimed until that
+wallet's pinned verifier passes the opt-in full-signature compatibility
+harness. The profile does not produce a credential that is meaningful to an
+arbitrary verifier.
+
+Outside local assurance, enabling this format requires `service.providerId`
+to be the stable HTTPS origin of the Evidence deployment. JWT VC Issuer
+Metadata publishes that exact `issuer` and an exact `jwks_uri`; it does not
+inline keys.
 
 #### Profile non-goals
 
@@ -1372,8 +1412,9 @@ mandatory default and includes:
 - authenticated `GET /v1/evidence-definitions` requester-scoped discovery and
   one `POST /v1/evidence` assertion operation with a required fixed-size
   request nonce;
-- one active EdDSA reference signing key, default flattened JWS JSON responses,
-  a governed explicitly selected unsigned envelope, and a public JWKS endpoint;
+- one active ES256/P-256 service signing key with RFC 7638 identity, explicit
+  published and revoked key sets, default flattened JWS JSON responses, a
+  governed explicitly selected unsigned envelope, and a public JWKS endpoint;
 - keyed JSONL audit on explicitly durable storage, fail-closed before source access and before release;
 - offline bundle checking and fixture evaluation;
 - adopter tooling that starts an incomplete local authoring project, compiles
@@ -1689,7 +1730,8 @@ semantics:
 7. Which durable audit sink is the first production target?
 8. What legal timezone and observation-time rules govern each time-dependent
    production requirement?
-9. Which supported signing algorithm and key provider fit the first deployment?
+9. Which Vault/OpenBao Transit deployment, local proxy, pinned key version, and
+   operator policy provide the required non-exportable P-256 signing key?
 10. How will relying parties obtain and pin the Evidence provider's verification trust?
 11. Which permitted existence-disclosure behavior applies to each enabled
     requirement under the closed public problem contract?

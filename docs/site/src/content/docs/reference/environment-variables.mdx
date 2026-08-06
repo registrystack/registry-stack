@@ -55,7 +55,12 @@ The `mint` binary reads the variables below.
 | `MINT_CONFIG` | YAML config path for `mint check` and `mint serve`. Equivalent to `--config`. | Required for those two subcommands, by flag or by variable. |
 | `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
 
-Registry Mint's key material and client registrations are files named in its configuration: `signing.activeKeyFile`, `signing.retiredPublicJwkFiles`, and `clients.directory`. None of them is an environment variable. The `mint token` subcommand is a caller tool rather than an operator one: it reads no server configuration at all, and takes the caller's private JWK and any delegation subject as file paths rather than as values. See the [Registry Mint reference](../mint/) for the full configuration surface.
+Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
+in its configuration: `signing.activePublicJwkFile`, `signing.publishedPublicJwkFiles`,
+`signing.revokedKeyIds`, `signer`, and `clients.directory`. None is an environment variable. The
+`mint token` subcommand is a caller tool rather than an operator one: it reads no server configuration
+at all, and takes the caller's private JWK and any delegation subject as file paths rather than as
+values. See the [Registry Mint reference](../mint/) for the full configuration surface.
 
 ## Registry Relay
 

@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     contracts::evidence_contract_accepts,
-    model::{Evidence, FlattenedJws, JwksDocument},
+    model::{Evidence, FlattenedJws, HolderPublicKey, JwksDocument},
     sdjwt_vc::evidence_payload_from_claims,
     AssuranceProfile, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_TYP,
@@ -55,6 +55,9 @@ pub struct EvidenceVerificationPolicy {
     pub expected_subjects: Vec<ExpectedSubject>,
     /// Expected concept identifiers, value forms, and cardinalities.
     pub expected_outputs: Vec<ExpectedOutput>,
+    /// Service key thumbprints that fail closed even if present in a stale or
+    /// otherwise trusted JWKS document.
+    pub revoked_key_ids: Vec<String>,
     /// Longest acceptable `validUntil - issuedAt` interval.
     pub maximum_assertion_lifetime: Duration,
     pub now: DateTime<Utc>,
@@ -82,6 +85,7 @@ pub struct EvidenceVerificationPolicyDocument {
     pub request_nonce: String,
     pub expected_subjects: Vec<ExpectedSubjectDocument>,
     pub expected_outputs: Vec<ExpectedOutputDocument>,
+    pub revoked_key_ids: Vec<String>,
     pub maximum_assertion_lifetime_seconds: u64,
     #[serde(default)]
     pub clock_skew_seconds: u64,
@@ -176,6 +180,7 @@ impl EvidenceVerificationPolicyDocument {
                     form: expected_value_form_document(output.form),
                 })
                 .collect(),
+            revoked_key_ids: self.revoked_key_ids,
             maximum_assertion_lifetime: Duration::from_secs(
                 self.maximum_assertion_lifetime_seconds,
             ),
@@ -258,6 +263,7 @@ impl EvidenceVerificationPolicy {
                     form: expected_form_of(&value.value),
                 })
                 .collect(),
+            revoked_key_ids: Vec::new(),
             maximum_assertion_lifetime,
             now,
             clock_skew,
@@ -451,19 +457,25 @@ pub fn verify_flattened_jws_report(
         parse_json_strict(&protected_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
     let protected: ProtectedHeader =
         serde_json::from_value(protected_strict).map_err(|_| VerificationError::ProtectedHeader)?;
-    if protected.alg != "EdDSA"
+    if protected.alg != "ES256"
         || protected.typ != EVIDENCE_JWS_TYP
         || protected.cty != EVIDENCE_JWS_CTY
-        || protected.kid.is_empty()
-        || protected.kid.len() > 256
-        || protected.kid.chars().any(char::is_control)
+        || !key_identifier_is_thumbprint(&protected.kid)
     {
         return Err(VerificationError::ProtectedHeader);
+    }
+    validate_revocations(&policy.revoked_key_ids)?;
+    if policy
+        .revoked_key_ids
+        .iter()
+        .any(|kid| kid == &protected.kid)
+    {
+        return Err(VerificationError::Key);
     }
 
     let keys = trusted_keys(trusted_jwks)?;
     let key = keys.get(&protected.kid).ok_or(VerificationError::Key)?;
-    if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+    if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
     let signature = decode_bounded(
@@ -552,18 +564,20 @@ pub fn verify_sd_jwt_vc_report(
         parse_json_strict(&header_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
     let header: SdJwtHeader =
         serde_json::from_value(header_strict).map_err(|_| VerificationError::ProtectedHeader)?;
-    if header.alg != "EdDSA"
+    if header.alg != "ES256"
         || header.typ != EVIDENCE_SD_JWT_VC_TYP
-        || header.kid.is_empty()
-        || header.kid.len() > 256
-        || header.kid.chars().any(char::is_control)
+        || !key_identifier_is_thumbprint(&header.kid)
     {
         return Err(VerificationError::ProtectedHeader);
+    }
+    validate_revocations(&policy.revoked_key_ids)?;
+    if policy.revoked_key_ids.iter().any(|kid| kid == &header.kid) {
+        return Err(VerificationError::Key);
     }
 
     let keys = trusted_keys(trusted_jwks)?;
     let key = keys.get(&header.kid).ok_or(VerificationError::Key)?;
-    if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+    if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
     let signature = decode_bounded(
@@ -764,7 +778,7 @@ fn resolve_disclosures(
     Ok(resolved)
 }
 
-/// The confirmation, when present, carries exactly one Ed25519 public key and
+/// The confirmation, when present, carries exactly one P-256 public key and
 /// no private material.
 fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> {
     let Some(members) = confirmation.as_object() else {
@@ -774,12 +788,9 @@ fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> 
         return Err(VerificationError::Payload);
     }
     let jwk = members.get("jwk").ok_or(VerificationError::Payload)?;
-    let key: PublicJwk =
+    let key: HolderPublicKey =
         serde_json::from_value(jwk.clone()).map_err(|_| VerificationError::Payload)?;
-    if key.kty != "OKP"
-        || key.crv.as_deref() != Some("Ed25519")
-        || key.algorithm().ok() != Some(SigningAlgorithm::EdDsa)
-    {
+    if !key.is_acceptable() {
         return Err(VerificationError::Payload);
     }
     Ok(())
@@ -791,19 +802,47 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
     }
     let mut output = BTreeMap::new();
     for value in &jwks.keys {
+        let members = value.as_object().ok_or(VerificationError::Key)?;
+        let exact_members = ["alg", "crv", "kid", "kty", "x", "y"]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if members.keys().map(String::as_str).collect::<BTreeSet<_>>() != exact_members {
+            return Err(VerificationError::Key);
+        }
         let key: PublicJwk =
             serde_json::from_value(value.clone()).map_err(|_| VerificationError::Key)?;
         let kid = key.kid.clone().ok_or(VerificationError::Key)?;
-        if kid.is_empty()
-            || kid.len() > 256
-            || kid.chars().any(char::is_control)
-            || key.algorithm().ok() != Some(SigningAlgorithm::EdDsa)
+        if !key_identifier_is_thumbprint(&kid)
+            || key.algorithm().ok() != Some(SigningAlgorithm::Es256)
+            || key.jkt().ok().as_deref() != Some(kid.as_str())
             || output.insert(kid, key).is_some()
         {
             return Err(VerificationError::Key);
         }
     }
     Ok(output)
+}
+
+fn validate_revocations(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
+    if revoked_key_ids.len() > MAX_TRUSTED_KEYS
+        || revoked_key_ids
+            .iter()
+            .any(|kid| !key_identifier_is_thumbprint(kid))
+        || revoked_key_ids.iter().collect::<BTreeSet<_>>().len() != revoked_key_ids.len()
+    {
+        return Err(VerificationError::Key);
+    }
+    Ok(())
+}
+
+fn key_identifier_is_thumbprint(kid: &str) -> bool {
+    kid.len() == 43
+        && kid
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        && URL_SAFE_NO_PAD
+            .decode(kid)
+            .is_ok_and(|decoded| decoded.len() == 32 && URL_SAFE_NO_PAD.encode(&decoded) == kid)
 }
 
 /// Compare every policy expectation after signature and schema verification.
@@ -965,9 +1004,11 @@ fn decode_bounded(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
+    use rand_core::OsRng;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+    use serde::Deserialize;
     use serde_json::{json, Value};
 
     use super::*;
@@ -977,8 +1018,214 @@ mod tests {
         SupportedValue,
     };
 
-    const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
-    const RETIRED_PRIVATE_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"retired-evidence-key"}"#;
+    const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const RETIRED_KEY_ID: &str = "xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M";
+    const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    const RETIRED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExternalVectorFixture {
+        fixture: String,
+        synthetic_only: bool,
+        compatibility_claim: String,
+        purpose: String,
+        issuer_public_jwk: PublicJwk,
+        vectors: Vec<ExternalVector>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExternalVector {
+        id: String,
+        standard: String,
+        provenance: ExternalVectorProvenance,
+        serialized: String,
+        expected: ExternalVectorExpected,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ExternalVectorProvenance {
+        source: String,
+        revision: String,
+        location: String,
+        derivation: String,
+        serialized_sha256: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ExternalVectorExpected {
+        protected_typ: String,
+        issuer: String,
+        #[serde(default)]
+        vct: Option<String>,
+        disclosure_names: Vec<String>,
+        evidence_profile_rejection: String,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct ExternalPresentation {
+        protected_typ: String,
+        issuer: String,
+        vct: Option<String>,
+        disclosure_names: Vec<String>,
+    }
+
+    fn verify_external_presentation(
+        serialized: &str,
+        public_key: &PublicJwk,
+    ) -> Result<ExternalPresentation, &'static str> {
+        let without_trailing_tilde = serialized
+            .strip_suffix('~')
+            .ok_or("presentation lacks the no-KB-JWT trailing tilde")?;
+        let mut presentation_parts = without_trailing_tilde.split('~');
+        let jwt = presentation_parts.next().ok_or("issuer JWT is absent")?;
+        let disclosures = presentation_parts.collect::<Vec<_>>();
+        if disclosures.is_empty() || disclosures.iter().any(|value| value.is_empty()) {
+            return Err("presentation disclosures are absent or empty");
+        }
+
+        let jwt_parts = jwt.split('.').collect::<Vec<_>>();
+        let [protected, payload, encoded_signature] = jwt_parts.as_slice() else {
+            return Err("issuer JWT is not compact JWS");
+        };
+        let header_bytes = URL_SAFE_NO_PAD
+            .decode(protected)
+            .map_err(|_| "protected header is not base64url")?;
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| "payload is not base64url")?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .map_err(|_| "signature is not base64url")?;
+        let header = parse_json_strict(&header_bytes).map_err(|_| "header is not strict JSON")?;
+        let payload_value =
+            parse_json_strict(&payload_bytes).map_err(|_| "payload is not strict JSON")?;
+        if header.get("alg").and_then(Value::as_str) != Some("ES256") {
+            return Err("external vector is not ES256");
+        }
+        verify(
+            format!("{protected}.{payload}").as_bytes(),
+            &signature,
+            public_key,
+        )
+        .map_err(|_| "external ES256 signature does not verify")?;
+
+        let payload = payload_value
+            .as_object()
+            .ok_or("external payload is not an object")?;
+        if payload.get("_sd_alg").and_then(Value::as_str) != Some("sha-256") {
+            return Err("external vector does not select sha-256 disclosures");
+        }
+        let mut embedded_digests = BTreeSet::new();
+        collect_external_sd_digests(&payload_value, &mut embedded_digests);
+        let mut disclosure_names = Vec::with_capacity(disclosures.len());
+        for disclosure in disclosures {
+            let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+            if !embedded_digests.contains(&digest) {
+                return Err("presented disclosure digest is not signed");
+            }
+            let disclosure_bytes = URL_SAFE_NO_PAD
+                .decode(disclosure)
+                .map_err(|_| "disclosure is not base64url")?;
+            let disclosure_value = parse_json_strict(&disclosure_bytes)
+                .map_err(|_| "disclosure is not strict JSON")?;
+            let disclosure_array = disclosure_value
+                .as_array()
+                .filter(|members| members.len() == 3)
+                .ok_or("disclosure is not a property disclosure")?;
+            disclosure_names.push(
+                disclosure_array[1]
+                    .as_str()
+                    .ok_or("disclosure name is not a string")?
+                    .to_owned(),
+            );
+        }
+
+        Ok(ExternalPresentation {
+            protected_typ: header
+                .get("typ")
+                .and_then(Value::as_str)
+                .ok_or("protected typ is absent")?
+                .to_owned(),
+            issuer: payload
+                .get("iss")
+                .and_then(Value::as_str)
+                .ok_or("issuer is absent")?
+                .to_owned(),
+            vct: payload
+                .get("vct")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            disclosure_names,
+        })
+    }
+
+    fn collect_external_sd_digests(value: &Value, output: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(members) => {
+                if members.len() == 1 {
+                    if let Some(digest) = members.get("...").and_then(Value::as_str) {
+                        output.insert(digest.to_owned());
+                    }
+                }
+                if let Some(digests) = members.get("_sd").and_then(Value::as_array) {
+                    output.extend(digests.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+                for member in members.values() {
+                    collect_external_sd_digests(member, output);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    collect_external_sd_digests(member, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn mutate_external_signature(serialized: &str) -> String {
+        let mut presentation_parts = serialized
+            .strip_suffix('~')
+            .expect("fixture has trailing tilde")
+            .split('~')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut jwt_parts = presentation_parts[0]
+            .split('.')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut signature = URL_SAFE_NO_PAD
+            .decode(&jwt_parts[2])
+            .expect("fixture signature decodes");
+        signature[0] ^= 1;
+        jwt_parts[2] = URL_SAFE_NO_PAD.encode(signature);
+        presentation_parts[0] = jwt_parts.join(".");
+        format!("{}~", presentation_parts.join("~"))
+    }
+
+    fn mutate_first_external_disclosure(serialized: &str) -> String {
+        let mut parts = serialized
+            .strip_suffix('~')
+            .expect("fixture has trailing tilde")
+            .split('~')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let disclosure = parts.get_mut(1).expect("fixture has a disclosure");
+        let last = disclosure.pop().expect("fixture disclosure is nonempty");
+        disclosure.push(if last == 'A' { 'B' } else { 'A' });
+        format!("{}~", parts.join("~"))
+    }
 
     async fn sign_with_protected_header(
         private_jwk: &str,
@@ -1056,7 +1303,7 @@ mod tests {
         let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("signer builds"));
-        let signer = EvidenceSigner::initialize(provider, "evidence-key-1")
+        let signer = EvidenceSigner::initialize(provider, KEY_ID)
             .await
             .expect("signer initializes");
         let jws = signer.sign_json(&evidence).await.expect("evidence signs");
@@ -1085,6 +1332,108 @@ mod tests {
             "2026-08-02T12:00:00Z".parse().expect("time parses"),
         )
         .await
+    }
+
+    #[test]
+    fn external_rfc9901_and_draft18_vectors_verify_shared_cryptography_and_preserve_profile_boundary(
+    ) {
+        let fixture: ExternalVectorFixture = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/external-sd-jwt-vectors.yaml"
+        ))
+        .expect("external vector fixture parses");
+        assert_eq!(
+            fixture.fixture,
+            "registry.evidence.external-sd-jwt-vectors/v1"
+        );
+        assert!(fixture.synthetic_only);
+        assert_eq!(fixture.compatibility_claim, "none");
+        assert!(fixture.purpose.contains("shared ES256 and RFC 9901"));
+        assert_eq!(fixture.vectors.len(), 2);
+
+        let mut evidence_jwk = fixture.issuer_public_jwk.clone();
+        evidence_jwk.kid = Some(
+            evidence_jwk
+                .jkt()
+                .expect("external key thumbprint computes"),
+        );
+        let evidence_jwks = jwks_document(evidence_jwk, []).expect("strict Evidence JWKS builds");
+        let evidence_policy = policy_for(
+            &fixture_evidence(),
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+
+        for vector in &fixture.vectors {
+            let (expected_standard, expected_source, expected_revision, expected_sha256) =
+                match vector.id.as_str() {
+                    "rfc-9901-section-5-single-disclosure" => (
+                        "RFC 9901",
+                        "https://www.rfc-editor.org/rfc/rfc9901.txt",
+                        "RFC 9901, November 2025",
+                        "ded07ccce2201ac557def085e1f514f2669e1274914c33efdd7459a04bae50f2",
+                    ),
+                    "sd-jwt-vc-draft-18-figure-10" => (
+                        "draft-ietf-oauth-sd-jwt-vc-18",
+                        "https://www.ietf.org/archive/id/draft-ietf-oauth-sd-jwt-vc-18.txt",
+                        "draft-ietf-oauth-sd-jwt-vc-18; oauth-wg tag commit 69e50ea623367c212c12c680e35e256b640b5f6b",
+                        "d76ee28606ccc124fb90567f2511ddd5f2cddf2ee3f2ff7eeebfa51b3e759ad2",
+                    ),
+                    other => panic!("unexpected external vector {other}"),
+                };
+            assert_eq!(vector.standard, expected_standard);
+            assert_eq!(vector.provenance.source, expected_source);
+            assert_eq!(vector.provenance.revision, expected_revision);
+            assert!(!vector.provenance.location.is_empty());
+            assert!(!vector.provenance.derivation.is_empty());
+            assert_eq!(vector.provenance.serialized_sha256, expected_sha256);
+            assert_eq!(sha256_hex(vector.serialized.as_bytes()), expected_sha256);
+
+            let verified =
+                verify_external_presentation(&vector.serialized, &fixture.issuer_public_jwk)
+                    .expect("authoritative external vector verifies");
+            assert_eq!(
+                verified,
+                ExternalPresentation {
+                    protected_typ: vector.expected.protected_typ.clone(),
+                    issuer: vector.expected.issuer.clone(),
+                    vct: vector.expected.vct.clone(),
+                    disclosure_names: vector.expected.disclosure_names.clone(),
+                }
+            );
+
+            assert!(verify_external_presentation(
+                &mutate_external_signature(&vector.serialized),
+                &fixture.issuer_public_jwk,
+            )
+            .is_err());
+            assert!(verify_external_presentation(
+                &mutate_first_external_disclosure(&vector.serialized),
+                &fixture.issuer_public_jwk,
+            )
+            .is_err());
+
+            assert_eq!(
+                vector.expected.evidence_profile_rejection,
+                "protected-header"
+            );
+            assert_eq!(
+                verify_sd_jwt_vc(
+                    vector.serialized.as_bytes(),
+                    &evidence_jwks,
+                    &evidence_policy,
+                ),
+                Err(VerificationError::ProtectedHeader),
+                "external standards vectors must not silently widen the Evidence profile",
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_requires_canonical_sha256_thumbprint_encoding() {
+        assert!(key_identifier_is_thumbprint(&"A".repeat(43)));
+        assert!(!key_identifier_is_thumbprint(&format!(
+            "{}B",
+            "A".repeat(42)
+        )));
     }
 
     #[tokio::test]
@@ -1177,8 +1526,8 @@ mod tests {
         let base = serde_json::to_string(&fixture_evidence()).expect("Evidence serializes");
         assert_eq!(base.matches("\"value\":false").count(), 1);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1316,6 +1665,7 @@ mod tests {
                 "add an unprotected header",
                 "add jku, x5u, jwk, x5c, crit, or b64",
                 "unknown kid",
+                "revoked kid, even when the key remains in a cached JWKS",
                 "algorithm mismatch",
                 "signed payload violates the Evidence JSON Schema",
                 "duplicate evidence object beside payload",
@@ -1325,8 +1675,8 @@ mod tests {
 
         let evidence = fixture_evidence();
         let base_header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1335,6 +1685,12 @@ mod tests {
         let jwks = jwks_document(public, []).expect("JWKS builds");
         let (_, _, policy) = signed_fixture().await;
         assert!(verify_flattened_jws(&valid, &jwks, &policy).is_ok());
+        let mut revoked = policy.clone();
+        revoked.revoked_key_ids = vec![KEY_ID.to_owned()];
+        assert_eq!(
+            verify_flattened_jws(&valid, &jwks, &revoked),
+            Err(VerificationError::Key)
+        );
 
         let mut missing_signature: Value = serde_json::from_slice(&valid).expect("JWS parses");
         missing_signature
@@ -1351,7 +1707,7 @@ mod tests {
         );
 
         for extra in [
-            ("header", json!({"kid": "evidence-key-1"})),
+            ("header", json!({"kid": KEY_ID})),
             (
                 "evidence",
                 serde_json::to_value(&evidence).expect("Evidence serializes"),
@@ -1398,14 +1754,14 @@ mod tests {
         for (header, expected) in [
             (
                 json!({
-                    "alg": "EdDSA", "kid": "unknown-key", "typ": EVIDENCE_JWS_TYP,
+                    "alg": "ES256", "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "typ": EVIDENCE_JWS_TYP,
                     "cty": EVIDENCE_JWS_CTY
                 }),
                 VerificationError::Key,
             ),
             (
                 json!({
-                    "alg": "HS256", "kid": "evidence-key-1", "typ": EVIDENCE_JWS_TYP,
+                    "alg": "HS256", "kid": KEY_ID, "typ": EVIDENCE_JWS_TYP,
                     "cty": EVIDENCE_JWS_CTY
                 }),
                 VerificationError::ProtectedHeader,
@@ -1436,8 +1792,8 @@ mod tests {
         let mut mutated = fixture_evidence();
         mutated.request_nonce = "B".repeat(43);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1666,8 +2022,8 @@ mod tests {
     async fn retired_public_key_verifies_only_while_published_and_payload_is_current() {
         let evidence = fixture_evidence();
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "retired-evidence-key",
+            "alg": "ES256",
+            "kid": RETIRED_KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1704,18 +2060,13 @@ mod tests {
         let active = LocalJwkSigner::new(private)
             .expect("active signer builds")
             .public_jwk();
-        let retired = (0..32).map(|index| {
-            let mut key = active.clone();
-            key.kid = Some(format!("retired-evidence-key-{index:02}"));
-            key
-        });
+        let retired = (0..32).map(|_| generated_public_jwk());
         let maximum = jwks_document(active.clone(), retired).expect("maximum JWKS builds");
         assert_eq!(maximum.keys.len(), MAX_TRUSTED_KEYS);
         assert!(verify_flattened_jws(&jws, &maximum, &policy).is_ok());
 
         let mut excess = maximum;
-        let mut extra = active;
-        extra.kid = Some("retired-evidence-key-excess".to_owned());
+        let extra = generated_public_jwk();
         excess
             .keys
             .push(serde_json::to_value(extra).expect("extra key serializes"));
@@ -1798,7 +2149,7 @@ mod tests {
         let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("signer builds"));
-        EvidenceSigner::initialize(provider, "evidence-key-1")
+        EvidenceSigner::initialize(provider, KEY_ID)
             .await
             .expect("signer initializes")
     }
@@ -1847,6 +2198,17 @@ mod tests {
             verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy).expect("SD-JWT VC verifies");
         // The rebuilt payload is the payload the signed JWS would carry.
         assert_eq!(evidence, fixture_evidence());
+    }
+
+    #[tokio::test]
+    async fn revoked_key_rejects_sd_jwt_even_when_cached_jwks_still_contains_it() {
+        let (serialized, jwks, mut policy) = issued_sd_jwt_vc().await;
+        policy.revoked_key_ids = vec![KEY_ID.to_owned()];
+
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Key)
+        );
     }
 
     #[tokio::test]
@@ -1906,10 +2268,11 @@ mod tests {
         let evidence = fixture_evidence();
         let signer = fixture_signer().await;
         let holder = crate::model::HolderPublicKey {
-            kty: "OKP".to_owned(),
-            crv: "Ed25519".to_owned(),
-            x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
-            alg: Some("EdDSA".to_owned()),
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
+            x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_owned(),
+            y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_owned(),
+            alg: Some("ES256".to_owned()),
             kid: Some("holder-1".to_owned()),
         };
         let input = crate::sdjwt_vc::issuance_input(&evidence, Some(&holder), &BTreeMap::new())
@@ -2037,9 +2400,9 @@ mod tests {
         let (jwt, disclosures) = split_sd_jwt(&serialized);
 
         for header in [
-            json!({"alg": "none", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP}),
-            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": "JWT"}),
-            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP, "jwk": {"kty": "OKP"}}),
+            json!({"alg": "none", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP}),
+            json!({"alg": "ES256", "kid": KEY_ID, "typ": "JWT"}),
+            json!({"alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP, "jwk": {"kty": "EC"}}),
         ] {
             let replacement =
                 URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
@@ -2060,8 +2423,8 @@ mod tests {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
         let (jwt, disclosures) = split_sd_jwt(&serialized);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "some-other-key",
+            "alg": "ES256",
+            "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "typ": EVIDENCE_SD_JWT_VC_TYP
         });
         let replacement =
@@ -2076,6 +2439,23 @@ mod tests {
             ),
             Err(VerificationError::Key)
         );
+    }
+
+    fn generated_public_jwk() -> PublicJwk {
+        let signing_key = p256::ecdsa::SigningKey::random(&mut OsRng);
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let mut key = PublicJwk {
+            kty: "EC".to_owned(),
+            kid: None,
+            alg: Some("ES256".to_owned()),
+            crv: Some("P-256".to_owned()),
+            x: point.x().map(|x| URL_SAFE_NO_PAD.encode(x)),
+            y: point.y().map(|y| URL_SAFE_NO_PAD.encode(y)),
+            n: None,
+            e: None,
+        };
+        key.kid = Some(key.jkt().expect("thumbprint computes"));
+        key
     }
 
     #[tokio::test]

@@ -39,7 +39,7 @@ use tokio::{net::TcpListener, sync::Semaphore};
 use crate::{
     config::{ListenerConfig, ResponseFormat},
     contracts::{request_contract_accepts, served_openapi_document},
-    model::{request_nonce_is_canonical, EvidenceRequest, JwksDocument},
+    model::{request_nonce_is_canonical, EvidenceRequest},
     observability::{self, operation_id, Metrics},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
@@ -602,7 +602,7 @@ async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> 
 }
 
 /// JWT VC Issuer Metadata. Discovery is not a trust anchor: it republishes the
-/// same public keys under the provider identity the assertion already names.
+/// provider identity and the exact governed JWKS URI.
 /// Resolution is meaningful only when that identity is the HTTPS origin of the
 /// deployment; a URN provider identity simply has no resolution path.
 async fn jwt_vc_issuer_metadata(
@@ -612,7 +612,11 @@ async fn jwt_vc_issuer_metadata(
     let operation = operation_id(request.extensions());
     let metadata = JwtVcIssuerMetadata {
         issuer: &state.runtime.bundle().config.service.provider_id,
-        jwks: state.runtime.jwks(),
+        jwks_uri: format!(
+            "{}{}",
+            state.runtime.bundle().config.service.provider_id,
+            state.runtime.bundle().config.signing.jwks_path
+        ),
     };
     match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &metadata) {
         Some(response) => response,
@@ -623,7 +627,7 @@ async fn jwt_vc_issuer_metadata(
 #[derive(Serialize)]
 struct JwtVcIssuerMetadata<'a> {
     issuer: &'a str,
-    jwks: &'a JwksDocument,
+    jwks_uri: String,
 }
 
 async fn unknown_route(request: Request<Body>) -> Response {

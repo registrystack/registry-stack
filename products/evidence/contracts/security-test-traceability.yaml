@@ -206,10 +206,10 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
   - id: sec-secret-file-identity
     tests:
-      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_uses_open_file_owner_and_exact_mode_checks}
-      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
-      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
-      - {file: crates/registry-evidence/src/secrets.rs, name: file_secret_read_is_bounded}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_uses_open_file_owner_and_exact_mode_checks}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_read_is_bounded}
   - id: sec-transport-backend-and-single-attempt
     tests:
       - {file: crates/registry-evidence/src/source.rs, name: evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority}
@@ -228,6 +228,7 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}
   - id: sec-sd-jwt-projection-integrity
     tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: external_rfc9901_and_draft18_vectors_verify_shared_cryptography_and_preserve_profile_boundary}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_round_trips_and_verifies_under_the_same_policy}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_disclosure_modification_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_added_disclosure_rejected}
@@ -249,6 +250,19 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_with_private_member_rejected}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_wrong_algorithm_rejected}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
+  - id: sec-service-key-governance
+    tests:
+      - {file: crates/registry-evidence/src/bundle.rs, name: strict_public_jwk_rejects_private_material_and_duplicate_members}
+      - {file: crates/registry-evidence/src/signing.rs, name: configured_key_id_must_match_provider}
+      - {file: crates/registry-evidence/src/signing.rs, name: flattened_jws_has_exact_protected_header_and_valid_signature}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: transit_signer_uses_the_common_vault_openbao_es256_wire_contract}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: transit_signer_rejects_unsafe_or_mismatched_metadata}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: public_jwk_thumbprint_uses_required_members_only}
+  - id: sec-audit-key-epoch
+    tests:
+      - {file: crates/registry-platform-audit/src/lib.rs, name: audit_profile_chain_and_identifier_keys_are_domain_separated}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profiles_reject_weak_master_secrets_without_echo}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
   - id: sec-sd-jwt-claims-closed
     tests: [{file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]
   - id: sec-local-source-none-boundary

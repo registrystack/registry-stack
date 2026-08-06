@@ -51,7 +51,7 @@ const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1
 /// Shape of the server-minted operation identifier, shared by the response
 /// header and the problem member so the two cannot describe different values.
 const OPERATION_PATTERN: &str = "^[0-9A-HJKMNP-TV-Z]{26}$";
-/// Unpadded base64url encoding of exactly one 32-byte Ed25519 public key.
+/// Unpadded base64url encoding of exactly one 32-byte P-256 affine coordinate.
 const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
     ("malformed_request", 400, "Request is not valid"),
@@ -312,12 +312,13 @@ fn request_schema() -> Value {
             },
             "holder-key": {
                 "type": "object", "additionalProperties": false,
-                "required": ["kty", "crv", "x"],
+                "required": ["kty", "crv", "x", "y"],
                 "properties": {
-                    "kty": {"type": "string", "enum": ["OKP"]},
-                    "crv": {"type": "string", "enum": ["Ed25519"]},
+                    "kty": {"type": "string", "enum": ["EC"]},
+                    "crv": {"type": "string", "enum": ["P-256"]},
                     "x": {"type": "string", "pattern": HOLDER_KEY_COORDINATE_PATTERN},
-                    "alg": {"type": "string", "enum": ["EdDSA"]},
+                    "y": {"type": "string", "pattern": HOLDER_KEY_COORDINATE_PATTERN},
+                    "alg": {"type": "string", "enum": ["ES256"]},
                     "kid": {"type": "string", "minLength": 1, "maxLength": 256}
                 }
             }
@@ -476,7 +477,7 @@ fn jws_schema() -> Value {
             "payload": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
             "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
         },
-        "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=EdDSA, kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes."
+        "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=ES256, an RFC 7638 thumbprint kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes."
     })
 }
 
@@ -564,23 +565,24 @@ fn jwks_schema() -> Value {
         "properties": {
             "keys": {
                 "type": "array", "minItems": 1, "maxItems": 33, "uniqueItems": true,
-                "items": {"$ref": "#/$defs/ed25519-public-jwk"}
+                "items": {"$ref": "#/$defs/p256-public-jwk"}
             }
         },
         "$defs": {
-            "ed25519-public-jwk": {
+            "p256-public-jwk": {
                 "type": "object", "additionalProperties": false,
-                "required": ["kty", "kid", "alg", "crv", "x"],
+                "required": ["kty", "kid", "alg", "crv", "x", "y"],
                 "properties": {
-                    "kty": {"const": "OKP"},
-                    "kid": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
-                    "alg": {"const": "EdDSA"},
-                    "crv": {"const": "Ed25519"},
-                    "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+                    "kty": {"const": "EC"},
+                    "kid": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                    "alg": {"const": "ES256"},
+                    "crv": {"const": "P-256"},
+                    "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                    "y": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
                 }
             }
         },
-        "$comment": "Only the active and configured retired public keys are published. Key ids are unique and limited to 256 UTF-8 bytes by the runtime; JSON Schema maxLength is an additional code-point bound. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location."
+        "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location."
     })
 }
 
@@ -836,8 +838,8 @@ fn openapi_document(
             "additionalProperties": false,
             "required": ["alg", "kid", "typ", "cty"],
             "properties": {
-                "alg": {"type": "string", "enum": ["EdDSA"]},
-                "kid": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F]+$"},
+                "alg": {"type": "string", "enum": ["ES256"]},
+                "kid": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
                 "typ": {"type": "string", "enum": ["evidence+jws"]},
                 "cty": {"type": "string", "enum": ["application/evidence+json"]}
             }
@@ -848,7 +850,7 @@ fn openapi_document(
         &mut schemas,
         "JwksDocument",
         jwks,
-        &[("ed25519-public-jwk", "Ed25519PublicJwk")],
+        &[("p256-public-jwk", "P256PublicJwk")],
     );
     schemas.insert(
         "SdJwtVcCredential".to_string(),
@@ -863,10 +865,10 @@ fn openapi_document(
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["issuer", "jwks"],
+            "required": ["issuer", "jwks_uri"],
             "properties": {
                 "issuer": {"type": "string", "maxLength": 512},
-                "jwks": {"$ref": "#/components/schemas/JwksDocument"}
+                "jwks_uri": {"type": "string", "format": "uri", "maxLength": 1024}
             }
         }),
     );
@@ -1224,7 +1226,7 @@ mod tests {
         assert_eq!(
             document["components"]["schemas"]["EvidenceProtectedHeader"]["properties"]["alg"]
                 ["enum"],
-            json!(["EdDSA"])
+            json!(["ES256"])
         );
 
         for path in paths.values() {
@@ -1375,8 +1377,9 @@ mod tests {
             (
                 jwks_schema(),
                 json!({"keys": [{
-                    "kty": "OKP", "kid": "evidence-key-1", "alg": "EdDSA",
-                    "crv": "Ed25519", "x": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    "kty": "EC", "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo", "alg": "ES256",
+                    "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                    "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
                 }]}),
             ),
         ];

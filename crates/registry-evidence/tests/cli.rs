@@ -21,6 +21,17 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
     );
     copy_tree(&project.join("bundle"), &staged.path().join("bundle"));
+    let bundle_configuration = staged.path().join("bundle/evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replacen(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+            1,
+        ),
+    )
+    .expect("select local assurance for the isolated CLI test");
     let secret_root = staged.path().join("secrets");
     fs::create_dir(&secret_root).expect("create private secret root");
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
@@ -42,6 +53,11 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         .replacen(
             "/var/lib/registry-evidence/audit/evidence.jsonl",
             audit_path.to_str().expect("temporary path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
             1,
         );
     let runtime_path = staged.path().join("runtime.yaml");
@@ -72,29 +88,21 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
 }
 
 /// Stage the platform secrets the reference project's bundle names, with a
-/// signing key generated for this run under the bundle's `activeKeyId`.
+/// signing key matching the bundle's governed active public JWK.
 /// Source credentials stay absent: `check` must not resolve them.
 fn stage_reference_secrets(secret_root: &Path) {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
     let write = |name: &str, value: &str| {
         let path = secret_root.join(name);
         fs::write(&path, value).expect("write reference secret");
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .expect("set owner-only secret mode");
     };
-    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-    let private_jwk = format!(
-        r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"evidence-signing-2026-01","d":"{}","x":"{}"}}"#,
-        URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-    );
     write("audit-hmac-key", "audit-hash-secret-32-bytes-minimum-value");
     write(
         "subject-binding-hmac-key",
         "subject-binding-secret-32-bytes-minimum-value",
     );
-    write("signing-ed25519-private-jwk", &private_jwk);
+    write("evidence-signing", VERIFY_PRIVATE_JWK);
 }
 
 /// One deployment failure class, with the exact operator text it must produce.
@@ -312,7 +320,7 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
     }
     let cases = [
         SecretFailureCase {
-            label: "signing key kid differs from the bundle's activeKeyId",
+            label: "signing key differs from the governed active public JWK",
             break_secrets: |deployment| deployment.write_mismatched_signing_key(),
             expected: "evidence: runtime signing initialization failed\n",
         },
@@ -480,11 +488,14 @@ fn serve_stops_on_sigterm_and_restarts_on_an_archived_audit_chain() {
 }
 
 /// The staged verification key identifier, echoed by the protected header.
-const VERIFY_KEY_ID: &str = "verify-fixture-key";
+const VERIFY_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 
-/// A staged Ed25519 test key. It signs fixture assertions in this test binary
+/// A staged P-256 test key. It signs fixture assertions in this test binary
 /// only and is not a deployment key.
-const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"verify-fixture-key"}"#;
+const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+
+/// A different valid P-256 key used to prove exact public-key matching.
+const MISMATCHED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
 
 /// A staged request nonce, of the exact 43-character request-nonce shape.
 const FIXTURE_NONCE: &str = "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I";
@@ -757,6 +768,7 @@ expectedOutputs:
     form: boolean
 maximumAssertionLifetimeSeconds: 172800
 clockSkewSeconds: 30
+revokedKeyIds: []
 ",
         revision = "0".repeat(64),
         binding = "A".repeat(43),
@@ -775,18 +787,18 @@ impl StoredResponse {
     /// signature no longer covers the stored bytes.
     fn stage(signed: &serde_json::Value, stored: &serde_json::Value, policy: &str) -> Self {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-        use ed25519_dalek::Signer as _;
+        use registry_platform_crypto::{sign, PrivateJwk};
 
         let root = tempfile::tempdir().expect("temporary verification inputs");
-        let key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let key = PrivateJwk::parse(VERIFY_PRIVATE_JWK).expect("fixture key parses");
         let protected = URL_SAFE_NO_PAD.encode(format!(
-            r#"{{"alg":"EdDSA","kid":"{VERIFY_KEY_ID}","typ":"evidence+jws","cty":"application/evidence+json"}}"#
+            r#"{{"alg":"ES256","kid":"{VERIFY_KEY_ID}","typ":"evidence+jws","cty":"application/evidence+json"}}"#
         ));
         let signed_payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(signed).expect("Evidence payload serializes"));
         let signature = URL_SAFE_NO_PAD.encode(
-            key.sign(format!("{protected}.{signed_payload}").as_bytes())
-                .to_bytes(),
+            sign(format!("{protected}.{signed_payload}").as_bytes(), &key)
+                .expect("fixture payload signs"),
         );
         let stored_payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(stored).expect("Evidence payload serializes"));
@@ -800,10 +812,8 @@ impl StoredResponse {
         .expect("stage the stored response");
         fs::write(
             root.path().join("trusted.jwks.json"),
-            format!(
-                r#"{{"keys":[{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"{VERIFY_KEY_ID}","x":"{}"}}]}}"#,
-                URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes())
-            ),
+            serde_json::to_vec(&serde_json::json!({"keys": [key.public()]}))
+                .expect("trusted JWKS serializes"),
         )
         .expect("stage the pinned key set");
         fs::write(root.path().join("policy.yaml"), policy).expect("stage the policy");
@@ -983,6 +993,11 @@ impl Deployment {
             .join("../../products/evidence/fixtures/acceptance")
             .join(case);
         copy_tree(&source, &deployment.path("bundle"));
+        deployment.replace(
+            "bundle/evidence.yaml",
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+        );
         let secrets = deployment.path("secrets");
         fs::create_dir(&secrets).expect("create private secret root");
         fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700))
@@ -1015,6 +1030,9 @@ listener:
 secretProviders:
   file:
     root: {secrets}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
 auditStorage:
   path: {audit}
   maximumFileBytes: 1073741824
@@ -1077,24 +1095,16 @@ outboundTls:
 
     /// Stage every logical secret the acceptance bundle references.
     ///
-    /// The signing key is generated for this run so no private key material is
-    /// tracked, and the source credentials are synthetic constants that never
-    /// reach a network because the test performs no evidence request.
+    /// The signing key matches the governed public fixture key, and the source
+    /// credentials are synthetic constants that never reach a network because
+    /// the test performs no evidence request.
     fn stage_acceptance_secrets(&self) {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let private_jwk = format!(
-            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"fixture-key-2026-01","d":"{}","x":"{}"}}"#,
-            URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-        );
         self.write_secret("audit-hash-key", "audit-hash-secret-32-bytes-minimum-value");
         self.write_secret(
             "subject-binding-key",
             "subject-binding-secret-32-bytes-minimum-value",
         );
-        self.write_secret("signing-key", &private_jwk);
+        self.write_secret("signing-key", VERIFY_PRIVATE_JWK);
         self.write_secret("source-a-token", "synthetic-source-token");
         self.write_secret("source-b-token", "synthetic-source-token");
         self.write_secret("source-c-username", "synthetic-source-user");
@@ -1111,18 +1121,9 @@ outboundTls:
             .expect("set owner-only audit chain mode");
     }
 
-    /// Overwrite the staged signing key with a fresh key whose kid is not
-    /// the bundle's `signing.activeKeyId`.
+    /// Overwrite the staged signing key with a different valid P-256 key.
     fn write_mismatched_signing_key(&self) {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let private_jwk = format!(
-            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"not-the-active-key","d":"{}","x":"{}"}}"#,
-            URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-        );
-        self.write_secret("signing-key", &private_jwk);
+        self.write_secret("signing-key", MISMATCHED_PRIVATE_JWK);
     }
 
     /// Start `serve` against the sealed deployment.

@@ -154,7 +154,7 @@ those stages apply. Omission is not treated as a wildcard.
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.
 Successful `response` cases require `lookup: match`, `derivationRuns: true`,
-and `signed: true`. The harness creates a fresh in-memory Ed25519 key for the
+and `signed: true`. The harness creates a fresh in-memory P-256 key for the
 evaluation, signs the constructed Evidence, and verifies the JWS and exact
 payload policy. The private key is never read from deployment secrets, written
 to disk, or included in output. Unresolved and failing cases require

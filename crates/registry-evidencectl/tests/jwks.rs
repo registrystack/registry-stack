@@ -26,23 +26,22 @@ fn stderr_of(output: &Output) -> String {
 /// Generates a signing keypair via the `keygen signing` subcommand and
 /// returns the path to its public JWK file. Reuses the tool under test
 /// instead of hand-rolling key material.
-fn generate_public_jwk(dir: &Path, name: &str, kid: &str) -> std::path::PathBuf {
+fn generate_public_jwk(dir: &Path, name: &str) -> std::path::PathBuf {
     let out_dir = dir.join(name);
     let output = evidencectl()
         .args(["keygen", "signing", "--out-dir"])
         .arg(&out_dir)
-        .args(["--kid", kid])
         .output()
         .expect("run evidencectl keygen");
     assert!(output.status.success(), "{}", stderr_of(&output));
-    out_dir.join("signing-ed25519-public.jwk.json")
+    out_dir.join("signing-p256-public.jwk.json")
 }
 
 #[test]
 fn assembles_a_jwks_document_from_public_jwk_files() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let first = generate_public_jwk(dir.path(), "first", "kid-a");
-    let second = generate_public_jwk(dir.path(), "second", "kid-b");
+    let first = generate_public_jwk(dir.path(), "first");
+    let second = generate_public_jwk(dir.path(), "second");
     let out = dir.path().join("jwks.json");
 
     let output = evidencectl()
@@ -66,8 +65,8 @@ fn assembles_a_jwks_document_from_public_jwk_files() {
         .iter()
         .map(|key| key["kid"].as_str().unwrap())
         .collect();
-    assert!(kids.contains(&"kid-a"));
-    assert!(kids.contains(&"kid-b"));
+    assert_ne!(kids[0], kids[1]);
+    assert!(kids.iter().all(|kid| kid.len() == 43));
 }
 
 #[test]
@@ -106,7 +105,7 @@ fn rejects_a_private_jwk_input_without_printing_its_contents() {
 #[test]
 fn deduplicates_identical_duplicate_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let public = generate_public_jwk(dir.path(), "solo", "kid-dup");
+    let public = generate_public_jwk(dir.path(), "solo");
     let out = dir.path().join("jwks.json");
 
     let output = evidencectl()
@@ -132,8 +131,19 @@ fn deduplicates_identical_duplicate_entries() {
 #[test]
 fn conflicting_keys_sharing_a_kid_is_an_error() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let first = generate_public_jwk(dir.path(), "first", "shared-kid");
-    let second = generate_public_jwk(dir.path(), "second", "shared-kid");
+    let first = generate_public_jwk(dir.path(), "first");
+    let second = generate_public_jwk(dir.path(), "second");
+    let first_jwk: serde_json::Value =
+        serde_json::from_slice(&fs::read(&first).expect("first public JWK")).expect("first JWK");
+    let shared_kid = first_jwk["kid"].as_str().expect("first kid").to_owned();
+    let mut second_jwk: serde_json::Value =
+        serde_json::from_slice(&fs::read(&second).expect("second public JWK")).expect("second JWK");
+    second_jwk["kid"] = serde_json::Value::String(shared_kid.clone());
+    fs::write(
+        &second,
+        serde_json::to_vec_pretty(&second_jwk).expect("second JWK serialization"),
+    )
+    .expect("rewrite second JWK with conflicting kid");
     let out = dir.path().join("jwks.json");
 
     let output = evidencectl()
@@ -151,7 +161,7 @@ fn conflicting_keys_sharing_a_kid_is_an_error() {
     assert!(!out.exists());
     let stderr = stderr_of(&output);
     assert!(
-        stderr.contains("shared-kid"),
+        stderr.contains(&shared_kid),
         "error should name the conflicting kid: {stderr}"
     );
 }
@@ -161,7 +171,7 @@ fn force_replaces_a_symlinked_output_path_without_writing_through_it() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let public = generate_public_jwk(dir.path(), "solo", "kid-sym");
+    let public = generate_public_jwk(dir.path(), "solo");
     let target = dir.path().join("elsewhere.json");
     fs::write(&target, b"untouched").expect("seed symlink target");
     let out = dir.path().join("jwks.json");
@@ -194,7 +204,7 @@ fn force_replaces_a_symlinked_output_path_without_writing_through_it() {
 #[test]
 fn refuses_overwrite_without_force_then_succeeds_with_force() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let public = generate_public_jwk(dir.path(), "solo", "kid-x");
+    let public = generate_public_jwk(dir.path(), "solo");
     let out = dir.path().join("jwks.json");
 
     let first = evidencectl()
@@ -220,7 +230,7 @@ fn refuses_overwrite_without_force_then_succeeds_with_force() {
     );
     assert_eq!(fs::read(&out).expect("read jwks"), original);
 
-    let another = generate_public_jwk(dir.path(), "another", "kid-y");
+    let another = generate_public_jwk(dir.path(), "another");
     let third = evidencectl()
         .arg("jwks")
         .arg("--out")

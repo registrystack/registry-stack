@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -74,17 +74,32 @@ governance:
 Do not invent these URIs during the build. Review them with the institution that owns the
 requirement and disclosure decision.
 
-## Create the production target
+## Create complete environment targets
 
-Create exactly one explicit target for this candidate:
+Keep reviewed Evidence semantics and complete environment bindings in one protected branch of the
+deployment repository:
 
 ```text
-institution-evidence/
-  deployment-targets/
-    production/
-      governance.yaml
-      runtime.yaml
+shared/
+  evidence-project/
+environments/
+  local/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+  staging/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+  production/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
 ```
+
+Omit the Mint directories when the deployment uses another OIDC issuer. Every environment target
+is complete. Do not use overlays, environment branches, symlinks, or runtime substitutions. Git
+contains public keys and nonsecret provider configuration, but never private JWKs, HMAC keys,
+provider tokens, auto-auth credentials, access tokens, live responses, or real identifiers.
 
 `governance.yaml` provides bundle-owned production values. It contains version `1`,
 `assuranceProfile: production`, service and issuer, authentication, audit, subject binding, rate
@@ -99,6 +114,12 @@ Set `bundleDirectory` to `<new-candidate-directory>/bundle`, and keep the listen
 loopback or private address. The runtime cannot override the governed service, authentication,
 authority, source, disclosure, or signing fields.
 
+`public-keys/` contains the exact active and published service JWKs named by `governance.yaml`.
+Production and evidence-grade targets bind the matching non-exportable provider key through the
+Transit signer in `runtime.yaml`. Use
+[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+before building the first strict candidate.
+
 ## Build the candidate
 
 Choose a new output path. The command refuses an existing path and does not modify the editable
@@ -106,8 +127,8 @@ project:
 
 ```sh
 evidencectl build \
-  --project "<editable-project>" \
-  --target "<editable-project>/deployment-targets/production" \
+  --project "<deployment-repository>/shared/evidence-project" \
+  --target "<deployment-repository>/environments/production/evidence" \
   --output "<new-candidate-directory>"
 ```
 
@@ -122,20 +143,25 @@ The candidate contains the runtime document and closed bundle:
     derivations/
     schemas/
     fixtures/
+    public-keys/
 ```
 
 The build validates the generated bundle through the real `evidence` binary and every referenced
 fixture before it publishes the candidate. It does not contact an identity provider, Mint, or a
-source endpoint. Record the printed bundle revision with the approved candidate path.
+source endpoint. It validates governed public-key semantics without contacting Transit or
+generating an unrelated signing key. The target-host check performs the provider self-test. Record
+the printed bundle revision with the approved candidate path.
 
 ## Provision the target host
 
-Transfer the exact candidate. The operator independently provisions the Evidence Gateway signing key,
-audit HMAC key, subject-binding HMAC key, and source credentials beneath the runtime secret root.
+Transfer the exact candidate. The operator provisions the audit HMAC key, subject-binding HMAC key,
+and source credentials beneath the runtime secret root. The workload-local Transit proxy holds the
+provider token and auto-auth state; Evidence Gateway receives only access to the configured Unix
+socket. Its non-exportable signing key remains in Transit.
 Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity.
 
-Run the grouped offline ceremony once after the candidate, runtime bindings, trust files, and
-secrets are in place:
+Start the workload-local Transit proxy. Run the grouped offline ceremony once after the candidate,
+runtime bindings, trust files, secrets, and proxy socket are in place:
 
 ```sh
 evidencectl doctor --project "<candidate>"
@@ -190,8 +216,8 @@ evidence verify \
 evidence --runtime "<candidate>/runtime.yaml" verify-audit
 ```
 
-The signing policy and secret references are governed bundle content. Rotate a key by introducing a
-new key identifier through the key-rotation procedure, not by replacing a key under an unchanged
+The signing policy and secret references are governed bundle content. Rotate a key by publishing a
+new public JWK whose `kid` is its RFC 7638 thumbprint, not by replacing a key under an unchanged
 identifier.
 
 ## Expected result
@@ -213,4 +239,5 @@ rm -f "<owner-only-curl-config>"
 
 - [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
 - [Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
+- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
 - [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

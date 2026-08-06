@@ -6,8 +6,9 @@ use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
+use registry_platform_crypto::{PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -246,7 +247,8 @@ pub struct Bundle {
     pub fact_schemas: BTreeMap<String, JsonValue>,
     pub codelists: BTreeMap<String, Codelist>,
     pub fixtures: BTreeMap<String, YamlValue>,
-    pub retired_public_jwks: BTreeMap<String, JsonValue>,
+    pub active_public_jwk: PublicJwk,
+    pub published_public_jwks: BTreeMap<String, PublicJwk>,
 }
 
 /// One captured operator runtime configuration and its bound trust anchors.
@@ -365,7 +367,7 @@ impl Bundle {
         let codelists = load_codelists(&config, &files)?;
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(&config, &files)?;
-        let retired_public_jwks = load_retired_public_jwks(&config, &files)?;
+        let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let revision = compute_revision(&files)?;
 
         Ok(Self {
@@ -377,7 +379,8 @@ impl Bundle {
             fact_schemas,
             codelists,
             fixtures,
-            retired_public_jwks,
+            active_public_jwk,
+            published_public_jwks,
         })
     }
 
@@ -719,7 +722,8 @@ fn validate_file_closure(
             }
         }
     }
-    for path in &config.signing.retired_public_jwk_files {
+    expected.insert(config.signing.active_public_jwk_file.as_str().to_owned());
+    for path in &config.signing.published_public_jwk_files {
         expected.insert(path.as_str().to_owned());
     }
     expected.extend(reviewed_schema_paths(config, files)?);
@@ -1689,27 +1693,78 @@ impl FixtureCategories {
     }
 }
 
-fn load_retired_public_jwks(
+fn load_public_jwks(
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, JsonValue>, BundleError> {
+) -> Result<(PublicJwk, BTreeMap<String, PublicJwk>), BundleError> {
+    let active_path = config.signing.active_public_jwk_file.as_str();
+    let active = files
+        .get(active_path)
+        .ok_or(invalid_artifact("active public JWK is missing"))
+        .and_then(|bytes| parse_service_public_jwk(bytes))
+        .map_err(|error| error.in_artifact(active_path))?;
+    let active_kid = active
+        .kid
+        .as_deref()
+        .ok_or(invalid_artifact("active public JWK kid is missing"))?;
+    validate_public_jwk_path(active_path, active_kid)
+        .map_err(|error| error.in_artifact(active_path))?;
+    if config
+        .signing
+        .revoked_key_ids
+        .iter()
+        .any(|kid| kid == active_kid)
+    {
+        return Err(invalid_artifact("active public JWK is revoked").in_artifact(active_path));
+    }
+
     let mut keys = BTreeMap::new();
-    for path in &config.signing.retired_public_jwk_files {
+    for path in &config.signing.published_public_jwk_files {
         let path = path.as_str();
-        let load = || -> Result<(String, JsonMap<String, JsonValue>), BundleError> {
+        let load = || -> Result<(String, PublicJwk), BundleError> {
             let bytes = files
                 .get(path)
-                .ok_or(invalid_artifact("retired public JWK is missing"))?;
-            let object = parse_strict_json_object(bytes)?;
-            let kid = validate_public_jwk(&object, &config.signing.active_key_id)?;
-            Ok((kid, object))
+                .ok_or(invalid_artifact("published public JWK is missing"))?;
+            let jwk = parse_service_public_jwk(bytes)?;
+            let kid = jwk
+                .kid
+                .as_deref()
+                .ok_or(invalid_artifact("published public JWK kid is missing"))?
+                .to_owned();
+            validate_public_jwk_path(path, &kid)?;
+            if kid == active_kid {
+                return Err(invalid_artifact(
+                    "published public JWK duplicates the active key",
+                ));
+            }
+            if config
+                .signing
+                .revoked_key_ids
+                .iter()
+                .any(|revoked| revoked == &kid)
+            {
+                return Err(invalid_artifact("published public JWK is revoked"));
+            }
+            Ok((kid, jwk))
         };
-        let (kid, object) = load().map_err(|error| error.in_artifact(path))?;
-        if keys.insert(kid, JsonValue::Object(object)).is_some() {
-            return Err(invalid_artifact("retired public JWK kid is duplicated").in_artifact(path));
+        let (kid, jwk) = load().map_err(|error| error.in_artifact(path))?;
+        if keys.insert(kid, jwk).is_some() {
+            return Err(
+                invalid_artifact("published public JWK kid is duplicated").in_artifact(path)
+            );
         }
     }
-    Ok(keys)
+    Ok((active, keys))
+}
+
+fn validate_public_jwk_path(path: &str, kid: &str) -> Result<(), BundleError> {
+    let expected = format!("public-keys/{kid}.jwk.json");
+    if path != expected {
+        return Err(invalid_artifact(
+            "public JWK filename does not match its RFC 7638 thumbprint",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_strict_json_object(bytes: &[u8]) -> Result<JsonMap<String, JsonValue>, BundleError> {
@@ -1753,54 +1808,36 @@ fn parse_strict_json_object(bytes: &[u8]) -> Result<JsonMap<String, JsonValue>, 
     Ok(object.0)
 }
 
-fn validate_public_jwk(
-    object: &JsonMap<String, JsonValue>,
-    active_key_id: &str,
-) -> Result<String, BundleError> {
-    const ALLOWED: [&str; 7] = ["kty", "crv", "x", "kid", "alg", "use", "key_ops"];
-    if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
-        || object.get("kty").and_then(JsonValue::as_str) != Some("OKP")
-        || object.get("crv").and_then(JsonValue::as_str) != Some("Ed25519")
-        || object.get("alg").and_then(JsonValue::as_str) != Some("EdDSA")
+fn parse_service_public_jwk(bytes: &[u8]) -> Result<PublicJwk, BundleError> {
+    const EXACT_MEMBERS: [&str; 6] = ["kty", "crv", "x", "y", "alg", "kid"];
+    let object = parse_strict_json_object(bytes)?;
+    if object.len() != EXACT_MEMBERS.len()
         || object
-            .get("use")
-            .is_some_and(|value| value.as_str() != Some("sig"))
+            .keys()
+            .any(|member| !EXACT_MEMBERS.contains(&member.as_str()))
     {
+        return Err(invalid_artifact("service public JWK members are not exact"));
+    }
+    let json = serde_json::to_string(&object)
+        .map_err(|_| invalid_artifact("service public JWK JSON is invalid"))?;
+    let jwk =
+        PublicJwk::parse(&json).map_err(|_| invalid_artifact("service public JWK is invalid"))?;
+    if jwk.algorithm().ok() != Some(ProviderSigningAlgorithm::Es256)
+        || jwk.kty != "EC"
+        || jwk.crv.as_deref() != Some("P-256")
+        || jwk.alg.as_deref() != Some("ES256")
+    {
+        return Err(invalid_artifact("service public JWK must be ES256 P-256"));
+    }
+    let thumbprint = jwk
+        .jkt()
+        .map_err(|_| invalid_artifact("service public JWK thumbprint is invalid"))?;
+    if thumbprint.len() != 43 || jwk.kid.as_deref() != Some(thumbprint.as_str()) {
         return Err(invalid_artifact(
-            "retired JWK is not an allowed public EdDSA key",
+            "service public JWK kid must equal its RFC 7638 thumbprint",
         ));
     }
-    let kid = object
-        .get("kid")
-        .and_then(JsonValue::as_str)
-        .filter(|kid| {
-            !kid.is_empty()
-                && kid.len() <= 256
-                && !kid.chars().any(char::is_control)
-                && *kid != active_key_id
-        })
-        .ok_or(invalid_artifact("retired JWK kid is invalid"))?;
-    let x = object
-        .get("x")
-        .and_then(JsonValue::as_str)
-        .ok_or(invalid_artifact("retired JWK public coordinate is missing"))?;
-    let decoded = URL_SAFE_NO_PAD
-        .decode(x)
-        .map_err(|_| invalid_artifact("retired JWK public coordinate is invalid"))?;
-    if decoded.len() != 32 {
-        return Err(invalid_artifact(
-            "retired JWK public coordinate has the wrong size",
-        ));
-    }
-    if let Some(operations) = object.get("key_ops") {
-        let operations = operations
-            .as_array()
-            .ok_or(invalid_artifact("retired JWK key_ops is invalid"))?;
-        if operations.len() != 1 || operations[0].as_str() != Some("verify") {
-            return Err(invalid_artifact("retired JWK key_ops is not verify-only"));
-        }
-    }
-    Ok(kid.to_owned())
+    Ok(jwk)
 }
 
 fn concept_codelist_path(constraints: &OrderedMap<YamlValue>) -> Result<&str, BundleError> {
@@ -1821,6 +1858,44 @@ fn validate_runtime_bindings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Result<(), BundleError> {
+    let signer_matches_assurance = match bundle.assurance_profile {
+        crate::config::AssuranceProfile::Local => runtime.signer.is_local_jwk(),
+        crate::config::AssuranceProfile::Production
+        | crate::config::AssuranceProfile::EvidenceGrade => runtime.signer.is_transit(),
+    };
+    if !signer_matches_assurance {
+        return Err(invalid_artifact(
+            "runtime signer kind does not match the bundle assurance profile",
+        ));
+    }
+    let audit_ref = &bundle.audit.hash_secret_ref;
+    let subject_ref = &bundle.subject_binding.secret_ref;
+    if let Some(signing_ref) = runtime.signer.private_key_ref() {
+        if signing_ref == audit_ref || signing_ref == subject_ref {
+            return Err(invalid_artifact(
+                "the local signing key reference must be distinct from audit and subject-binding references",
+            ));
+        }
+    }
+    let secret_root = Path::new(&runtime.secret_providers.file.root);
+    let audit_path = Path::new(&runtime.audit_storage.path);
+    let configured_secret_paths = [
+        Some(audit_ref),
+        Some(subject_ref),
+        runtime.signer.private_key_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|reference| reference.as_str().strip_prefix("secret:file/"))
+    .map(|name| secret_root.join(name));
+    if configured_secret_paths
+        .into_iter()
+        .any(|path| path == audit_path)
+    {
+        return Err(invalid_artifact(
+            "the audit storage path must not resolve to configured secret material",
+        ));
+    }
     let required = bundle
         .sources
         .iter()
@@ -2134,15 +2209,13 @@ mod tests {
     #[test]
     fn strict_public_jwk_rejects_private_material_and_duplicate_members() {
         let private = br#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"old","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","d":"secret"}"#;
-        let object = parse_strict_json_object(private).expect("JSON parses");
-        assert!(validate_public_jwk(&object, "active").is_err());
+        assert!(parse_service_public_jwk(private).is_err());
 
         let duplicate = br#"{"kty":"OKP","kty":"OKP"}"#;
         assert!(parse_strict_json_object(duplicate).is_err());
 
         let control_kid = br#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"old\u000aidentifier","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#;
-        let object = parse_strict_json_object(control_kid).expect("JSON parses");
-        assert!(validate_public_jwk(&object, "active").is_err());
+        assert!(parse_service_public_jwk(control_kid).is_err());
     }
 
     #[cfg(unix)]
@@ -2411,7 +2484,7 @@ mod tests {
         fs::write(
             &runtime_path,
             format!(
-                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
+                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),

@@ -70,8 +70,9 @@ and completion means every Definition of Done row passes on one revision.
 
 Governed configuration, Rhai scripts, schemas, codelists, and fixtures are one
 trusted, immutable, startup-only bundle. A separate closed runtime file owns
-only process-local listener, filesystem, audit-storage, secret-mount, and TLS
-trust bindings and cannot override the bundle. Rust owns authentication,
+only process-local listener, filesystem, audit-storage, secret-mount, signer
+transport and pinned version, and TLS trust bindings and cannot override the
+bundle or governed active public key. Rust owns authentication,
 authorization, selector validation and minimization, credentials, fixed
 networking, path/header authority, response projection, script capabilities
 and limits, output validation, evidence construction, signing, and audit. Rhai

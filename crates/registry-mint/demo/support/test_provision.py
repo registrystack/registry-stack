@@ -11,6 +11,9 @@ crates/registry-mint/demo/support/test_provision.py`; the tests skip where
 """
 
 import importlib.util
+import base64
+import hashlib
+import json
 import os
 import stat
 import sys
@@ -70,6 +73,22 @@ class SecretFileModeTests(unittest.TestCase):
         path = provision.write(self.root / "ca.pem", "not-a-real-certificate")
 
         self.assertEqual(0o644, stat.S_IMODE(path.stat().st_mode))
+
+    def test_service_key_is_es256_with_an_rfc7638_identifier(self):
+        private, public = provision.p256_jwk()
+        members = {name: public[name] for name in ("crv", "kty", "x", "y")}
+        digest = hashlib.sha256(
+            json.dumps(members, sort_keys=True, separators=(",", ":")).encode()
+        ).digest()
+        expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+        self.assertEqual("ES256", public["alg"])
+        self.assertEqual("EC", public["kty"])
+        self.assertEqual("P-256", public["crv"])
+        self.assertEqual(expected, public["kid"])
+        self.assertEqual(expected, private["kid"])
+        self.assertIn("d", private)
+        self.assertNotIn("d", public)
 
 
 if __name__ == "__main__":

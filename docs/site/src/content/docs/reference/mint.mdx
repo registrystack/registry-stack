@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -50,9 +50,12 @@ following tables group the surface by the struct that owns each field.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `version` | integer | required | Must equal `1`. |
+| `validationMode` | `strict` or `supervised-local-development` | `strict` | Strict mode requires Transit. Supervised local development also permits `local-jwk`. |
 | `issuer` | string (URL) | required | Must be `https`, have a host, and carry no credentials, query, or fragment. |
 | `listener` | object | required | See [Listener](#listener). |
 | `signing` | object | required | See [Signing](#signing). |
+| `signer` | object | required | The local-JWK or Transit signing provider. |
+| `secretProviders` | object | required | File-secret root for local signing and audit masters. |
 | `audit` | object | required | See [Audit](#audit). |
 | `accessTokens` | object | required | See [Access tokens](#access-tokens). |
 | `clientAssertion` | object | required | See [Client assertion](#client-assertion). |
@@ -71,11 +74,20 @@ following tables group the surface by the struct that owns each field.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `algorithm` | enum: `EdDSA`, `ES256`, `RS256` | required | Shared by minted tokens and accepted client assertions. |
-| `activeKeyId` | string (1..=256 bytes) | required | Must match the `kid` of the private JWK at `activeKeyFile`. |
-| `activeKeyFile` | path | required | Private JWK. Must be a regular, owner-only, single-link file. |
-| `retiredPublicJwkFiles` | list of paths | `[]` | Public JWKs of keys that no longer sign but may still have live tokens. |
+| `algorithm` | `ES256` | required | Fixed service-token signing algorithm. Client assertions have their own allowlist. |
+| `activePublicJwkFile` | path | required | Exact public P-256 JWK for the signer. Its `kid` must be the derived RFC 7638 thumbprint. |
+| `publishedPublicJwkFiles` | list of paths | `[]` | Other current public P-256 JWKs that remain in JWKS during a planned rotation. |
+| `revokedKeyIds` | list of thumbprints | `[]` | Denylisted service keys. They cannot be active, published, or returned by JWKS. |
 | `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, or `/.well-known/oauth-authorization-server`. |
+
+### Signer
+
+`signer.kind` is `transit` in strict mode and `local-jwk` only for supervised local development.
+A Transit configuration has `unixSocketPath`, `mount`, `keyName`, `keyVersion`, and
+`timeoutMilliseconds`. The Unix socket points to a workload-local proxy, not a network provider.
+The key version is nonzero and pinned. Mint verifies the public key, Transit custody controls, key
+version, and a signature before readiness admits traffic. A local-JWK configuration has only
+`privateKeyRef`; its resolved key must match `activePublicJwkFile`.
 
 ### Audit
 
@@ -83,7 +95,7 @@ following tables group the surface by the struct that owns each field.
 | --- | --- | --- | --- |
 | `path` | path | required | One keyed JSONL chain. The parent directory and existing chain must be owner-only. |
 | `maximumFileBytes` | integer (`u64`) | required | Per-segment rotation threshold, from `1048576` through `1099511627776` bytes. |
-| `hashKeyFile` | path | required | At least 32 bytes in a regular, owner-only, single-link file. Must differ from signing and audit paths. |
+| `hashKeyRef` | `secret:file/<name>` | required | At least 32 bytes in a regular, owner-only file beneath `secretProviders.file.root`. Must differ from the local signing key reference. |
 | `hashKeyVersion` | integer (`u32`) | required | Must be non-zero. Labels keyed pseudonyms so an operator can identify the correlating key generation. |
 
 Mint takes a single-writer lock, verifies the active chain at startup, and synchronizes the chain
@@ -191,8 +203,8 @@ configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
 }
 ```
 
-`access_token` is a compact JWS with header `{"alg": "<signing.algorithm>", "typ": "at+jwt",
-"kid": "<signing.activeKeyId>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
+`access_token` is a compact JWS with header `{"alg": "ES256", "typ": "at+jwt",
+"kid": "<RFC-7638-thumbprint>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
 `exp`, `jti`, `client_id`, and `sub` (the principal), plus the authority claims named under
 `accessTokens.claims`. `expires_in` equals `accessTokens.lifetimeSeconds`. Mint durably appends
 the matching token-release audit record before sending this response. If that append fails, the
@@ -217,7 +229,7 @@ Every response body is `{"error": "<code>"}`, from
 | `GET <signing.jwksPath>` (default `/.well-known/jwks.json`) | Public keys for verifying minted tokens, `application/jwk-set+json`. |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and the key set. |
 | `GET /health` | Liveness. |
-| `GET /ready` | Readiness. Returns `503` while no client is registered or after an audit write failure poisons the writer. |
+| `GET /ready` | Readiness. Returns `503` while no client is registered, after an audit write failure poisons the writer, or while the signing provider is unavailable. Provider readiness recovers after a successful self-test. |
 
 ## How a client, Registry Mint, and Evidence Gateway interact
 
@@ -278,8 +290,9 @@ Mint writes: `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `g
 configuration in `crates/registry-evidence/src/auth.rs` (`Authenticator`), reading each claim by
 the name configured there rather than any hardcoded name. Setting `authentication.issuer` and
 `authentication.jwksUri` to Registry Mint's own `issuer` and published key set, and setting each
-claim name to match `accessTokens.claims` on Registry Mint, is what lets one token flow between
-the two.
+claim name to match `accessTokens.claims` on Registry Mint, and setting its required maximum token
+lifetime and `revokedKeyIds`, is what lets one token flow between the two. Evidence Gateway checks
+the key denylist before it selects a cached JWKS entry.
 
 This is proven by tests, not only by matching configuration. `registry-mint`'s
 `tests/evidence_compatibility.rs` drives the real Registry Mint router over a real on-disk

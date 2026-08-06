@@ -1,6 +1,7 @@
 //! Governed runtime configuration verification contracts.
 
 mod config_bundle;
+mod secrets;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -20,6 +21,7 @@ pub use config_bundle::{
     MAX_MANIFEST_BYTES, MAX_SIGNATURE_ENVELOPE_BYTES, MAX_TRUST_ANCHOR_BYTES,
     MAX_TRUST_ANCHOR_SIGNERS,
 };
+pub use secrets::{ProtectedSecret, SecretError, SecretProvider, SecretResolver, MAX_SECRET_BYTES};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DeprecatedConfigField {

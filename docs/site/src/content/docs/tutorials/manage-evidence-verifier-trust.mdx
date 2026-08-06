@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - consumer or verifier
@@ -25,7 +25,7 @@ Through your organization's provider-onboarding process, verify and retain:
 
 - the legal issuer and technical provider identifiers;
 - the expected Evidence Gateway service and JWKS endpoints;
-- the Ed25519 public keys and their `kid` values;
+- the ES256 P-256 public keys and their RFC 7638 thumbprint `kid` values;
 - the audience that identifies your relying party;
 - the requirements, evidence types, purposes, concepts, and configuration revisions you accept;
 - the maximum assertion lifetime and clock skew your decisions allow.
@@ -85,6 +85,6 @@ Remove a retiring key from current verification only after:
 Never make verification fetch a missing key automatically. An unknown `kid` is a trust-change
 signal and must fail closed until your organization approves the change.
 
-Provider operators use [Rotate Evidence Gateway signing keys](../move-evidence-to-production-signing/)
+Provider operators use [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
 for the other side of this rotation. Consumers remain independent and do not inherit trust merely
 because the provider published a key.

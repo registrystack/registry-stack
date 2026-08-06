@@ -11,6 +11,7 @@ Set the following absolute paths before starting Compose:
 - `EVIDENCE_CANDIDATE_DIR`, an approved candidate containing `bundle/`.
 - `EVIDENCE_RUNTIME_FILE`, a container-specific runtime document.
 - `EVIDENCE_SECRET_ROOT`, owner-only Evidence secret files.
+- `EVIDENCE_TRANSIT_SOCKET_DIR`, the dedicated directory containing `transit-proxy.sock`.
 - `EVIDENCE_IMAGE`, a reviewed, digest-pinned Evidence image.
 
 The maintained Evidence image runs as UID and GID `65532`; the Compose service pins
@@ -18,9 +19,15 @@ The maintained Evidence image runs as UID and GID `65532`; the Compose service p
 owner-only modes Evidence requires. If you select another reviewed image, record its service UID
 and update the ownership and `user` setting together.
 
-The service mounts the approved bundle, runtime, and secrets read-only. Its named audit volume is
-the only writable Evidence storage. The runtime uses container paths and binds Evidence to the
-static private address assigned in `docker-compose.yaml`.
+The Transit socket directory must be searchable but not writable by the Evidence service identity.
+The proxy owns the directory and creates a mode `0660` socket whose group admits only that Evidence
+identity.
+
+The service mounts the approved bundle, runtime, and secrets read-only. It also mounts the dedicated
+Transit socket directory created by an operator-managed host proxy or sidecar. Evidence receives no
+provider token or auto-auth credential. Its named audit volume is the only writable Evidence
+storage. The runtime uses container paths and binds Evidence to the static private address assigned
+in `docker-compose.yaml`.
 Provision the named volume so UID and GID `65532` can create and append the configured audit file
 before the first start. Do not widen the Evidence process to root to compensate for a root-owned
 volume.
@@ -29,11 +36,13 @@ volume.
 export EVIDENCE_CANDIDATE_DIR='<candidate>'
 export EVIDENCE_RUNTIME_FILE='<runtime.docker.yaml>'
 export EVIDENCE_SECRET_ROOT='<secret-root>'
+export EVIDENCE_TRANSIT_SOCKET_DIR='<transit-socket-directory>'
 export EVIDENCE_IMAGE='<reviewed-evidence-image-by-digest>'
 docker compose -f docker-compose.yaml config
 ```
 
-Run the target-context check before starting the service:
+Start the operator-managed Transit proxy and confirm it created the configured socket. Then run the
+target-context check before starting the service:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm evidence \
@@ -48,10 +57,10 @@ owner or mode checks for the container service identity.
 
 Mint is a separate service and is intentionally absent from the base adapter, so an Evidence-only
 deployment has no Mint configuration dependency. When the deployment has no suitable OIDC issuer,
-add an operator-owned Mint service with its configuration, signing key, client registry, reviewed
-image, and private listener mounted independently. Mint's configured issuer and JWKS URI remain
-public HTTPS identities. Operator routing or split DNS resolves that public identity within the
-Compose network.
+add an operator-owned Mint service with its configuration, public signing keys, client registry,
+reviewed image, private listener, and dedicated Transit socket mounted independently. Mint receives
+no provider token or private signing key. Mint's configured issuer and JWKS URI remain public HTTPS
+identities. Operator routing or split DNS resolves that public identity within the Compose network.
 
 This adapter does not establish image provenance, TLS, routing, client registration, or secret
 ownership. Those remain operator responsibilities.

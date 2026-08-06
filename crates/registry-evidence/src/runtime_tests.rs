@@ -17,7 +17,9 @@ use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
-use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditChainHasher, AuditHashSecret};
+use registry_platform_audit::{
+    verify_jsonl_lines_with_hasher, AuditChainHasher, AuditChainProfile,
+};
 use registry_platform_crypto::{
     sign, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
     SigningProvider,
@@ -62,8 +64,9 @@ use crate::{
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
-const AUTH_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"acceptance-auth-key"}"#;
-const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"acceptance-evidence-key"}"#;
+const AUTH_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"acceptance-auth-key"}"#;
+const EVIDENCE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 const TOKEN_ISSUER: &str = "https://identity.invalid";
 const TOKEN_AUDIENCE: &str = "evidence-fixture";
 const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
@@ -102,7 +105,7 @@ struct PreparedFixture {
     audit_path: PathBuf,
 }
 
-struct FailAfterSelfTestSigner {
+struct FailOnceAfterSelfTestSigner {
     delegate: LocalJwkSigner,
     calls: AtomicUsize,
 }
@@ -329,7 +332,7 @@ impl SigningProvider for UnavailableReadinessSigner {
 }
 
 #[async_trait]
-impl SigningProvider for FailAfterSelfTestSigner {
+impl SigningProvider for FailOnceAfterSelfTestSigner {
     fn algorithm(&self) -> SigningAlgorithm {
         self.delegate.algorithm()
     }
@@ -343,14 +346,18 @@ impl SigningProvider for FailAfterSelfTestSigner {
     }
 
     fn readiness(&self) -> KeyReadiness {
-        KeyReadiness::Ready
+        if self.calls.load(Ordering::Acquire) == 2 {
+            KeyReadiness::NotReady
+        } else {
+            KeyReadiness::Ready
+        }
     }
 
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
-        if self.calls.fetch_add(1, Ordering::AcqRel) == 0 {
-            self.delegate.sign(payload).await
-        } else {
-            Err(SigningError::external("synthetic unavailable signer"))
+        match self.calls.fetch_add(1, Ordering::AcqRel) {
+            0 => self.delegate.sign(payload).await,
+            1 => Err(SigningError::external("synthetic unavailable signer")),
+            _ => self.delegate.sign(payload).await,
         }
     }
 }
@@ -1298,10 +1305,11 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
 
     let mut holder_request = request.clone();
     holder_request.holder_key = Some(HolderPublicKey {
-        kty: "OKP".to_owned(),
-        crv: "Ed25519".to_owned(),
-        x: "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc".to_owned(),
-        alg: Some("EdDSA".to_owned()),
+        kty: "EC".to_owned(),
+        crv: "P-256".to_owned(),
+        x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_owned(),
+        y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_owned(),
+        alg: Some("ES256".to_owned()),
         kid: Some("acceptable-holder-key".to_owned()),
     });
     assert!(
@@ -1638,7 +1646,7 @@ async fn readiness_fails_for_missing_credentials_tampered_audit_and_unready_sign
     let provider: Arc<dyn SigningProvider> = Arc::new(UnavailableReadinessSigner {
         delegate: LocalJwkSigner::new(private).expect("test signer builds"),
     });
-    let signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+    let signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
         .await
         .expect("provider self-test succeeds independently of readiness posture");
     runtime.replace_signer_for_test(signer);
@@ -1837,15 +1845,16 @@ async fn signing_failure_is_transient_audited_and_never_releases_unsigned_eviden
             .expect("runtime initializes");
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
     let delegate = LocalJwkSigner::new(private).expect("local signer builds");
-    let provider: Arc<dyn SigningProvider> = Arc::new(FailAfterSelfTestSigner {
+    let provider = Arc::new(FailOnceAfterSelfTestSigner {
         delegate,
         calls: AtomicUsize::new(0),
     });
-    let failing_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+    let signing_provider: Arc<dyn SigningProvider> = provider.clone();
+    let failing_signer = EvidenceSigner::initialize(signing_provider, EVIDENCE_KEY_ID)
         .await
         .expect("signer passes its startup self-test");
     runtime.replace_signer_for_test(failing_signer);
-    mount_adult_source(&prepared.server, None).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
 
     let error = runtime
         .evaluate(
@@ -1856,10 +1865,27 @@ async fn signing_failure_is_transient_audited_and_never_releases_unsigned_eviden
         .await
         .expect_err("signing failure cannot produce any success representation");
     assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    assert_eq!(provider.readiness(), KeyReadiness::NotReady);
+    assert!(
+        runtime.ready().await,
+        "readiness retries a failed provider so load-balanced replicas can recover"
+    );
+    assert_eq!(provider.readiness(), KeyReadiness::Ready);
+
+    runtime
+        .evaluate(
+            "operation-signing-recovered",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect("a later signed request retries the provider and recovers");
+    assert!(runtime.ready().await);
+
     let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
-    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 1);
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 2);
     assert_eq!(audit.matches("\"decision\":\"signing-failure\"").count(), 1);
-    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
     for canary in privacy_canaries() {
         assert!(!audit.contains(canary));
     }
@@ -2302,7 +2328,7 @@ async fn unsigned_envelope_is_exact_audited_and_never_a_signing_fallback() {
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
     let delegate = LocalJwkSigner::new(private).expect("local signer builds");
     let provider: Arc<dyn SigningProvider> = Arc::new(UnavailableReadinessSigner { delegate });
-    let unready_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+    let unready_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
         .await
         .expect("signer passes its startup self-test");
     runtime.replace_signer_for_test(unready_signer);
@@ -2330,11 +2356,11 @@ async fn signing_failure_returns_a_problem_and_never_an_unsigned_body() {
             .expect("runtime initializes");
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
     let delegate = LocalJwkSigner::new(private).expect("local signer builds");
-    let provider: Arc<dyn SigningProvider> = Arc::new(FailAfterSelfTestSigner {
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailOnceAfterSelfTestSigner {
         delegate,
         calls: AtomicUsize::new(0),
     });
-    let failing_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+    let failing_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
         .await
         .expect("signer passes its startup self-test");
     runtime.replace_signer_for_test(failing_signer);
@@ -2589,7 +2615,7 @@ async fn sd_jwt_format_not_permitted_by_grant() {
         .expect("the credential release records the SD-JWT VC mode");
     assert_eq!(
         credential_release["record"]["signingKeyId"],
-        json!("acceptance-evidence-key")
+        json!(EVIDENCE_KEY_ID)
     );
     assert!(!audit.contains(&request.request_nonce));
     for canary in privacy_canaries() {
@@ -2607,9 +2633,10 @@ async fn sd_jwt_holder_key_with_private_member_rejected() {
 
     for holder_key in [
         json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+            "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
             "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
         }),
         json!({
@@ -2663,11 +2690,11 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
     let mut body = serde_json::to_value(adult_request()).expect("request serializes");
 
     for holder_key in [
-        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "alg": "ES256"}),
-        json!({"kty": "EC", "crv": "P-256", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "alg": "EdDSA"}),
-        json!({"kty": "OKP", "crv": "X25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}),
-        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg"}),
-        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo="}),
+        json!({"kty": "OKP", "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
+        json!({"kty": "EC", "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU", "alg": "EdDSA"}),
+        json!({"kty": "EC", "crv": "P-384", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
+        json!({"kty": "EC", "crv": "P-256", "x": "11qYAYKxCrfVS_7TyWQHOg", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
+        json!({"kty": "EC", "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4=", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
     ] {
         body["holderKey"] = holder_key.clone();
         let response = http
@@ -2708,11 +2735,11 @@ async fn sd_jwt_signing_failure_no_fallback_format() {
             .expect("runtime initializes");
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
     let delegate = LocalJwkSigner::new(private).expect("local signer builds");
-    let provider: Arc<dyn SigningProvider> = Arc::new(FailAfterSelfTestSigner {
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailOnceAfterSelfTestSigner {
         delegate,
         calls: AtomicUsize::new(0),
     });
-    let failing_signer = EvidenceSigner::initialize(provider, "acceptance-evidence-key")
+    let failing_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
         .await
         .expect("signer passes its startup self-test");
     runtime.replace_signer_for_test(failing_signer);
@@ -2956,6 +2983,7 @@ fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> Str
             .iter()
             .map(|output| json!({"concept": output.concept, "form": expected_form_document(&output.form)}))
             .collect::<Vec<_>>(),
+        "revokedKeyIds": policy.revoked_key_ids,
         "maximumAssertionLifetimeSeconds": policy.maximum_assertion_lifetime.as_secs(),
         "clockSkewSeconds": policy.clock_skew.as_secs(),
     });
@@ -3098,6 +3126,7 @@ fn verification_policy_stub(
         request_nonce: request.request_nonce.clone(),
         expected_subjects: Vec::new(),
         expected_outputs: Vec::new(),
+        revoked_key_ids: Vec::new(),
         maximum_assertion_lifetime: Duration::from_secs(48 * 60 * 60),
         now: Utc::now(),
         clock_skew: Duration::from_secs(30),
@@ -4195,7 +4224,7 @@ fn authenticator() -> Authenticator {
         TokenVerifierConfig::access_token_profile(
             TOKEN_ISSUER,
             vec![TOKEN_AUDIENCE.to_owned()],
-            vec![Algorithm::EdDSA],
+            vec![Algorithm::ES256],
             vec!["at+jwt".to_owned()],
         ),
         fetcher,
@@ -4224,7 +4253,7 @@ fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
         TokenVerifierConfig::access_token_profile(
             TOKEN_ISSUER,
             vec![TOKEN_AUDIENCE.to_owned()],
-            vec![Algorithm::EdDSA],
+            vec![Algorithm::ES256],
             vec!["at+jwt".to_owned()],
         ),
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
@@ -4261,7 +4290,7 @@ fn access_token_for_issuer(issuer: &str, principal: &str, extra: Option<Value>) 
         "aud": TOKEN_AUDIENCE,
         "sub": principal,
         "iat": now - 1,
-        "exp": now + 3600,
+        "exp": now + 298,
         "evidence_tags": ["fixture-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     });
@@ -4277,7 +4306,7 @@ fn access_token_for_issuer(issuer: &str, principal: &str, extra: Option<Value>) 
 fn signed_access_token(claims: Value) -> String {
     let header = URL_SAFE_NO_PAD.encode(
         serde_json::to_vec(&json!({
-            "alg": "EdDSA",
+            "alg": "ES256",
             "kid": "acceptance-auth-key",
             "typ": "at+jwt"
         }))
@@ -4710,8 +4739,8 @@ fn rewrite_deployment_values(bundle_root: &Path, source_origin: &str) {
     replace_exact(&mut text, "https://source.invalid", source_origin, 4);
     replace_exact(
         &mut text,
-        "fixture-key-2026-01",
-        "acceptance-evidence-key",
+        "assuranceProfile: evidence-grade",
+        "assuranceProfile: local",
         1,
     );
     fs::write(path, text).expect("deployment-only fixture rewrite succeeds");
@@ -4799,6 +4828,9 @@ listener:
 secretProviders:
   file:
     root: {}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
 auditStorage:
   path: {}
   maximumFileBytes: {}
@@ -5277,10 +5309,11 @@ fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
 }
 
 fn acceptance_audit_hasher() -> AuditChainHasher {
-    AuditChainHasher::keyed(
-        AuditHashSecret::new(b"audit-hash-secret-canary-32-bytes-minimum".to_vec())
-            .expect("the acceptance audit secret is accepted"),
-    )
+    AuditChainProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        b"audit-hash-secret-canary-32-bytes-minimum".to_vec(),
+    ))
+    .expect("the acceptance audit chain key derives")
+    .hasher()
 }
 
 /// Distinct evidence identities across every disclosure-release record.
@@ -5690,7 +5723,7 @@ impl SustainedFixture {
 ///
 /// Every measured request runs token verification, rate limiting, Rhai request
 /// preparation, one outbound source call, Rhai extraction, evidence
-/// construction, Ed25519 signing, and two durable audit appends, over real
+/// construction, ES256 signing, and two durable audit appends, over real
 /// sockets against the real router. At 1000 requests per second that is 2000
 /// audit appends per second.
 ///

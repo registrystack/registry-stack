@@ -239,7 +239,11 @@ impl Authenticator {
             config.audiences.clone(),
             algorithms,
             token_types,
-        );
+        )
+        .with_denied_kids(config.revoked_key_ids.iter().cloned().collect())
+        .with_max_token_lifetime(Some(Duration::from_secs(
+            config.maximum_token_lifetime_seconds,
+        )));
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
