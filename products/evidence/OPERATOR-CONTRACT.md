@@ -18,7 +18,7 @@ The supported native deployment has:
   fallback;
 - reviewed requester and subject-authority mappings for named requirement
   revisions, purposes, audiences, roles, selector profiles, and value origins;
-- fixed, bounded HTTP JSON source requests with fixed or selector-bound paths,
+- fixed, bounded HTTP JSON source requests with fixed or tagged selector/prior-fact-bound paths,
   fixed non-secret headers, client-side response projection, denied redirects,
   logical private-CA trust profiles, and generic Basic, static Bearer, static
   API-key, or OAuth 2.0 client-credentials authentication through secret
@@ -458,8 +458,9 @@ resolved authoritative record. When count plus one minimized result is unavailab
 request may retrieve at most two minimally projected results solely to detect
 ambiguity.
 
-Every source declares its acquisition posture. Requirements inherit the
-posture of their configured source:
+Every source declares its acquisition posture. A single requirement inherits
+its source posture. A search-then-fetch requirement takes the weaker posture
+of its search and fetch sources:
 
 | Posture | Operator claim |
 |---|---|
@@ -476,9 +477,17 @@ cannot be closed at that boundary must use `record-transformed`, even when
 local projection and Rhai emit only narrow facts.
 
 Bundle-fixed headers cannot set authentication, routing, cookies, framing,
-forwarding, proxy, or tracing fields. Selector-bound path placeholders occupy
-complete segments and Rust expands them directly from already authorized
-selectors. Scripts render only query pairs and one JSON body.
+forwarding, proxy, or tracing fields. Tagged path placeholders occupy complete
+segments and Rust expands them directly from already authorized selectors or,
+only for a fixed fetch, a scalar property in the validated search FactSet.
+Scripts render only query pairs and one JSON body and cannot select the binding
+origin.
+
+Each requirement declares exactly `single` or `search-then-fetch`. The latter
+fixes both source identifiers at startup, performs the fetch only after a
+unique schema-valid search match, and has a hard two-call ceiling. It is not a
+workflow surface: neither a response nor Rhai may choose a source, origin,
+method, credentials, retry, or further call.
 
 A source may name a logical TLS trust profile. `runtime.yaml` binds it to one
 bounded PEM CA file. Hostname and fixed-origin verification remain mandatory;
@@ -489,18 +498,18 @@ there is no insecure or trust-all mode. Version 1 ignores `HTTP_PROXY`,
 
 After successful authentication, the configured audit sink must durably accept
 a minimal authorization-refusal event before a generic `403` is returned. It
-must durably accept the access-attempt event before the first evidence-data
+must durably accept one access-attempt event before each actual evidence-data
 source read and the disclosure-release event after signing and before response
 release. Any failure blocks the applicable action and returns a generic `503`
 when an HTTP response remains possible.
 
 Authorized-material audit events contain reviewed identifiers and decision
 categories, never raw selector values, per-field selector hashes, source
-values, Supported Values, credentials, tokens, or raw subject identifiers.
-When correlation is required, one keyed, domain-separated, versioned pseudonym
-covers the complete canonical role, selector-profile identifier, ordered field
-names, and selector value bundle. It must not be globally stable across purposes
-or audiences.
+values, prior facts, intermediate lookup identifiers, Supported Values,
+credentials, tokens, or raw subject identifiers. When correlation is required,
+one keyed, domain-separated, versioned pseudonym covers the complete canonical
+role, selector-profile identifier, ordered field names, and selector value
+bundle. It must not be globally stable across purposes or audiences.
 
 After successful authentication, every authorization refusal writes one
 standalone minimal native event before the generic `403` is returned. The event
@@ -528,10 +537,10 @@ excluded from logs, metrics, traces, snapshots, panics, and errors.
 Audit and operational logging are separate channels and operators must not
 confuse them. The audit chain is the accountability record: durable, complete,
 tamper-evident, and it has no severity levels and no way to turn records off.
-Every authorized evidence evaluation writes two records: the access-attempt
-event durable before any source read and the disclosure-release or terminal
-event required by its outcome. Every authenticated authorization refusal writes
-one minimal denial event before its response. Those gates are pinned by frozen
+Every authorized evidence evaluation writes one access-attempt event durable
+before each actual source read and the disclosure-release or terminal event
+required by its outcome. Every authenticated authorization refusal writes one
+minimal denial event before its response. Those gates are pinned by frozen
 Version 1 security invariants and are not configurable. The `tracing` channel
 is the operational and diagnostic record: it has levels, it is buffered and
 lossy, and it is cheap. The rule for operators and integrators is:

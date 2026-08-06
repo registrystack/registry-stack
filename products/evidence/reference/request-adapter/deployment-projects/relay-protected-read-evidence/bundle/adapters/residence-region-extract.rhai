@@ -5,7 +5,8 @@
 // of two against an exact reference filter, which is the smallest page that
 // can still distinguish one match from several.
 
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let records = source_response["data"];
     let has_more = source_response["pagination"]["has_more"];
 

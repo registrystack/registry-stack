@@ -43,15 +43,16 @@ configuration variant is not part of ordinary adoption.
 
 Decide compatibility before authoring scripts. A Version 1 provider must:
 
-- expose one bounded lookup at one fixed origin over HTTPS, except numeric
-  loopback HTTP used only by deterministic local tests;
+- expose a bounded lookup at a fixed origin over HTTPS, except numeric loopback
+  HTTP used only by deterministic local tests;
 - accept one fixed `GET` or `POST` and return JSON with media type
   `application/json` or `application/graphql-response+json`;
 - let one response distinguish zero, one, and multiple matches, either through
   a trustworthy total count plus at most one minimized result, or through a
   caller-controlled hard result limit of at least two;
-- not require page traversal, a response-provided next URL, a retry, or a
-  second evidence-data request to establish uniqueness;
+- not require page traversal, a response-provided next URL, or a retry. A
+  provider may require the closed search-then-fetch profile, but both endpoints
+  and the scalar fact binding must be reviewable and fixed before startup;
 - support a query/body/path lookup narrow enough that Evidence does not fetch
   a broad candidate set; and
 - provide the complete facts and relationship-set completeness needed by the
@@ -65,8 +66,9 @@ outside Evidence rather than weakening the one-request and no-matcher boundary.
 The hard result limit itself is governed adapter policy. Its value, such as
 `resultLimit: 2` in the source's `adapterParameters`, is declared by the
 reviewed source configuration and rendered into the request by that source's
-preparation script. Rust enforces the generic one-request, projection, and
-response bounds around it and holds no domain rule about a two-result ceiling.
+preparation script. Rust enforces the generic one-request-per-stage,
+projection, and response bounds around it and holds no domain rule about a
+two-result ceiling.
 The number is not a property of any source product; a different reviewed
 configuration may declare a different limit as long as one response still
 distinguishes zero, one, and multiple matches.
@@ -203,7 +205,7 @@ Each requirement declares these fields:
 | Key | Required | Meaning |
 |---|---|---|
 | `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
-| `source` | yes | One configured source id. Version 1 does not perform multi-source fulfillment. |
+| `acquisition` | yes | Exactly `{kind: single, source: <id>}` or `{kind: search-then-fetch, search: <id>, fetch: <id>}`. The latter has a hard two-call ceiling and no response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
 | `subjectRoles` | yes | Complete role set, `cardinality: one`, and permitted selector profile ids. Public subject array order is not semantic; roles are resolved uniquely and canonicalized to declaration order. |
 | `referenceFrameworks`, `evidenceType` | yes | Governed legal/procedural framework URIs and the exact Evidence Type URI. |
@@ -404,9 +406,9 @@ request:
 | `method` | yes | Fixed `GET` or `POST`. |
 | `path` | conditional | Fixed absolute path. Exactly one of `path` or `pathTemplate` is required. |
 | `pathTemplate` | conditional | Fixed absolute path with complete-segment placeholders resolved by Rust. |
-| `pathBindings` | with template | Closed placeholder-to-selector bindings. |
+| `pathBindings` | with template | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. |
 | `fixedHeaders` | no | Ordered non-secret constants. Names are unique after ASCII case folding. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare`. |
+| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare`; an empty array is valid only for a fetch source. |
 | `prepareScript` | yes | Bundle-relative Rhai script implementing `prepare/2`. |
 | `adapterParameters` | yes | Closed non-secret JSON parameters shared by preparation and extraction. `{}` is valid. |
 | `adapterParametersSchema` | yes | Closed bundle-relative JSON Schema for those parameters. |
@@ -437,14 +439,17 @@ request:
   pathTemplate: /api/records/{record_reference}
   pathBindings:
     record_reference:
+      from: selector
       role: subject
       profile: record-reference-v1
       field: record_reference
 ```
 
-Each placeholder occupies one complete path segment and has exactly one closed
-binding. Rust reads the value directly from an already validated and authorized
-selector. Scripts do not return path values. A value must be non-empty bounded
+Each placeholder occupies one complete path segment and has exactly one tagged
+binding. Rust reads `from: selector` directly from an already validated and
+authorized selector. On a fetch source, `from: prior-fact` may instead name a
+scalar property required by the search fact schema. Scripts do not choose path
+binding origins or return path values. A value must be non-empty bounded
 UTF-8 and cannot contain `/`, `\`, `%`, controls, `.` or `..`. Rust
 percent-encodes it exactly once. Templates cannot contain a scheme, authority,
 query, fragment, empty segment, or dot segment. Exact expanded-path fixtures

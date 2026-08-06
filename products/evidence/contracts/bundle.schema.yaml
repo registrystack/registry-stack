@@ -332,7 +332,7 @@ $defs:
             value: {type: string, maxLength: 4096, pattern: '^[^\u0000-\u001F\u007F-\u009F]*$'}
       selectorInputs:
         type: array
-        minItems: 1
+        minItems: 0
         maxItems: 8
         items: {$ref: '#/$defs/selector-input'}
       prepareScript: {$ref: '#/$defs/relative-path'}
@@ -389,13 +389,21 @@ $defs:
               uniqueItems: true
               items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
   path-binding:
-    type: object
-    additionalProperties: false
-    required: [role, profile, field]
-    properties:
-      role: {$ref: '#/$defs/local-id'}
-      profile: {$ref: '#/$defs/local-id'}
-      field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [from, role, profile, field]
+        properties:
+          from: {const: selector}
+          role: {$ref: '#/$defs/local-id'}
+          profile: {$ref: '#/$defs/local-id'}
+          field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      - type: object
+        additionalProperties: false
+        required: [from, field]
+        properties:
+          from: {const: prior-fact}
+          field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
   configurable-header-name:
     type: string
     minLength: 1
@@ -488,14 +496,29 @@ $defs:
                         valueOrigin: {const: request}
                     then:
                       not: {required: [valueClaims]}
+  acquisition:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind, source]
+        properties:
+          kind: {const: single}
+          source: {$ref: '#/$defs/local-id'}
+      - type: object
+        additionalProperties: false
+        required: [kind, search, fetch]
+        properties:
+          kind: {const: search-then-fetch}
+          search: {$ref: '#/$defs/local-id'}
+          fetch: {$ref: '#/$defs/local-id'}
   requirement:
     type: object
     additionalProperties: false
-    required: [id, kind, source, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, disclosureGuard, existenceDisclosure]
+    required: [id, kind, acquisition, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, disclosureGuard, existenceDisclosure]
     properties:
       id: {$ref: '#/$defs/uri'}
       kind: {enum: [criterion, information-requirement, constraint]}
-      source: {$ref: '#/$defs/local-id'}
+      acquisition: {$ref: '#/$defs/acquisition'}
       purposes:
         type: array
         minItems: 1
@@ -752,7 +775,7 @@ startup_checks:
   - No two enabled requirements share a disclosureGuard family; a shared family rejects the bundle regardless of purposes, audiences, requester entitlements, or rate limits.
   - Each context-derived or grant-derived subject has valueClaims whose keys exactly equal the named selector profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
   - Request-derived subjects have no valueClaims.
-  - Request preparation receives only the closed selectorInputs alternatives and cannot choose transport authority, paths, headers, credentials, or request count.
+  - Request preparation receives only the closed selectorInputs alternatives and the exact adapter context of parameters plus empty or validated prior facts; it cannot choose transport authority, path-binding origin, headers, credentials, or request count.
   - Configured authority claim names are distinct and none names a registered JWT claim; `sub` is permitted for principalClaim alone, because it already carries the principal. A repeated or shadowing name would read one verified token member as something the issuer wrote for another purpose.
   - For authenticated-grant origin, verified token values at authentication.grantIdClaim and grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must bind requirement, purpose, audience, role, selector profile, and valueClaims result before selector resolution.
   - Required signing, audit, credential, and source dependencies are ready.
@@ -760,8 +783,8 @@ startup_checks:
   - The active plus published set contains at most 33 keys. A published predecessor remains available for the maximum assertion validity plus clock skew, unless emergency revocation requires immediate removal and denylisting.
   - The runtime signer matches the governed active public JWK exactly and passes a startup sign-and-verify test; local assurance uses local-jwk and production or evidence-grade uses Transit.
   - Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml secretProviders.file.root.
-  - Fixed path and selector-bound path-template forms are mutually exclusive and every template placeholder has one authorized selector binding.
-  - Every selector set an authority grant can activate for a source carries each role and profile that source's path template binds. The sets are derived one per grant, so covering a bound role across their union is not enough: a single grant omitting one yields a set with no value to substitute, which fails startup rather than every request that grant would serve.
+  - Fixed path and path-template forms are mutually exclusive and every template placeholder has exactly one tagged selector or prior-fact binding. Prior-fact bindings are allowed only on fetch sources and must name a scalar property required by every preceding search fact schema.
+  - Every selector set an authority grant can activate for a source carries each role and profile that source's selector path bindings require. The sets are derived one per grant, so covering a bound role across their union is not enough: a single grant omitting one yields a set with no value to substitute, which fails startup rather than every request that grant would serve.
   - Fixed headers and static API-key header names reject authentication, routing, framing, cookie, forwarding, proxy, tracing, and hop-by-hop collisions after ASCII case folding.
   - Extended JSON Pointer projections are non-empty, uniquely decoded, and reject duplicate or overlapping ancestor, descendant, and wildcard paths.
   - Every source preparation, extraction, and derivation selector-input contract is closed and cross-referenced to the exact authorized role/profile/field set.

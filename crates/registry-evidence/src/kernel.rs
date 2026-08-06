@@ -300,24 +300,37 @@ impl OfflineKernel {
         let requirement = self
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
+        let source_id = requirement.acquisition.initial_source();
+        self.prepare_source(source_id, selectors, &BTreeMap::new())
+    }
+
+    /// Run one source's reviewed preparation script with the closed adapter
+    /// context. Prior facts are empty for single and search calls and contain
+    /// only the schema-validated search `FactSet` for a fetch call.
+    pub fn prepare_source(
+        &self,
+        source_id: &str,
+        selectors: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<RequestParts, KernelError> {
         let source = self
             .bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let script = self
             .preparations
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let limits = self
             .request_parts_limits
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .map_err(|_| KernelError::Bundle)?;
         self.runtime
-            .prepare(script, selectors, &parameters, limits)
+            .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
             .map_err(|_| KernelError::Preparation)
     }
 
@@ -342,19 +355,28 @@ impl OfflineKernel {
         let requirement = self
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
-        let script = self
-            .extractions
-            .get(&requirement.source)
-            .ok_or(KernelError::Bundle)?;
+        let source_id = requirement.acquisition.initial_source();
+        self.extract_source(source_id, source_response, &BTreeMap::new())
+    }
+
+    /// Run one source's closed extraction ABI over one bounded projected JSON
+    /// response and the exact prior search facts supplied to that call.
+    pub fn extract_source(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<LookupResult, KernelError> {
+        let script = self.extractions.get(source_id).ok_or(KernelError::Bundle)?;
         let schema = self
             .fact_schemas
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let source = self
             .bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         // The declared response shape is checked in Rust before any script sees
         // the response, so extraction maps a response it can rely on and a
@@ -362,20 +384,16 @@ impl OfflineKernel {
         // or not the script happens to test for it.
         let response_schema = self
             .response_schemas
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         if let Err(errors) = response_schema.validate(source_response) {
-            report_response_shape_rejection(
-                &requirement.source,
-                source.response_schema.as_str(),
-                errors,
-            );
+            report_response_shape_rejection(source_id, source.response_schema.as_str(), errors);
             return Err(KernelError::SourceProtocol);
         }
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .map_err(|_| KernelError::Bundle)?;
         self.runtime
-            .extract(script, source_response, &parameters, schema)
+            .extract_with_prior_facts(script, source_response, &parameters, prior_facts, schema)
             .map_err(|error| match error {
                 RhaiRuntimeError::ExtractionResult | RhaiRuntimeError::FactSchema => {
                     KernelError::Extraction
@@ -1235,7 +1253,7 @@ mod tests {
             let source_config = bundle
                 .config
                 .sources
-                .get(&requirement.source)
+                .get(requirement.acquisition.initial_source())
                 .expect("requirement source exists");
             for test_case in fixture["cases"].as_array().expect("cases is an array") {
                 if test_case.get("source_failure").is_some()
@@ -1352,7 +1370,7 @@ mod tests {
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.acquisition.initial_source())
             .expect("the requirement names a configured source");
         let schema = bundle
             .fact_schema(&source.response_schema)

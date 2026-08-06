@@ -51,7 +51,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
-    source: source-b
+    acquisition:
+      kind: single
+      source: source-b
     purposes: [fixture-routing]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [residence-record-v1]}]
     referenceFrameworks: [urn:example:fixture:framework:residence-region:v1]

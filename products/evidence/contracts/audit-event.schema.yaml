@@ -111,8 +111,9 @@ allOf:
 audit_rules:
   authorization_refusal_gate: After successful authentication, an authorization refusal is durably accepted before the generic HTTP 403 is returned. Audit failure changes the outward result to service_unavailable with HTTP 503.
   authorization_refusal_minimization: The refusal event contains only its chain and event identifiers, operation, timestamp and duration, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, and the closed denial category and decision. Requester and actor pseudonym scope binds the operator trust domain, requested purpose, and authenticated audience, while those scope inputs remain omitted from the event. It omits the untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, and source or evaluation material.
-  access_gate: access-attempt is durably accepted after authorization and before credential acquisition or source access
+  access_gate: One access-attempt is durably accepted after authorization and before credential acquisition or source access for every actual source stage; search-then-fetch therefore records search access and, only after a unique validated match, fetch access.
   release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released
+  source_identity: Each access or failure event names the source and adapter for that stage; disclosure release names the final source and adapter that produced the derivation FactSet.
   response_protection: Every authorized-material event records the closed non-secret responseProtection mode resolved with authorization. signingKeyId exists exactly for cryptographically protected disclosure release, which is the signed flattened JWS and the SD-JWT VC serialization, and is forbidden for unsigned output. An authorization-refusal event has no resolved response protection and omits both fields.
   failure_policy: sink failure blocks the applicable step
   chain_verification: At startup and after restart, the newest sealed segment supplies the prior chain head and the complete active segment is verified from that head. Complete retained-history verification is an out-of-band operator duty performed with evidence verify-audit across every available sealed segment and, when the writer is stopped, the active segment. Steady-state appends and readiness verify the pinned active-segment identity, modification fingerprint, expected length, verified tail, and lock-file identity without rescanning sealed history or the growing active segment.
@@ -126,4 +127,5 @@ audit_rules:
     - credentials, tokens, request or response bodies
     - the request nonce
     - candidate count, candidates, scores, hints, or comparisons
+    - prior facts, intermediate lookup identifiers, or fetch path values
     - script inputs, outputs, stacks, or signing material

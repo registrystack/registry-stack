@@ -70,7 +70,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
-    source: source-d
+    acquisition:
+      kind: single
+      source: source-d
     purposes: [fixture-enrolment]
     subjectRoles:
       - {role: child, cardinality: one, selectorProfiles: [civil-record-reference-v1]}

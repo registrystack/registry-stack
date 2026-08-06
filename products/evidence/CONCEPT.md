@@ -165,7 +165,10 @@ Evidence distinguishes three source-access postures:
 | `field-projected` | Source returns only facts needed for derivation | Strong acquisition and disclosure minimization |
 | `record-transformed` | Legacy source returns a broader record | Disclosure minimization only |
 
-Every requirement declares its posture. `record-transformed` is a legitimate migration state, but it must not be described as full lifecycle minimization.
+Every source declares its posture. A single-source requirement inherits that
+posture; a search-then-fetch requirement takes the weaker posture of its two
+sources. `record-transformed` is a legitimate migration state, but it must not
+be described as full lifecycle minimization.
 
 For every posture:
 
@@ -297,14 +300,15 @@ flowchart LR
     A["Requester"] --> B["JSON boundary"]
     B --> C["Authenticate and resolve authority context"]
     C --> D["Resolve and authorize selector profiles and values"]
-    D -->|"authorized"| E["Write access-attempt audit"]
+    D -->|"authorized"| E{"Fixed acquisition kind"}
     D -->|"refused after authentication"| R["Write minimal authorization-refusal audit"]
     R --> S["Return generic 403"]
-    E --> F["Rhai renders bounded request parts"]
-    F --> G["Rust validates request parts and resolves credentials"]
-    G --> H["Rust executes one fixed-authority source request"]
-    H --> I["Authoritative source"]
-    I --> J["Rhai maps response to a closed lookup result"]
+    E -->|"single"| F["Audit and execute one fixed source"]
+    E -->|"search-then-fetch"| G["Audit and execute fixed search"]
+    G --> H["Validate unique search FactSet"]
+    H --> I["Audit and execute fixed fetch"]
+    F --> J["Closed final lookup result"]
+    I --> J
     J --> K["On match, Rhai derives declared concept values"]
     K --> L["Rust validates values and constructs evidence"]
     L --> M{"Authorized response format"}
@@ -529,7 +533,9 @@ requirements:
   - id: urn:example:requirement:adult-status:v1
     kind: criterion
     name: Adult status
-    source: civil-registry
+    acquisition:
+      kind: single
+      source: civil-registry
     purposes:
       - benefit-eligibility
     requester_tags:
@@ -557,17 +563,19 @@ requirements:
 
 ### 9.1 Fixed source execution with reviewed request rendering
 
-Rust owns scheme, host, method, the fixed path or closed selector-bound path
+Rust owns scheme, host, method, the fixed path or closed tagged selector or
+fetch prior-fact-bound path
 template, permitted query and body channels, fixed headers, credentials, TLS
 trust, redirect policy, timeouts, response limits, concurrency limits, and the
-one-request ceiling.
+one-request-per-stage ceiling.
 
 After authorization and durable access-attempt audit, Rust supplies only the
-source-required authorized selectors and closed non-secret parameters to a
-reviewed preparation script. The script renders ordered query pairs and at
-most one JSON body. It cannot choose the source, origin, path template or path
-binding, method, headers, credentials, redirects, retries, pagination
-traversal, or another request.
+source-required authorized selectors and the exact closed adapter context of
+non-secret parameters plus empty or schema-validated prior facts to a reviewed
+preparation script. The script renders ordered query pairs and at most one JSON
+body. It cannot choose the source, origin, path template or path-binding
+origin, method, headers, credentials, redirects, retries, pagination traversal,
+or another request.
 Rust validates and encodes the complete result before credential acquisition.
 This is deterministic request rendering, not caller-supplied templating or
 dynamic source planning.
@@ -620,11 +628,16 @@ variables and has no application-level proxy configuration.
 Version one uses two small Rhai interfaces in the same process:
 
 ```text
-prepare(source_required_selectors, adapter_parameters) -> RequestParts
-extract(source_response, adapter_parameters) -> LookupResult
+prepare(source_required_selectors, adapter_context) -> RequestParts
+extract(source_response, adapter_context) -> LookupResult
 derive(facts, declared_authorized_selectors, evaluation_context)
     -> array<DerivedConceptValue>
 ```
+
+`adapter_context` has exactly `parameters` and `prior_facts`. Parameters are
+closed trusted bundle data. Prior facts are empty for single and search stages;
+for a fixed fetch they are the closed search FactSet after Rust schema
+validation. Scripts cannot select the acquisition or source sequence.
 
 `LookupResult` is a closed tagged union:
 
@@ -1268,13 +1281,19 @@ An MCP or other tool facade may compile static tool descriptions from the truste
 
 A later document profile may retrieve and transiently deliver an existing official artifact. It does not make Evidence a document repository or certificate generator. Multipart responses, artifact integrity, supplementary documents, and retention require a separate design.
 
-### 15.5 Dynamic source planning and policy
+### 15.5 Bounded acquisition, not dynamic source planning
 
-Version one includes deterministic rendering of query pairs and one JSON body
-under a Rust-fixed transport plan. Script-selected sources, URLs, methods,
-headers, credentials, retries, pagination traversal, response-led requests,
-multi-call orchestration, and a richer policy language remain separate
-proposals. None is added merely as an extension seam.
+Version one includes two closed acquisition kinds. `single` executes one fixed
+source. `search-then-fetch` executes one fixed search and, only after a unique
+schema-valid match, one fixed fetch. The fetch receives the validated search
+FactSet as transient `prior_facts`; Rust may bind a declared scalar fact to a
+complete fetch path segment. The response cannot select a source, origin,
+method, credential, or additional call.
+
+Script-selected sources, URLs, methods, headers, credentials, retries,
+pagination traversal, response-led routing, a third call, general workflow
+orchestration, and a richer policy language remain separate proposals. None is
+added merely as an extension seam.
 
 ### 15.6 Audience-scoped SD-JWT VC response format
 
@@ -1431,7 +1450,7 @@ mandatory default and includes:
   client-credentials source authentication using secret references;
 - credential-free source access only for explicit local authoring at a
   canonical numeric-loopback HTTP origin;
-- fixed non-secret request headers, Rust-owned selector-bound path templates,
+- fixed non-secret request headers, Rust-owned tagged selector/prior-fact path templates,
   and logical private-CA trust profiles without script transport authority;
 - explicit `source-derived`, `field-projected`, and `record-transformed`
   acquisition postures with no overclaiming of minimization;
@@ -1535,8 +1554,8 @@ The complete Version 1 sequence is:
 
 ### Phase 2: generic source boundary
 
-- Add fixed HTTP JSON source execution, fixed headers, selector-bound path
-  templates, private-CA trust profiles, and generic Basic, static Bearer,
+- Add fixed HTTP JSON source execution, fixed headers, tagged selector/prior-
+  fact path templates, private-CA trust profiles, and generic Basic, static Bearer,
   static API-key header, and OAuth 2.0 client-credentials authentication.
 - Run flat REST, paged nested REST, and OpenCRVS Event Search-shaped contracts
   through one source executor.

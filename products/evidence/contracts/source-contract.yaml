@@ -2,7 +2,8 @@ contract: registry.evidence.fixed-http-json-source/v1
 status: frozen
 ownership:
   governed_bundle:
-    - fixed source origin, acquisition posture, authentication kind, and logical secret references
+    - requirement acquisition kind and its one fixed source, or fixed search and fetch sources
+    - each source's fixed origin, acquisition posture, authentication kind, and logical secret references
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
     - preparation channel policy and bounds, response projection, redirect denial, timeout, response byte limit, and concurrency limit
@@ -13,12 +14,15 @@ ownership:
     - exact private-CA file binding for each governed logical TLS trust profile
   runtime_override: prohibited
   scripts:
-    prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors and closed parameters.
-    extract: Maps only the bounded projected response, already inside its declared response schema, and closed parameters to the closed lookup union.
-    prohibited: source, origin, method, path, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
+    prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors, closed parameters, and the empty or validated prior FactSet supplied by Rust.
+    extract: Maps only the bounded projected response, already inside its declared response schema, closed parameters, and the same prior FactSet to the closed lookup union.
+    prohibited: source sequence, origin, method, path binding origin, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
 evidence_data_request:
-  count: Exactly one per evaluation after successful authorization, durable access audit, and complete RequestParts validation.
-  retry: The HTTP client disables transport retry explicitly, so a connection failure yields exactly one connection attempt and no second request.
+  count:
+    single: Exactly one per evaluation.
+    search-then-fetch: One search, followed only after a unique schema-valid match by one fetch; the ceiling is exactly two.
+    common_order: Successful authorization and request rate limiting occur once. Each actual source call requires its own durable access audit and complete RequestParts validation before credential resolution.
+  retry: The HTTP client disables transport retry explicitly, so each configured stage yields at most one connection attempt and never creates a third evidence-data request.
   owner: Core runtime.
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
@@ -34,8 +38,9 @@ evidence_data_request:
     validation_order: Rust validates the exact keys, types, channel policy, sizes, query controls, and normalized output before resolving credentials or contacting the source.
   path:
     fixed: One normalized absolute path.
-    template: A placeholder occupies one complete segment and binds directly to one already authorized selector role, profile, and field through pathBindings.
-    template_reachability: A binding is mandatory against the selector set a request activates, not against the union of the sets. Every allowed set must therefore carry each bound role and profile, and plan compilation refuses the source otherwise. Sets are derived one per authority grant, so an authority granted over roles the template does not bind would otherwise compile, pass readiness, and fail every request it serves.
+    template: A placeholder occupies one complete segment and binds directly through tagged pathBindings either to one already authorized selector role, profile, and field or, on a fetch source only, one scalar fact required by the preceding search fact schema.
+    prior_fact: Rust validates the search FactSet before path materialization; only string, signed 64-bit integer, and boolean facts can fill a fetch segment, using the same single-pass encoding and hostile-value rejection as selectors.
+    template_reachability: A selector binding is mandatory against the selector set a request activates, not against the union of the sets. Every allowed set must therefore carry each selector-bound role and profile, and plan compilation refuses the source otherwise. A prior-fact binding is instead proven at startup against every search fact schema that can precede that fetch source.
     encoding: Rust rejects missing, extra, duplicated, empty, slash, backslash, percent, control, and dot-segment values and percent-encodes each accepted segment exactly once.
     script_authority: prohibited
   fixed_headers:
@@ -123,7 +128,7 @@ cardinality:
   outcomes: [match, no_match, ambiguous]
   facts_only_on: match
   prohibited:
-    - broad candidate retrieval, candidate exposure, score comparison, candidate choice, page traversal, retry, response-led request, or second evidence-data request
+    - broad candidate retrieval, candidate exposure, score comparison, candidate choice, page traversal, retry, response-selected source or transport, a third evidence-data request, or any acquisition kind beyond single and search-then-fetch
     - converting provider inconsistency, returned-subject mismatch, or incomplete relationship data into no_match or an authoritative false concept
 authentication:
   none:
@@ -177,6 +182,7 @@ acquisition_postures:
   record-transformed:
     meaning: A broader legacy record is transiently transformed in memory.
     claim: Disclosure minimization only.
+  chained_rule: A search-then-fetch requirement has the weaker of its two declared source postures; chaining never upgrades a minimization claim.
 failure_classes:
   transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
@@ -186,7 +192,7 @@ failure_classes:
 persistence:
   source_request_or_response: prohibited
   raw_fact: prohibited
-  in_memory_lifetime: One bounded evaluation only.
+  in_memory_lifetime: One bounded evaluation only; validated search facts are dropped with the fetch and are never placed in audit.
 neutrality:
   production_contract: Generic HTTP, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only.
   named_compatibility_profiles: Test fixtures and reference documentation only.

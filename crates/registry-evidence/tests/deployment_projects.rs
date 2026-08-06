@@ -380,7 +380,7 @@ async fn execute_fixture(
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .unwrap_or_else(|| panic!("{label}: requirement source is absent"));
         let preparation_selectors = selector_projection(&resolved, &source.request.selector_inputs)
             .unwrap_or_else(|| panic!("{label}: preparation selector projection failed"));
@@ -760,7 +760,7 @@ fn execute_derivation_mutation(
     let source = disposable
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .unwrap_or_else(|| panic!("{label}: source is absent"));
     let projected = project_fixture_response(source, response)
         .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));
@@ -826,7 +826,7 @@ fn execute_parameter_mutation(
     let source = disposable
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .unwrap_or_else(|| panic!("{label}: source is absent"));
     let projected = project_fixture_response(source, positive_response(label, fixture))
         .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));

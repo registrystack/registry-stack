@@ -1,4 +1,5 @@
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let role_a = selectors["subject-a"];
     let role_b = selectors["subject-b"];
     let selector = #{};

@@ -63,7 +63,7 @@ fn source_config(
             "method": "POST",
             "pathTemplate": "/v1/records/{record}",
             "pathBindings": {
-                "record": {"role": "subject", "profile": "record-v1", "field": "record_id"}
+                "record": {"from": "selector", "role": "subject", "profile": "record-v1", "field": "record_id"}
             },
             "fixedHeaders": fixed_headers,
             "selectorInputs": [{

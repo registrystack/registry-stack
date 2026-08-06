@@ -4,7 +4,8 @@
 // the page count agreeing with the total, and the one attribute this
 // requirement names.
 
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let pager = source_response["pager"];
     let records = source_response["trackedEntities"];
 

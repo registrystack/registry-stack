@@ -193,7 +193,9 @@ authorityProfiles:
 requirements:
   - id: urn:gov:example:requirement:adult-status:v1
     kind: criterion
-    source: population-tracker
+    acquisition:
+      kind: single
+      source: population-tracker
     purposes: [benefit-eligibility]
     subjectRoles:
       - role: subject
@@ -222,7 +224,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:gov:example:requirement:professional-licence-status:v1
     kind: criterion
-    source: professional-licence-register
+    acquisition:
+      kind: single
+      source: professional-licence-register
     purposes: [professional-registration-verification]
     subjectRoles:
       - role: subject

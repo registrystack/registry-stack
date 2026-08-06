@@ -126,7 +126,9 @@ authorityProfiles:
 requirements:
   - id: urn:gov:example:requirement:residence-region:v1
     kind: information-requirement
-    source: residence-register
+    acquisition:
+      kind: single
+      source: residence-register
     purposes: [residence-verification]
     subjectRoles:
       - role: subject

@@ -15,7 +15,8 @@ fn exact_filter(attribute, value) {
     attribute + ":EQ:" + dhis2_filter_value(value)
 }
 
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let subject = selectors["subject"];
     let query = [
         #{name: "program", value: parameters["program"]},

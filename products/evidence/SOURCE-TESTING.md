@@ -109,25 +109,28 @@ Profile-specific cases include:
 - OpenCRVS token expiry, malformed token response, exact child-event body,
   bounded event result, configured declaration fields, and missing or malformed
   parent references.
-- fixed and selector-bound path expansion, fixed headers, Basic, static Bearer,
+- fixed and tagged selector/prior-fact-bound path expansion, fixed headers, Basic, static Bearer,
   static API-key, OAuth client credentials, system-root and private-CA TLS,
   projection conflicts, and proof that ambient proxy variables are ignored.
 - the explicit local credential-free boundary, including exact numeric-
   loopback origin validation and absence of an authentication header.
 
-The mocks assert the received wire request. Preparation Rhai sees only the
-source-required authorized selectors and closed parameters. Extraction Rhai
-sees only the bounded projected JSON response and parameters. Neither can inspect
-credentials, request headers, URLs, or the source client.
+The mocks assert every received wire request. Preparation Rhai sees only the
+source-required authorized selectors and the exact context containing closed
+parameters and `prior_facts`. Extraction Rhai sees only the bounded projected
+JSON response and that same context. `prior_facts` is empty for a single or
+search call and is exactly the validated search FactSet for a fetch. Neither
+script can inspect credentials, request headers, URLs, or the source client.
 
 Extraction maps the response to exactly `match(FactSet)`, `no_match`, or
 `ambiguous`. It may interpret a provider result count or at most two minimally
 projected results when the provider cannot return count plus one result. It
 must not receive a broad candidate set or select between results. Derivation
 runs only on `match` and may compare the facts with only its declared
-authorized selector inputs using the reviewed requirement rule. `ambiguous` stops without
-derivation, page traversal, a second evidence-data request, or a success
-response in any format.
+authorized selector inputs using the reviewed requirement rule. Search
+`ambiguous` stops without derivation, fetch, page traversal, or a success
+response in any format. A single acquisition makes one request; a
+search-then-fetch acquisition makes at most its two fixed audited requests.
 
 The same suite runs every initial assertion case from `CONCEPT.md` through the
 complete Evidence service. At least one case runs against two mock source
