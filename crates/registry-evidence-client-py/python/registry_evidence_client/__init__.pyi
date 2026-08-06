@@ -106,11 +106,13 @@ class PreparedEvidenceRequest:
     subject_expectations: Union[str, Sequence[Any]]
 
 class RawEvidenceResponse:
-    """A signed response, read but not yet judged. No public constructor and
-    no attributes: obtain one only from `EvidenceClient.send`. Nothing in it
-    has been trusted yet; `verify` is what judges it."""
+    """A signed response, read but not yet judged. No public constructor:
+    obtain one only from `EvidenceClient.send`. Reading either attribute
+    judges nothing; `verify` is what decides whether these bytes are
+    trustworthy."""
 
-    ...
+    body: bytes
+    operation: Optional[str]
 
 class VerifiedEvidence:
     """A response that satisfied every expectation."""
