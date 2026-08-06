@@ -53,14 +53,65 @@ const FIXTURE_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 const ACTIVE_KEY_ID: &str = "evidence-python-fixture-key-1";
 
-/// Ten years past `issued_at`. The Python suite runs this fixture through
-/// `discover`/`fetch_jwks` stubs indefinitely into the future, so its
-/// validity window has to outlive ordinary gaps between regenerations, not
-/// just the day it was generated.
-const FIXTURE_LIFETIME_DAYS: i64 = 3650;
+/// The instant the committed response is signed for, shared by the generator
+/// and by every check that reads the result, so nothing has to re-derive it
+/// from the committed bytes.
+const FIXTURE_ISSUED_AT: &str = "2026-08-01T00:00:00Z";
+
+/// Thirty days past `FIXTURE_ISSUED_AT`, which is also the acceptance ceiling
+/// the committed policy states. It has to stay inside the
+/// `maximumAssertionLifetimeSeconds` bound the verification-policy contract
+/// sets, or the fixture would model a policy no conformant relying party could
+/// express. Nothing here needs a longer window: the checks that read the
+/// committed response verify at a pinned instant rather than at the wall clock,
+/// and the real-clock path is covered by signing fresh evidence instead.
+const FIXTURE_LIFETIME_DAYS: i64 = 30;
 
 fn fixtures_dir() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+}
+
+fn fixture_issued_at() -> DateTime<Utc> {
+    FIXTURE_ISSUED_AT
+        .parse()
+        .expect("the fixture instant parses")
+}
+
+/// A fresh Ed25519 signer under the fixture's key id. The private half never
+/// leaves the process that made it: regeneration commits only the public key,
+/// and the real-clock check below discards the whole pair when it returns.
+fn fixture_signer() -> LocalJwkSigner {
+    let mut seed = [0_u8; 32];
+    getrandom::fill(&mut seed).expect("the host supplies randomness");
+    let signing_key = SigningKey::from_bytes(&seed);
+    let private_jwk_json = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "kid": ACTIVE_KEY_ID,
+        "x": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+        "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+    });
+    let private_jwk =
+        PrivateJwk::parse(&private_jwk_json.to_string()).expect("the generated key parses");
+    LocalJwkSigner::new(private_jwk).expect("the generated key signs")
+}
+
+fn public_jwks(signer: &LocalJwkSigner) -> JwksDocument {
+    JwksDocument {
+        keys: vec![serde_json::to_value(signer.public_jwk()).expect("the public key serializes")],
+    }
+}
+
+fn assert_fixture_shape(evidence: &Evidence) {
+    assert_eq!(evidence.request_nonce, FIXTURE_NONCE);
+    assert_eq!(evidence.subjects.len(), 1);
+    assert_eq!(evidence.subjects[0].role, "subject");
+    assert_eq!(evidence.supported_values.len(), 1);
+    assert!(matches!(
+        evidence.supported_values[0].value,
+        PublicValue::Boolean(true)
+    ));
 }
 
 fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evidence {
@@ -168,29 +219,14 @@ fn write_pretty<T: serde::Serialize>(path: &Path, value: &T) {
 #[tokio::test]
 #[ignore]
 async fn regenerate_golden_fixture() {
-    let mut seed = [0_u8; 32];
-    getrandom::fill(&mut seed).expect("the host supplies randomness");
-    let signing_key = SigningKey::from_bytes(&seed);
-    let private_jwk_json = serde_json::json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "alg": "EdDSA",
-        "kid": ACTIVE_KEY_ID,
-        "x": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
-        "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-    });
-    let private_jwk =
-        PrivateJwk::parse(&private_jwk_json.to_string()).expect("the generated key parses");
-    let signer = LocalJwkSigner::new(private_jwk).expect("the generated key signs");
+    let signer = fixture_signer();
 
-    let issued_at: DateTime<Utc> = "2026-08-01T00:00:00Z".parse().expect("issued_at parses");
+    let issued_at = fixture_issued_at();
     let valid_until = issued_at + ChronoDuration::days(FIXTURE_LIFETIME_DAYS);
     let evidence = fixture_evidence(issued_at, valid_until);
     let policy_document = fixture_policy_document(&evidence);
     let jws = sign(&evidence, &signer).await;
-    let jwks = JwksDocument {
-        keys: vec![serde_json::to_value(signer.public_jwk()).expect("the public key serializes")],
-    };
+    let jwks = public_jwks(&signer);
 
     let dir = fixtures_dir();
     fs::create_dir_all(dir).expect("the fixtures directory can be created");
@@ -199,11 +235,50 @@ async fn regenerate_golden_fixture() {
     write_pretty(&dir.join("policy.json"), &policy_document);
 }
 
-/// Confirms the committed fixture still verifies against the real wall clock,
-/// so the Python suite can trust `jwks.json` and `response.jws.json` without
-/// re-deriving them.
+/// The committed policy fixture stands for a document a relying party writes,
+/// so the frozen verification-policy contract is what decides whether it is a
+/// policy anyone could actually adopt. It once was not: it named an acceptance
+/// window longer than the contract's own ceiling, which made the fixture a model
+/// of something no conformant relying party could express.
 #[test]
-fn golden_fixture_verifies_against_the_real_clock() {
+fn the_committed_policy_conforms_to_the_verification_policy_contract() {
+    let contract: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+        "../../../products/evidence/contracts/verification-policy.schema.yaml"
+    ))
+    .expect("the verification policy contract is YAML");
+    let contract = serde_json::to_value(contract).expect("the contract converts to JSON");
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&contract)
+        .expect("the verification policy contract compiles");
+
+    let policy: serde_json::Value = serde_json::from_slice(
+        &fs::read(fixtures_dir().join("policy.json")).expect("the policy fixture exists"),
+    )
+    .expect("the policy fixture parses");
+
+    let violations: Vec<String> = match validator.validate(&policy) {
+        Ok(()) => Vec::new(),
+        Err(errors) => errors
+            .map(|error| format!("{error}, at {}", error.instance_path))
+            .collect(),
+    };
+    assert!(
+        violations.is_empty(),
+        "the committed policy fixture violates its contract:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Confirms the committed response, key set, and policy still agree, at an
+/// instant inside the acceptance window the fixture states rather than at the
+/// wall clock, so the Python suite can trust `jwks.json` and
+/// `response.jws.json` without re-deriving them. Pinning the instant is what
+/// lets the fixture carry a lifetime a relying party could adopt: it does not
+/// have to outlive the gaps between regenerations.
+#[test]
+fn the_committed_fixture_verifies_at_its_pinned_instant() {
     let dir = fixtures_dir();
     let jws_bytes = fs::read(dir.join("response.jws.json")).expect("the response fixture exists");
     let jwks: JwksDocument =
@@ -214,15 +289,29 @@ fn golden_fixture_verifies_against_the_real_clock() {
     )
     .expect("the policy fixture parses");
 
-    let policy = policy_document.into_policy(Utc::now());
+    let policy = policy_document.into_policy(fixture_issued_at() + ChronoDuration::days(1));
     let evidence = verify_flattened_jws(&jws_bytes, &jwks, &policy).expect("the fixture verifies");
 
-    assert_eq!(evidence.request_nonce, FIXTURE_NONCE);
-    assert_eq!(evidence.subjects.len(), 1);
-    assert_eq!(evidence.subjects[0].role, "subject");
-    assert_eq!(evidence.supported_values.len(), 1);
-    assert!(matches!(
-        evidence.supported_values[0].value,
-        PublicValue::Boolean(true)
-    ));
+    assert_fixture_shape(&evidence);
+}
+
+/// The real-clock half of the same coverage. A response signed now and verified
+/// now keeps the wall-clock path through `into_policy` and
+/// `verify_flattened_jws` exercised, without any committed file having to stay
+/// current for years to do it.
+#[tokio::test]
+async fn a_freshly_signed_response_verifies_against_the_real_clock() {
+    let signer = fixture_signer();
+    let issued_at = Utc::now();
+    let valid_until = issued_at + ChronoDuration::days(FIXTURE_LIFETIME_DAYS);
+    let evidence = fixture_evidence(issued_at, valid_until);
+    let policy_document = fixture_policy_document(&evidence);
+    let jws_bytes = serde_json::to_vec(&sign(&evidence, &signer).await)
+        .expect("the signed response serializes");
+
+    let policy = policy_document.into_policy(Utc::now());
+    let verified = verify_flattened_jws(&jws_bytes, &public_jwks(&signer), &policy)
+        .expect("a freshly signed response verifies");
+
+    assert_fixture_shape(&verified);
 }

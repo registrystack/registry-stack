@@ -34,7 +34,7 @@
 use std::{fs, path::Path};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use ed25519_dalek::{Signer, SigningKey};
 use evidence_client_sdk::{
     AssuranceProfile, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
@@ -50,6 +50,11 @@ use wiremock::{
 };
 
 const KEY_ID: &str = "evidence-python-live-key-1";
+
+/// The instant the golden fixture is signed for, restated from
+/// `tests/golden_fixture.rs` rather than shared with it: every file under
+/// `tests/` compiles as its own crate.
+const FIXTURE_ISSUED_AT: &str = "2026-08-01T00:00:00Z";
 
 /// The specification every send/verify test in this file prepares against,
 /// as the plain Python-facing (snake_case) shape `spec_from_json` expects.
@@ -395,6 +400,11 @@ fn a_second_send_is_refused_without_reaching_the_deployment() {
 /// canonical nonce, so checking it against a freshly prepared request (whose
 /// nonce is different on every run) has to fail verification, not just
 /// happen to succeed by construction.
+///
+/// Verified through `verify_as_of` at an instant inside the fixture's own
+/// validity window, so the nonce mismatch stays the reason it fails. Against
+/// the wall clock, the fixture would eventually expire and this case would go
+/// on passing for a reason it was never written to prove.
 #[test]
 fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request() {
     let fixtures_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
@@ -461,8 +471,15 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
             .call_method1("send", (&prepared,))
             .expect("the stub answers, with its stale fixture body");
 
+        let as_of = FIXTURE_ISSUED_AT
+            .parse::<DateTime<Utc>>()
+            .expect("the fixture instant parses")
+            + ChronoDuration::days(1);
         let error = client
-            .call_method1("verify", (&prepared, &response))
+            .call_method1(
+                "verify_as_of",
+                (&prepared, &response, as_of.timestamp() as f64),
+            )
             .expect_err("a response signed for a different nonce fails verification");
         let kind: String = error
             .value(py)
@@ -471,5 +488,15 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
             .extract()
             .expect("kind is a string");
         assert_eq!(kind, "verification");
+        let code: String = error
+            .value(py)
+            .getattr("code")
+            .expect("the exception carries a code")
+            .extract()
+            .expect("code is a string");
+        // The one generic class every failed policy comparison reports, the
+        // expected nonce included. `time` here would mean the fixture expired
+        // instead, which is the outcome the pinned instant rules out.
+        assert_eq!(code, "policy");
     });
 }

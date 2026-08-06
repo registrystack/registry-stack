@@ -20,6 +20,6 @@
       "form": "boolean"
     }
   ],
-  "maximumAssertionLifetimeSeconds": 315360000,
+  "maximumAssertionLifetimeSeconds": 2592000,
   "clockSkewSeconds": 30
 }
