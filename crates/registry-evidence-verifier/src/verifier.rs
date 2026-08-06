@@ -402,6 +402,17 @@ struct SdJwtHeader {
     typ: String,
 }
 
+/// Whether a pinned trusted key set is one this verifier could ever use.
+///
+/// Verification applies this rule to every response, so a key set that fails it
+/// can never verify anything. Exposing it lets a relying party apply it once,
+/// where it pinned the set, instead of learning per response that the pinning
+/// decision was unusable. The rule stays owned here: this is the same check
+/// verification performs, not a restatement of it.
+pub fn trusted_keys_are_usable(trusted_jwks: &JwksDocument) -> Result<(), VerificationError> {
+    trusted_keys(trusted_jwks).map(|_| ())
+}
+
 /// Strict one-call verification: cryptographic authenticity, every policy
 /// expectation, and current validity must all hold.
 pub fn verify_flattened_jws(
@@ -1712,6 +1723,56 @@ mod tests {
             verify_flattened_jws(&jws, &excess, &policy),
             Err(VerificationError::Key)
         );
+    }
+
+    /// A relying party pins its trusted key set once, long before any response
+    /// arrives. This check is what lets it learn there that the set is unusable,
+    /// so it must refuse exactly what verification refuses.
+    #[tokio::test]
+    async fn the_pinned_key_set_check_agrees_with_what_verification_would_refuse() {
+        let (jws, usable, policy) = signed_fixture().await;
+        assert!(trusted_keys_are_usable(&usable).is_ok());
+        assert!(verify_flattened_jws(&jws, &usable, &policy).is_ok());
+
+        let one_key = usable.keys[0].clone();
+        let mut private_material = one_key.clone();
+        private_material["d"] = serde_json::json!("cHJpdmF0ZS1zY2FsYXItcGxhY2Vob2xkZXI");
+        let mut absent_kid = one_key.clone();
+        absent_kid
+            .as_object_mut()
+            .expect("the key is an object")
+            .remove("kid");
+        let mut empty_kid = one_key.clone();
+        empty_kid["kid"] = serde_json::json!("");
+        for keys in [
+            // Nothing to verify against.
+            vec![],
+            // Private material a public set must never carry.
+            vec![private_material],
+            // No identifier to select the key by.
+            vec![absent_kid],
+            vec![empty_kid],
+            // Two keys claiming one identifier.
+            vec![one_key.clone(), one_key.clone()],
+            // Not the signature algorithm the profile fixes.
+            vec![
+                serde_json::json!({"kty": "EC", "crv": "P-256", "kid": "es256", "alg": "ES256",
+                "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+                "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}),
+            ],
+        ] {
+            let refused = JwksDocument { keys };
+            assert_eq!(
+                trusted_keys_are_usable(&refused),
+                Err(VerificationError::Key),
+                "the pinning check accepted a set verification refuses"
+            );
+            assert_eq!(
+                verify_flattened_jws(&jws, &refused, &policy),
+                Err(VerificationError::Key),
+                "verification and the pinning check disagree"
+            );
+        }
     }
 
     /// Issue the fixture as an SD-JWT VC through the same signer, mapping, and
