@@ -458,12 +458,12 @@ impl Fixture {
         .expect("governed public key");
         fs::write(
             project.join("adapters/source-prepare.rhai"),
-            "fn prepare(selectors, parameters) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n",
+            "fn prepare(selectors, context) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n",
         )
         .expect("prepare script");
         fs::write(
             project.join("adapters/source-extract.rhai"),
-            "fn extract(source_response, parameters) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n",
+            "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n",
         )
         .expect("extract script");
         fs::write(

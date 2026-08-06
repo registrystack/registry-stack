@@ -218,7 +218,7 @@ request:
   method: GET
   pathTemplate: /stable-2-43-1/api/tracker/trackedEntities/{uid}
   pathBindings:
-    uid: {role: child, profile: child-tracked-entity-v1, field: tracked_entity_id}
+    uid: {from: selector, role: child, profile: child-tracked-entity-v1, field: tracked_entity_id}
   fixedHeaders:
     - name: Accept
       value: application/json

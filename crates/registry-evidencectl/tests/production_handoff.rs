@@ -687,7 +687,8 @@ factSchema: schemas/people-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/people-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -701,7 +702,7 @@ factSchema: schemas/people-facts.schema.yaml
             ),
             (
                 "adapters/people-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
@@ -908,7 +909,8 @@ factSchema: schemas/relationships-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/immunizations-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -922,7 +924,7 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/immunizations-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
@@ -934,7 +936,8 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/relationships-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -951,7 +954,7 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/relationships-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
