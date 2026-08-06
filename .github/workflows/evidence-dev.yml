@@ -199,6 +199,12 @@ jobs:
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    env:
+      # Select the already installed toolchain directly. This prevents rustup
+      # from trying to reconcile the workspace's developer-only rustfmt and
+      # Clippy components while maturin or napi invokes Cargo on hosted ARM
+      # runners, where those component shims may already exist.
+      RUSTUP_TOOLCHAIN: "1.95.0"
     permissions:
       contents: read
     strategy:
@@ -314,11 +320,12 @@ jobs:
           JWKS = {
               "keys": [
                   {
-                      "kty": "OKP",
-                      "crv": "Ed25519",
-                      "alg": "EdDSA",
-                      "kid": "development-build-smoke-key",
-                      "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                      "kty": "EC",
+                      "crv": "P-256",
+                      "alg": "ES256",
+                      "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+                      "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                      "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
                   }
               ]
           }
@@ -342,7 +349,7 @@ jobs:
 
           # A placeholder static token: no request is ever sent with it.
           client = client_module.EvidenceClient(
-              "https://evidence.invalid", JWKS, "placeholder-not-a-credential"
+              "https://evidence.invalid", JWKS, [], "placeholder-not-a-credential"
           )
           prepared = client.prepare(SPEC)
           if len(prepared.request_nonce) != 43:
@@ -426,11 +433,12 @@ jobs:
           const trustedJwks = {
             keys: [
               {
-                kty: 'OKP',
-                crv: 'Ed25519',
-                alg: 'EdDSA',
-                kid: 'development-build-smoke-key',
-                x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+                kty: 'EC',
+                crv: 'P-256',
+                alg: 'ES256',
+                kid: '_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo',
+                x: '3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4',
+                y: 'GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU',
               },
             ],
           };
@@ -453,6 +461,7 @@ jobs:
           const client = new EvidenceClient({
             baseUrl: 'https://evidence.invalid',
             trustedJwks,
+            revokedKeyIds: [],
             // A placeholder static token: no request is ever sent with it.
             token: { static: 'placeholder-not-a-credential' },
           });

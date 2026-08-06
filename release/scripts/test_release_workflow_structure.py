@@ -154,7 +154,8 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
 
     def test_builds_and_smokes_the_relying_party_client_packages(self) -> None:
         _, document = workflow("evidence-dev.yml")
-        matrix = document["jobs"]["clients"]["strategy"]["matrix"]["include"]
+        clients = document["jobs"]["clients"]
+        matrix = clients["strategy"]["matrix"]["include"]
         self.assertEqual(
             {
                 (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
@@ -166,6 +167,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
                 ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
             },
         )
+        self.assertEqual(clients["env"]["RUSTUP_TOOLCHAIN"], "1.95.0")
 
         wheel = step_run(document, "clients", "Build the Python client wheel")
         # The published wheel name has to be predictable from the source, since
@@ -187,6 +189,15 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             smoke = step_run(document, "clients", name)
             self.assertIn("placeholder-not-a-credential", smoke)
             self.assertIn("https://evidence.invalid", smoke)
+            self.assertIn("P-256", smoke)
+            self.assertIn("ES256", smoke)
+            self.assertNotIn("Ed25519", smoke)
+            self.assertNotIn("EdDSA", smoke)
+
+        python_smoke = step_run(document, "clients", "Smoke the Python client wheel")
+        self.assertIn('JWKS, [], "placeholder-not-a-credential"', python_smoke)
+        node_smoke = step_run(document, "clients", "Smoke the Node client package")
+        self.assertIn("revokedKeyIds: []", node_smoke)
 
         roster = step_run(
             document,
@@ -600,6 +611,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Deploy to GitHub Pages"
         )
         self.assertEqual(recheck + 1, deployment)
+        self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 1_200_000)
 
     def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,

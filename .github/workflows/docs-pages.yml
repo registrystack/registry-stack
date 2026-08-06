@@ -229,6 +229,11 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+        with:
+          # GitHub Pages can remain queued beyond the action's ten-minute
+          # default even when no repository deployment is active. Keep the
+          # bounded wait, but tolerate a transient service-side queue.
+          timeout: 1200000
 
       - name: Smoke live canonical deployment
         working-directory: docs/site
