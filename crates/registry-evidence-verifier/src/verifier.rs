@@ -36,8 +36,8 @@ const MAXIMUM_SALT_BYTES: usize = 64;
 /// Shortest maximum assertion lifetime a policy may state, per the
 /// verification policy contract.
 ///
-/// This bound and the two below it are the only contract constraints on a
-/// policy that fail open, so they are the only ones enforced here. A pattern,
+/// This bound and the bounds below it are the contract constraints on a policy
+/// that fail open, so they are enforced here. A pattern,
 /// length, or uniqueness violation elsewhere in a policy fails closed: the
 /// payload is itself contract-checked, so an out-of-contract expectation is one
 /// no conformant payload can match and verification refuses the response. A
@@ -53,11 +53,15 @@ pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 31_536_000;
 /// Largest clock skew tolerance a policy may state, per the same contract.
 /// Omitting the tolerance means zero, which is always inside the bound.
 pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
+/// Smallest list cardinality a policy may state.
+pub const MINIMUM_EXPECTED_LIST_ITEMS: usize = 1;
+/// Largest list cardinality a policy may state.
+pub const MAXIMUM_EXPECTED_LIST_ITEMS: usize = 64;
 
-/// A policy stating a time bound the verification policy contract forbids.
+/// A policy stating a bound the verification policy contract forbids.
 ///
 /// This is a refusal to use the policy at all, not a verification outcome. Both
-/// variants carry the stated value, which is a relying party's own expectation
+/// Variants carry the stated value, which is a relying party's own expectation
 /// and never comes from a response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PolicyBoundsError {
@@ -65,6 +69,10 @@ pub enum PolicyBoundsError {
     AssertionLifetime(u64),
     #[error("clockSkewSeconds must be at most {MAXIMUM_CLOCK_SKEW_SECONDS}, not {0}")]
     ClockSkew(u64),
+    #[error("minimumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    MinimumItems(usize),
+    #[error("maximumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    MaximumItems(usize),
 }
 
 fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsError> {
@@ -80,6 +88,20 @@ fn checked_clock_skew(seconds: u64) -> Result<Duration, PolicyBoundsError> {
         return Err(PolicyBoundsError::ClockSkew(seconds));
     }
     Ok(Duration::from_secs(seconds))
+}
+
+fn checked_minimum_items(items: usize) -> Result<usize, PolicyBoundsError> {
+    if !(MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS).contains(&items) {
+        return Err(PolicyBoundsError::MinimumItems(items));
+    }
+    Ok(items)
+}
+
+fn checked_maximum_items(items: usize) -> Result<usize, PolicyBoundsError> {
+    if !(MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS).contains(&items) {
+        return Err(PolicyBoundsError::MaximumItems(items));
+    }
+    Ok(items)
 }
 
 /// Complete relying-procedure expectations for strict verification.
@@ -226,17 +248,34 @@ pub struct ExpectedListFormDocument {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExpectedListDocument {
+    #[serde(deserialize_with = "read_minimum_items")]
     pub minimum_items: usize,
+    #[serde(deserialize_with = "read_maximum_items")]
     pub maximum_items: usize,
+}
+
+fn read_minimum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = usize::deserialize(deserializer)?;
+    checked_minimum_items(items).map_err(serde::de::Error::custom)
+}
+
+fn read_maximum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = usize::deserialize(deserializer)?;
+    checked_maximum_items(items).map_err(serde::de::Error::custom)
 }
 
 impl EvidenceVerificationPolicyDocument {
     /// The runtime-facing policy for one verification instant, or a refusal when
-    /// the document states a time bound the contract forbids.
+    /// the document states a bound the contract forbids.
     ///
-    /// Reading a document already refuses those bounds, so this is what holds
-    /// them for a document built in code, where the public fields accept any
-    /// value.
+    /// Reading a document already refuses bounded fields, so this is what holds
+    /// them for a document built in code, where the public fields accept any value.
     pub fn try_into_policy(
         self,
         now: DateTime<Utc>,
@@ -265,11 +304,13 @@ impl EvidenceVerificationPolicyDocument {
             expected_outputs: self
                 .expected_outputs
                 .into_iter()
-                .map(|output| ExpectedOutput {
-                    concept: output.concept,
-                    form: expected_value_form_document(output.form),
+                .map(|output| {
+                    Ok(ExpectedOutput {
+                        concept: output.concept,
+                        form: expected_value_form_document(output.form)?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, PolicyBoundsError>>()?,
             revoked_key_ids: self.revoked_key_ids,
             maximum_assertion_lifetime,
             now,
@@ -278,8 +319,10 @@ impl EvidenceVerificationPolicyDocument {
     }
 }
 
-fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValueForm {
-    match document {
+fn expected_value_form_document(
+    document: ExpectedFormDocument,
+) -> Result<ExpectedValueForm, PolicyBoundsError> {
+    Ok(match document {
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => {
             ExpectedValueForm::Boolean
         }
@@ -302,10 +345,10 @@ fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValue
             ExpectedValueForm::Structured
         }
         ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
-            minimum_items: wrapper.list.minimum_items,
-            maximum_items: wrapper.list.maximum_items,
+            minimum_items: checked_minimum_items(wrapper.list.minimum_items)?,
+            maximum_items: checked_maximum_items(wrapper.list.maximum_items)?,
         },
-    }
+    })
 }
 
 impl EvidenceVerificationPolicy {
@@ -2066,6 +2109,23 @@ mod tests {
         }
     }
 
+    fn policy_document_with_list_bounds(
+        minimum_items: usize,
+        maximum_items: usize,
+    ) -> EvidenceVerificationPolicyDocument {
+        let mut document = policy_document_with_time_bounds(48 * 60 * 60, 30);
+        document.expected_outputs.push(ExpectedOutputDocument {
+            concept: "urn:example:concept".to_string(),
+            form: ExpectedFormDocument::List(ExpectedListFormDocument {
+                list: ExpectedListDocument {
+                    minimum_items,
+                    maximum_items,
+                },
+            }),
+        });
+        document
+    }
+
     /// The bounds this crate enforces are the contract's, not a second opinion
     /// about them.
     #[test]
@@ -2091,6 +2151,17 @@ mod tests {
             bound("clockSkewSeconds", "maximum"),
             MAXIMUM_CLOCK_SKEW_SECONDS
         );
+
+        let list =
+            &contract["$defs"]["expected-form"]["oneOf"][1]["properties"]["list"]["properties"];
+        let list_bound = |field: &str, bound: &str| -> usize {
+            serde_norway::from_value(list[field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        for field in ["minimumItems", "maximumItems"] {
+            assert_eq!(list_bound(field, "minimum"), MINIMUM_EXPECTED_LIST_ITEMS);
+            assert_eq!(list_bound(field, "maximum"), MAXIMUM_EXPECTED_LIST_ITEMS);
+        }
     }
 
     /// A policy document is an input, and one that states a time bound the
@@ -2145,6 +2216,48 @@ mod tests {
             assert_eq!(read.maximum_assertion_lifetime_seconds, lifetime);
             assert_eq!(read.clock_skew_seconds, skew);
         }
+
+        for (minimum_items, maximum_items) in [
+            (MINIMUM_EXPECTED_LIST_ITEMS, MINIMUM_EXPECTED_LIST_ITEMS),
+            (MAXIMUM_EXPECTED_LIST_ITEMS, MAXIMUM_EXPECTED_LIST_ITEMS),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_list_bounds(
+                minimum_items,
+                maximum_items,
+            ))
+            .expect("the document serializes");
+            serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes).unwrap_or_else(
+                |error| panic!("{minimum_items}..={maximum_items} items are read: {error}"),
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_document_stating_a_forbidden_list_bound_is_refused_when_read() {
+        for (label, minimum_items, maximum_items) in [
+            ("zero minimum", 0, 1),
+            (
+                "minimum past the ceiling",
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1,
+                MAXIMUM_EXPECTED_LIST_ITEMS,
+            ),
+            ("zero maximum", 1, 0),
+            (
+                "maximum past the ceiling",
+                MINIMUM_EXPECTED_LIST_ITEMS,
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1,
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_list_bounds(
+                minimum_items,
+                maximum_items,
+            ))
+            .expect("the document serializes");
+            assert!(
+                serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes).is_err(),
+                "{label} was accepted"
+            );
+        }
     }
 
     /// The document fields are public, so a caller can build one in code
@@ -2185,6 +2298,21 @@ mod tests {
         assert_eq!(
             policy.clock_skew(),
             Duration::from_secs(MAXIMUM_CLOCK_SKEW_SECONDS)
+        );
+
+        assert_eq!(
+            policy_document_with_list_bounds(0, 1)
+                .try_into_policy(now)
+                .map(|_| ()),
+            Err(PolicyBoundsError::MinimumItems(0))
+        );
+        assert_eq!(
+            policy_document_with_list_bounds(1, MAXIMUM_EXPECTED_LIST_ITEMS + 1)
+                .try_into_policy(now)
+                .map(|_| ()),
+            Err(PolicyBoundsError::MaximumItems(
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1
+            ))
         );
     }
 

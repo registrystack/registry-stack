@@ -629,6 +629,34 @@ fn verify_rejects_a_policy_document_outside_the_contract_time_bounds() {
 }
 
 #[test]
+fn verify_rejects_a_policy_document_outside_the_contract_list_bounds() {
+    for (label, minimum_items, maximum_items) in [
+        ("a zero minimum", 0, 1),
+        ("a minimum past the ceiling", 65, 64),
+        ("a zero maximum", 1, 0),
+        ("a maximum past the ceiling", 1, 65),
+    ] {
+        let policy = fixture_policy().replacen(
+            "form: boolean",
+            &format!(
+                "form:\n      list:\n        minimumItems: {minimum_items}\n        maximumItems: {maximum_items}"
+            ),
+            1,
+        );
+        let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &policy);
+        let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+        assert_verification_failure(
+            &output,
+            "2026-08-02T12:00:00Z",
+            "",
+            "evidence: stored response verification failed (malformed)\n",
+        );
+        assert_eq!(output.status.code(), Some(1), "{label} was accepted");
+    }
+}
+
+#[test]
 fn verify_rejects_a_verification_instant_that_is_not_strict_utc() {
     let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &fixture_policy());
 
