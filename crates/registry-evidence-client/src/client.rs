@@ -4,12 +4,10 @@
 //! makes about a response is the one the portable verifier makes for it, against
 //! the policy the caller closed before the request existed.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
-    model::{Evidence, FlattenedJws, JwksDocument, SubjectBinding},
-    verifier::{verify_flattened_jws, ExpectedSubjectDocument},
-    EVIDENCE_JWS_MEDIA_TYPE,
+    model::{Evidence, JwksDocument},
+    verifier::ExpectedSubjectDocument,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{
@@ -24,9 +22,9 @@ use crate::{
     definitions::{EvidenceDefinitionsDocument, EVIDENCE_DEFINITIONS_SCHEMA_V1},
     error::EvidenceClientError,
     outbound::{self, OutboundOptions},
-    prepare::{EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations},
+    prepare::{EvidenceRequestSpec, PreparedEvidenceRequest},
     problem::{essence, map_problem, sanitized_operation},
-    request::EvidenceRequestBody,
+    retained::RetainedEvidenceVerification,
 };
 
 /// Path of the Evidence request endpoint.
@@ -108,8 +106,8 @@ impl std::fmt::Debug for RawEvidenceResponse {
 /// A response that satisfied every expectation.
 #[derive(Debug, Clone)]
 pub struct VerifiedEvidence {
-    evidence: Evidence,
-    operation: Option<String>,
+    pub(crate) evidence: Evidence,
+    pub(crate) operation: Option<String>,
 }
 
 impl VerifiedEvidence {
@@ -167,6 +165,19 @@ impl EvidenceClient {
         spec: EvidenceRequestSpec,
     ) -> Result<PreparedEvidenceRequest, EvidenceClientError> {
         PreparedEvidenceRequest::new_with_revoked_key_ids(spec, self.config.revoked_key_ids.clone())
+    }
+
+    /// Close a self-contained offline verification context before a response
+    /// exists.
+    ///
+    /// The retained context includes the client's pinned keys and the prepared
+    /// policy, but no request selector values. Creating it performs no I/O.
+    #[must_use]
+    pub fn retain_verification(
+        &self,
+        prepared: &PreparedEvidenceRequest,
+    ) -> RetainedEvidenceVerification {
+        RetainedEvidenceVerification::new(prepared, self.config.trusted_jwks.clone())
     }
 
     /// Read the request shapes this requester is entitled to send.
@@ -229,17 +240,18 @@ impl EvidenceClient {
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         prepared.claim_single_send()?;
         let url = self.endpoint(EVIDENCE_PATH)?;
-        let body = serialize_request(prepared.body())?;
+        let body = prepared.request_json()?;
+        let response_media_type = prepared.response_format().media_type();
         let request = self
             .http
             .request(Method::POST, url)
-            .header(ACCEPT, EVIDENCE_JWS_MEDIA_TYPE)
+            .header(ACCEPT, response_media_type)
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .body(body);
         let response = self.exchange(request, Credential::Required).await?;
         self.expect_success(
             response,
-            EVIDENCE_JWS_MEDIA_TYPE,
+            response_media_type,
             self.config.max_response_bytes,
         )
         .await
@@ -311,40 +323,12 @@ impl EvidenceClient {
         response: &RawEvidenceResponse,
         now: DateTime<Utc>,
     ) -> Result<VerifiedEvidence, EvidenceClientError> {
-        let mut policy_document = match prepared.subject_expectations() {
-            SubjectExpectations::Pinned(_) => prepared.policy_document().clone(),
-            // Adopt the response's own role-bound bindings as expectations, then
-            // let the ordinary verifier apply the whole policy. Nothing else is
-            // taken from the response, and the subject question is deliberately
-            // deferred to the caller, which persists these bindings and pins
-            // them next time.
-            SubjectExpectations::AcceptFirstUse => {
-                prepared.policy_with_subjects(untrusted_subject_bindings(&response.body))
-            }
-        };
-        // The client's current trusted denylist wins over the retained policy
-        // and the pinned JWKS. Reconstructing a client after an emergency
-        // revocation must refuse an older response even when both retained
-        // artifacts still name the compromised key.
-        policy_document
-            .revoked_key_ids
-            .clone_from(&self.config.revoked_key_ids);
-        // `prepare` bounded the two time expectations by the same contract the
-        // verifier enforces, so this refusal is unreachable from a prepared
-        // request. It stays a refusal rather than an assumption: honouring an
-        // out-of-contract lifetime would accept assertions this relying party
-        // must refuse.
-        let policy = policy_document.try_into_policy(now).map_err(|_| {
-            EvidenceClientError::configuration(
-                "the prepared policy states a time bound the verification policy contract forbids",
-            )
-        })?;
-        let evidence = verify_flattened_jws(&response.body, &self.config.trusted_jwks, &policy)
-            .map_err(EvidenceClientError::Verification)?;
-        Ok(VerifiedEvidence {
-            evidence,
-            operation: response.operation.clone(),
-        })
+        self.retain_verification(prepared).verify_with_revocations(
+            &response.body,
+            now,
+            Some(&self.config.revoked_key_ids),
+            response.operation.clone(),
+        )
     }
 
     /// Read one JSON document from a GET endpoint under the base URL.
@@ -524,39 +508,6 @@ fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, Eviden
     .map_err(EvidenceClientError::configuration)
 }
 
-fn serialize_request(body: &EvidenceRequestBody) -> Result<Vec<u8>, EvidenceClientError> {
-    serde_json::to_vec(body)
-        .map_err(|_| EvidenceClientError::configuration("the request body cannot be serialized"))
-}
-
-/// Read the role-bound subject bindings out of a response that has not been
-/// verified.
-///
-/// This is a bounded structural read of untrusted bytes, using the same strict
-/// payload type the verifier uses, for one purpose only: turning the response's
-/// claimed subject set into stated expectations under first-use acceptance. It
-/// authenticates nothing. When the bytes are unreadable it yields no subject at
-/// all, so the verifier itself refuses the response.
-fn untrusted_subject_bindings(body: &[u8]) -> Vec<ExpectedSubjectDocument> {
-    let Ok(jws) = serde_json::from_slice::<FlattenedJws>(body) else {
-        return Vec::new();
-    };
-    let Ok(payload) = URL_SAFE_NO_PAD.decode(jws.payload.as_bytes()) else {
-        return Vec::new();
-    };
-    let Ok(evidence) = serde_json::from_slice::<Evidence>(&payload) else {
-        return Vec::new();
-    };
-    evidence
-        .subjects
-        .iter()
-        .map(|subject: &SubjectBinding| ExpectedSubjectDocument {
-            role: subject.role.clone(),
-            binding: subject.binding.clone(),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,8 +518,9 @@ mod tests {
             EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS, PROVIDED_BY, PURPOSE, REQUIREMENT,
         },
         outbound::read_failure_kind,
-        prepare::{EvidenceRequestSpec, SubjectRequest},
+        prepare::{EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
         request::SelectorValue,
+        response_format::EvidenceResponseFormat,
         token::StaticToken,
     };
     use registry_evidence_verifier::{
@@ -576,7 +528,7 @@ mod tests {
             ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
             VerificationError,
         },
-        AssuranceProfile,
+        AssuranceProfile, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     };
     use registry_platform_httputil::BoundedReadError;
     use std::{net::TcpListener, sync::Arc, time::Duration};
@@ -620,6 +572,7 @@ mod tests {
 
     fn spec(subject_expectations: SubjectExpectations) -> EvidenceRequestSpec {
         EvidenceRequestSpec {
+            response_format: EvidenceResponseFormat::SignedJws,
             requirement: REQUIREMENT.to_owned(),
             purpose: PURPOSE.to_owned(),
             audience: AUDIENCE.to_owned(),
@@ -946,7 +899,6 @@ mod tests {
             br#"{"protected":"","payload":"","signature":""}"#.to_vec(),
             br#"{"protected":"AA","payload":"!!!","signature":"AA"}"#.to_vec(),
         ] {
-            assert!(untrusted_subject_bindings(&body).is_empty());
             assert!(client
                 .verify_as_of(&prepared, &raw(body), fixture.now)
                 .is_err());
@@ -1030,6 +982,36 @@ mod tests {
                 .await
                 .unwrap_or_else(|error| panic!("{media_type} was refused: {error}"));
         }
+    }
+
+    #[tokio::test]
+    async fn the_prepared_format_selects_the_exact_sd_jwt_vc_exchange_and_verifier() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let mut request_spec = spec(SubjectExpectations::AcceptFirstUse);
+        request_spec.response_format = EvidenceResponseFormat::SdJwtVc;
+        let prepared = client
+            .prepare(request_spec)
+            .expect("the SD-JWT VC request is prepared");
+        let response = fixture.sign_sd_jwt_vc(prepared.request_nonce()).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .and(header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(response, EVIDENCE_SD_JWT_VC_MEDIA_TYPE),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = client
+            .send(&prepared)
+            .await
+            .expect("the SD-JWT VC response is read");
+        client
+            .verify_as_of(&prepared, &response, fixture.now)
+            .expect("the SD-JWT VC response verifies");
     }
 
     /// A body the problem contract does not cover leaves the client with nothing

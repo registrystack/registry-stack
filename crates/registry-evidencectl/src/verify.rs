@@ -1,25 +1,28 @@
-//! Offline response verification delegated entirely to the Evidence core.
+//! Offline response verification delegated to the Evidence relying-party client.
 
 use std::{
     fs::{self, File},
+    io::Read as _,
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
-    process::{Command, ExitCode, Stdio},
+    process::ExitCode,
 };
 
 use anyhow::{bail, Context as _, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Args;
+use registry_evidence_client::RetainedEvidenceVerification;
+use registry_platform_crypto::canonicalize_json;
 use zeroize::Zeroize as _;
 
-use crate::dev;
-
 const PRIVATE_FILE_MODE: u32 = 0o600;
+const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
+const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_VERIFIED_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
-    /// Flattened JWS JSON response returned by Evidence.
+    /// Signed JWS or SD-JWT VC response returned by Evidence.
     response: PathBuf,
 
     /// Owner-only verification context retained before the response existed.
@@ -29,39 +32,66 @@ pub struct VerifyArgs {
     /// New owner-only file for the exact verified Evidence payload.
     #[arg(long)]
     output: PathBuf,
-
-    #[arg(long, hide = true)]
-    evidence_bin: Option<PathBuf>,
 }
 
 pub fn run(args: VerifyArgs) -> Result<ExitCode> {
     validate_output_path(&args.output)?;
-    let evidence = dev::resolve_tool_binary(
-        "evidence",
-        args.evidence_bin.as_deref(),
-        "EVIDENCECTL_TEST_EVIDENCE_BIN",
-    )?;
-    let mut staged = StagedOutput::create(&args.output)?;
-    let output_file = staged.file.try_clone()?;
-    let status = Command::new(evidence)
-        .arg("verify-local-response")
-        .arg("--context")
-        .arg(&args.context)
-        .arg("--response")
-        .arg(&args.response)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(output_file))
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to invoke Evidence response verification")?;
-    if !status.success() {
+    let context = read_bounded_regular_input(&args.context, MAX_CONTEXT_BYTES, true)
+        .context("Evidence response verification failed")?;
+    let context: RetainedEvidenceVerification = serde_json::from_slice(&context)
+        .map_err(|_| anyhow::anyhow!("Evidence response verification failed"))?;
+    let response = read_bounded_regular_input(&args.response, MAX_RESPONSE_BYTES, false)
+        .context("Evidence response verification failed")?;
+    let verified = context
+        .verify(&response)
+        .map_err(|_| anyhow::anyhow!("Evidence response verification failed"))?;
+    let mut output = canonicalize_json(&serde_json::to_value(verified.evidence())?)
+        .context("Evidence response verification failed")?;
+    output.push(b'\n');
+    if output.len() as u64 > MAX_VERIFIED_BYTES {
         bail!("Evidence response verification failed");
     }
+    let mut staged = StagedOutput::create(&args.output)?;
+    use std::io::Write as _;
+    staged.file.write_all(&output)?;
     staged.file.sync_all()?;
     validate_private_output(&staged.path, &staged.file)?;
     staged.publish(&args.output)?;
     println!("VERIFIED");
     Ok(ExitCode::SUCCESS)
+}
+
+fn read_bounded_regular_input(
+    path: &Path,
+    maximum_bytes: u64,
+    require_owner_only: bool,
+) -> Result<Vec<u8>> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.len() > maximum_bytes
+        || (require_owner_only
+            && (metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.permissions().mode() & 0o7777 != PRIVATE_FILE_MODE))
+    {
+        bail!("input is not a bounded regular file");
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() as u64 > maximum_bytes {
+        bail!("input is not a bounded regular file");
+    }
+    Ok(bytes)
 }
 
 fn validate_output_path(path: &Path) -> Result<()> {

@@ -3,12 +3,15 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write as _,
     net::TcpStream,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
+
+use serde_json::{json, Value};
 
 /// A value planted in every mutated artifact so a diagnostic that leaks a
 /// document value fails loudly instead of quietly.
@@ -85,6 +88,156 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "Evidence fixture passed (",
         " evaluated cases)\n",
     );
+}
+
+#[test]
+fn local_relying_procedure_is_bearer_free_closed_and_selector_private() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.stage_acceptance_secrets();
+    deployment.seal();
+    let input_path = deployment.path("relying-procedure-input.json");
+    let draft = json!({
+        "schema": "registry.evidence.local-relying-procedure-input/v1",
+        "responseFormat": "signed-jws",
+        "requirement": "urn:example:fixture:requirement:adult-status:v1",
+        "purpose": "fixture-eligibility",
+        "audience": "urn:example:local-client:age-checker",
+        "subjects": [{
+            "role": "subject",
+            "selector": {
+                "profile": "person-demographics-v1",
+                "values": {
+                    "given_name": "Amina",
+                    "family_name": "Diallo",
+                    "birth_date": "2000-01-01"
+                }
+            }
+        }]
+    });
+    write_private_json(&input_path, &draft);
+
+    // Non-token stdin is deliberately present. Success proves this seam does
+    // not authenticate, parse, or otherwise depend on bearer input.
+    let output = invoke_local_relying_procedure(
+        &deployment.path("runtime.yaml"),
+        &input_path,
+        b"this-is-not-a-bearer-token\n",
+    );
+    assert!(
+        output.status.success(),
+        "procedure preparation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let procedure: Value =
+        serde_json::from_slice(&output.stdout).expect("procedure output is one JSON document");
+    assert_eq!(
+        procedure["schema"],
+        json!("registry.evidence.local-relying-procedure/v1")
+    );
+    assert_eq!(procedure["responseFormat"], json!("signed-jws"));
+    assert_eq!(procedure["expectedAssuranceProfile"], json!("local"));
+    assert_eq!(
+        procedure["requirement"],
+        json!("urn:example:fixture:requirement:adult-status:v1")
+    );
+    assert_eq!(procedure["purpose"], json!("fixture-eligibility"));
+    assert_eq!(
+        procedure["audience"],
+        json!("urn:example:local-client:age-checker")
+    );
+    assert!(procedure["configurationRevision"]
+        .as_str()
+        .is_some_and(|revision| revision.starts_with("sha256:") && revision.len() == 71));
+    assert!(procedure["trustedJwks"]["keys"]
+        .as_array()
+        .is_some_and(|keys| keys.len() == 1));
+    assert!(procedure["expectedSubjects"][0]["binding"]
+        .as_str()
+        .is_some_and(|binding| binding.starts_with("urn:evidence:subject:v1_")));
+    assert_eq!(
+        procedure["expectedOutputs"],
+        json!([{
+            "concept": "urn:example:fixture:concept:adult-status",
+            "form": "boolean"
+        }])
+    );
+    assert_eq!(procedure["maximumAssertionLifetimeSeconds"], json!(300));
+    assert_eq!(procedure["clockSkewSeconds"], json!(30));
+    assert!(procedure.get("requestNonce").is_none());
+    let serialized = std::str::from_utf8(&output.stdout).expect("procedure output is UTF-8");
+    for protected in [
+        "Amina",
+        "Diallo",
+        "2000-01-01",
+        "person-demographics-v1",
+        "subject-binding-secret-32-bytes-minimum-value",
+        "fixture-agency",
+    ] {
+        assert!(
+            !serialized.contains(protected),
+            "procedure output disclosed protected input {protected:?}"
+        );
+    }
+    assert!(
+        !deployment.path("audit.jsonl").exists(),
+        "procedure preparation never opens audit storage"
+    );
+
+    let mut wrong_purpose = draft.clone();
+    wrong_purpose["purpose"] = json!("not-configured");
+    let mut wrong_profile = draft.clone();
+    wrong_profile["subjects"][0]["selector"]["profile"] = json!("not-configured-v1");
+    let mut missing_value = draft.clone();
+    missing_value["subjects"][0]["selector"]["values"]
+        .as_object_mut()
+        .expect("selector values are an object")
+        .remove("birth_date");
+    let mut absent_values = draft.clone();
+    absent_values["subjects"][0]["selector"]
+        .as_object_mut()
+        .expect("selector is an object")
+        .remove("values");
+    let mut unsupported_format = draft.clone();
+    unsupported_format["responseFormat"] = json!("sd-jwt-vc");
+    for (label, invalid) in [
+        ("purpose", wrong_purpose),
+        ("profile", wrong_profile),
+        ("missing selector value", missing_value),
+        ("absent selector values", absent_values),
+        ("response format", unsupported_format),
+    ] {
+        write_private_json(&input_path, &invalid);
+        let refused = invoke_local_relying_procedure(
+            &deployment.path("runtime.yaml"),
+            &input_path,
+            b"ignored-stdin\n",
+        );
+        assert!(!refused.status.success(), "an invalid {label} was accepted");
+        assert!(refused.stdout.is_empty(), "an invalid {label} wrote output");
+        assert_eq!(
+            std::str::from_utf8(&refused.stderr).expect("diagnostic is UTF-8"),
+            "evidence: local relying procedure preparation failed\n"
+        );
+    }
+
+    write_private_json(&input_path, &draft);
+    fs::set_permissions(&input_path, fs::Permissions::from_mode(0o644)).expect("widen draft mode");
+    let public_input = invoke_local_relying_procedure(
+        &deployment.path("runtime.yaml"),
+        &input_path,
+        b"ignored-stdin\n",
+    );
+    assert!(
+        !public_input.status.success(),
+        "a non-private selector draft was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&public_input.stderr).expect("diagnostic is UTF-8"),
+        "evidence: local relying procedure preparation failed\n"
+    );
+
+    deployment.unseal();
 }
 
 /// Stage the platform secrets the reference project's bundle names, with a
@@ -1234,6 +1387,37 @@ impl Drop for Deployment {
             set_tree_mode(&self.path("bundle"), 0o755, 0o644);
         }
     }
+}
+
+fn write_private_json(path: &Path, value: &Value) {
+    fs::write(
+        path,
+        serde_json::to_vec(value).expect("local relying procedure draft serializes"),
+    )
+    .expect("write local relying procedure draft");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .expect("make local relying procedure draft owner-only");
+}
+
+fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .arg("--runtime")
+        .arg(runtime)
+        .arg("prepare-local-relying-procedure")
+        .arg("--input")
+        .arg(input)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("evidence binary starts");
+    let mut child_stdin = child.stdin.take().expect("command stdin is piped");
+    child_stdin
+        .write_all(stdin)
+        .expect("write deliberately irrelevant stdin");
+    drop(child_stdin);
+    child.wait_with_output().expect("evidence command exits")
 }
 
 fn invoke(runtime: &Path, arguments: &[&str]) -> Output {

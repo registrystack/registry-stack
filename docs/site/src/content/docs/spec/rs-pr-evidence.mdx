@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: specification
 doc_id: RS-PR-EVIDENCE
 category: normative
@@ -60,6 +60,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.1.0 | 2026-08-03 | draft | Initial profile derived from the frozen V1 contracts. |
 | 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Evidence Gateway in the architecture. |
 | 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
+| 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
 
 ## 1. Scope and references
 
@@ -75,7 +76,7 @@ This specification covers Evidence Gateway's externally observable protocol beha
   unsigned envelope, and the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
   same assertion.
 - The problem contract, including existence collapse.
-- The audit obligation and its two durable gates.
+- The authorization-refusal gate and the two authorized-material audit gates.
 - The immutability of deployment input.
 
 This specification does not define:
@@ -435,20 +436,24 @@ source content.
 
 ## 9. Audit behavior
 
-REQ-PR-EVIDENCE-046: Evidence Gateway MUST durably accept an access-attempt event after authorization and
-before credential acquisition or source access, and a disclosure-release event after the final
-immutable response bytes are serialized and before those exact bytes are released.
+REQ-PR-EVIDENCE-046: Evidence Gateway MUST durably accept a standalone minimal event after an
+authenticated authorization refusal and before returning its generic `403`, an access-attempt event
+after authorization and before credential acquisition or source access, and a disclosure-release
+event after the final immutable response bytes are serialized and before those exact bytes are
+released.
 A sink failure MUST block the applicable step
-(`products/evidence/contracts/audit-event.schema.yaml`, invariants `V1-I13` and `V1-I29`).
+(`products/evidence/contracts/audit-event.schema.yaml`, invariants `V1-I13`, `V1-I29`, and
+`V1-I39`).
 
 REQ-PR-EVIDENCE-047: Every native audit event MUST validate against
 `products/evidence/contracts/audit-event.schema.yaml`, which closes the member set, the phase and
 decision enumerations, and the conditional members.
 
-REQ-PR-EVIDENCE-048: Every native event MUST record the closed response-protection mode resolved with
-authorization.
+REQ-PR-EVIDENCE-048: Every authorized-material native event MUST record the closed
+response-protection mode resolved with authorization.
 A signing key identity MUST be present exactly for cryptographically protected disclosure release and
-MUST be absent for unsigned output
+MUST be absent for unsigned output. The standalone authorization-refusal event MUST contain neither
+response protection nor a signing key identity because authorization did not resolve those fields
 (`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I30`).
 
 REQ-PR-EVIDENCE-049: Audit MUST NOT record the values listed under the never-record rule in
@@ -457,10 +462,16 @@ selector, source, and supported values, the request nonce, credentials and bodie
 and comparisons, and script inputs, outputs, or signing material.
 Identity MUST travel only as domain-separated keyed pseudonyms (invariant `V1-I15`).
 
-REQ-PR-EVIDENCE-050: Authentication, unmatched-authority, and invalid-selector failures occur before
-a privacy-safe authority and complete selector bundle exist, so Evidence Gateway MUST NOT fabricate a native
-event from that untrusted or protected request material
-(`products/evidence/contracts/audit-event.schema.yaml`).
+REQ-PR-EVIDENCE-050: Every authorization refusal after successful authentication MUST durably append
+exactly one standalone minimal native event before Evidence Gateway returns the generic `403`.
+That event MUST identify the event and operation, assurance profile, bundle revision, requester
+pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration.
+It MUST NOT contain the requested requirement, purpose, subjects, unmatched authority, selector
+information, response protection, source, or evaluation material. If the event cannot be durably
+appended, Evidence Gateway MUST return the generic `503` instead and MUST NOT acquire source
+credentials or make a source request. Authentication, malformed-request, and invalid-selector
+failures MUST NOT create a native audit event
+(`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I39`).
 
 REQ-PR-EVIDENCE-051: At startup and after restart, Evidence Gateway MUST recover the prior chain head from
 the newest sealed segment, when one exists, and MUST verify the complete active segment from that
@@ -624,9 +635,10 @@ An Evidence Gateway deployment conforms to this specification when it:
 - reports failures as closed problem documents, collapses unresolved classes, refuses unacceptable
   negotiation before source access, and bounds retry hints (REQ-PR-EVIDENCE-042,
   REQ-PR-EVIDENCE-043, REQ-PR-EVIDENCE-044, REQ-PR-EVIDENCE-045);
-- audits at both durable gates, validates every event against the closed schema, records the
-  response-protection mode and signing key identity correctly, records no protected value, fabricates
-  no event from untrusted material, and verifies the keyed chain (REQ-PR-EVIDENCE-046,
+- audits at the refusal and authorized-material durable gates, validates every event against the
+  closed schema, records response protection only for authorized material, records a minimal refusal
+  before `403`, returns `503` if that append fails, records no protected value, and verifies the
+  keyed chain (REQ-PR-EVIDENCE-046,
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,
   REQ-PR-EVIDENCE-051);
 - treats deployment input as immutable, restricts the runtime file to process-local bindings, fails

@@ -14,13 +14,18 @@
 //! side could impose. The runtime signer is proven against the verifier by the
 //! runtime's own suite, and this crate's integration suite drives that runtime.
 
+use std::collections::BTreeMap;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence_verifier::{
-    model::JwksDocument, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
+    model::{Evidence, JwksDocument},
+    sdjwt_vc::issuance_input,
+    EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
 };
 use registry_platform_crypto::{sign, PrivateJwk};
+use registry_platform_sdjwt::SdJwtIssuer;
 use serde_json::{json, Value};
 
 /// Vocabulary the fixtures assert about. It is deliberately abstract: this
@@ -96,6 +101,21 @@ impl SignedEvidenceFixture {
     /// A signed assertion answering the request that carried this nonce.
     pub(crate) fn sign(&self, request_nonce: &str) -> Vec<u8> {
         self.sign_payload(&self.payload(request_nonce, PURPOSE))
+    }
+
+    /// The same assertion in the compact SD-JWT VC response encoding.
+    pub(crate) async fn sign_sd_jwt_vc(&self, request_nonce: &str) -> Vec<u8> {
+        let evidence: Evidence = serde_json::from_value(self.payload(request_nonce, PURPOSE))
+            .expect("the fixture payload is Evidence");
+        let input = issuance_input(&evidence, None, &BTreeMap::new())
+            .expect("the fixture maps onto the SD-JWT VC profile");
+        SdJwtIssuer::from_jwk(self.signing_key.clone())
+            .expect("the fixture key initializes the issuer")
+            .issue(input)
+            .await
+            .expect("the fixture SD-JWT VC is issued")
+            .jwt
+            .into_bytes()
     }
 
     /// A signed assertion whose stated purpose is not the one the relying party

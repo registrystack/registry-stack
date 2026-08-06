@@ -67,6 +67,7 @@ function signEvidence(evidence, signingKey) {
  */
 function requestSpec() {
   return {
+    responseFormat: 'signed-jws',
     requirement: 'urn:example:node-test:requirement:status:v1',
     purpose: 'example-decision',
     audience: 'urn:example:node-test:audience',

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -144,8 +144,9 @@ The following are not covered by the compatibility promise, at any version:
 - Hidden commands and internal protocols. A command or protocol that no reference page documents
   is not a covered surface.
 - Adopter tooling that wraps a covered surface rather than defining one, including `evidencectl`,
-  which generates key material and project scaffolds and shells out to the `evidence` binary for
-  every Evidence Gateway semantic decision.
+  which generates key material and project scaffolds, delegates runtime decisions to the
+  `evidence` binary, and reuses the Evidence client and portable verifier for relying-party
+  request preparation and offline response verification.
 - The layout of the repository, the `products/` export trees, the docs site internals, and
   the lab tooling.
 - Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is

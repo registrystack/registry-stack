@@ -21,9 +21,9 @@ use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
-        EvidenceAuditLog, ResponseProtection,
+        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent, ResponseProtection,
     },
-    auth::{AuthenticatedContext, Authenticator},
+    auth::Authenticator,
     bundle::{Bundle, DeploymentInputs},
     config::{
         AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind, ResponseFormat,
@@ -843,14 +843,39 @@ impl EvidenceRuntime {
             .audit
             .pseudonym("requester", &scope, context.principal().as_bytes())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let actor_pseudonym = context
+            .actor()
+            .map(|actor| self.audit.pseudonym("actor", &scope, actor.as_bytes()))
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
-        let matched = match_entitlement(self.bundle(), request, &context).map_err(map_authority)?;
+        let matched = match match_entitlement(self.bundle(), request, &context) {
+            Ok(matched) => matched,
+            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                self.append_authorization_refusal(
+                    operation,
+                    requester_pseudonym,
+                    actor_pseudonym,
+                    started,
+                )
+                .await?;
+                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+            }
+            Err(error) => return Err(map_authority(error)),
+        };
         // The immutable bundle and the one complete matched grant must both
         // permit the requested format. API selection creates no permission,
         // and the denial does not reveal which layer withheld it.
         if !self.bundle().config.response_formats.contains(&format)
             || !matched.permits_response_format(format)
         {
+            self.append_authorization_refusal(
+                operation,
+                requester_pseudonym,
+                actor_pseudonym,
+                started,
+            )
+            .await?;
             return Err(failure(ProblemCode::NotAuthorized, "response-format"));
         }
         let selector_limit_input = canonical_pair(
@@ -868,6 +893,16 @@ impl EvidenceRuntime {
             .map_err(map_selector_limit)?;
         let resolved = match resolve_selectors(self.bundle(), request, &context, &matched) {
             Ok(resolved) => resolved,
+            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                self.append_authorization_refusal(
+                    operation,
+                    requester_pseudonym,
+                    actor_pseudonym,
+                    started,
+                )
+                .await?;
+                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+            }
             Err(error) => {
                 if error == AuthorizationError::Selector {
                     self.rate_limiter
@@ -879,8 +914,13 @@ impl EvidenceRuntime {
             }
         };
 
-        let material =
-            self.audit_material(&scope, requester_pseudonym, &context, &resolved, format)?;
+        let material = self.audit_material(
+            &scope,
+            requester_pseudonym,
+            actor_pseudonym,
+            &resolved,
+            format,
+        )?;
         let (source_id, adapter_id) = self.source_identity(&request.requirement)?;
         let mut access_event = material.event(
             operation,
@@ -1277,15 +1317,10 @@ impl EvidenceRuntime {
         &self,
         scope: &str,
         requester_pseudonym: String,
-        context: &AuthenticatedContext,
+        actor_pseudonym: Option<String>,
         resolved: &ResolvedAuthorization,
         format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
-        let actor_pseudonym = context
-            .actor()
-            .map(|actor| self.audit.pseudonym("actor", scope, actor.as_bytes()))
-            .transpose()
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
         let grant_pseudonym = resolved
             .grant_id
             .as_deref()
@@ -1324,6 +1359,33 @@ impl EvidenceRuntime {
             subjects,
             response_protection: map_response_protection(format),
         })
+    }
+
+    async fn append_authorization_refusal(
+        &self,
+        operation: &str,
+        requester_pseudonym: String,
+        actor_pseudonym: Option<String>,
+        started: Instant,
+    ) -> Result<(), RuntimeFailure> {
+        let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
+            self.bundle().config.assurance_profile,
+            operation.to_owned(),
+            self.bundle().revision().to_owned(),
+            requester_pseudonym,
+            elapsed_millis(started),
+        );
+        event.actor_pseudonym = actor_pseudonym;
+        self.audit
+            .append_authorization_refusal(event)
+            .await
+            .map(|_| ())
+            .map_err(|_| {
+                failure(
+                    ProblemCode::ServiceUnavailable,
+                    "authorization-refusal-audit",
+                )
+            })
     }
 
     fn subject_bindings(

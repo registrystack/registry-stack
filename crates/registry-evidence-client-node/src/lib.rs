@@ -249,7 +249,9 @@ impl EvidenceClient {
     /// Close the expectations for one request and generate its nonce. No I/O
     /// happens here. The returned request is good for exactly one exchange:
     /// spend it with `send` or `requestAndVerify`.
-    #[napi]
+    #[napi(
+        ts_args_type = "spec: { responseFormat: 'signed-jws' | 'sd-jwt-vc'; [key: string]: any }"
+    )]
     pub fn prepare(&self, spec: serde_json::Value) -> Result<PreparedEvidenceRequest> {
         catch_panic("preparing a request", || {
             let spec = spec_from_json(&spec)

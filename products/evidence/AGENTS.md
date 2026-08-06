@@ -36,11 +36,14 @@ source is covered by the same source-product and domain neutrality checks.
 links `registry-evidence-verifier` for every verification decision, so it
 re-implements no part of evaluation, signing, or verification. It sits outside
 the frozen Version 1 runtime contract, and its source is covered by the same
-source-product and domain neutrality checks. `registry-evidence-client-node` is
-a thin napi-rs binding over `registry-evidence-client` for Node.js callers, and
-carries the same neutrality checks. `registry-evidence-client-py` is the same
-binding pattern for Python callers, via PyO3, and carries the same neutrality
-checks.
+source-product and domain neutrality checks. `registry-evidencectl` reuses that
+client and verifier for relying-party request preparation and offline response
+verification while continuing to delegate runtime evaluation, signing, bundle
+validation, and fixture evaluation to the `evidence` binary.
+`registry-evidence-client-node` is a thin napi-rs binding over
+`registry-evidence-client` for Node.js callers, and carries the same neutrality
+checks. `registry-evidence-client-py` is the same binding pattern for Python
+callers, via PyO3, and carries the same neutrality checks.
 
 Selected `registry-platform-*` primitives may be reused only when their existing
 contracts fit Evidence directly. The approved candidates are audit, crypto,

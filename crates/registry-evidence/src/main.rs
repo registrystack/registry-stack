@@ -27,13 +27,10 @@ use registry_evidence::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
     },
-    local_verification::{
-        prepare_local_verification_context_for_format, verify_local_response, LocalResponseFormat,
-        LocalVerificationContext,
-    },
+    local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
-        EvidenceRequest, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
-        SelectorValue, SubjectBinding,
+        JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
+        SubjectBinding,
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
@@ -142,29 +139,12 @@ enum Command {
     /// already sealed segment is not caught there. This is the counterpart
     /// check that catches it, meant to run out of band.
     VerifyAudit,
-    /// Internal local-adopter seam. Bearer bytes are accepted only on stdin.
+    /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
-    PrepareLocalVerificationContext {
-        /// Owner-only JSON file containing the exact request to retain.
+    PrepareLocalRelyingProcedure {
+        /// Owner-only JSON draft containing the request shape and audience.
         #[arg(long)]
-        request: PathBuf,
-        /// Exact response format the caller will request.
-        #[arg(
-            long,
-            default_value = "signed-jws",
-            value_parser = ["signed-jws", "sd-jwt-vc"]
-        )]
-        response_format: String,
-    },
-    /// Internal offline response-verification seam.
-    #[command(hide = true)]
-    VerifyLocalResponse {
-        /// Owner-only closed context produced before the response existed.
-        #[arg(long)]
-        context: PathBuf,
-        /// Bounded flattened JWS JSON returned by Evidence.
-        #[arg(long)]
-        response: PathBuf,
+        input: PathBuf,
     },
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
@@ -345,12 +325,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )?)
         }
         Command::VerifyAudit => run_verify_audit(&cli.runtime),
-        Command::PrepareLocalVerificationContext {
-            request,
-            response_format,
-        } => prepare_local_context_command(&cli.runtime, &request, &response_format).await,
-        Command::VerifyLocalResponse { context, response } => {
-            verify_local_response_command(&context, &response)
+        Command::PrepareLocalRelyingProcedure { input } => {
+            prepare_local_relying_procedure_command(&cli.runtime, &input).await
         }
         Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
@@ -519,69 +495,39 @@ async fn shutdown_signal() {
 /// pulled into memory because a path was mistyped.
 const MAX_VERIFY_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_LOCAL_REQUEST_BYTES: u64 = 64 * 1024;
-const MAX_LOCAL_CONTEXT_BYTES: u64 = 256 * 1024;
-const MAX_LOCAL_RESPONSE_BYTES: u64 = 256 * 1024;
-const MAX_LOCAL_BEARER_BYTES: usize = 64 * 1024;
 
 /// Exit status for a response that is authentic but no longer current.
 const NOT_CURRENT_EXIT_CODE: u8 = 3;
 
 /// The one class reported for an input document that cannot be read or parsed.
 const VERIFY_MALFORMED: CliError = CliError("stored response verification failed (malformed)");
-const LOCAL_CONTEXT_FAILED: CliError = CliError("local verification context preparation failed");
-const LOCAL_RESPONSE_FAILED: CliError = CliError("local response verification failed");
+const LOCAL_RELYING_PROCEDURE_FAILED: CliError =
+    CliError("local relying procedure preparation failed");
 const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
 
-/// Prepare one closed context from trusted deployment state and a retained
-/// request. The bearer is read only from stdin and is never echoed.
-async fn prepare_local_context_command(
+/// Close trusted local procedure metadata and exact request-origin bindings.
+///
+/// This command has no bearer input. Authorization remains exclusively on the
+/// running service's HTTP request boundary.
+async fn prepare_local_relying_procedure_command(
     runtime_path: &Path,
-    request_path: &Path,
-    response_format: &str,
+    input_path: &Path,
 ) -> Result<ExitCode, CommandError> {
-    let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let request_bytes =
-        read_owner_only_input(request_path, MAX_LOCAL_REQUEST_BYTES, LOCAL_CONTEXT_FAILED)?;
-    let request_value = parse_json_strict(&request_bytes).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let request: EvidenceRequest =
-        serde_json::from_value(request_value).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let bearer = read_local_bearer(std::io::stdin()).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let response_format = match response_format {
-        "signed-jws" => LocalResponseFormat::SignedJws,
-        "sd-jwt-vc" => LocalResponseFormat::SdJwtVc,
-        _ => return Err(LOCAL_CONTEXT_FAILED.into()),
-    };
-    let context = prepare_local_verification_context_for_format(
-        &deployment,
-        &request,
-        &bearer,
-        response_format,
-    )
-    .await
-    .map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    write_canonical_json_line(&context, LOCAL_CONTEXT_FAILED)?;
-    Ok(ExitCode::SUCCESS)
-}
-
-/// Verify from closed local state only. In particular, `--runtime` is not
-/// loaded on this path and no network, source, secret, or audit boundary is
-/// reachable after the context has been created.
-fn verify_local_response_command(
-    context_path: &Path,
-    response_path: &Path,
-) -> Result<ExitCode, CommandError> {
-    let context_bytes =
-        read_owner_only_input(context_path, MAX_LOCAL_CONTEXT_BYTES, LOCAL_RESPONSE_FAILED)?;
-    let context_value = parse_json_strict(&context_bytes).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    let context: LocalVerificationContext =
-        serde_json::from_value(context_value).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    let response = read_untrusted_response_input(
-        response_path,
-        MAX_LOCAL_RESPONSE_BYTES,
-        LOCAL_RESPONSE_FAILED,
+    let deployment =
+        DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let input_bytes = read_owner_only_input(
+        input_path,
+        MAX_LOCAL_REQUEST_BYTES,
+        LOCAL_RELYING_PROCEDURE_FAILED,
     )?;
-    let evidence = verify_local_response(context, &response).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    write_canonical_json_line(&evidence, LOCAL_RESPONSE_FAILED)?;
+    let input_value =
+        parse_json_strict(&input_bytes).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let input: LocalRelyingProcedureInput =
+        serde_json::from_value(input_value).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let procedure = prepare_local_relying_procedure(&deployment, &input)
+        .await
+        .map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    write_canonical_json_line(&procedure, LOCAL_RELYING_PROCEDURE_FAILED)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -593,17 +539,6 @@ fn read_owner_only_input(
     failure: CliError,
 ) -> Result<Vec<u8>, CliError> {
     read_bounded_regular_input(path, maximum_bytes, true, failure)
-}
-
-/// A signed response is untrusted input, not a trust anchor. Normal
-/// `curl --output` permissions are accepted, while file identity and size
-/// checks still prevent path tricks and blocking or unbounded reads.
-fn read_untrusted_response_input(
-    path: &Path,
-    maximum_bytes: u64,
-    failure: CliError,
-) -> Result<Vec<u8>, CliError> {
-    read_bounded_regular_input(path, maximum_bytes, false, failure)
 }
 
 fn read_bounded_regular_input(
@@ -640,33 +575,6 @@ fn read_bounded_regular_input(
         return Err(failure);
     }
     Ok(bytes)
-}
-
-/// Read exactly one compact bearer from stdin with at most one shell line
-/// ending. Other whitespace, control bytes, empty values, and oversize input
-/// are rejected before authentication.
-fn read_local_bearer(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
-    let mut bytes = Zeroizing::new(Vec::new());
-    reader
-        .take((MAX_LOCAL_BEARER_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    if bytes.len() > MAX_LOCAL_BEARER_BYTES {
-        return Err(LOCAL_CONTEXT_FAILED);
-    }
-    let body = bytes
-        .strip_suffix(b"\r\n")
-        .or_else(|| bytes.strip_suffix(b"\n"))
-        .unwrap_or(bytes.as_slice());
-    let bearer = std::str::from_utf8(body).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    if bearer.is_empty()
-        || bearer
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-    {
-        return Err(LOCAL_CONTEXT_FAILED);
-    }
-    Ok(Zeroizing::new(bearer.to_owned()))
 }
 
 fn write_canonical_json_line<T: serde::Serialize>(
@@ -2775,8 +2683,7 @@ mod tests {
         for name in [
             "bundle-check",
             "bundle-evaluate",
-            "prepare-local-verification-context",
-            "verify-local-response",
+            "prepare-local-relying-procedure",
             "local-audit-last-operation",
         ] {
             assert!(
@@ -2790,25 +2697,6 @@ mod tests {
     }
 
     #[test]
-    fn local_bearer_is_bounded_and_accepts_only_one_shell_line() {
-        assert_eq!(
-            read_local_bearer("header.payload.signature\n".as_bytes())
-                .expect("one shell line is accepted")
-                .as_str(),
-            "header.payload.signature"
-        );
-        for invalid in [
-            "",
-            "\n",
-            "header.payload.signature\n\n",
-            "header.payload. signature",
-        ] {
-            assert!(read_local_bearer(invalid.as_bytes()).is_err());
-        }
-        assert!(read_local_bearer(vec![b'a'; MAX_LOCAL_BEARER_BYTES + 1].as_slice()).is_err());
-    }
-
-    #[test]
     fn local_documents_require_one_owner_only_regular_file() {
         use std::os::unix::fs::{symlink, PermissionsExt as _};
 
@@ -2818,51 +2706,26 @@ mod tests {
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
             .expect("input becomes owner-only");
         assert_eq!(
-            read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).expect("owner-only input reads"),
+            read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED)
+                .expect("owner-only input reads"),
             b"{}"
         );
 
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o640))
             .expect("input becomes group-readable");
-        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
             .expect("input becomes owner-only again");
 
         let link = directory.path().join("second-link.json");
         fs::hard_link(&safe, &link).expect("hard link is created");
-        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
         fs::remove_file(&link).expect("hard link is removed");
 
         let symbolic = directory.path().join("symbolic.json");
         symlink(&safe, &symbolic).expect("symbolic link is created");
-        assert!(read_owner_only_input(&symbolic, 2, LOCAL_CONTEXT_FAILED).is_err());
-        assert!(read_owner_only_input(&safe, 1, LOCAL_CONTEXT_FAILED).is_err());
-    }
-
-    #[test]
-    fn local_response_accepts_curl_permissions_but_rejects_file_identity_tricks() {
-        use std::os::unix::fs::{symlink, PermissionsExt as _};
-
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let response = directory.path().join("assertion.jws.json");
-        fs::write(&response, b"{}").expect("response is written");
-        fs::set_permissions(&response, fs::Permissions::from_mode(0o644))
-            .expect("response uses ordinary curl output permissions");
-        assert_eq!(
-            read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED)
-                .expect("ordinary curl output reads"),
-            b"{}"
-        );
-
-        let link = directory.path().join("response-link.json");
-        fs::hard_link(&response, &link).expect("hard link is created");
-        assert!(read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED).is_err());
-        fs::remove_file(&link).expect("hard link is removed");
-
-        let symbolic = directory.path().join("response-symbolic.json");
-        symlink(&response, &symbolic).expect("symbolic link is created");
-        assert!(read_untrusted_response_input(&symbolic, 2, LOCAL_RESPONSE_FAILED).is_err());
-        assert!(read_untrusted_response_input(&response, 1, LOCAL_RESPONSE_FAILED).is_err());
+        assert!(read_owner_only_input(&symbolic, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 1, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
     }
 
     /// Every expected form the published policy schema accepts must parse the

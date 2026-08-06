@@ -65,6 +65,7 @@ const FIXTURE_ISSUED_AT: &str = "2026-08-01T00:00:00Z";
 /// value chosen ahead of time.
 fn request_spec_json() -> serde_json::Value {
     serde_json::json!({
+        "response_format": "signed-jws",
         "requirement": "urn:example:requirement:v1",
         "purpose": "example-purpose",
         "audience": "urn:example:audience",
@@ -452,6 +453,7 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
     // `prepare()` mints fresh below: the fixture's response was signed for
     // its own canonical, fixed nonce, never this one.
     let spec_json = serde_json::json!({
+        "response_format": "signed-jws",
         "requirement": "urn:example:requirement:v1",
         "purpose": "example-purpose",
         "audience": "urn:example:audience",

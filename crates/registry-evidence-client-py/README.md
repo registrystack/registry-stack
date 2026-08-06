@@ -23,6 +23,10 @@ from registry_evidence_client import EvidenceClient
 
 client = EvidenceClient(base_url, trusted_jwks, revoked_key_ids, token)
 
+spec = {
+    "response_format": "signed-jws",
+    # requirement, subjects, and the remaining trusted procedure inputs
+}
 prepared = client.prepare(spec)              # synchronous, no I/O
 definitions = client.discover()
 jwks = client.fetch_jwks()
@@ -31,6 +35,13 @@ verified = client.verify(prepared, response)
 verified = client.request_and_verify(prepared)
 verified = client.verify_as_of(prepared, response, as_of_unix_seconds)
 ```
+
+`response_format` is required on every request specification. Use
+`"signed-jws"` for a flattened JWS JSON response or `"sd-jwt-vc"` for the
+keyless SD-JWT VC response. `prepare()` closes that choice before any I/O,
+`send()` uses its corresponding HTTP `Accept` value, and verification never
+guesses a format from the returned bytes. The shipped type stub exposes
+`EvidenceResponseFormat` and `EvidenceRequestSpec` for these inputs.
 
 `token` is either a bare string (a static token) or a mapping with exactly one
 key, `"private_key_jwt"`. There is no caller-supplied token provider; that is

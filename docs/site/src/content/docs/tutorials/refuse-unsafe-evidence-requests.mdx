@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -64,8 +64,9 @@ evidencectl request prepare age-bracket \
   --name refusal-check
 ```
 
-The provider authorized `service-path-selection`. Preparation also obtained short-lived local
-authorization for that exact authority path.
+The provider configured `service-path-selection` for this question. Preparation also obtained a
+short-lived local token carrying the tutorial caller's configured authority claims. The token does
+not authorize one exact request. Evidence Gateway applies those claims to the request it receives.
 
 ## Change the purpose after preparation
 

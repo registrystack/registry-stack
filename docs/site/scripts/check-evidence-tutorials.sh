@@ -53,6 +53,7 @@ EVIDENCE_TUTORIALS=(
 	assert-a-role-bound-relationship
 	refuse-unsafe-evidence-requests
 	verify-an-assertion-as-a-consumer
+	control-who-can-request-evidence
 )
 
 load_spec() {
@@ -120,6 +121,39 @@ load_spec() {
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED age-bracket service-path-selection requester="
 			"DISCLOSURE RELEASED age_bracket"
+			"Removed stopped local Evidence state"
+		)
+		;;
+	control-who-can-request-evidence)
+		SPEC_FENCES=20
+		SPEC_STEPS=(
+			"background:1"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:2-20"
+		)
+		SPEC_LITERALS=(
+			"evidencectl access policy add age-checks --question adult-status"
+			"evidencectl access client add service-router"
+			"--config .evidence/requests/age-checker-refused/authorization.curl"
+			"--data-binary @.evidence/requests/age-checker-refused/request.json"
+			"evidencectl access client revoke age-checker"
+			"unexpected request preparation success"
+			"ACCESS REFUSED requester=<pseudonym> reason=not_authorized"
+		)
+		SPEC_OUTPUTS=(
+			"Evidence ready at http://127.0.0.1:8080"
+			"Added access policy age-checks for adult-status."
+			"Added client service-router with policy service-routing."
+			"Prepared request: .evidence/requests/age-checker-refused/request.json"
+			"Prepared request: .evidence/requests/service-router-allowed/request.json"
+			"HTTP 403"
+			'"code": "not_authorized"'
+			"HTTP 200"
+			"VERIFIED"
+			"evidencectl: unknown or revoked active client age-checker"
+			"Local Evidence stopped"
+			"ACCESS REFUSED requester="
+			"reason=not_authorized"
 			"Removed stopped local Evidence state"
 		)
 		;;
@@ -507,6 +541,9 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		reader_dir="$WORK_ROOT/reader/evidence-start"
 		;;
 	return-a-governed-value)
+		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
+		;;
+	control-who-can-request-evidence)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
 	refuse-unsafe-evidence-requests)

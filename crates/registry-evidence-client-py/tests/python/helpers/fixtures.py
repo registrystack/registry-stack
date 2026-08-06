@@ -35,6 +35,7 @@ VALID_JWKS = {
 
 def request_spec() -> dict:
     return {
+        "response_format": "signed-jws",
         "requirement": "urn:example:requirement:v1",
         "purpose": "example-purpose",
         "audience": "urn:example:audience",

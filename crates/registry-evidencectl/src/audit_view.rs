@@ -104,16 +104,47 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
 }
 
 fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> Result<String> {
-    let access = view.events.first().ok_or_else(failed)?;
+    if view.schema != CORE_VIEW_SCHEMA || !valid_operation(&view.operation) {
+        return Err(failed());
+    }
+
+    match view.events.as_slice() {
+        [CoreAuditEvent::Refusal(refusal)] => render_refusal(refusal),
+        [CoreAuditEvent::Authorized(access)] => render_authorized(access, None, questions),
+        [CoreAuditEvent::Authorized(access), CoreAuditEvent::Authorized(release)] => {
+            render_authorized(access, Some(release), questions)
+        }
+        _ => Err(failed()),
+    }
+}
+
+fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
+    if refusal.phase != Phase::Denial
+        || refusal.decision != Decision::NotAuthorized
+        || refusal.safe_error_category != SafeErrorCategory::NotAuthorized
+        || !valid_pseudonym(&refusal.requester_pseudonym)
+    {
+        return Err(failed());
+    }
+    parse_time(&refusal.occurred_at)?;
+    Ok(format!(
+        "ACCESS REFUSED requester={} reason=not_authorized\n",
+        refusal.requester_pseudonym
+    ))
+}
+
+fn render_authorized(
+    access: &CoreAuthorizedAuditEvent,
+    release: Option<&CoreAuthorizedAuditEvent>,
+    questions: &[dev::ReadyQuestionState],
+) -> Result<String> {
     let question = questions
         .iter()
         .find(|question| {
             question.requirement_uri == access.requirement && question.purpose == access.purpose
         })
         .ok_or_else(failed)?;
-    if view.schema != CORE_VIEW_SCHEMA
-        || !valid_operation(&view.operation)
-        || !valid_alias(&question.alias)
+    if !valid_alias(&question.alias)
         || question.concepts.is_empty()
         || question.concepts.len() > 16
         || question.concepts.iter().any(|concept| {
@@ -128,7 +159,6 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
                 )
         })
         || !valid_purpose(&question.purpose)
-        || !(1..=2).contains(&view.events.len())
     {
         return Err(failed());
     }
@@ -146,11 +176,10 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
         "ACCESS AUTHORIZED {} {} requester={}\n",
         question.alias, question.purpose, access.requester_pseudonym
     );
-    if view.events.len() == 1 {
+    let Some(release) = release else {
         return Ok(rendered);
-    }
+    };
 
-    let release = &view.events[1];
     validate_common(release, question)?;
     if release.phase != Phase::DisclosureRelease
         || release.decision != Decision::Released
@@ -186,7 +215,10 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
     Ok(rendered)
 }
 
-fn validate_common(event: &CoreAuditEvent, question: &dev::ReadyQuestionState) -> Result<()> {
+fn validate_common(
+    event: &CoreAuthorizedAuditEvent,
+    question: &dev::ReadyQuestionState,
+) -> Result<()> {
     if event.requirement != question.requirement_uri
         || event.purpose != question.purpose
         || !matches!(
@@ -265,8 +297,15 @@ struct CoreAuditOperation {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CoreAuditEvent {
+    Authorized(CoreAuthorizedAuditEvent),
+    Refusal(CoreRefusalAuditEvent),
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CoreAuditEvent {
+struct CoreAuthorizedAuditEvent {
     occurred_at: String,
     phase: Phase,
     decision: Decision,
@@ -280,11 +319,22 @@ struct CoreAuditEvent {
     evidence_id: Presence<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CoreRefusalAuditEvent {
+    occurred_at: String,
+    phase: Phase,
+    decision: Decision,
+    requester_pseudonym: String,
+    safe_error_category: SafeErrorCategory,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Phase {
     AccessAttempt,
     DisclosureRelease,
+    Denial,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -292,6 +342,13 @@ enum Phase {
 enum Decision {
     Authorized,
     Released,
+    NotAuthorized,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum SafeErrorCategory {
+    NotAuthorized,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]

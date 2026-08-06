@@ -418,3 +418,9 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
       - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
+  - id: acceptance-row-63
+    summary: An authorization refusal after successful authentication durably appends exactly one standalone minimal registry.evidence.audit.authorization-refusal/v1 denial event before returning the generic 403; append failure returns the generic 503, no source boundary is crossed, and authentication, malformed-request, and invalid-selector failures remain operational-only.
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}

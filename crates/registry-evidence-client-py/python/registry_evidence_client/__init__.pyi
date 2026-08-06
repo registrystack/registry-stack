@@ -5,12 +5,12 @@ honest by `tests/python/test_drift.py`, which introspects the compiled
 module's real classes and asserts this file names exactly the same methods
 and attributes, in both directions.
 
-Every "JSON-shaped" parameter and return value below (`trusted_jwks`, `token`,
-`spec`, and every returned document) crosses the FFI boundary as a plain
-Python object graph built from `dict`/`list`/`str`/`int`/`float`/`bool`/
-`None`, mirroring the wire JSON it stands for. `Any` says exactly that,
-rather than a shape this binding does not itself constrain any further than
-"valid JSON".
+Every "JSON-shaped" parameter and return value below crosses the FFI boundary
+as a plain Python object graph built from `dict`/`list`/`str`/`int`/`float`/
+`bool`/`None`, mirroring the wire JSON it stands for. The request specification
+is typed because the binding constrains its complete top-level shape and its
+explicit response format. Other JSON documents remain `Any` where the binding
+does not narrow their structure beyond the wrapped Rust contract.
 
 Every method on `EvidenceClient` is an ordinary, blocking call: the client
 owns a private tokio runtime and blocks on it for every network call,
@@ -18,7 +18,43 @@ releasing the GIL for the duration so other Python threads keep running.
 None of this crosses into `asyncio`; there is no `async def` anywhere here.
 """
 
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict, Union
+
+EvidenceResponseFormat = Literal["signed-jws", "sd-jwt-vc"]
+
+SubjectRequest = TypedDict(
+    "SubjectRequest", {"role": str, "selector_profile": str}
+)
+SubjectRequestWithValues = TypedDict(
+    "SubjectRequestWithValues",
+    {
+        "role": str,
+        "selector_profile": str,
+        "selector_values": Mapping[str, Union[str, int, bool]],
+    },
+)
+ExpectedSubject = TypedDict("ExpectedSubject", {"role": str, "binding": str})
+EvidenceRequestSpec = TypedDict(
+    "EvidenceRequestSpec",
+    {
+        "response_format": EvidenceResponseFormat,
+        "requirement": str,
+        "purpose": str,
+        "audience": str,
+        "evidence_type": str,
+        "issued_by": str,
+        "provided_by": str,
+        "configuration_revision": str,
+        "expected_assurance_profile": Any,
+        "subjects": Sequence[Union[SubjectRequest, SubjectRequestWithValues]],
+        "expected_outputs": Sequence[Mapping[str, Any]],
+        "maximum_assertion_lifetime_seconds": int,
+        "clock_skew_seconds": int,
+        "subject_expectations": Union[
+            Literal["accept_first_use"], Sequence[ExpectedSubject]
+        ],
+    },
+)
 
 class EvidenceClientError(Exception):
     """Base exception for every mapped failure this client reports.
@@ -137,7 +173,7 @@ class EvidenceClient:
         max_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
     ) -> None: ...
-    def prepare(self, spec: Any) -> PreparedEvidenceRequest: ...
+    def prepare(self, spec: EvidenceRequestSpec) -> PreparedEvidenceRequest: ...
     def discover(self) -> Any: ...
     def fetch_jwks(self) -> Any: ...
     def send(self, prepared: PreparedEvidenceRequest) -> RawEvidenceResponse: ...

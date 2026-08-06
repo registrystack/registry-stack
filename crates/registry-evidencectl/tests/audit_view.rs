@@ -115,6 +115,35 @@ fn access_only_view_prints_authorized_without_claiming_release() {
 }
 
 #[test]
+fn standalone_authorization_refusal_prints_only_the_safe_reason() {
+    let fixture = Fixture::new();
+    fixture.write_core_json(&refusal_view());
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("ACCESS REFUSED requester={PSEUDONYM} reason=not_authorized\n")
+    );
+    assert!(output.stderr.is_empty());
+
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    for forbidden in [
+        "adult-status",
+        "age-check",
+        "is_adult",
+        "requirement",
+        "purpose",
+        "selector",
+        "authority",
+        "responseProtection",
+        "signed",
+        "operation",
+    ] {
+        assert!(!rendered.contains(forbidden), "rendered {forbidden}");
+    }
+}
+
+#[test]
 fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
     let fixture = Fixture::new();
     let state_path = fixture.root.join(".evidence/dev/state.json");
@@ -295,6 +324,69 @@ fn closed_parser_alias_mapping_and_metadata_fail_without_partial_output() {
 }
 
 #[test]
+fn malformed_or_mixed_refusal_views_fail_without_partial_output() {
+    let fixture = Fixture::new();
+    let base = refusal_view();
+    let mut cases = Vec::new();
+
+    let mut mixed = base.clone();
+    mixed["events"]
+        .as_array_mut()
+        .expect("events")
+        .push(successful_view()["events"][0].clone());
+    cases.push(("refusal followed by authorization", mixed));
+
+    let mut two_refusals = base.clone();
+    let second = two_refusals["events"][0].clone();
+    two_refusals["events"]
+        .as_array_mut()
+        .expect("events")
+        .push(second);
+    cases.push(("two refusals", two_refusals));
+
+    let mut request_metadata = base.clone();
+    request_metadata["events"][0]["requirement"] =
+        json!("urn:registrystack:evidence:local:requirement:adult-status");
+    cases.push(("refusal request metadata", request_metadata));
+
+    let mut response_metadata = base.clone();
+    response_metadata["events"][0]["responseProtection"] = json!("signed");
+    cases.push(("refusal response metadata", response_metadata));
+
+    let mut category = base.clone();
+    category["events"][0]["safeErrorCategory"] = json!("selector");
+    cases.push(("unsafe category", category));
+
+    let mut phase = base.clone();
+    phase["events"][0]["phase"] = json!("access-attempt");
+    cases.push(("refusal phase", phase));
+
+    let mut decision = base.clone();
+    decision["events"][0]["decision"] = json!("authorized");
+    cases.push(("refusal decision", decision));
+
+    let mut requester = base.clone();
+    requester["events"][0]["requesterPseudonym"] = json!("person-123");
+    cases.push(("unsafe refusal requester", requester));
+
+    let mut occurred_at = base.clone();
+    occurred_at["events"][0]["occurredAt"] = json!("not-a-time");
+    cases.push(("invalid refusal time", occurred_at));
+
+    let mut missing_category = base.clone();
+    missing_category["events"][0]
+        .as_object_mut()
+        .expect("event")
+        .remove("safeErrorCategory");
+    cases.push(("missing refusal category", missing_category));
+
+    for (label, value) in cases {
+        fixture.write_core_json(&value);
+        assert_closed_failure(&fixture.show(), label);
+    }
+}
+
+#[test]
 fn core_failure_oversized_output_and_non_stopped_state_are_value_free() {
     let fixture = Fixture::new();
     fixture.write_core_json(&successful_view());
@@ -345,6 +437,22 @@ fn successful_view() -> Value {
                     "urn:registrystack:evidence:local:concept:adult-status:is_adult"
                 ],
                 "evidenceId": "urn:token-canary:evidence:person-123"
+            }
+        ]
+    })
+}
+
+fn refusal_view() -> Value {
+    json!({
+        "schema": "registry.evidence.local-audit-operation/v1",
+        "operation": "refused-operation-1234",
+        "events": [
+            {
+                "occurredAt": "2026-08-04T00:00:01.000Z",
+                "phase": "denial",
+                "decision": "not-authorized",
+                "requesterPseudonym": PSEUDONYM,
+                "safeErrorCategory": "not-authorized"
             }
         ]
     })

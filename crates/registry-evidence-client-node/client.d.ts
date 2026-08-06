@@ -4,6 +4,33 @@
 // `__test__/drift.test.js`, against the real module.
 export * from './index'
 
+/** The signed response encoding closed before one request is sent. */
+export type EvidenceResponseFormat = 'signed-jws' | 'sd-jwt-vc'
+
+/** The request-spec input accepted by `EvidenceClient.prepare`. */
+export interface EvidenceRequestSpec {
+  responseFormat: EvidenceResponseFormat
+  requirement: string
+  purpose: string
+  audience: string
+  evidenceType: string
+  issuedBy: string
+  providedBy: string
+  configurationRevision: string
+  expectedAssuranceProfile: unknown
+  subjects: ReadonlyArray<{
+    role: string
+    selectorProfile: string
+    selectorValues?: Readonly<Record<string, string | number | boolean>> | null
+  }>
+  expectedOutputs: ReadonlyArray<Readonly<Record<string, unknown>>>
+  maximumAssertionLifetimeSeconds: number
+  clockSkewSeconds: number
+  subjectExpectations:
+    | 'acceptFirstUse'
+    | { pinned: ReadonlyArray<{ role: string; binding: string }> }
+}
+
 /**
  * The stable eight-kind error envelope every mapped Evidence Node failure
  * carries, as properties on a thrown `Error` (see `src/lib.rs`'s

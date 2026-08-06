@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - operator
@@ -60,16 +60,20 @@ For an admitted request, the native chain uses closed phases:
 |---|---|---|
 | `access-attempt` with `authorized` | Authentication and the complete authority path were accepted before source credentials or source data were touched. | The source returned a record or the assertion was released. |
 | `disclosure-release` with `released` | The named concepts were serialized and durably recorded before the exact response bytes were released. | The source fact was true or the caller used the answer correctly. |
-| `denial` or `transient-failure` | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
+| `denial` with `not-authorized` | An authenticated authorization refusal was durably recorded before its generic `403` response. | The rejected requirement, purpose, subjects, unmatched authority, selector information, or response format. |
+| `denial` or `transient-failure` after authorization | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
 
-Failures that happen before Evidence Gateway has enough privacy-safe context, such as authentication
-failure or an invalid selector, do not fabricate a native subject event. Do not expect every HTTP
-request to produce two audit records.
+Authentication, malformed-request, and invalid-selector failures happen before Evidence Gateway has
+enough privacy-safe context and do not fabricate a native event. Do not expect every HTTP request
+to produce two audit records.
 
-Native records can carry the governed requirement, purpose, bundle revision, requester pseudonym,
-subject role and selector-profile pseudonym, source and adapter identifiers, response protection,
-decision, safe failure class, disclosed concept IDs, evidence ID, and signing key ID. They never
-carry the disclosed value, raw selector, source response, access token, or credential.
+Authorized-material native records can carry the governed requirement, purpose, bundle revision,
+requester pseudonym, subject role and selector-profile pseudonym, source and adapter identifiers,
+response protection, decision, safe failure class, disclosed concept IDs, evidence ID, and signing
+key ID. A standalone authorization-refusal record instead carries a requester pseudonym and closed
+denial reason without the rejected requirement, purpose, subjects, unmatched authority, selector
+information, or response format. Native records never carry the disclosed value, raw selector,
+source response, access token, or credential.
 
 ## Inspect the last local tutorial operation
 
@@ -84,7 +88,15 @@ ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
 DISCLOSURE RELEASED age_bracket
 ```
 
-This command verifies the whole retained local chain, then renders only the last operation. It is
+A standalone authorization refusal produces a one-event view:
+
+```text
+ACCESS REFUSED requester=<pseudonym> reason=not_authorized
+```
+
+This command verifies the whole retained local chain, then renders the operation that owns the
+physically last verified chain record. Concurrent requests can complete in a different order from
+their admission order, so "last" does not mean the most recently admitted request. The command is
 not a production audit browser and has no `--all`, subject filter, or export mode. An access-only
 operation prints only the authorized line rather than claiming a release that did not occur.
 

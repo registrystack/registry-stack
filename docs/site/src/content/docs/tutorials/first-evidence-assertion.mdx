@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -298,9 +298,10 @@ evidencectl request prepare adult-status \
   --name first-assertion
 ```
 
-Preparation asks the local Mint for short-lived authorization and records the verification
-expectations before a response exists. It does not send the request to Evidence Gateway or contact the
-registry. It creates exactly these owner-only artifacts:
+The Evidence client prepares the request and closes its pinned verification expectations locally,
+before a response exists. `evidencectl` separately asks the local Mint for short-lived
+authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
+command creates exactly these owner-only artifacts:
 
 ```text
 Prepared request: .evidence/requests/first-assertion/request.json
@@ -332,8 +333,10 @@ curl --silent --show-error --fail-with-body \
 HTTP 200
 ```
 
-`curl` called Evidence Gateway, Evidence Gateway called the registry, and the HTTP response is a signed flattened
-JSON Web Signature (JWS). A successful HTTP response is not yet a trusted assertion.
+`curl` made the one `POST /v1/evidence` assertion request, Evidence Gateway called the registry, and
+the HTTP response is a signed flattened JSON Web Signature (JWS). A successful HTTP response is not
+yet a trusted assertion. Preparation made zero Evidence Gateway HTTP requests, and the verification
+step below is offline, so one assertion requires one request to Evidence Gateway rather than two.
 
 ## Verify before reading
 

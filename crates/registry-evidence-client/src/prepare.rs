@@ -20,11 +20,13 @@ use registry_evidence_verifier::{
     },
     AssuranceProfile,
 };
+use registry_platform_crypto::canonicalize_json;
 
 use crate::{
     error::EvidenceClientError,
     nonce::RequestNonce,
     request::{EvidenceRequestBody, RequestedSelector, RequestedSubject, SelectorValue},
+    response_format::EvidenceResponseFormat,
 };
 
 /// Largest role set one request may carry, per the request contract.
@@ -69,6 +71,8 @@ pub struct SubjectRequest {
 /// authoring that procedure, never a per-request authority.
 #[derive(Debug, Clone)]
 pub struct EvidenceRequestSpec {
+    /// Signed response encoding to negotiate and retain for verification.
+    pub response_format: EvidenceResponseFormat,
     pub requirement: String,
     pub purpose: String,
     /// The relying party's own audience identifier, as the deployment
@@ -152,6 +156,7 @@ impl std::fmt::Debug for SubjectExpectations {
 /// with its own unclaimed flag, which is exactly the reuse the flag prevents.
 pub struct PreparedEvidenceRequest {
     body: EvidenceRequestBody,
+    response_format: EvidenceResponseFormat,
     /// The policy with every expectation except the subject set, which
     /// `subject_expectations` decides.
     policy: EvidenceVerificationPolicyDocument,
@@ -168,6 +173,7 @@ impl PreparedEvidenceRequest {
     ) -> Result<Self, EvidenceClientError> {
         validate(&spec)?;
         let nonce = RequestNonce::generate()?;
+        let response_format = spec.response_format;
 
         let subjects = spec
             .subjects
@@ -213,6 +219,7 @@ impl PreparedEvidenceRequest {
         };
         Ok(Self {
             body,
+            response_format,
             policy,
             subject_expectations: spec.subject_expectations,
             sent: AtomicBool::new(false),
@@ -232,6 +239,26 @@ impl PreparedEvidenceRequest {
         &self.body.request_nonce
     }
 
+    /// Serialize the exact request body that corresponds to the closed policy.
+    ///
+    /// This performs no I/O. Selector values are present because they are part
+    /// of the request, so callers should retain the returned bytes with the
+    /// same care as the original selector input.
+    pub fn request_json(&self) -> Result<Vec<u8>, EvidenceClientError> {
+        let value = serde_json::to_value(&self.body).map_err(|_| {
+            EvidenceClientError::configuration("the request body cannot be serialized")
+        })?;
+        canonicalize_json(&value).map_err(|_| {
+            EvidenceClientError::configuration("the request body cannot be serialized")
+        })
+    }
+
+    /// The response encoding selected before this request is sent.
+    #[must_use]
+    pub fn response_format(&self) -> EvidenceResponseFormat {
+        self.response_format
+    }
+
     /// The closed policy, with the subject set as `prepare` left it. It is
     /// serializable, so a relying party can retain it beside the response.
     #[must_use]
@@ -244,8 +271,12 @@ impl PreparedEvidenceRequest {
         &self.subject_expectations
     }
 
-    pub(crate) fn body(&self) -> &EvidenceRequestBody {
-        &self.body
+    pub(crate) fn requested_roles(&self) -> Vec<String> {
+        self.body
+            .subjects
+            .iter()
+            .map(|subject| subject.role.clone())
+            .collect()
     }
 
     /// Claim the single send this prepared request is good for.
@@ -262,40 +293,6 @@ impl PreparedEvidenceRequest {
         }
         Ok(())
     }
-
-    /// The same policy with an explicit subject set. This is how first-use
-    /// acceptance reaches the ordinary verifier: the adopted bindings become
-    /// stated expectations, and nothing else about the policy changes.
-    ///
-    /// First use defers which subject an assertion is about, not which roles were
-    /// asked about. A claimed set that does not cover exactly the requested roles,
-    /// once each, is adopted as nothing at all, which leaves the verifier to
-    /// refuse the response on the policy it was given.
-    pub(crate) fn policy_with_subjects(
-        &self,
-        claimed_subjects: Vec<ExpectedSubjectDocument>,
-    ) -> EvidenceVerificationPolicyDocument {
-        let mut policy = self.policy.clone();
-        policy.expected_subjects = if self.covers_requested_roles(&claimed_subjects) {
-            claimed_subjects
-        } else {
-            Vec::new()
-        };
-        policy
-    }
-
-    /// Whether a claimed subject set names exactly the requested roles, once
-    /// each.
-    fn covers_requested_roles(&self, claimed_subjects: &[ExpectedSubjectDocument]) -> bool {
-        claimed_subjects.len() == self.body.subjects.len()
-            && self.body.subjects.iter().all(|requested| {
-                claimed_subjects
-                    .iter()
-                    .filter(|claimed| claimed.role == requested.role)
-                    .count()
-                    == 1
-            })
-    }
 }
 
 impl std::fmt::Debug for PreparedEvidenceRequest {
@@ -305,6 +302,7 @@ impl std::fmt::Debug for PreparedEvidenceRequest {
             .debug_struct("PreparedEvidenceRequest")
             .field("requirement", &self.policy.requirement)
             .field("request_nonce", &self.policy.request_nonce)
+            .field("response_format", &self.response_format)
             .field("subject_expectations", &self.subject_expectations)
             .finish_non_exhaustive()
     }
@@ -554,6 +552,7 @@ mod tests {
 
     fn spec() -> EvidenceRequestSpec {
         EvidenceRequestSpec {
+            response_format: EvidenceResponseFormat::SignedJws,
             requirement: "urn:example:client:requirement:status:v1".to_owned(),
             purpose: "example-decision".to_owned(),
             audience: "urn:example:client:audience:relying-party".to_owned(),
@@ -597,7 +596,10 @@ mod tests {
             prepared.policy_document().request_nonce,
             prepared.request_nonce()
         );
-        assert_eq!(prepared.body().request_nonce, prepared.request_nonce());
+        let body: serde_json::Value =
+            serde_json::from_slice(&prepared.request_json().expect("the request serializes"))
+                .expect("the request parses");
+        assert_eq!(body["requestNonce"], prepared.request_nonce());
 
         let policy = serde_json::to_value(prepared.policy_document())
             .expect("the policy document serializes");
@@ -640,28 +642,6 @@ mod tests {
             prepared.subject_expectations(),
             SubjectExpectations::AcceptFirstUse
         ));
-
-        // Adopting a subject set changes only the subject set.
-        let adopted = prepared.policy_with_subjects(vec![ExpectedSubjectDocument {
-            role: "subject".to_owned(),
-            binding: "y0KMdWluZGluZw".to_owned(),
-        }]);
-        let mut before =
-            serde_json::to_value(prepared.policy_document()).expect("the policy serializes");
-        let mut after = serde_json::to_value(&adopted).expect("the policy serializes");
-        assert_eq!(
-            after["expectedSubjects"],
-            serde_json::json!([{"role": "subject", "binding": "y0KMdWluZGluZw"}])
-        );
-        before
-            .as_object_mut()
-            .expect("the policy is an object")
-            .remove("expectedSubjects");
-        after
-            .as_object_mut()
-            .expect("the policy is an object")
-            .remove("expectedSubjects");
-        assert_eq!(before, after);
     }
 
     /// One named way of breaking an otherwise acceptable specification.
@@ -987,7 +967,8 @@ mod tests {
         let mut spec = spec();
         spec.subjects[0].selector_values = None;
         let prepared = PreparedEvidenceRequest::new(spec).expect("the specification is accepted");
-        let body = serde_json::to_string(prepared.body()).expect("the body serializes");
+        let body = String::from_utf8(prepared.request_json().expect("the body serializes"))
+            .expect("the request is UTF-8 JSON");
         assert!(!body.contains("values"), "{body}");
     }
 
