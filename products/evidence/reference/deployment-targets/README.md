@@ -56,12 +56,15 @@ namespace as applicable. Vault Proxy and OpenBao Agent accept the same relevant
 listener, auto-auth, and API-proxy shape. Use one proxy identity and one policy
 per service.
 
-ACLs grant read metadata and sign access to one named key. They do not filter
-the request-body `key_version`. Evidence and Mint pin a nonzero version. Planned
-retirement raises the Transit key's `min_encryption_version` only after the old
-token or assertion validity window and consumer skew have elapsed. Emergency
-retirement raises it immediately, removes the public JWK, and deny-lists the
-thumbprint in affected consumers.
+ACLs grant read metadata and sign access to one named key. Their required and
+allowed parameter constraints admit only the exact signing request shape and
+the version pinned by Evidence or Mint. During planned rotation, add the next
+numeric version to `allowed_parameters.key_version`, deploy the overlap, then
+remove the old version after the token or assertion validity window and
+consumer skew have elapsed. Raising the Transit key's
+`min_encryption_version` is a second retirement control. Emergency retirement
+raises it immediately, removes the public JWK, and deny-lists the thumbprint in
+affected consumers.
 
 Local private JWKs and audit masters are disposable files created outside Git.
 `evidencectl new` and `evidencectl dev` remain the normal application-developer

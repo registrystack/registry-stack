@@ -13,7 +13,7 @@ in CI.
 ## JS surface
 
 ```js
-const client = new EvidenceClient({ baseUrl, trustedJwks, revokedKeyIds, token, ... });
+const client = new EvidenceClient({ baseUrl, trustedJwks, revokedKeyIds, token });
 
 const prepared = client.prepare(spec);       // synchronous, no I/O
 const definitions = await client.discover();

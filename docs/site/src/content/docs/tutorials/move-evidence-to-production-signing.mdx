@@ -158,12 +158,21 @@ path "transit/keys/evidence-signing" {
 
 path "transit/sign/evidence-signing/sha2-256" {
   capabilities = ["update"]
+  required_parameters = ["input", "key_version", "marshaling_algorithm", "prehashed"]
+  allowed_parameters = {
+    "input"                 = []
+    "key_version"           = [<nonzero-version>]
+    "marshaling_algorithm" = ["jws"]
+    "prehashed"             = [true]
+  }
 }
 ```
 
-Use a corresponding policy for `mint-signing`. The ACL names the key path but cannot restrict the
-`key_version` request-body field. Evidence Gateway and Mint pin the nonzero version, and the
-provider's `min_encryption_version` retires an older signing version.
+Use a corresponding policy for `mint-signing`. The parameter constraints make the service identity
+usable only for the pinned version and exact JWS signing request shape. During a planned rotation,
+temporarily allow the old and new numeric versions, for example `"key_version" = [7, 8]`, then
+remove the retired version after the overlap window. The provider's `min_encryption_version`
+provides a second retirement control.
 
 The Evidence Gateway proxy's core boundary is:
 
