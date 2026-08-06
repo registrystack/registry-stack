@@ -176,7 +176,8 @@ evidencectl: the active project requires a registered client selected with --cli
 
 ## Read the definitions once
 
-Ask the deployment which complete request shapes this client may send:
+Ask the deployment which complete request shapes this client may send, and keep the answer to
+review:
 
 ```sh
 python3 - <<'PY'
@@ -201,7 +202,9 @@ client = EvidenceClient(
         },
     },
 )
-print(json.dumps(client.discover(), indent=2, sort_keys=True))
+document = json.dumps(client.discover(), indent=2, sort_keys=True)
+Path("discovery.json").write_text(document + "\n")
+print(document)
 PY
 ```
 
@@ -251,25 +254,125 @@ PY
 ```
 
 Discovery is authenticated, and it grants no authority. It answers exactly one question: which
-complete request shapes this client may send. It is not a trust anchor. Copy the values you need
-into your code now. A request must never take an expectation from a discovery response fetched
-alongside it.
+complete request shapes this client may send. It is not a trust anchor, and a request must never
+take an expectation from a discovery response fetched alongside it.
 
-Four values in the procedure below do not come from discovery:
+Read it here once, to author the procedure. From now on the procedure supplies every request's
+expectations.
 
-- `audience` is the application's own registered identifier, from its client registration.
-- `subject_expectations` is what the application already knows about the subject.
-- `maximum_assertion_lifetime_seconds` and `clock_skew_seconds` are the application's own bounds on
-  how stale an answer it accepts.
+## Pin the procedure
 
-`configurationRevision` is worth pinning deliberately. When the deployment's governed configuration
-changes, the revision changes with it, verification fails until the procedure has been reviewed, and
-your application refuses rather than silently accepting a different question's answer.
+Write what you just reviewed into a file the application owns. This step makes no network call: it
+transforms the document you already read, so the identifiers and the revision are transcribed rather
+than copied by hand. The constants at the top are the application's own, stated rather than read:
+
+```sh
+python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+
+REQUIREMENT = "urn:registrystack:evidence:local:requirement:adult-status"
+
+# Chosen by this application, not published by the deployment.
+AUDIENCE = "urn:registrystack:evidence:local:client:age-checker"
+EXPECTED_OUTPUTS = [
+    {
+        "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+        "form": "boolean",
+    },
+]
+MAXIMUM_LIFETIME_SECONDS = 300
+CLOCK_SKEW_SECONDS = 30
+
+published = json.loads(Path("discovery.json").read_text())
+definition = next(
+    (item for item in published["definitions"] if item["requirement"] == REQUIREMENT),
+    None,
+)
+if definition is None:
+    sys.exit(f"this client may not request {REQUIREMENT}")
+
+# Fail here, at review time, rather than at verification time.
+offered = {concept["id"] for concept in definition["concepts"]}
+absent = [item["concept"] for item in EXPECTED_OUTPUTS if item["concept"] not in offered]
+if absent:
+    sys.exit(f"the deployment no longer publishes {', '.join(absent)}")
+
+document = json.dumps(
+    {
+        "requirement": definition["requirement"],
+        "purpose": definition["purpose"],
+        "evidence_type": definition["evidenceType"],
+        "issued_by": published["issuedBy"],
+        "provided_by": published["providedBy"],
+        "configuration_revision": published["configurationRevision"],
+        "expected_assurance_profile": published["assuranceProfile"],
+        "audience": AUDIENCE,
+        "expected_outputs": EXPECTED_OUTPUTS,
+        "maximum_assertion_lifetime_seconds": MAXIMUM_LIFETIME_SECONDS,
+        "clock_skew_seconds": CLOCK_SKEW_SECONDS,
+    },
+    indent=2,
+    sort_keys=True,
+)
+Path("procedure.json").write_text(document + "\n")
+print(document)
+PY
+```
+
+```json
+{
+  "audience": "urn:registrystack:evidence:local:client:age-checker",
+  "clock_skew_seconds": 30,
+  "configuration_revision": "sha256:<revision>",
+  "evidence_type": "urn:registrystack:evidence:local:evidence-type:adult-status",
+  "expected_assurance_profile": "local",
+  "expected_outputs": [
+    {
+      "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+      "form": "boolean"
+    }
+  ],
+  "issued_by": "urn:registrystack:evidence:local:issuer",
+  "maximum_assertion_lifetime_seconds": 300,
+  "provided_by": "urn:registrystack:evidence:local:provider",
+  "purpose": "age-check",
+  "requirement": "urn:registrystack:evidence:local:requirement:adult-status"
+}
+```
+
+`procedure.json` is the pinned procedure. In a real deployment you review it, commit it, and ship it
+with the application. You do not regenerate it at startup: an application that refreshes its
+expectations from the deployment it is checking has no expectations of its own.
+
+Three of those values are the application's own judgement, and no deployment can supply them:
+
+- `audience` is the identifier the client registration assigned this application.
+- `maximum_assertion_lifetime_seconds` and `clock_skew_seconds` are its own bounds on how stale an
+  answer it will accept.
+
+`expected_outputs` is stated by hand for a different reason. A concept's published `form` and a
+verification expectation's `form` are separate vocabularies: a boolean concept is expected as
+`boolean`, but controlled codes and bounded decimals are expected as `string`, bounded integers as
+`integer`, and the two list forms need explicit bounds. Deriving the expectation from the published
+form would work for this requirement and mislead you on the next one. The concept identifiers are
+still checked against discovery above, so a deployment that stops publishing one fails at review
+time rather than at verification time.
+
+`subject_expectations` is absent from the file because it is per-request: it is what the application
+already knows about the subject in front of it.
+
+Regenerating this file is a review step, not a retry. The revision covers the deployment's entire
+governed configuration, so it moves whenever an operator changes any of it, and verification then
+fails until someone has looked at what changed. When that happens, keep the reviewed copy, write a
+new one, and `diff` them before accepting: a changed revision alone is routine, a changed
+`evidence_type`, `issued_by`, or concept set means the question itself moved.
 
 ## Write the relying procedure
 
-Open `age_check.py` in your editor and add the application. Substitute the
-`configuration_revision` value from your own discovery output:
+Open `age_check.py` in your editor and add the application. It loads the pinned procedure and never
+calls discovery again:
 
 ```python
 import json
@@ -286,26 +389,9 @@ from registry_evidence_client import (
     VerificationError,
 )
 
-# Read once from the published definitions while writing this procedure. A
-# request never takes an expectation from a fresh discovery response.
-PROCEDURE = {
-    "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
-    "purpose": "age-check",
-    "audience": "urn:registrystack:evidence:local:client:age-checker",
-    "evidence_type": "urn:registrystack:evidence:local:evidence-type:adult-status",
-    "issued_by": "urn:registrystack:evidence:local:issuer",
-    "provided_by": "urn:registrystack:evidence:local:provider",
-    "configuration_revision": "sha256:<revision>",
-    "expected_outputs": [
-        {
-            "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-            "form": "boolean",
-        },
-    ],
-    "expected_assurance_profile": "local",
-    "maximum_assertion_lifetime_seconds": 300,
-    "clock_skew_seconds": 30,
-}
+# The reviewed procedure. This program never calls discovery: every expectation
+# comes from the file that was pinned when it was written.
+PROCEDURE = json.loads(Path("procedure.json").read_text())
 IS_ADULT = "urn:registrystack:evidence:local:concept:adult-status:is_adult"
 SELECTOR_PROFILE = "local-subject-adult-status-v1"
 BINDINGS = Path("subject-bindings.json")
@@ -378,8 +464,10 @@ print(f"{person_id} is_adult={is_adult}")
 print(f"pinned binding recorded in {BINDINGS}")
 ```
 
-Four properties of that code are the point of this tutorial:
+Five properties of that code are the point of this tutorial:
 
+- Every expectation comes from `procedure.json`. The program holds no discovery client and cannot
+  learn what to expect from the deployment it is checking.
 - `prepare` performs no network call. It closes the request, generates a fresh nonce, and builds the
   verification policy while the answer is still unknown. A prepared request is good for one send.
 - `request_and_verify` returns only after the response satisfied the policy. There is no object in
@@ -455,8 +543,8 @@ unverifiable response, nothing read (policy): the Evidence response failed verif
 ```
 
 Evidence answered the request successfully. The client discarded the response because it did not
-match the retained expectation, and `age_check.py` exited without reading a value. A stale
-`configuration_revision` fails the same way, and for the same reason.
+match the retained expectation, and `age_check.py` exited without reading a value. Editing the
+`configuration_revision` in `procedure.json` fails the same way, and for the same reason.
 
 Delete `subject-bindings.json` to start the pinning over.
 
@@ -494,7 +582,8 @@ Local Evidence stopped
 Removed stopped local Evidence state
 ```
 
-This keeps `age_check.py`, the pinned JWKS, the recorded bindings, and the client's private key.
+This keeps `age_check.py`, `discovery.json`, `procedure.json`, the pinned JWKS, the recorded
+bindings, and the client's private key.
 Return to the first terminal and press `Ctrl+C` to stop `registry.py`.
 
 ## Next
