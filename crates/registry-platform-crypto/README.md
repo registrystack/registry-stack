@@ -6,8 +6,10 @@ Crypto primitives shared by registry services.
 
 - `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519, EC/P-256, and RSA JWKs.
 - EdDSA, ES256, and RS256 signing and verification helpers.
-- `SigningProvider`, `LocalJwkSigner`, and `TransitSigner` for code that should
-  sign without depending directly on one private-key storage model.
+- `SigningProvider` and `LocalJwkSigner`, plus the `transit` feature's
+  `TransitSigner`, for code that should sign without depending directly on one
+  private-key storage model. The opt-in feature keeps HTTP and async-networking
+  dependencies out of offline verifiers.
 - `KeyProviderKind`, `KeyStatus`, `KeyReadiness`, and `KeyReadinessSnapshot`
   for provider-neutral readiness reporting and live-apply gates.
 - Public JWK thumbprints through `PublicJwk::jkt`.
@@ -103,6 +105,7 @@ policy.
 
 ```sh
 cargo test -p registry-platform-crypto
+cargo test -p registry-platform-crypto --features transit
 ```
 
 ## License

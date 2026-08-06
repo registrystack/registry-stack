@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
 use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256};
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+#[cfg(feature = "transit")]
+use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{
     Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
@@ -16,7 +18,9 @@ use p256::ecdsa::{
     signature::Verifier as _, Signature as P256Signature, SigningKey as P256SigningKey,
     VerifyingKey as P256VerifyingKey,
 };
+#[cfg(feature = "transit")]
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+#[cfg(feature = "transit")]
 use p256::pkcs8::DecodePublicKey as _;
 use p256::PublicKey as P256PublicKey;
 use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
@@ -29,9 +33,12 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::net::IpAddr;
+#[cfg(feature = "transit")]
 use std::path::PathBuf;
+#[cfg(feature = "transit")]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "transit")]
 use std::time::Duration;
 use thiserror::Error;
 use url::{Host, Url};
@@ -441,12 +448,19 @@ impl SigningProvider for LocalJwkSigner {
     }
 }
 
+#[cfg(feature = "transit")]
 const MAX_TRANSIT_RESPONSE_BYTES: usize = 64 * 1024;
+#[cfg(feature = "transit")]
 const MAX_TRANSIT_SIGNING_INPUT_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "transit")]
 const MAX_TRANSIT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(feature = "transit")]
 const TRANSIT_SELF_TEST_MESSAGE: &[u8] = b"registry-platform-transit-signing-readiness-v1";
+#[cfg(feature = "transit")]
 const TRANSIT_READINESS_UNKNOWN: u8 = 0;
+#[cfg(feature = "transit")]
 const TRANSIT_READINESS_READY: u8 = 1;
+#[cfg(feature = "transit")]
 const TRANSIT_READINESS_NOT_READY: u8 = 2;
 
 /// Validated connection and key binding for a Vault/OpenBao Transit signer.
@@ -457,6 +471,7 @@ const TRANSIT_READINESS_NOT_READY: u8 = 2;
 /// are deliberately redacted from `Debug` because socket, mount, and key names
 /// reveal deployment topology.
 #[derive(Clone)]
+#[cfg(feature = "transit")]
 pub struct TransitSignerConfig {
     socket_path: PathBuf,
     mount_path: String,
@@ -466,6 +481,7 @@ pub struct TransitSignerConfig {
     request_timeout: Duration,
 }
 
+#[cfg(feature = "transit")]
 impl TransitSignerConfig {
     /// Bind one immutable ES256 public identity to one explicit Transit key
     /// version. `key_version = 0` (the provider's "latest" alias) is refused so
@@ -508,6 +524,7 @@ impl TransitSignerConfig {
     }
 }
 
+#[cfg(feature = "transit")]
 impl fmt::Debug for TransitSignerConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -523,6 +540,7 @@ impl fmt::Debug for TransitSignerConfig {
 /// Construction validates provider custody metadata, the pinned version, and
 /// the provider's PEM public key before a sign-and-verify self-test marks the
 /// signer ready. Every later signature is verified locally before release.
+#[cfg(feature = "transit")]
 pub struct TransitSigner {
     client: reqwest::Client,
     metadata_url: String,
@@ -534,6 +552,7 @@ pub struct TransitSigner {
     readiness: AtomicU8,
 }
 
+#[cfg(feature = "transit")]
 impl TransitSigner {
     /// Connect to Transit, validate custody and public identity metadata, and
     /// prove signing access without exporting private material.
@@ -650,6 +669,7 @@ impl TransitSigner {
     }
 }
 
+#[cfg(feature = "transit")]
 impl fmt::Debug for TransitSigner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -662,6 +682,7 @@ impl fmt::Debug for TransitSigner {
 }
 
 #[async_trait]
+#[cfg(feature = "transit")]
 impl SigningProvider for TransitSigner {
     fn algorithm(&self) -> SigningAlgorithm {
         SigningAlgorithm::Es256
@@ -731,8 +752,9 @@ impl SigningProvider for TransitSigner {
     }
 }
 
+#[cfg(feature = "transit")]
 fn build_transit_client(config: &TransitSignerConfig) -> Result<reqwest::Client, SigningError> {
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     {
         reqwest::Client::builder()
             .no_proxy()
@@ -749,6 +771,7 @@ fn build_transit_client(config: &TransitSignerConfig) -> Result<reqwest::Client,
     }
 }
 
+#[cfg(feature = "transit")]
 async fn read_bounded_transit_response(
     mut response: reqwest::Response,
 ) -> Result<Vec<u8>, SigningError> {
@@ -772,6 +795,7 @@ async fn read_bounded_transit_response(
     Ok(body)
 }
 
+#[cfg(feature = "transit")]
 fn validate_transit_public_key(pem: &str, configured: &PublicJwk) -> Result<(), SigningError> {
     let provider = P256PublicKey::from_public_key_pem(pem)
         .map_err(|_| transit_error("transit provider public key is invalid"))?;
@@ -789,10 +813,12 @@ fn validate_transit_public_key(pem: &str, configured: &PublicJwk) -> Result<(), 
     Ok(())
 }
 
+#[cfg(feature = "transit")]
 fn valid_transit_path(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && value.split('/').all(valid_transit_segment)
 }
 
+#[cfg(feature = "transit")]
 fn valid_transit_segment(value: &str) -> bool {
     !value.is_empty()
         && !matches!(value, "." | "..")
@@ -802,6 +828,7 @@ fn valid_transit_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+#[cfg(feature = "transit")]
 fn transit_error(message: &'static str) -> SigningError {
     SigningError::external(message)
 }
@@ -1536,22 +1563,22 @@ fn hex_value(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     use p256::pkcs8::{EncodePublicKey as _, LineEnding};
     use serde_json::json;
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     use tempfile::TempDir;
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     use tokio::net::UnixListener;
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     use tokio::task::JoinHandle;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     struct MockTransitReply {
         method: &'static str,
         path: &'static str,
@@ -1561,7 +1588,7 @@ mod tests {
         delay: Duration,
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn spawn_transit_mock(replies: Vec<MockTransitReply>) -> (TempDir, PathBuf, JoinHandle<()>) {
         let directory = tempfile::tempdir().expect("temporary Transit directory");
         let socket_path = directory.path().join("transit.sock");
@@ -1635,7 +1662,7 @@ mod tests {
         (directory, socket_path, task)
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn p256_public_pem(private: &PrivateJwk) -> String {
         let scalar = decode_fixed(private.d.as_deref(), 32, "d").expect("P-256 scalar");
         let signing = P256SigningKey::from_slice(&scalar).expect("P-256 signing key");
@@ -1646,7 +1673,7 @@ mod tests {
             .expect("P-256 public PEM")
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn transit_metadata(public_key: &str) -> Value {
         json!({
             "data": {
@@ -1671,7 +1698,7 @@ mod tests {
 
     // Mirrors the documented Vault Transit read-key response, extended with
     // the versioned P-256 public-key object returned for an asymmetric key.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn vault_transit_metadata_response_fixture(public_key: &str) -> Value {
         json!({
             "data": {
@@ -1702,7 +1729,7 @@ mod tests {
     // OpenBao documents the same Transit read-key wire schema. Keep a
     // separate fixture so a future provider divergence cannot be hidden by a
     // generic compatibility test.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn openbao_transit_metadata_response_fixture(public_key: &str) -> Value {
         json!({
             "data": {
@@ -1730,7 +1757,7 @@ mod tests {
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn transit_signature(private: &PrivateJwk, payload: &[u8], version: u32) -> Value {
         let signature = sign(payload, private).expect("mock Transit signature");
         json!({
@@ -1740,7 +1767,7 @@ mod tests {
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn vault_transit_sign_response_fixture(
         private: &PrivateJwk,
         payload: &[u8],
@@ -1749,7 +1776,7 @@ mod tests {
         transit_signature(private, payload, version)
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn openbao_transit_sign_response_fixture(
         private: &PrivateJwk,
         payload: &[u8],
@@ -1758,7 +1785,7 @@ mod tests {
         transit_signature(private, payload, version)
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn transit_request(payload: &[u8], version: u32) -> Value {
         let digest = Sha256::digest(payload);
         json!({
@@ -1769,7 +1796,7 @@ mod tests {
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     fn transit_reply(
         method: &'static str,
         path: &'static str,
@@ -1967,7 +1994,7 @@ mod tests {
         assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_uses_the_common_vault_openbao_es256_wire_contract() {
         const METADATA_PATH: &str = "/v1/registry-transit/keys/custody-key";
@@ -2032,7 +2059,7 @@ mod tests {
         drop(directory);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_accepts_vault_native_metadata_and_sign_response_fixtures() {
         const METADATA_PATH: &str = "/v1/vault-transit/keys/evidence-key";
@@ -2072,7 +2099,7 @@ mod tests {
         drop(directory);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_accepts_openbao_native_metadata_and_sign_response_fixtures() {
         const METADATA_PATH: &str = "/v1/openbao-transit/keys/evidence-key";
@@ -2112,6 +2139,7 @@ mod tests {
         drop(directory);
     }
 
+    #[cfg(feature = "transit")]
     #[test]
     fn transit_signer_config_rejects_unpinned_or_non_es256_bindings() {
         let public = PrivateJwk::parse(P256_JWK)
@@ -2190,7 +2218,7 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_rejects_unsafe_or_mismatched_metadata() {
         const METADATA_PATH: &str = "/v1/transit/keys/key";
@@ -2253,7 +2281,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_fails_closed_without_leaking_provider_responses_then_recovers() {
         const METADATA_PATH: &str = "/v1/transit/keys/key";
@@ -2316,7 +2344,7 @@ mod tests {
         drop(directory);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "transit"))]
     #[tokio::test]
     async fn transit_signer_bounds_time_and_response_bytes() {
         const METADATA_PATH: &str = "/v1/transit/keys/key";
