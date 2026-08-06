@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -80,10 +80,11 @@ authorization is most often assumed rather than enforced:
   entitlement (invariant `V1-I07`).
 
 Evidence Gateway has no notion of a Relay consultation or a compiled evidence mode selecting one. It
-declares an HTTP source with a fixed origin, method, fixed or
-selector-bound path, fixed non-secret headers, denied redirects, and client-side response
-projection, all executed by the core rather than by a script (invariant `V1-I09`). The source
-boundary belongs entirely to Evidence Gateway and its authoritative source.
+declares a closed single or search-then-fetch acquisition over HTTP sources with fixed origins,
+methods, fixed or tagged selector or prior-fact-bound paths, fixed non-secret headers, denied
+redirects, and client-side response projection. The core, not a script or response, executes the
+sequence and enforces one request per configured stage (invariants `V1-I09` and `V1-I40`). The source
+boundary belongs entirely to Evidence Gateway and its authoritative sources.
 
 ## Freshness has no Evidence Gateway counterpart
 

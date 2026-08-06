@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-07"
 doc_type: specification
 doc_id: RS-SEC-G
 category: normative
@@ -39,6 +39,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.0 | 2026-07-13 | draft | Assigned registry source access to Relay and restated Notary authorization and federation gates in terms of compiler-pinned Relay consultations. Those Notary gates are retired as of 0.5.0. |
 | 0.4.0 | 2026-07-19 | draft | Defined the product-owned Relay and Notary replay-protection boundaries, retention references, failure posture, and stale-recovery invariant. The Notary boundary is retired as of 0.5.0. |
 | 0.5.0 | 2026-08-03 | draft | Registry Notary is retired. Removed Section 7 (federation trust) and REQ-SEC-G-010, renumbered the following sections, restated REQ-SEC-G-002, REQ-SEC-G-005, REQ-SEC-G-006, REQ-SEC-G-011, REQ-SEC-G-014, and REQ-SEC-G-015 for Registry Relay, Evidence Gateway, and Registry Mint, and added REQ-SEC-G-016 and REQ-SEC-G-017. |
+| 0.6.0 | 2026-08-07 | draft | Clarified that Evidence Gateway durably records an access attempt before every actual source stage in a closed acquisition. |
 
 ## 1. Scope and references
 
@@ -125,7 +126,7 @@ Every request that touches person-level data is recorded. Audit is a security co
 
 REQ-SEC-G-008: Every request that returns person-level records or evidence assertions MUST be recorded in a Registry Platform audit envelope, capturing at least the caller principal, the scopes exercised, a request identifier, and the `Data-Purpose` value where the caller supplied one. This is the security-model form of REQ-ARC-G-004; it states an invariant a conforming deployment meets, not a claim that every route in a given build has been individually audited.
 
-REQ-SEC-G-009: A deployment MUST be able to run audit fail-closed, so that a request whose audit record cannot be written does not return a successful result. A service MUST NOT silently drop an audit record on the success path. In Evidence Gateway the fail-closed posture is not configurable: the access-attempt record is durable before the first source read, the disclosure-release record is durable after signing and before the response is released, and an audit write that cannot be completed fails the request.
+REQ-SEC-G-009: A deployment MUST be able to run audit fail-closed, so that a request whose audit record cannot be written does not return a successful result. A service MUST NOT silently drop an audit record on the success path. In Evidence Gateway the fail-closed posture is not configurable: one access-attempt record is durable before every actual source stage, the disclosure-release record is durable after signing and before the response is released, and an audit write that cannot be completed fails the request.
 
 ## 7. Replay-protection authority
 

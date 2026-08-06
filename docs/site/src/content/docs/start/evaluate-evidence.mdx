@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -191,9 +191,9 @@ against, only kept measurements.
 
 The cost that shapes throughput comes from durability, not from the HTTP or
 scripting layers. Evidence Gateway must durably accept the access-attempt audit
-record before reading a source and the disclosure-release record before
-returning a response, so every successful request pays two durable audit
-appends. The audit sink commits appends in groups: writes that arrive while
+record before every actual source stage and the disclosure-release record before
+returning a response. A successful single-source request therefore pays two durable audit appends;
+a successful search-then-fetch request pays three. The audit sink commits appends in groups: writes that arrive while
 a disk barrier is in flight form the next batch, and one sync covers the
 whole batch, while every append still resolves only after the barrier that
 covers its own bytes (`crates/registry-evidence/src/audit.rs`).

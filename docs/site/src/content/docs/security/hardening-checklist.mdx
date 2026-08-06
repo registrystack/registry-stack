@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -114,8 +114,8 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 ## Audit sink and retention
 
 - Evidence Gateway: put `auditStorage.path` on storage whose append durability, permissions, capacity,
-  backup, restore, and retention you own. Both audit events are fail-closed by contract: the
-  access-attempt event must be durably accepted before the first source read and the
+  backup, restore, and retention you own. Audit is fail-closed by contract: one access-attempt
+  event must be durably accepted before every actual source stage and the
   disclosure-release event before the response is released, so an unwritable sink stops the
   service returning success rather than degrading quietly.
 - Evidence Gateway: run exactly one process per audit path. The sink takes an exclusive advisory lock on

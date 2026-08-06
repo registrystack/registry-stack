@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -88,7 +88,7 @@ auditing separately.
             comes back, only predefined revisions are evaluable, one authorization decision binds
             the whole tuple, and possession is never authority. Evidence Gateway to its fixed sources fixes
             origin, method, path, headers, credential, TLS, projection, redirect and proxy denial,
-            and one request per evaluation by trusted configuration executed only by the core, with
+            and one request per configured acquisition stage by trusted configuration executed only by the core, with
             lookup collapsing to match, no match, or ambiguous and raw responses never logged. Evidence
             Gateway and Registry Relay keep separate sources, credentials, authorization decisions, and
             audit trails. Registry Mint to Evidence Gateway
@@ -144,10 +144,11 @@ distinct requester tag per purpose.
 
 **Evidence Gateway to its fixed sources.** Evidence Gateway's outbound edge is deliberately not
 general-purpose. Source calls are fixed by trusted bundle configuration and executed only by
-the core, which owns origin, method, fixed or selector-bound path, fixed headers,
-authentication, TLS, projection, redirect denial, proxy denial, limits, and a one-request
-ceiling; this is what closes SSRF, credential forwarding, and script-directed networking
-(`V1-I09`). A preparation script renders only bounded query pairs and one JSON body, and Rust
+the core, which owns the closed single or search-then-fetch sequence, origin, method, fixed or tagged
+selector or prior-fact-bound path, fixed headers, authentication, TLS, projection, redirect denial,
+proxy denial, limits, and a one-request-per-stage ceiling; this is what closes SSRF, credential
+forwarding, script-directed networking, and response-led routing (`V1-I09`, `V1-I40`). A preparation
+script renders only bounded query pairs and one JSON body, and Rust
 validates that output before a credential is resolved. Every source declares a response schema
 that Rust validates the projected response against before any extraction script runs, so a
 response outside its reviewed shape is a source-protocol failure rather than an input to fact
@@ -301,9 +302,10 @@ data leakage, and privacy regressions that expose raw subject identifiers.
   receive a PDP permit or fail closed with a stable `pdp.*` code rather than falling back to an
   ungoverned read.
 
-**Audit as a control.** Evidence Gateway writes two mandatory records per request: an access-attempt
-event that must be durably accepted before the first source read, and a disclosure-release
-event that must be durably accepted after signing and before the response is released. Either
+**Audit as a control.** Evidence Gateway writes one mandatory access-attempt record before every
+actual acquisition stage, plus one disclosure-release record per successful response. Each
+access-attempt event must be durably accepted before its source read, and the disclosure-release
+event must be durably accepted after signing and before the response is released. Either
 failure blocks the corresponding action. The chain is keyed and hash-linked, has no severity
 levels and no way to turn records off, and carries reviewed identifiers and decision categories
 only: never raw selector values, per-field selector hashes, source values, credentials, tokens,

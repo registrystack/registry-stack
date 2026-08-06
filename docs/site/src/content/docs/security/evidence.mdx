@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -22,7 +22,7 @@ guarantee or drops its test fails that job rather than merging unnoticed.
 
 ## What the invariant matrix guarantees
 
-The matrix pins 33 numbered invariants, `V1-I01` through `V1-I33`, each with a
+The matrix pins 40 numbered invariants, `V1-I01` through `V1-I40`, each with a
 rule, the threat it closes, its enforcement, and one `negative_test` id. This
 section groups them by theme and cites each id in backticks; the matrix itself
 is the complete, normative text.
@@ -128,6 +128,19 @@ accepted as an ordinary bearer token, because Evidence Gateway validates no send
 proof and accepting one would discard the constraint the token was issued
 under (`V1-I32`).
 
+### Assurance and fixed acquisition
+
+The local assurance profile alone may omit requirement fixtures, while production and evidence-grade
+retain complete fixture validation (`V1-I34`). Assertions, definition responses, and audit events carry
+the governed assurance profile, and verification compares it with an independent expectation
+(`V1-I35`). Credential-free source access is limited to local authoring against an exact numeric
+loopback HTTP origin and sends no authentication header (`V1-I36`). Configured authority claims use
+distinct token members and cannot reuse registered JWT claims, except that the principal may use `sub`
+(`V1-I37`). Every authority selector set must fill each selector-bound path template it can activate
+(`V1-I38`). A search-then-fetch acquisition is one fixed search and, only after a unique schema-valid
+match, one fixed fetch; only validated prior facts cross the stage boundary and no response or script
+can create another call (`V1-I40`).
+
 ### Telemetry
 
 Operational telemetry is off by default, served only on a separate
@@ -137,7 +150,7 @@ request content (`V1-I33`).
 
 ### Cross-cutting controls
 
-The matrix also pins 21 cross-cutting controls, keyed by name rather than a
+The matrix also pins 23 cross-cutting controls, keyed by name rather than a
 `V1-I` id, each with its own negative test. They cover bundle and secret
 trust (`config_trust`, `secret_parsing`), durable audit ordering
 (`audit_order`), listener exposure and outbound transport
@@ -147,7 +160,8 @@ file identity (`secret_file_identity`), the closed runtime file
 (`request_preparation`, `subject_role_order`, `source_response_shape`,
 `script_resource_exhaustion`, `reserved_header_aliases`,
 `jwks_route_parity`, `unsigned_envelope_distinct`, `exact_decimal`,
-`entity_reference_projection`), and the SD-JWT VC serialization
+`entity_reference_projection`), signing and audit key governance
+(`signing_key_governance`, `audit_key_epoch`), and the SD-JWT VC serialization
 (`sd_jwt_vc_projection_integrity`, `sd_jwt_vc_format_authorization`,
 `sd_jwt_vc_holder_key_closed`, `sd_jwt_vc_claims_closed`).
 
