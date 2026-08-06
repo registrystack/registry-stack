@@ -137,15 +137,16 @@ fn parse_url(value: &str, what: &str) -> Result<Url, ConversionError> {
 /// Turn a caller-supplied number of seconds into a [`Duration`].
 ///
 /// Python's idiom for a timeout is a float number of seconds, unlike the
-/// Node binding's millisecond integers. `Duration::from_secs_f64` panics on a
-/// negative, infinite, or `NaN` input, so those are refused here first.
+/// Node binding's millisecond integers. A negative, infinite, or `NaN` input,
+/// and a finite value larger than the `u64::MAX` seconds a [`Duration`] holds,
+/// are all refused: `Duration::try_from_secs_f64` reports every one of them as
+/// an error, where `Duration::from_secs_f64` would panic.
 fn duration_from_seconds(seconds: f64, what: &str) -> Result<Duration, ConversionError> {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return Err(ConversionError::new(format!(
-            "{what} must be a finite, non-negative number of seconds"
-        )));
-    }
-    Ok(Duration::from_secs_f64(seconds))
+    Duration::try_from_secs_f64(seconds).map_err(|_| {
+        ConversionError::new(format!(
+            "{what} must be a finite, non-negative number of seconds that a duration can hold"
+        ))
+    })
 }
 
 /// Turn a caller-supplied UNIX timestamp (seconds, as `datetime.timestamp()`
@@ -163,12 +164,41 @@ pub fn datetime_from_unix_seconds(seconds: f64) -> Result<DateTime<Utc>, Convers
         .ok_or_else(|| ConversionError::new("a timestamp is outside the representable range"))
 }
 
+/// How deep [`python_to_json`] will descend, mirroring `serde_json`'s own
+/// deserialization recursion limit.
+///
+/// A Python value is an arbitrary object graph, not a document `serde_json`
+/// already bounded on the way in: it may nest far deeper than any JSON text a
+/// caller could have parsed, and it may be cyclic. One finite bound refuses
+/// both, since a cycle simply descends until it reaches the bound.
+const MAX_JSON_DEPTH: usize = 128;
+
 /// Convert a Python value to a [`serde_json::Value`].
 ///
 /// The Python `bool` type is a subtype of `int`, so a boolean value must be
 /// recognized before an integer downcast is attempted; checking in the
 /// opposite order would silently turn `True`/`False` into `1`/`0`.
 pub fn python_to_json(value: &Bound<'_, PyAny>) -> Result<Value, ConversionError> {
+    python_to_json_at_depth(value, 1)
+}
+
+/// Convert one value at a known nesting level, where the top-level value is
+/// level 1 and each container's items sit one level below it.
+///
+/// The bound is checked before the value is inspected at all, so a graph that
+/// descends past [`MAX_JSON_DEPTH`] is refused rather than followed. Nothing
+/// tracks which containers have already been seen: a cycle is exactly a graph
+/// that descends without end, and the bound stops it at the same level it
+/// stops any other.
+fn python_to_json_at_depth(
+    value: &Bound<'_, PyAny>,
+    depth: usize,
+) -> Result<Value, ConversionError> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(ConversionError::new(format!(
+            "a value nested more than {MAX_JSON_DEPTH} levels deep cannot be converted"
+        )));
+    }
     if value.is_none() {
         return Ok(Value::Null);
     }
@@ -198,14 +228,14 @@ pub fn python_to_json(value: &Bound<'_, PyAny>) -> Result<Value, ConversionError
     if let Ok(list) = value.cast::<PyList>() {
         let items = list
             .iter()
-            .map(|item| python_to_json(&item))
+            .map(|item| python_to_json_at_depth(&item, depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::Array(items));
     }
     if let Ok(tuple) = value.cast::<PyTuple>() {
         let items = tuple
             .iter()
-            .map(|item| python_to_json(&item))
+            .map(|item| python_to_json_at_depth(&item, depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::Array(items));
     }
@@ -218,7 +248,7 @@ pub fn python_to_json(value: &Bound<'_, PyAny>) -> Result<Value, ConversionError
                 .to_str()
                 .map_err(|_| ConversionError::new("a mapping key must be valid Unicode"))?
                 .to_owned();
-            object.insert(key_text, python_to_json(&value)?);
+            object.insert(key_text, python_to_json_at_depth(&value, depth + 1)?);
         }
         return Ok(Value::Object(object));
     }
@@ -873,6 +903,41 @@ mod tests {
         });
     }
 
+    /// The bound belongs to this bridge rather than to `serde_json`: nothing
+    /// parsed the graph on the way in, so nothing else has limited how deep it
+    /// descends. A chain at exactly the limit still converts, so the bound is
+    /// pinned rather than merely known to exist.
+    #[test]
+    fn python_to_json_refuses_a_structure_nested_deeper_than_the_limit() {
+        fn nested_lists(py: Python<'_>, depth: usize) -> Bound<'_, PyAny> {
+            let mut value = PyList::empty(py).into_any();
+            for _ in 1..depth {
+                value = PyList::new(py, [value])
+                    .expect("a list holding one item is built")
+                    .into_any();
+            }
+            value
+        }
+
+        Python::attach(|py| {
+            assert!(python_to_json(&nested_lists(py, MAX_JSON_DEPTH)).is_ok());
+            assert!(python_to_json(&nested_lists(py, MAX_JSON_DEPTH + 1)).is_err());
+        });
+    }
+
+    /// A Python mapping may hold itself, which no JSON document can express.
+    /// The depth bound is what refuses it: the descent reaches the limit and
+    /// stops, so the same check covers a cycle and a merely deep graph.
+    #[test]
+    fn python_to_json_refuses_a_cyclic_mapping() {
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("self", &dict)
+                .expect("a mapping holds itself");
+            assert!(python_to_json(&dict.into_any()).is_err());
+        });
+    }
+
     #[test]
     fn json_to_python_round_trips_through_python_to_json() {
         Python::attach(|py| {
@@ -1104,6 +1169,20 @@ mod tests {
             duration_from_seconds(1.5, "`x`").unwrap(),
             Duration::from_secs_f64(1.5)
         );
+    }
+
+    /// A `Duration` holds at most `u64::MAX` whole seconds, so a perfectly
+    /// finite, positive `f64` can still be too large for one. The accepted
+    /// value pins that bound rather than only proving it was tightened.
+    #[test]
+    fn duration_from_seconds_refuses_a_value_too_large_for_a_duration() {
+        for seconds in [1e300, 2e19, f64::MAX] {
+            assert!(
+                duration_from_seconds(seconds, "`x`").is_err(),
+                "{seconds} should have been refused"
+            );
+        }
+        assert!(duration_from_seconds(1e19, "`x`").is_ok());
     }
 
     #[test]

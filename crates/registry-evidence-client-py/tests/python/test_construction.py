@@ -45,6 +45,17 @@ class ConstructionTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.kind, "configuration")
 
+    def test_a_cyclic_mapping_is_refused_as_a_configuration_error(self):
+        # Refused earlier than the cases above, in the Python-to-JSON bridge
+        # (`src/convert.rs`) rather than in `validate`: a mapping that holds
+        # itself has no depth to convert, so the bridge's depth bound ends the
+        # descent and the interpreter stays alive to raise.
+        cyclic = {}
+        cyclic["self"] = cyclic
+        with self.assertRaises(revc.ConfigurationError) as raised:
+            revc.EvidenceClient("https://example.org", cyclic, "test-token")
+        self.assertEqual(raised.exception.kind, "configuration")
+
     def test_a_loopback_http_base_url_is_accepted(self):
         # Not a refusal case: confirms the three refusals above are testing
         # the specific rules, not "any base URL fails". Port 1 is never
