@@ -28,9 +28,8 @@ import sys
 import unittest
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent
-_STUB_PATH = (
-    _TESTS_DIR.parent.parent / "python" / "registry_evidence_client" / "__init__.pyi"
-)
+_PACKAGE_DIR = _TESTS_DIR.parent.parent / "python" / "registry_evidence_client"
+_STUB_PATH = _PACKAGE_DIR / "__init__.pyi"
 sys.path.insert(0, str(_TESTS_DIR))
 sys.path.insert(0, str(_TESTS_DIR / "helpers"))
 
@@ -144,6 +143,16 @@ class DriftTest(unittest.TestCase):
                 )
                 live_cls = getattr(revc, name)
                 self.assertTrue(issubclass(live_cls, revc.EvidenceClientError))
+
+    def test_the_package_ships_a_pep_561_marker_beside_the_stub(self):
+        # A PEP 561 checker ignores `__init__.pyi` in an installed package that
+        # carries no `py.typed`, which reports every client API as `Any` and
+        # makes the stub above, and this whole test, invisible to consumers.
+        marker = _PACKAGE_DIR / "py.typed"
+        self.assertTrue(
+            marker.is_file(),
+            f"{marker} must exist so the committed stub is honored once installed",
+        )
 
     def test_the_base_exception_is_declared_and_live_as_an_exception(self):
         self.assertEqual(
