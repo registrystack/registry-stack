@@ -7,7 +7,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -276,7 +276,8 @@ credentials from source YAML, requests, command arguments, or logs.
 Replace `adapters/opencrvs-birth-parents-prepare.rhai` with:
 
 ```rhai
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let child = selectors[parameters["childSelectorRole"]];
     let data = #{};
     data[parameters["childNationalIdField"]] = #{
@@ -348,7 +349,8 @@ The generated response schema closes the projected response around `total`, at m
 and the selected declaration fields. Replace `adapters/opencrvs-birth-parents-extract.rhai` with:
 
 ```rhai
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
     if results.len > parameters["resultLimit"] {

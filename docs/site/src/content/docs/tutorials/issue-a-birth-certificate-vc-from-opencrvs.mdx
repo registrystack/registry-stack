@@ -7,7 +7,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -194,7 +194,8 @@ properties:
 Replace `adapters/opencrvs-birth-certificate-prepare.rhai` with:
 
 ```rhai
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let child = selectors[parameters["childSelectorRole"]];
     let data = #{};
     data[parameters["childNationalIdField"]] = #{
@@ -228,7 +229,8 @@ fn prepare(selectors, parameters) {
 Replace `adapters/opencrvs-birth-certificate-extract.rhai` with:
 
 ```rhai
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
     if results.len > parameters["resultLimit"] {

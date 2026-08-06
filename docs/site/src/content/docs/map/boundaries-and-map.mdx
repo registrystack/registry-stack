@@ -11,7 +11,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -147,10 +147,12 @@ systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */
 Evidence Gateway answers one bounded question about one subject and returns a signed assertion carrying the
 answer rather than the record. It does not own:
 
-- Source access as a general capability. Each evaluation makes exactly one fixed, bounded HTTP JSON
-  request with a fixed method, a fixed or selector-bound path, fixed non-secret headers, denied
-  redirects, and a client-side response projection. Pagination, transport retry, multi-source
-  fulfillment, and source-planning scripts are outside the Version 1 contract.
+- Source access as a general capability. Each evaluation uses one closed acquisition: one fixed,
+  bounded HTTP JSON request, or one fixed search followed after a unique schema-valid match by one
+  fixed fetch. Every stage has a fixed method, a fixed or tagged selector or prior-fact-bound path,
+  fixed non-secret headers, denied redirects, and a client-side response projection. Pagination,
+  transport retry, response-led routing, general multi-source fulfillment, and source-planning scripts
+  are outside the Version 1 contract.
   {/* Evidence: contract registry.evidence.fixed-http-json-source/v1,
        products/evidence/contracts/source-contract.yaml (frozen). */}
 - Record lookup and identity resolution. The authoritative provider owns lookup. Evidence Gateway accepts

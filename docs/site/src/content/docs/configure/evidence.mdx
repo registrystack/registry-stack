@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -96,7 +96,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | `selectorProfiles` | Named, bounded scalar field sets a subject role may be looked up by. |
 | `sources` | Named fixed HTTP JSON sources: transport, base URL, acquisition posture, authentication, the fixed request shape, and the response, extraction, and fact schemas bound to it. |
 | `authorityProfiles` | Named requester-tag gates: which grants (requirement, purpose, audience, subject roles, selector profiles, value origins) a caller carrying those tags holds. |
-| `requirements` | The assertion definitions themselves: id, source, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
+| `requirements` | The assertion definitions themselves: id, closed acquisition, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
 
 Everything under `bundle/` is mounted read-only and covered by one revision digest computed over
 the exact bundle bytes; there is no partial edit, hot reload, or fallback
@@ -107,8 +107,27 @@ outside them fail startup (`bundle.schema.yaml`, `bundle_layout`).
 Evidence Gateway's four coequal acceptance definitions are adult status, residence region, professional
 licence status, and legal-parent relationship (`products/evidence/README.md`,
 `products/evidence/OPERATOR-CONTRACT.md`). You shape each as an ordinary `requirements` entry
-with its own source, derivation script, and fixtures. The four are presented as coequal, and none
+with its own acquisition, derivation script, and fixtures. The four are presented as coequal, and none
 of them is a privileged domain type, a Rust built-in operation, or a special route.
+
+Each requirement declares one closed acquisition kind. `single` names one fixed source.
+`search-then-fetch` names a fixed search source and a distinct fixed fetch source:
+
+```yaml
+requirements:
+  - id: urn:example:requirement:registered-status:v1
+    kind: criterion
+    acquisition:
+      kind: search-then-fetch
+      search: subject-search
+      fetch: subject-record
+```
+
+The fetch runs only after the search returns one schema-valid match. Rust passes the validated search
+FactSet to the fetch as transient `prior_facts`; a fetch source may bind one declared scalar fact to a
+complete path segment. Neither a response nor a script can select a source, origin, method, credential,
+or additional call. The requirement's effective acquisition posture is the weaker posture of its two
+sources (`products/evidence/contracts/source-contract.yaml`, invariant `V1-I40`).
 
 ## What Rhai scripts may and may not do
 
@@ -122,12 +141,14 @@ audit, or evidence-construction authority.
 
 | Script | Signature | Owns | Never touches |
 | --- | --- | --- | --- |
-| `prepare` (adapters) | `(source_required_selectors, adapter_parameters) -> RequestParts` | Rendering an ordered query and a bounded JSON body from already authorized selector values. | Source origin, method, path, headers, credentials, TLS, proxy, timeout, redirects, or request count; those stay Rust-owned. |
-| `extract` (adapters) | `(projected_source_response, adapter_parameters) -> LookupResult` | Reading one already-projected, schema-validated response and returning `match` with facts, `no_match`, or `ambiguous`. | Choosing a candidate, scoring, counting, or emitting any diagnostic beyond the closed outcome. |
+| `prepare` (adapters) | `(source_required_selectors, adapter_context) -> RequestParts` | Rendering an ordered query and a bounded JSON body from already authorized selector values, trusted parameters, and any validated prior facts supplied to a fixed fetch. | Source origin, method, path, headers, credentials, TLS, proxy, timeout, redirects, or request count; those stay Rust-owned. |
+| `extract` (adapters) | `(projected_source_response, adapter_context) -> LookupResult` | Reading one already-projected, schema-validated response and returning `match` with facts, `no_match`, or `ambiguous`. | Choosing a candidate, scoring, counting, or emitting any diagnostic beyond the closed outcome. |
 | `derive` (derivations) | `(facts, declared_authorized_selectors, evaluation_context) -> ConceptValueSet` | Comparing facts against declared authorized selectors and producing at most 16 typed concept values. | Requester, purpose, audience, authority, grant, token, credential, or a logging, audit, or signing handle. |
 
-Every stage runs on fresh invocation state; nothing carries over between requests or between
-stages. Failures map to one closed, value-free class per stage (`adapter_input_error`,
+Every stage runs on fresh invocation state. The exact `adapter_context` contains only `parameters`
+and `prior_facts`. Prior facts are empty for single and search stages; a fetch receives only the
+schema-validated search FactSet. Only final fetch facts reach derivation. Failures map to one closed,
+value-free class per stage (`adapter_input_error`,
 `source_protocol_error`, `derivation_input_error`), and raw Rhai errors never reach a public
 response.
 

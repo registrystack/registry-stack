@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -47,9 +47,9 @@ asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
 That principle is enforced at two separate boundaries. A Relay integration declares closed
-request inputs and minimized typed outputs. An Evidence Gateway requirement reads a fixed, bounded source
-request whose origin, method, path, headers, and client-side response projection are all set by
-reviewed configuration, and it discloses only the concepts it declares.
+request inputs and minimized typed outputs. An Evidence Gateway requirement uses a closed single or
+search-then-fetch acquisition whose sources, origins, methods, paths, headers, and client-side response
+projections are all set by reviewed configuration, and it discloses only the concepts it declares.
 Callers cannot choose a source destination, credential, selector field, adapter capability, or
 undeclared output at request time in either product.
 

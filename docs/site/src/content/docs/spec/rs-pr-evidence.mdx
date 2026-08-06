@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-07"
 doc_type: specification
 doc_id: RS-PR-EVIDENCE
 category: normative
@@ -61,6 +61,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Evidence Gateway in the architecture. |
 | 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
 | 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
+| 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
 
 ## 1. Scope and references
 
@@ -226,7 +227,7 @@ flowchart LR
     authz["One authorization decision<br/>complete entitlement match"]
     access["Access audit<br/>durably accepted"]
     prepare["Bounded preparation<br/>validate fixed request parts"]
-    source["One fixed source request<br/>core-owned transport"]
+    source["One closed acquisition<br/>one fixed source or fixed search then fetch"]
     derive["Bounded extraction and derivation<br/>extract, then derive on match"]
     gate["Output gate<br/>exact concept set and forms"]
     sign["Construct and sign<br/>core-owned payload"]
@@ -246,12 +247,16 @@ Scripts MUST be confined to the closed `prepare`, `extract`, and `derive` entry 
 perform input or output (`products/evidence/contracts/rhai-abi.yaml`,
 `products/evidence/contracts/primitive-library.yaml`, invariant `V1-I11`).
 
-REQ-PR-EVIDENCE-018: Exactly one evidence-data request MUST be made per evaluation, after successful
-authorization and durable access audit.
+REQ-PR-EVIDENCE-018: Each requirement MUST declare exactly one closed acquisition kind: `single`,
+which executes one fixed evidence-data request, or `search-then-fetch`, which executes one fixed search
+and, only after a unique schema-valid match, one distinct fixed fetch.
+Each actual stage MUST follow successful authorization and its own durable access audit.
 Origin, method, path, fixed headers, authentication, TLS trust, redirect denial, proxy denial,
-timeout, response byte limit, concurrency, and the one-request ceiling are fixed by trusted
+timeout, response byte limit, concurrency, and the one-request-per-stage ceiling are fixed by trusted
 configuration and executed only by the core
-(`products/evidence/contracts/source-contract.yaml`, invariant `V1-I09`).
+(`products/evidence/contracts/source-contract.yaml`, invariants `V1-I09` and `V1-I40`).
+Only the validated search FactSet MAY cross into fetch preparation, only final fetch facts MAY reach
+derivation, and no response or script MAY select transport or create a third request.
 
 REQ-PR-EVIDENCE-019: Provider lookup MUST return only the closed union of match, no-match, and
 ambiguous outcomes, and only a match MAY carry facts.
@@ -438,12 +443,12 @@ source content.
 
 REQ-PR-EVIDENCE-046: Evidence Gateway MUST durably accept a standalone minimal event after an
 authenticated authorization refusal and before returning its generic `403`, an access-attempt event
-after authorization and before credential acquisition or source access, and a disclosure-release
-event after the final immutable response bytes are serialized and before those exact bytes are
-released.
+after authorization and before credential acquisition or source access for every actual acquisition
+stage, and a disclosure-release event after the final immutable response bytes are serialized and
+before those exact bytes are released.
 A sink failure MUST block the applicable step
 (`products/evidence/contracts/audit-event.schema.yaml`, invariants `V1-I13`, `V1-I29`, and
-`V1-I39`).
+`V1-I39` through `V1-I40`).
 
 REQ-PR-EVIDENCE-047: Every native audit event MUST validate against
 `products/evidence/contracts/audit-event.schema.yaml`, which closes the member set, the phase and
@@ -611,8 +616,9 @@ An Evidence Gateway deployment conforms to this specification when it:
   contract, admits only predefined requirement revisions, and resolves subject roles by name
   (REQ-PR-EVIDENCE-012, REQ-PR-EVIDENCE-013, REQ-PR-EVIDENCE-014, REQ-PR-EVIDENCE-015,
   REQ-PR-EVIDENCE-016);
-- keeps trust decisions in Rust with scripts confined to the closed entry points, makes exactly one
-  fixed source request per evaluation, returns only the closed lookup union, and fails closed
+- keeps trust decisions in Rust with scripts confined to the closed entry points, makes one fixed
+  request per configured acquisition stage with a hard two-request ceiling, returns only the closed
+  lookup union, and fails closed
   (REQ-PR-EVIDENCE-017, REQ-PR-EVIDENCE-018, REQ-PR-EVIDENCE-019, REQ-PR-EVIDENCE-022);
 - treats adult status, controlled residence region, professional licence status, and legal-parent
   relationship as coequal full-path acceptance definitions with no privileged domain type, and

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -282,7 +282,8 @@ The programme and field selection reach it as the only two query parameters the 
 Replace `adapters/child-tracker-prepare.rhai` with:
 
 ```rhai
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [
             #{name: "program", value: parameters["programId"]},
@@ -382,7 +383,8 @@ fn merge_reading(current, next) {
     current
 }
 
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let bcg = ();
     let opv = ();
     let penta = ();
