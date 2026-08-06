@@ -29,7 +29,8 @@ build, and generated Redoc API pages. It checks the current site only. Published
 release archives are immutable bundles and are not rebuilt during routine docs
 work.
 
-To verify the complete deployable tree, including every locked release archive:
+To verify the complete deployable tree, including the three archived releases
+in the publication window:
 
 ```sh
 npm run check:archives
@@ -43,6 +44,10 @@ check:archive-lock -- --base-ref origin/main` enforces that invariant.
 Historical archives retain their sealed search output. New release archives
 carry Pagefind and machine-readable discovery files built once by the release
 workflow.
+
+Archives outside the publication window are not restored or link-checked by
+routine CI. Their immutable lock metadata and release assets remain available
+for explicit audit or recovery work.
 
 To publish a new archived docset, build only that docset and create its bundle:
 
