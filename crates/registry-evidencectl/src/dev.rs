@@ -1022,14 +1022,42 @@ fn generate_service_and_holder_keys(keys: &Path) -> Result<PathBuf> {
             Err(error) => return Err(error).context("inspecting private dev key material"),
         }
     }
-    let (_mint_private, mint_public) =
+    let (_mint_private, staged_mint_public) =
         keygen::generate_dev_keypair(keys, "mint-private.jwk", "mint-public.jwk.json")?;
+    let mint_public = publish_thumbprint_named_public_jwk(&staged_mint_public)?;
     // Keep one disposable holder pair beside the other private local session
     // keys so wallet-binding examples need no extra setup. Evidence does not
     // consume the private half and neither half leaves supervised dev state.
     let _holder =
         keygen::generate_dev_keypair(keys, "holder-private.jwk", "holder-public.jwk.json")?;
     Ok(mint_public)
+}
+
+fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
+    let bytes = read_owner_file(staged, 16 * 1024)?;
+    let encoded = std::str::from_utf8(&bytes).context("generated public JWK is not UTF-8")?;
+    let public = registry_platform_crypto::PublicJwk::parse(encoded)
+        .context("generated public JWK failed validation")?;
+    let kid = public
+        .kid
+        .as_deref()
+        .ok_or_else(|| anyhow!("generated public JWK has no key id"))?;
+    if public
+        .jkt()
+        .context("generated public JWK has no thumbprint")?
+        != kid
+    {
+        bail!("generated public JWK key id is not its RFC 7638 thumbprint");
+    }
+    let published = staged
+        .parent()
+        .ok_or_else(|| anyhow!("generated public JWK has no parent directory"))?
+        .join(format!("{kid}.jwk.json"));
+    let mut file = create_private_file(&published)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::remove_file(staged).context("failed to remove the staged public JWK")?;
+    Ok(published)
 }
 
 fn stop_dev(project: &Path) -> Result<ExitCode> {
@@ -2011,15 +2039,26 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let keys = root.path().join("keys");
         let mint_public = generate_service_and_holder_keys(&keys).expect("generate dev keys");
-        assert_eq!(mint_public, keys.join("mint-public.jwk.json"));
 
         for name in ["mint", "holder"] {
             let private_path = keys.join(format!("{name}-private.jwk"));
-            let public_path = keys.join(format!("{name}-public.jwk.json"));
             let private = registry_platform_crypto::PrivateJwk::parse(
                 &fs::read_to_string(&private_path).expect("private JWK"),
             )
             .expect("private JWK parses");
+            let public_path = if name == "mint" {
+                assert_eq!(
+                    mint_public.file_name().and_then(|value| value.to_str()),
+                    private
+                        .kid
+                        .as_deref()
+                        .map(|kid| format!("{kid}.jwk.json"))
+                        .as_deref()
+                );
+                mint_public.clone()
+            } else {
+                keys.join("holder-public.jwk.json")
+            };
             let public = registry_platform_crypto::PublicJwk::parse(
                 &fs::read_to_string(&public_path).expect("public JWK"),
             )
@@ -2045,6 +2084,7 @@ mod tests {
                 PRIVATE_FILE_MODE
             );
         }
+        assert!(!keys.join("mint-public.jwk.json").exists());
 
         let before = fs::read(keys.join("holder-private.jwk")).expect("holder private JWK");
         assert!(generate_service_and_holder_keys(&keys).is_err());
