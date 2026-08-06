@@ -124,6 +124,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
+      - name: Cache Registryctl authoring-reference build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: docs-authoring-reference
+          save-if: true
+
       - name: Install docs dependencies
         working-directory: docs/site
         run: npm ci
@@ -230,10 +236,10 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
         with:
-          # GitHub Pages can remain queued beyond the action's ten-minute
-          # default even when no repository deployment is active. Keep the
-          # bounded wait, but tolerate a transient service-side queue.
-          timeout: 1200000
+          # State the action's maximum explicitly. A deployment that remains
+          # queued for ten minutes is a provider-side failure and is retried
+          # by relaunching this authenticated workflow.
+          timeout: 600000
 
       - name: Smoke live canonical deployment
         working-directory: docs/site
