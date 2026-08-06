@@ -33,11 +33,65 @@ const MAX_DISCLOSURE_BYTES: usize = 8 * 1024;
 const MINIMUM_SALT_BYTES: usize = 16;
 const MAXIMUM_SALT_BYTES: usize = 64;
 
+/// Shortest maximum assertion lifetime a policy may state, per the
+/// verification policy contract.
+///
+/// This bound and the two below it are the only contract constraints on a
+/// policy that fail open, so they are the only ones enforced here. A pattern,
+/// length, or uniqueness violation elsewhere in a policy fails closed: the
+/// payload is itself contract-checked, so an out-of-contract expectation is one
+/// no conformant payload can match and verification refuses the response. A
+/// lifetime or skew wider than the contract allows fails the other way, making
+/// this verifier accept assertions a conformant relying party must refuse. The
+/// failure-class vocabulary is frozen and has no class for an unusable policy,
+/// so a forbidden bound is refused where a policy is read or built, never
+/// reported as a verification outcome.
+pub const MINIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 1;
+/// Longest maximum assertion lifetime a policy may state, per the same
+/// contract.
+pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 31_536_000;
+/// Largest clock skew tolerance a policy may state, per the same contract.
+/// Omitting the tolerance means zero, which is always inside the bound.
+pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
+
+/// A policy stating a time bound the verification policy contract forbids.
+///
+/// This is a refusal to use the policy at all, not a verification outcome. Both
+/// variants carry the stated value, which is a relying party's own expectation
+/// and never comes from a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PolicyBoundsError {
+    #[error("maximumAssertionLifetimeSeconds must be {MINIMUM_ASSERTION_LIFETIME_SECONDS} to {MAXIMUM_ASSERTION_LIFETIME_SECONDS}, not {0}")]
+    AssertionLifetime(u64),
+    #[error("clockSkewSeconds must be at most {MAXIMUM_CLOCK_SKEW_SECONDS}, not {0}")]
+    ClockSkew(u64),
+}
+
+fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if !(MINIMUM_ASSERTION_LIFETIME_SECONDS..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&seconds)
+    {
+        return Err(PolicyBoundsError::AssertionLifetime(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn checked_clock_skew(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if seconds > MAXIMUM_CLOCK_SKEW_SECONDS {
+        return Err(PolicyBoundsError::ClockSkew(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
 /// Complete relying-procedure expectations for strict verification.
 ///
 /// Every expectation comes from independent trusted state such as the relying
 /// procedure, a previously trusted binding, or a trusted requirement contract.
 /// Copying values out of the JWS under verification proves nothing.
+///
+/// The two time bounds are private, so the only ways to a policy are the
+/// checked conversions on this type and on
+/// [`EvidenceVerificationPolicyDocument`], and no caller can state a bound the
+/// contract forbids.
 #[derive(Debug, Clone)]
 pub struct EvidenceVerificationPolicy {
     pub assurance_profile: AssuranceProfile,
@@ -58,10 +112,12 @@ pub struct EvidenceVerificationPolicy {
     /// Service key thumbprints that fail closed even if present in a stale or
     /// otherwise trusted JWKS document.
     pub revoked_key_ids: Vec<String>,
-    /// Longest acceptable `validUntil - issuedAt` interval.
-    pub maximum_assertion_lifetime: Duration,
+    /// Longest acceptable `validUntil - issuedAt` interval. Read it with
+    /// [`EvidenceVerificationPolicy::maximum_assertion_lifetime`].
+    maximum_assertion_lifetime: Duration,
     pub now: DateTime<Utc>,
-    pub clock_skew: Duration,
+    /// Read it with [`EvidenceVerificationPolicy::clock_skew`].
+    clock_skew: Duration,
 }
 
 /// Closed wire document for independently retained verification expectations.
@@ -70,6 +126,9 @@ pub struct EvidenceVerificationPolicy {
 /// durations. This document is the serializable form used by offline operator
 /// boundaries, including the local pre-response context. It never learns
 /// expectations from the response it is asked to verify.
+///
+/// Reading one refuses the two time bounds the contract forbids, so an
+/// out-of-contract document never reaches verification.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceVerificationPolicyDocument {
@@ -86,9 +145,28 @@ pub struct EvidenceVerificationPolicyDocument {
     pub expected_subjects: Vec<ExpectedSubjectDocument>,
     pub expected_outputs: Vec<ExpectedOutputDocument>,
     pub revoked_key_ids: Vec<String>,
+    #[serde(deserialize_with = "read_assertion_lifetime_seconds")]
     pub maximum_assertion_lifetime_seconds: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "read_clock_skew_seconds")]
     pub clock_skew_seconds: u64,
+}
+
+fn read_assertion_lifetime_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_assertion_lifetime(seconds).map_err(serde::de::Error::custom)?;
+    Ok(seconds)
+}
+
+fn read_clock_skew_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_clock_skew(seconds).map_err(serde::de::Error::custom)?;
+    Ok(seconds)
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -153,8 +231,20 @@ pub struct ExpectedListDocument {
 }
 
 impl EvidenceVerificationPolicyDocument {
-    pub fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
-        EvidenceVerificationPolicy {
+    /// The runtime-facing policy for one verification instant, or a refusal when
+    /// the document states a time bound the contract forbids.
+    ///
+    /// Reading a document already refuses those bounds, so this is what holds
+    /// them for a document built in code, where the public fields accept any
+    /// value.
+    pub fn try_into_policy(
+        self,
+        now: DateTime<Utc>,
+    ) -> Result<EvidenceVerificationPolicy, PolicyBoundsError> {
+        let maximum_assertion_lifetime =
+            checked_assertion_lifetime(self.maximum_assertion_lifetime_seconds)?;
+        let clock_skew = checked_clock_skew(self.clock_skew_seconds)?;
+        Ok(EvidenceVerificationPolicy {
             assurance_profile: self.expected_assurance_profile,
             issued_by: self.issued_by,
             provided_by: self.provided_by,
@@ -181,12 +271,10 @@ impl EvidenceVerificationPolicyDocument {
                 })
                 .collect(),
             revoked_key_ids: self.revoked_key_ids,
-            maximum_assertion_lifetime: Duration::from_secs(
-                self.maximum_assertion_lifetime_seconds,
-            ),
+            maximum_assertion_lifetime,
             now,
-            clock_skew: Duration::from_secs(self.clock_skew_seconds),
-        }
+            clock_skew,
+        })
     }
 }
 
@@ -221,6 +309,19 @@ fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValue
 }
 
 impl EvidenceVerificationPolicy {
+    /// Longest acceptable `validUntil - issuedAt` interval, within the bounds
+    /// the verification policy contract states.
+    #[must_use]
+    pub fn maximum_assertion_lifetime(&self) -> Duration {
+        self.maximum_assertion_lifetime
+    }
+
+    /// Accepted clock skew tolerance, within the same contract's bound.
+    #[must_use]
+    pub fn clock_skew(&self) -> Duration {
+        self.clock_skew
+    }
+
     /// Build expectations from evidence accepted in an original trusted
     /// transaction, for later re-verification of the stored response.
     ///
@@ -230,14 +331,21 @@ impl EvidenceVerificationPolicy {
     /// values back as expectations proves nothing. The expected nonce comes
     /// from the independently retained original request, never from the
     /// response.
+    ///
+    /// The two time bounds are the relying party's own, stated in seconds as the
+    /// contract states them, and a value the contract forbids is refused rather
+    /// than honoured.
     pub fn from_accepted_transaction(
         evidence: &Evidence,
         retained_request_nonce: &str,
-        maximum_assertion_lifetime: Duration,
+        maximum_assertion_lifetime_seconds: u64,
         now: DateTime<Utc>,
-        clock_skew: Duration,
-    ) -> Self {
-        Self {
+        clock_skew_seconds: u64,
+    ) -> Result<Self, PolicyBoundsError> {
+        let maximum_assertion_lifetime =
+            checked_assertion_lifetime(maximum_assertion_lifetime_seconds)?;
+        let clock_skew = checked_clock_skew(clock_skew_seconds)?;
+        Ok(Self {
             assurance_profile: evidence.assurance_profile,
             issued_by: evidence.issued_by.clone(),
             provided_by: evidence.provided_by.clone(),
@@ -267,7 +375,7 @@ impl EvidenceVerificationPolicy {
             maximum_assertion_lifetime,
             now,
             clock_skew,
-        }
+        })
     }
 }
 
@@ -1330,10 +1438,11 @@ mod tests {
         EvidenceVerificationPolicy::from_accepted_transaction(
             evidence,
             &evidence.request_nonce,
-            Duration::from_secs(48 * 60 * 60),
+            48 * 60 * 60,
             now,
-            Duration::from_secs(30),
+            30,
         )
+        .expect("the fixture policy states bounds the contract allows")
     }
 
     async fn signed_fixture() -> (Vec<u8>, JwksDocument, EvidenceVerificationPolicy) {
@@ -1931,6 +2040,190 @@ mod tests {
         };
         let rendered = format!("{policy:?}");
         assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+    }
+
+    /// A valid policy document whose two contract-bounded time fields the
+    /// caller sets, so a bound test states only what it is about.
+    fn policy_document_with_time_bounds(
+        maximum_assertion_lifetime_seconds: u64,
+        clock_skew_seconds: u64,
+    ) -> EvidenceVerificationPolicyDocument {
+        EvidenceVerificationPolicyDocument {
+            expected_assurance_profile: AssuranceProfile::EvidenceGrade,
+            issued_by: "urn:example:issuer".to_string(),
+            provided_by: "urn:example:provider".to_string(),
+            requirement: "urn:example:requirement:v1".to_string(),
+            evidence_type: "urn:example:type:v1".to_string(),
+            purpose: "casework".to_string(),
+            audience: "urn:example:audience".to_string(),
+            configuration_revision: format!("sha256:{}", "0".repeat(64)),
+            request_nonce: FIXTURE_NONCE.to_string(),
+            expected_subjects: Vec::new(),
+            expected_outputs: Vec::new(),
+            revoked_key_ids: Vec::new(),
+            maximum_assertion_lifetime_seconds,
+            clock_skew_seconds,
+        }
+    }
+
+    /// The bounds this crate enforces are the contract's, not a second opinion
+    /// about them.
+    #[test]
+    fn the_enforced_time_bounds_are_the_contract_bounds() {
+        let contract: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/verification-policy.schema.yaml"
+        ))
+        .expect("the verification policy contract is YAML");
+        let bound = |field: &str, bound: &str| -> u64 {
+            serde_norway::from_value(contract["properties"][field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "minimum"),
+            MINIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "maximum"),
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(bound("clockSkewSeconds", "minimum"), 0);
+        assert_eq!(
+            bound("clockSkewSeconds", "maximum"),
+            MAXIMUM_CLOCK_SKEW_SECONDS
+        );
+    }
+
+    /// A policy document is an input, and one that states a time bound the
+    /// contract forbids is unusable rather than merely unsatisfied. Reading it
+    /// has to refuse it: the failure-class vocabulary is frozen, so verification
+    /// has no class to report it under, and honouring it would make this
+    /// verifier accept assertions a conformant relying party must refuse.
+    #[test]
+    fn a_policy_document_stating_a_forbidden_time_bound_is_refused_when_read() {
+        let refused = |document: EvidenceVerificationPolicyDocument| {
+            let bytes = serde_json::to_vec(&document).expect("the document serializes");
+            serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes)
+                .expect_err("a document outside the contract bounds is refused")
+                .to_string()
+        };
+        for (label, document) in [
+            (
+                "a zero lifetime",
+                policy_document_with_time_bounds(MINIMUM_ASSERTION_LIFETIME_SECONDS - 1, 0),
+            ),
+            (
+                "a lifetime past the ceiling",
+                policy_document_with_time_bounds(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0),
+            ),
+        ] {
+            let message = refused(document);
+            assert!(
+                message.contains("maximumAssertionLifetimeSeconds"),
+                "{label} is refused for the field it states: {message}"
+            );
+        }
+        let message = refused(policy_document_with_time_bounds(
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+            MAXIMUM_CLOCK_SKEW_SECONDS + 1,
+        ));
+        assert!(message.contains("clockSkewSeconds"), "{message}");
+    }
+
+    #[test]
+    fn a_policy_document_at_the_contract_bounds_is_read() {
+        for (lifetime, skew) in [
+            (MINIMUM_ASSERTION_LIFETIME_SECONDS, 0),
+            (
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                MAXIMUM_CLOCK_SKEW_SECONDS,
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_time_bounds(lifetime, skew))
+                .expect("the document serializes");
+            let read: EvidenceVerificationPolicyDocument = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("{lifetime}s and {skew}s skew are read: {error}"));
+            assert_eq!(read.maximum_assertion_lifetime_seconds, lifetime);
+            assert_eq!(read.clock_skew_seconds, skew);
+        }
+    }
+
+    /// The document fields are public, so a caller can build one in code
+    /// without going through a reader. The conversion to a policy is the second
+    /// place the bounds hold.
+    #[test]
+    fn a_policy_document_built_in_code_cannot_widen_the_contract_bounds() {
+        let now = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let refusal = |lifetime, skew| {
+            policy_document_with_time_bounds(lifetime, skew)
+                .try_into_policy(now)
+                .map(|_| ())
+        };
+        assert_eq!(
+            refusal(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0),
+            Err(PolicyBoundsError::AssertionLifetime(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1
+            ))
+        );
+        assert_eq!(refusal(0, 0), Err(PolicyBoundsError::AssertionLifetime(0)));
+        assert_eq!(
+            refusal(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                MAXIMUM_CLOCK_SKEW_SECONDS + 1
+            ),
+            Err(PolicyBoundsError::ClockSkew(MAXIMUM_CLOCK_SKEW_SECONDS + 1))
+        );
+        let policy = policy_document_with_time_bounds(
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+            MAXIMUM_CLOCK_SKEW_SECONDS,
+        )
+        .try_into_policy(now)
+        .expect("a document at the bounds converts");
+        assert_eq!(
+            policy.maximum_assertion_lifetime(),
+            Duration::from_secs(MAXIMUM_ASSERTION_LIFETIME_SECONDS)
+        );
+        assert_eq!(
+            policy.clock_skew(),
+            Duration::from_secs(MAXIMUM_CLOCK_SKEW_SECONDS)
+        );
+    }
+
+    /// Re-verifying a retained response is the third way to a policy, and it
+    /// never reads a document, so it carries the same bounds itself.
+    #[test]
+    fn an_accepted_transaction_cannot_widen_the_contract_bounds() {
+        let evidence = fixture_evidence();
+        let now = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let policy_for_bounds = |lifetime, skew| {
+            EvidenceVerificationPolicy::from_accepted_transaction(
+                &evidence,
+                &evidence.request_nonce,
+                lifetime,
+                now,
+                skew,
+            )
+        };
+        assert_eq!(
+            policy_for_bounds(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0).map(|_| ()),
+            Err(PolicyBoundsError::AssertionLifetime(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1
+            ))
+        );
+        assert_eq!(
+            policy_for_bounds(0, 0).map(|_| ()),
+            Err(PolicyBoundsError::AssertionLifetime(0))
+        );
+        assert_eq!(
+            policy_for_bounds(48 * 60 * 60, MAXIMUM_CLOCK_SKEW_SECONDS + 1).map(|_| ()),
+            Err(PolicyBoundsError::ClockSkew(MAXIMUM_CLOCK_SKEW_SECONDS + 1))
+        );
+        let policy = policy_for_bounds(MINIMUM_ASSERTION_LIFETIME_SECONDS, 0)
+            .expect("a transaction at the bounds builds a policy");
+        assert_eq!(
+            policy.maximum_assertion_lifetime(),
+            Duration::from_secs(MINIMUM_ASSERTION_LIFETIME_SECONDS)
+        );
+        assert_eq!(policy.clock_skew(), Duration::ZERO);
     }
 
     #[tokio::test]

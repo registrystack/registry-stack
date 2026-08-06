@@ -589,6 +589,45 @@ fn verify_rejects_a_policy_document_with_an_unknown_field() {
     );
 }
 
+/// A policy stating a time bound the verification policy contract forbids is an
+/// unusable input document, not a verification outcome: honouring it would make
+/// the verifier accept assertions a conformant relying party must refuse, and
+/// the failure-class vocabulary is frozen, so there is no class to report it
+/// under. The command therefore refuses it before verifying anything, exactly as
+/// it refuses a policy with an unknown field.
+#[test]
+fn verify_rejects_a_policy_document_outside_the_contract_time_bounds() {
+    for (label, replaced, with) in [
+        (
+            "a lifetime past the contract ceiling",
+            "maximumAssertionLifetimeSeconds: 172800",
+            "maximumAssertionLifetimeSeconds: 31536001",
+        ),
+        (
+            "a zero lifetime",
+            "maximumAssertionLifetimeSeconds: 172800",
+            "maximumAssertionLifetimeSeconds: 0",
+        ),
+        (
+            "a skew past the contract ceiling",
+            "clockSkewSeconds: 30",
+            "clockSkewSeconds: 301",
+        ),
+    ] {
+        let policy = fixture_policy().replacen(replaced, with, 1);
+        assert!(policy.contains(with), "{label} did not reach the policy");
+        let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &policy);
+        let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+        assert_verification_failure(
+            &output,
+            "2026-08-02T12:00:00Z",
+            "",
+            "evidence: stored response verification failed (malformed)\n",
+        );
+    }
+}
+
 #[test]
 fn verify_rejects_a_verification_instant_that_is_not_strict_utc() {
     let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &fixture_policy());

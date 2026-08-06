@@ -294,14 +294,16 @@ fn the_committed_fixture_verifies_at_its_pinned_instant() {
     )
     .expect("the policy fixture parses");
 
-    let policy = policy_document.into_policy(fixture_issued_at() + ChronoDuration::days(1));
+    let policy = policy_document
+        .try_into_policy(fixture_issued_at() + ChronoDuration::days(1))
+        .expect("the committed policy states bounds its contract allows");
     let evidence = verify_flattened_jws(&jws_bytes, &jwks, &policy).expect("the fixture verifies");
 
     assert_fixture_shape(&evidence);
 }
 
 /// The real-clock half of the same coverage. A response signed now and verified
-/// now keeps the wall-clock path through `into_policy` and
+/// now keeps the wall-clock path through `try_into_policy` and
 /// `verify_flattened_jws` exercised, without any committed file having to stay
 /// current for years to do it.
 #[tokio::test]
@@ -314,7 +316,9 @@ async fn a_freshly_signed_response_verifies_against_the_real_clock() {
     let jws_bytes = serde_json::to_vec(&sign(&evidence, &signer).await)
         .expect("the signed response serializes");
 
-    let policy = policy_document.into_policy(Utc::now());
+    let policy = policy_document
+        .try_into_policy(Utc::now())
+        .expect("the fixture policy states bounds its contract allows");
     let verified = verify_flattened_jws(&jws_bytes, &public_jwks(&signer), &policy)
         .expect("a freshly signed response verifies");
 

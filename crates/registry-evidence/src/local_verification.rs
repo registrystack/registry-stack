@@ -219,7 +219,14 @@ pub(crate) fn verify_local_response_at(
     if context.schema != LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1 {
         return Err(LocalVerificationError);
     }
-    let policy = context.verification_policy.into_policy(now);
+    // The requirement validity and the verifier skew this policy carries are
+    // both bounded by the bundle schema, so a loaded deployment cannot reach a
+    // policy the verification policy contract forbids. A context assembled some
+    // other way is refused rather than verified against.
+    let policy = context
+        .verification_policy
+        .try_into_policy(now)
+        .map_err(|_| LocalVerificationError)?;
     match context.response_format {
         LocalResponseFormat::SignedJws => {
             verify_flattened_jws(response, &context.trusted_jwks, &policy)

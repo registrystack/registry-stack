@@ -1282,10 +1282,11 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
             &evidence,
             registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-            Duration::from_secs(31_536_000),
+            31_536_000,
             observed_at,
-            Duration::from_secs(0),
-        );
+            0,
+        )
+        .expect("the fixture policy states bounds the contract allows");
         policy.issued_by = "urn:example:fixture:issuer:authority".to_owned();
         policy.provided_by = "urn:example:fixture:provider:evidence".to_owned();
         policy.requirement = requirement.to_owned();

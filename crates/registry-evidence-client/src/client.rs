@@ -329,7 +329,16 @@ impl EvidenceClient {
         policy_document
             .revoked_key_ids
             .clone_from(&self.config.revoked_key_ids);
-        let policy = policy_document.into_policy(now);
+        // `prepare` bounded the two time expectations by the same contract the
+        // verifier enforces, so this refusal is unreachable from a prepared
+        // request. It stays a refusal rather than an assumption: honouring an
+        // out-of-contract lifetime would accept assertions this relying party
+        // must refuse.
+        let policy = policy_document.try_into_policy(now).map_err(|_| {
+            EvidenceClientError::configuration(
+                "the prepared policy states a time bound the verification policy contract forbids",
+            )
+        })?;
         let evidence = verify_flattened_jws(&response.body, &self.config.trusted_jwks, &policy)
             .map_err(EvidenceClientError::Verification)?;
         Ok(VerifiedEvidence {
