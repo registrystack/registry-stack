@@ -1249,10 +1249,13 @@ impl SigningConfig {
             31_536_000,
             "maximum assertion validity",
         )?;
+        // The same bound the relying party's `clockSkewSeconds` carries: an
+        // advertised skew a conformant verification policy cannot express would
+        // be unusable advice. Widening either one alone is a contract change.
         validate_range(
             self.verifier_clock_skew_seconds,
             0,
-            600,
+            300,
             "verifier clock skew",
         )
     }
@@ -3907,6 +3910,68 @@ mod tests {
                 "requirement validity exceeds signing maximum validity"
             ))
         ));
+    }
+
+    #[test]
+    fn the_advertised_verifier_skew_stays_within_what_a_policy_may_express() {
+        // A deployment advertises `verifierClockSkewSeconds` so a relying party
+        // can adopt it, and a relying party expresses what it adopted as
+        // `clockSkewSeconds`. An advertised value no conformant policy can hold
+        // would be unusable advice, so the two bounds are one bound. Both are
+        // read from the contracts here rather than restated, so moving either
+        // one alone fails.
+        let bundle: serde_json::Value = serde_json::to_value(
+            serde_norway::from_slice::<serde_norway::Value>(include_bytes!(
+                "../../../products/evidence/contracts/bundle.schema.yaml"
+            ))
+            .expect("bundle contract is YAML"),
+        )
+        .expect("bundle contract converts to JSON");
+        let policy: serde_json::Value = serde_json::to_value(
+            serde_norway::from_slice::<serde_norway::Value>(include_bytes!(
+                "../../../products/evidence/contracts/verification-policy.schema.yaml"
+            ))
+            .expect("verification policy contract is YAML"),
+        )
+        .expect("verification policy contract converts to JSON");
+        let advertised = bundle["properties"]["signing"]["properties"]["verifierClockSkewSeconds"]
+            ["maximum"]
+            .as_u64()
+            .expect("the advertised skew declares an integer maximum");
+        let expressible = policy["properties"]["clockSkewSeconds"]["maximum"]
+            .as_u64()
+            .expect("the expressible skew declares an integer maximum");
+        assert_eq!(
+            advertised, expressible,
+            "a deployment may advertise a skew no conformant verification policy can express"
+        );
+
+        // Startup validation is the enforcement point, and it must agree with
+        // the contract rather than carry its own bound.
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
+        let validator = bundle_contract_validator();
+        for (skew, accepted) in [(expressible, true), (expressible + 1, false)] {
+            let mutated = yaml.replace(
+                "verifierClockSkewSeconds: 30",
+                &format!("verifierClockSkewSeconds: {skew}"),
+            );
+            assert_ne!(mutated, yaml, "{skew}");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_ok(),
+                accepted,
+                "startup validation disagrees with the contract at {skew}"
+            );
+            assert_eq!(
+                validator
+                    .validate(&bundle_contract_instance(mutated.as_bytes()))
+                    .is_ok(),
+                accepted,
+                "the bundle contract disagrees with startup validation at {skew}"
+            );
+        }
     }
 
     #[test]
