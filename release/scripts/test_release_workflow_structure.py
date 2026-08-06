@@ -58,11 +58,15 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("schedule:", trigger)
         self.assertEqual(
             list(document["jobs"]),
-            ["validate", "build", "assemble", "publish"],
+            ["validate", "build", "clients", "assemble", "publish"],
         )
         self.assertEqual(
             document["jobs"]["validate"]["permissions"],
             {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["clients"]["permissions"],
+            {"contents": "read"},
         )
         self.assertEqual(
             document["jobs"]["assemble"]["permissions"],
@@ -148,6 +152,57 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
         self.assertIn("bash development-assets/evidencectl-install.sh", smoke)
 
+    def test_builds_and_smokes_the_relying_party_client_packages(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        matrix = document["jobs"]["clients"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {
+                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                for entry in matrix
+            },
+            {
+                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
+                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
+                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+            },
+        )
+
+        wheel = step_run(document, "clients", "Build the Python client wheel")
+        # The published wheel name has to be predictable from the source, since
+        # the roster below names it exactly: hence a stated Linux platform tag
+        # instead of maturin's symbol-derived manylinux audit, and exactly one
+        # wheel per platform rather than one per interpreter version.
+        self.assertIn("--compatibility linux", wheel)
+        self.assertIn("expected exactly one wheel", wheel)
+        node = step_run(document, "clients", "Build the Node client package")
+        self.assertIn(
+            "package/evidence-client.${{ matrix.napi_platform }}.node",
+            node,
+        )
+
+        # Both smokes load a prebuilt native artifact and exercise it offline.
+        # Neither may carry a credential, and each addresses a reserved host
+        # that cannot resolve, so a request would fail rather than leave.
+        for name in ("Smoke the Python client wheel", "Smoke the Node client package"):
+            smoke = step_run(document, "clients", name)
+            self.assertIn("placeholder-not-a-credential", smoke)
+            self.assertIn("https://evidence.invalid", smoke)
+
+        roster = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        self.assertIn('echo "evidence-client-node-${tag}-${platform}.tgz"', roster)
+        self.assertIn(
+            'echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"',
+            roster,
+        )
+        self.assertIn(
+            "for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64",
+            roster,
+        )
+
     def test_publishes_one_unique_prerelease_and_prints_its_curl_command(self) -> None:
         text, document = workflow("evidence-dev.yml")
         verify = step_run(
@@ -166,7 +221,11 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--target "${source_sha}"', publish)
         self.assertIn("--prerelease", publish)
         self.assertIn("--latest=false", publish)
-        self.assertIn("releases/download/${tag}/evidencectl-install.sh", publish)
+        self.assertIn(
+            'download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"',
+            publish,
+        )
+        self.assertIn('install_url="${download_url}/evidencectl-install.sh"', publish)
         for forbidden in (
             "gh release upload",
             "gh release delete",
