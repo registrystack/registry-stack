@@ -31,7 +31,7 @@ jsonwebtoken.workspace = true
 registry-evidence-verifier.workspace = true
 p256.workspace = true
 registry-platform-audit.workspace = true
-registry-platform-crypto.workspace = true
+registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-config.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
