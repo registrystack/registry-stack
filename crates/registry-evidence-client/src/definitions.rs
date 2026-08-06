@@ -34,11 +34,21 @@ pub struct EvidenceDefinitionsDocument {
 impl EvidenceDefinitionsDocument {
     /// The single definition for one requirement identifier, when the
     /// requester is entitled to exactly one shape of it.
+    ///
+    /// A deployment keys its authorized shapes on requirement, purpose, and
+    /// selector profile together, so one requirement may carry several. This
+    /// answers `None` for an ambiguous requirement rather than picking one,
+    /// because `purpose` is policy bearing on both ends: it travels in the
+    /// request and the verifier compares it. Read `definitions` directly to
+    /// choose between the shapes.
     #[must_use]
     pub fn definition(&self, requirement: &str) -> Option<&EvidenceDefinition> {
-        self.definitions
+        let mut matching = self
+            .definitions
             .iter()
-            .find(|definition| definition.requirement == requirement)
+            .filter(|definition| definition.requirement == requirement);
+        let first = matching.next()?;
+        matching.next().is_none().then_some(first)
     }
 }
 
@@ -303,6 +313,36 @@ mod tests {
         assert!(document
             .definition("urn:example:client:requirement:absent")
             .is_none());
+    }
+
+    #[test]
+    fn a_requirement_with_two_authorized_shapes_yields_no_single_definition() {
+        // A deployment keys its discovery candidates on requirement, purpose,
+        // and selector profile together, so one requirement can carry several
+        // authorized shapes. Answering with whichever happened to serialize
+        // first would have the relying party author a request, and close a
+        // verification policy, for a purpose it never chose, and verification
+        // would pass because the deployment did issue for that purpose.
+        let mut document = document();
+        let mut other_purpose = document.definitions[0].clone();
+        other_purpose.purpose = "other-decision".to_owned();
+        document.definitions.push(other_purpose);
+        // Two shapes of one requirement are distinct items, so the definitions
+        // contract's `uniqueItems` does not stop a deployment sending this.
+        let round_tripped: EvidenceDefinitionsDocument = serde_json::from_str(
+            &serde_json::to_string(&document).expect("the two shape document serializes"),
+        )
+        .expect("the two shape document parses");
+        assert_eq!(round_tripped.definitions.len(), 2);
+        assert!(round_tripped
+            .definition("urn:example:client:requirement:status:v1")
+            .is_none());
+        // The entries stay visible, so a caller that wants to disambiguate on
+        // purpose or selector profile still can.
+        assert!(round_tripped
+            .definitions
+            .iter()
+            .any(|definition| definition.purpose == "other-decision"));
     }
 
     #[test]
