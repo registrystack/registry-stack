@@ -39,7 +39,7 @@ class ErrorMappingTest(unittest.TestCase):
 
     def _client(self, **kwargs):
         return revc.EvidenceClient(
-            self.server.base_url, fixtures.VALID_JWKS, "test-token", **kwargs
+            self.server.base_url, fixtures.VALID_JWKS, [], "test-token", **kwargs
         )
 
     def _send(self, client):

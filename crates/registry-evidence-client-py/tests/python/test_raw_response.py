@@ -49,7 +49,7 @@ class RawResponseTest(unittest.TestCase):
             headers={"Content-Type": EVIDENCE_JWS_MEDIA_TYPE, **headers},
             body=SIGNED_BODY,
         )
-        client = revc.EvidenceClient(server.base_url, fixtures.VALID_JWKS, "test-token")
+        client = revc.EvidenceClient(server.base_url, fixtures.VALID_JWKS, [], "test-token")
         return client.send(client.prepare(fixtures.request_spec()))
 
     def test_the_body_is_exactly_the_bytes_the_deployment_served(self):

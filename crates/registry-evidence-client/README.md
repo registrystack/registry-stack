@@ -45,18 +45,21 @@ use registry_evidence_client::{
 };
 
 /// `trusted_jwks` is the key set the integrator reviewed and pinned out of band.
-/// The prepared request carries the nonce and the closed policy that will judge
-/// the answer.
+/// `revoked_key_ids` is the current emergency denylist of service-key RFC 7638
+/// thumbprints. The prepared request carries the nonce and the closed policy
+/// that will judge the answer.
 async fn accept(
     base_url: url::Url,
     access_token: &str,
     trusted_jwks: registry_evidence_client::JwksDocument,
+    revoked_key_ids: Vec<String>,
     prepared: &PreparedEvidenceRequest,
 ) -> Result<VerifiedEvidence, EvidenceClientError> {
     let client = EvidenceClient::new(EvidenceClientConfig::new(
         base_url,
         Arc::new(StaticToken::new(access_token)?),
         trusted_jwks,
+        revoked_key_ids,
     ))?;
     client.request_and_verify(prepared).await
 }
@@ -68,6 +71,10 @@ async fn accept(
   uses the key set pinned at construction. Nothing here fetches keys at
   verification time, because a key set taken from the same origin as the
   response it would verify establishes nothing about that response.
+- The current revoked-key list is a separate required trust input. It overrides
+  both a key retained in the pinned set and the revocation list captured in an
+  older prepared request, so an emergency revocation takes effect without
+  preparing a replacement request.
 - One prepared request is one exchange, enforced rather than advised. Neither this
   crate nor its HTTP client retries anything, and a second `send` with the same
   prepared request fails locally before any I/O: a second attempt is a second

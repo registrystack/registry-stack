@@ -16,7 +16,7 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use ed25519_dalek::SigningKey;
+use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence_verifier::{
     model::JwksDocument, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
 };
@@ -55,25 +55,26 @@ pub(crate) struct SignedEvidenceFixture {
 /// A fresh issuer. Two fixtures never share a key or a key identifier, so a
 /// response from one is a response signed by a key the other never pinned.
 pub(crate) fn signed_evidence() -> SignedEvidenceFixture {
-    let mut seed = [0u8; 32];
-    getrandom::fill(&mut seed).expect("the test host supplies randomness");
-    let signing_key = SigningKey::from_bytes(&seed);
-    let public = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
-    let private = URL_SAFE_NO_PAD.encode(signing_key.to_bytes());
-    let key_id = format!("fixture-key-{}", &public[..8]);
-
-    let signing_key = PrivateJwk::parse(
-        &json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "alg": "EdDSA",
-            "kid": key_id,
-            "x": public,
-            "d": private,
-        })
-        .to_string(),
-    )
-    .expect("the fixture key parses");
+    let signing_key = SigningKey::random(&mut OsRng);
+    let public = signing_key.verifying_key().to_encoded_point(false);
+    let mut signing_key = PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
+        x: public.x().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        y: public.y().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        n: None,
+        e: None,
+        p: None,
+        q: None,
+        dp: None,
+        dq: None,
+        qi: None,
+    };
+    let key_id = signing_key.public().jkt().expect("the thumbprint computes");
+    signing_key.kid = Some(key_id.clone());
     let trusted_jwks = JwksDocument {
         keys: vec![
             serde_json::to_value(signing_key.public()).expect("the published key serializes")
@@ -151,7 +152,7 @@ impl SignedEvidenceFixture {
     fn sign_payload(&self, payload: &Value) -> Vec<u8> {
         let protected = URL_SAFE_NO_PAD.encode(
             json!({
-                "alg": "EdDSA",
+                "alg": "ES256",
                 "kid": self.key_id,
                 "typ": EVIDENCE_JWS_TYP,
                 "cty": EVIDENCE_JWS_CTY,

@@ -12,7 +12,7 @@ const EVIDENCE_SCHEMA_V1 = 'registry.assertion-evidence/v1';
 const EVIDENCE_JWS_MEDIA_TYPE = 'application/jose+json';
 
 /**
- * A fresh Ed25519 signing key for one stub deployment.
+ * A fresh P-256 signing key for one stub deployment.
  *
  * Neither crate that can sign a real Evidence response
  * (`registry-evidence-verifier`, `registry-evidence-client`) exposes its test
@@ -22,20 +22,24 @@ const EVIDENCE_JWS_MEDIA_TYPE = 'application/jose+json';
  * `registry-platform-crypto` on the Rust side. This key is generated fresh
  * per test and never written anywhere.
  */
-function generateSigningKey(kid) {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+function generateSigningKey() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
+    namedCurve: 'prime256v1',
+  });
   const jwk = publicKey.export({ format: 'jwk' });
+  const thumbprintInput = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y });
+  const kid = crypto.createHash('sha256').update(thumbprintInput).digest('base64url');
   return {
     kid,
     privateKey,
-    jwks: { keys: [{ ...jwk, kid, alg: 'EdDSA' }] },
+    jwks: { keys: [{ ...jwk, kid, alg: 'ES256' }] },
   };
 }
 
 /** Sign an Evidence payload as a flattened JWS, matching the wire format `verify_flattened_jws` expects. */
 function signEvidence(evidence, signingKey) {
   const protectedHeader = {
-    alg: 'EdDSA',
+    alg: 'ES256',
     kid: signingKey.kid,
     typ: EVIDENCE_JWS_TYP,
     cty: EVIDENCE_JWS_CTY,
@@ -43,7 +47,10 @@ function signEvidence(evidence, signingKey) {
   const protectedSegment = Buffer.from(JSON.stringify(protectedHeader)).toString('base64url');
   const payloadSegment = Buffer.from(JSON.stringify(evidence)).toString('base64url');
   const signingInput = `${protectedSegment}.${payloadSegment}`;
-  const signature = crypto.sign(null, Buffer.from(signingInput), signingKey.privateKey);
+  const signature = crypto.sign('sha256', Buffer.from(signingInput), {
+    key: signingKey.privateKey,
+    dsaEncoding: 'ieee-p1363',
+  });
   return {
     protected: protectedSegment,
     payload: payloadSegment,

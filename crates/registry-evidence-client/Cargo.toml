@@ -33,6 +33,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
+p256.workspace = true
 registry-evidence.workspace = true
 registry-mint.workspace = true
 tempfile.workspace = true

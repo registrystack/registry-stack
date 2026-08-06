@@ -59,7 +59,7 @@ findings["reload_keeps_submodule_dropped"] = not hasattr(
 )
 
 try:
-    revc.EvidenceClient("not-a-url", {"keys": []}, "test-token")
+    revc.EvidenceClient("not-a-url", {"keys": []}, [], "test-token")
 except revc.ConfigurationError as error:
     findings["refusal_kind"] = error.kind
 

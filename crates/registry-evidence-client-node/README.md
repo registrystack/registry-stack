@@ -13,7 +13,7 @@ in CI.
 ## JS surface
 
 ```js
-const client = new EvidenceClient({ baseUrl, trustedJwks, token, ... });
+const client = new EvidenceClient({ baseUrl, trustedJwks, revokedKeyIds, token, ... });
 
 const prepared = client.prepare(spec);       // synchronous, no I/O
 const definitions = await client.discover();
@@ -79,7 +79,7 @@ cargo test -p registry-evidence-client-node --test golden_fixture -- --ignored r
 
 never by hand-editing the fixture files. The JS tests under `__test__/` take
 the opposite approach for their own live round trip: `helpers/live-signing.js`
-signs a fresh Evidence payload with Node's built-in `crypto` (Ed25519) for
+signs a fresh Evidence payload with Node's built-in `crypto` (P-256/ES256) for
 whatever nonce the prepared request actually generated, because neither
 `registry-evidence-verifier` nor `registry-evidence-client` exposes its test
 signer outside `cfg(test)`.
@@ -110,6 +110,10 @@ workspace-wide forbid would reject outright.
 
 - `trustedRootCertificates` accepts a PEM-encoded string only, not a Buffer or
   DER bytes.
+- `trustedJwks` and `revokedKeyIds` are both required trust inputs.
+  `revokedKeyIds` contains current service-key RFC 7638 thumbprints and
+  overrides a matching key even when it remains in `trustedJwks` or in an
+  older prepared request's policy.
 - Exactly two token providers are supported: `token: { static: "..." }` and
   `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, ... } }`. A
   caller-supplied custom token provider is out of scope for this binding.

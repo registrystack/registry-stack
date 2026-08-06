@@ -17,7 +17,7 @@ use std::{fs, path::Path};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use ed25519_dalek::SigningKey;
+use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence_client::{
     AssuranceProfile, Evidence, EvidenceObjectType, EvidenceVerificationPolicyDocument,
     ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
@@ -34,8 +34,6 @@ use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
 /// always carries a freshly generated nonce; this fixture never goes through
 /// `prepare`, so there is nothing independent to match it against.
 const FIXTURE_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-
-const ACTIVE_KEY_ID: &str = "evidence-node-fixture-key-1";
 
 /// The instant the committed response is signed for, shared by the generator
 /// and by every check that reads the result, so nothing has to re-derive it
@@ -61,23 +59,29 @@ fn fixture_issued_at() -> DateTime<Utc> {
         .expect("the fixture instant parses")
 }
 
-/// A fresh Ed25519 signer under the fixture's key id. The private half never
+/// A fresh P-256 signer under its RFC 7638 thumbprint key id. The private half never
 /// leaves the process that made it: regeneration commits only the public key,
 /// and the real-clock check below discards the whole pair when it returns.
 fn fixture_signer() -> LocalJwkSigner {
-    let mut seed = [0_u8; 32];
-    getrandom::fill(&mut seed).expect("the host supplies randomness");
-    let signing_key = SigningKey::from_bytes(&seed);
-    let private_jwk_json = serde_json::json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "alg": "EdDSA",
-        "kid": ACTIVE_KEY_ID,
-        "x": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
-        "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-    });
-    let private_jwk =
-        PrivateJwk::parse(&private_jwk_json.to_string()).expect("the generated key parses");
+    let signing_key = SigningKey::random(&mut OsRng);
+    let public = signing_key.verifying_key().to_encoded_point(false);
+    let mut private_jwk = PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
+        x: public.x().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        y: public.y().map(|value| URL_SAFE_NO_PAD.encode(value)),
+        n: None,
+        e: None,
+        p: None,
+        q: None,
+        dp: None,
+        dq: None,
+        qi: None,
+    };
+    private_jwk.kid = Some(private_jwk.public().jkt().expect("the thumbprint computes"));
     LocalJwkSigner::new(private_jwk).expect("the generated key signs")
 }
 
@@ -153,6 +157,7 @@ fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDoc
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             })
             .collect(),
+        revoked_key_ids: Vec::new(),
         maximum_assertion_lifetime_seconds: (FIXTURE_LIFETIME_DAYS * 24 * 60 * 60) as u64,
         clock_skew_seconds: 30,
     }
@@ -169,7 +174,7 @@ struct ProtectedHeader<'a> {
 async fn sign(evidence: &Evidence, signer: &LocalJwkSigner) -> FlattenedJws {
     let payload = serde_json::to_vec(evidence).expect("evidence serializes");
     let protected = serde_json::to_vec(&ProtectedHeader {
-        alg: "EdDSA",
+        alg: "ES256",
         kid: signer.key_id(),
         typ: EVIDENCE_JWS_TYP,
         cty: EVIDENCE_JWS_CTY,

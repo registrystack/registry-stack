@@ -10,10 +10,12 @@ const { generateSigningKey, signEvidence, requestSpec, evidenceFor } = require('
 const DUMMY_JWKS = {
   keys: [
     {
-      kty: 'OKP',
-      crv: 'Ed25519',
-      kid: 'errors-test-key',
-      x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      kty: 'EC',
+      crv: 'P-256',
+      kid: '_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo',
+      alg: 'ES256',
+      x: '3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4',
+      y: 'GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU',
     },
   ],
 };
@@ -25,6 +27,7 @@ async function clientAndPrepared(stub) {
   const client = new EvidenceClient({
     baseUrl: stub.baseUrl,
     trustedJwks: DUMMY_JWKS,
+    revokedKeyIds: [],
     token: { static: 'errors-test-token' },
   });
   return { client, prepared: client.prepare(requestSpec()) };
@@ -170,6 +173,7 @@ test('a response over maxResponseBytes is refused as a transport failure, not a 
     const client = new EvidenceClient({
       baseUrl: stub.baseUrl,
       trustedJwks: DUMMY_JWKS,
+      revokedKeyIds: [],
       token: { static: 'errors-test-token' },
       maxResponseBytes: 16,
     });
@@ -202,6 +206,7 @@ test('verifyAsOf refuses a non-finite or unrepresentable asOfMillis as a configu
     const client = new EvidenceClient({
       baseUrl: stub.baseUrl,
       trustedJwks: signingKey.jwks,
+      revokedKeyIds: [],
       token: { static: 'as-of-millis-token' },
     });
     const prepared = client.prepare(spec);

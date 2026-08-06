@@ -823,7 +823,13 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
     Ok(output)
 }
 
-fn validate_revocations(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
+/// Validate a relying party's emergency service-key denylist.
+///
+/// This is public so clients can reject unusable pinned trust configuration at
+/// construction rather than deferring the same failure to every verification.
+/// An identifier may deliberately still appear in a cached JWKS: revocation is
+/// checked first and overrides that cached key.
+pub fn revoked_key_ids_are_usable(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
     if revoked_key_ids.len() > MAX_TRUSTED_KEYS
         || revoked_key_ids
             .iter()
@@ -833,6 +839,10 @@ fn validate_revocations(revoked_key_ids: &[String]) -> Result<(), VerificationEr
         return Err(VerificationError::Key);
     }
     Ok(())
+}
+
+fn validate_revocations(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
+    revoked_key_ids_are_usable(revoked_key_ids)
 }
 
 fn key_identifier_is_thumbprint(kid: &str) -> bool {
@@ -1006,7 +1016,7 @@ fn decode_bounded(
 mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
-    use rand_core::OsRng;
+    use p256::elliptic_curve::rand_core::OsRng;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
     use serde::Deserialize;
     use serde_json::{json, Value};
@@ -1915,6 +1925,7 @@ mod tests {
                 binding: DEBUG_BINDING_CANARY.to_string(),
             }],
             expected_outputs: Vec::new(),
+            revoked_key_ids: Vec::new(),
             maximum_assertion_lifetime_seconds: 48 * 60 * 60,
             clock_skew_seconds: 30,
         };

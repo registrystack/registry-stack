@@ -307,10 +307,11 @@ struct EvidenceClient {
 impl EvidenceClient {
     /// Build a client for one deployment.
     ///
-    /// `trusted_jwks` is mandatory: a key set the verifier could never use is
-    /// refused, exactly as the wrapped Rust configuration refuses it. `token`
-    /// is either a static bearer string or the private-key-JWT provider's own
-    /// settings; there is no caller-supplied token provider in this binding.
+    /// `trusted_jwks` and `revoked_key_ids` are mandatory trust inputs: a key
+    /// set or revoked-key list the verifier could never use is refused, exactly
+    /// as the wrapped Rust configuration refuses it. `token` is either a static
+    /// bearer string or the private-key-JWT provider's own settings; there is no
+    /// caller-supplied token provider in this binding.
     ///
     /// `max_response_bytes` bounds the signed response `send` reads.
     /// `max_metadata_bytes` bounds the documents `discover` and `fetch_jwks`
@@ -319,6 +320,7 @@ impl EvidenceClient {
     #[pyo3(signature = (
         base_url,
         trusted_jwks,
+        revoked_key_ids,
         token,
         request_timeout_seconds=None,
         connect_timeout_seconds=None,
@@ -332,6 +334,7 @@ impl EvidenceClient {
         py: Python<'_>,
         base_url: &str,
         trusted_jwks: &Bound<'_, PyAny>,
+        revoked_key_ids: Vec<String>,
         token: &Bound<'_, PyAny>,
         request_timeout_seconds: Option<f64>,
         connect_timeout_seconds: Option<f64>,
@@ -347,6 +350,7 @@ impl EvidenceClient {
         let config = config_from_parts(
             base_url,
             &trusted_jwks_json,
+            revoked_key_ids,
             &token_json,
             request_timeout_seconds,
             connect_timeout_seconds,

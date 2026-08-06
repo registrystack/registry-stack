@@ -585,6 +585,7 @@ fn token_provider_from_json(value: &Value) -> Result<Arc<dyn TokenProvider>, Con
 pub fn config_from_parts(
     base_url: &str,
     trusted_jwks: &Value,
+    revoked_key_ids: Vec<String>,
     token: &Value,
     request_timeout_seconds: Option<f64>,
     connect_timeout_seconds: Option<f64>,
@@ -604,7 +605,8 @@ pub fn config_from_parts(
 
     let token_provider = token_provider_from_json(token)?;
 
-    let mut config = EvidenceClientConfig::new(base_url, token_provider, trusted_jwks);
+    let mut config =
+        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
 
     if let Some(seconds) = request_timeout_seconds {
         let timeout = duration_from_seconds(seconds, "`request_timeout_seconds`")
@@ -1076,6 +1078,7 @@ mod tests {
         let config = config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &Value::String("a-static-token".to_owned()),
             None,
             None,
@@ -1100,6 +1103,7 @@ mod tests {
         config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &token,
             Some(5.5),
             Some(1.0),
@@ -1116,6 +1120,7 @@ mod tests {
         let error = config_from_parts(
             "not a url",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &Value::String("token".to_owned()),
             None,
             None,
@@ -1133,6 +1138,7 @@ mod tests {
         let error = config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &serde_json::json!({ "static": "token" }),
             None,
             None,
@@ -1157,6 +1163,7 @@ mod tests {
         let error = config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &token,
             None,
             None,
@@ -1407,6 +1414,7 @@ mod tests {
         let error = config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &Value::String(format!("{CANARY}\n")),
             None,
             None,
@@ -1442,6 +1450,7 @@ mod tests {
         let error = config_from_parts(
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
+            Vec::new(),
             &token,
             None,
             None,
