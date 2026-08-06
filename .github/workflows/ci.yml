@@ -1125,7 +1125,7 @@ jobs:
           ARCHIVE_LOCK_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
         run: npm run check:archive-lock -- --base-ref "${ARCHIVE_LOCK_BASE_REF}"
 
-      - name: Assemble and verify every archived release
+      - name: Assemble and verify the published archive window
         working-directory: docs/site
         run: npm run check:archives
 
