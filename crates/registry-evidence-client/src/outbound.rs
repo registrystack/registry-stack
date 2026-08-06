@@ -5,7 +5,7 @@
 //! signed client assertion. Both hand a secret to a host the integrator named,
 //! so both are built here rather than from two rule sets that could drift apart.
 
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use registry_platform_httputil::BoundedReadError;
 use url::Url;
@@ -92,6 +92,25 @@ pub(crate) fn transport_protects_the_credential(url: &Url) -> bool {
         }),
         _ => false,
     }
+}
+
+/// The base URL with any userinfo removed.
+///
+/// [`EvidenceClientConfig::validate`] refuses a base URL carrying credentials,
+/// but it runs inside `EvidenceClient::new`, so the rendering cannot rely on
+/// having been reached after construction.
+pub(crate) fn base_url_without_userinfo(base_url: &Url) -> Cow<'_, str> {
+    if base_url.username().is_empty() && base_url.password().is_none() {
+        return Cow::Borrowed(base_url.as_str());
+    }
+    let mut stripped = base_url.clone();
+    // Both setters refuse only a URL that cannot carry userinfo at all, and this
+    // point is reached only for a URL that carries some, so neither can refuse
+    // here. A refusal withholds the whole URL rather than rendering a credential.
+    if stripped.set_username("").is_err() || stripped.set_password(None).is_err() {
+        return Cow::Borrowed("<a base URL whose userinfo could not be removed>");
+    }
+    Cow::Owned(stripped.into())
 }
 
 /// Why a send failed, in the terms the caller can act on.

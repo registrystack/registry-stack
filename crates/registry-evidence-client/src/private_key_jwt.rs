@@ -18,9 +18,15 @@
 //! at which point the next caller acquires a replacement. The margin exists
 //! because a credential that is valid when the request is built may have expired
 //! by the time the deployment reads it. A server that states no lifetime has given
-//! nothing to cache against, so each request acquires its own credential.
+//! nothing to cache against, so each request acquires its own credential. The
+//! deadline is measured against a reading that only moves forward, so correcting
+//! the host clock cannot extend how long a credential is presented for.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -37,7 +43,9 @@ use zeroize::Zeroizing;
 
 use crate::{
     config::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT},
-    outbound::{self, transport_protects_the_credential, OutboundOptions},
+    outbound::{
+        self, base_url_without_userinfo, transport_protects_the_credential, OutboundOptions,
+    },
     problem::essence,
     token::{BearerToken, OAuthErrorCode, TokenError, TokenProvider},
 };
@@ -89,12 +97,19 @@ const BEARER_TOKEN_TYPE: &str = "bearer";
 /// JSON object; anything larger is not one.
 const MAXIMUM_TOKEN_RESPONSE_BYTES: u64 = 16 * 1024;
 
-/// The instant the provider reasons about.
+/// The two readings the provider reasons about.
 ///
-/// It exists so assertion claims and cache arithmetic are driven by one source a
-/// test can move, rather than by two readings of the host clock.
+/// They are separate because they answer different questions. An assertion claim
+/// is a wall-clock time the authorization server checks against its own clock,
+/// so nothing else will do there. A cache deadline is only ever compared against
+/// a later reading of the same clock, and a wall-clock one would move whenever
+/// the host clock is corrected. Both come from one source a test can drive,
+/// rather than from readings of the host taken wherever they are needed.
 pub(crate) trait Clock: Send + Sync {
     fn unix_seconds(&self) -> i64;
+
+    /// A reading that only ever moves forward, however the host clock is set.
+    fn monotonic(&self) -> Instant;
 }
 
 /// The host clock.
@@ -103,6 +118,10 @@ struct SystemClock;
 impl Clock for SystemClock {
     fn unix_seconds(&self) -> i64 {
         Utc::now().timestamp()
+    }
+
+    fn monotonic(&self) -> Instant {
+        Instant::now()
     }
 }
 
@@ -201,12 +220,16 @@ impl PrivateKeyJwtConfig {
 }
 
 impl fmt::Debug for PrivateKeyJwtConfig {
-    /// The client key and the pinned certificate material are withheld. Only the
-    /// operational choices and the public identifiers are rendered.
+    /// The client key and the pinned certificate material are withheld, as is any
+    /// userinfo in the token endpoint. Only the operational choices and the public
+    /// identifiers are rendered.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PrivateKeyJwtConfig")
-            .field("token_endpoint", &self.token_endpoint.as_str())
+            .field(
+                "token_endpoint",
+                &base_url_without_userinfo(&self.token_endpoint),
+            )
             .field("client_id", &self.client_id)
             .field("audience", &self.audience)
             .field(
@@ -221,10 +244,10 @@ impl fmt::Debug for PrivateKeyJwtConfig {
     }
 }
 
-/// An access token, and the instant it stops being worth presenting.
+/// An access token, and the monotonic instant it stops being worth presenting.
 struct CachedToken {
     token: BearerToken,
-    expires_at: i64,
+    expires_at: Instant,
 }
 
 /// A [`TokenProvider`] that authenticates with a signed assertion and caches what
@@ -334,11 +357,18 @@ impl PrivateKeyJwt {
     }
 
     /// The cached credential, if it has more life left than the refresh margin.
-    async fn usable_cached_token(&self, now: i64) -> Option<BearerToken> {
+    ///
+    /// The deadline and `monotonic_now` are both readings of a clock that only
+    /// moves forward, so a host clock stepping backward cannot present a spent
+    /// credential as a fresh one.
+    async fn usable_cached_token(&self, monotonic_now: Instant) -> Option<BearerToken> {
+        // A negative margin was refused at construction, so this is the margin
+        // the integrator configured.
+        let margin = Duration::from_secs(self.refresh_margin_seconds.unsigned_abs());
         let cached = self.cached.read().await;
         cached
             .as_ref()
-            .filter(|entry| now.saturating_add(self.refresh_margin_seconds) < entry.expires_at)
+            .filter(|entry| entry.expires_at.saturating_duration_since(monotonic_now) > margin)
             .map(|entry| entry.token.clone())
     }
 
@@ -384,7 +414,11 @@ impl PrivateKeyJwt {
     }
 
     /// Exchange one fresh assertion for an access token.
-    async fn acquire(&self, now: i64) -> Result<AcquiredToken, TokenError> {
+    ///
+    /// `now` dates the assertion the authorization server validates, and
+    /// `monotonic_now` is what the cache deadline of whatever it issues is
+    /// measured from.
+    async fn acquire(&self, now: i64, monotonic_now: Instant) -> Result<AcquiredToken, TokenError> {
         let assertion = self.sign_assertion(now)?;
         // The assertion is a credential, so it lives in a scrubbed buffer here.
         // The body reqwest owns afterwards cannot be wiped, which is why the
@@ -457,7 +491,10 @@ impl PrivateKeyJwt {
                 .expires_in
                 .filter(|seconds| *seconds > 0)
                 .map(|seconds| seconds.min(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS))
-                .map(|seconds| now.saturating_add(seconds)),
+                // What reaches this point is within
+                // 1..=MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, so the deadline is
+                // an instant at most a day ahead of the reading it is built on.
+                .map(|seconds| monotonic_now + Duration::from_secs(seconds.unsigned_abs())),
         })
     }
 }
@@ -465,7 +502,7 @@ impl PrivateKeyJwt {
 #[async_trait]
 impl TokenProvider for PrivateKeyJwt {
     async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
-        if let Some(token) = self.usable_cached_token(self.clock.unix_seconds()).await {
+        if let Some(token) = self.usable_cached_token(self.clock.monotonic()).await {
             return Ok(token);
         }
         // The refresh lock serializes acquisition: one caller holds it and
@@ -477,11 +514,12 @@ impl TokenProvider for PrivateKeyJwt {
         // it times the configured request timeout, not by that timeout alone.
         let _refreshing = self.refresh_lock.lock().await;
         let now = self.clock.unix_seconds();
-        if let Some(token) = self.usable_cached_token(now).await {
+        let monotonic_now = self.clock.monotonic();
+        if let Some(token) = self.usable_cached_token(monotonic_now).await {
             return Ok(token);
         }
 
-        let acquired = self.acquire(now).await?;
+        let acquired = self.acquire(now, monotonic_now).await?;
         let mut cached = self.cached.write().await;
         // An uncacheable credential clears the cache rather than leaving a stale
         // entry behind it.
@@ -515,7 +553,7 @@ impl fmt::Debug for PrivateKeyJwt {
 /// A credential and what may be assumed about how long it lasts.
 struct AcquiredToken {
     token: BearerToken,
-    expires_at: Option<i64>,
+    expires_at: Option<Instant>,
 }
 
 /// The success response of RFC 6749 section 5.1, in the members this client uses.
@@ -564,10 +602,10 @@ mod tests {
     use std::{
         net::TcpListener,
         sync::{
-            atomic::{AtomicI64, Ordering},
+            atomic::{AtomicI64, AtomicU64, Ordering},
             Arc,
         },
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -598,21 +636,52 @@ mod tests {
 
     /// A clock a test moves by hand, so cache arithmetic is asserted rather than
     /// waited out.
-    struct TestClock(AtomicI64);
+    ///
+    /// Both readings move together under [`TestClock::set`], as they do on a host
+    /// whose clock nothing is correcting. A test that needs them to disagree,
+    /// which is what a correction looks like, moves the wall reading on its own.
+    struct TestClock {
+        unix_seconds: AtomicI64,
+        unix_origin: i64,
+        monotonic_origin: Instant,
+        monotonic_elapsed_seconds: AtomicU64,
+    }
 
     impl TestClock {
         fn new(now: i64) -> Self {
-            Self(AtomicI64::new(now))
+            Self {
+                unix_seconds: AtomicI64::new(now),
+                unix_origin: now,
+                monotonic_origin: Instant::now(),
+                monotonic_elapsed_seconds: AtomicU64::new(0),
+            }
         }
 
+        /// Both readings are now at `now`, which is what time passing looks like.
         fn set(&self, now: i64) {
-            self.0.store(now, Ordering::Relaxed);
+            self.unix_seconds.store(now, Ordering::Relaxed);
+            let elapsed = u64::try_from(now - self.unix_origin)
+                .expect("a test moves this clock forward from where it started");
+            self.monotonic_elapsed_seconds
+                .store(elapsed, Ordering::Relaxed);
+        }
+
+        /// Move the wall reading back, leaving the monotonic reading where it is.
+        /// That is what an NTP correction, a virtual machine resume, or an
+        /// operator setting the clock by hand does to a running process.
+        fn step_wall_clock_backward(&self, seconds: i64) {
+            self.unix_seconds.fetch_sub(seconds, Ordering::Relaxed);
         }
     }
 
     impl Clock for TestClock {
         fn unix_seconds(&self) -> i64 {
-            self.0.load(Ordering::Relaxed)
+            self.unix_seconds.load(Ordering::Relaxed)
+        }
+
+        fn monotonic(&self) -> Instant {
+            self.monotonic_origin
+                + Duration::from_secs(self.monotonic_elapsed_seconds.load(Ordering::Relaxed))
         }
     }
 
@@ -872,6 +941,41 @@ mod tests {
             token_requests(&server).await,
             2,
             "a credential inside the refresh margin was reused"
+        );
+    }
+
+    /// A host clock steps backward for ordinary reasons: an NTP correction, a
+    /// virtual machine resuming, an operator setting it by hand. A credential
+    /// whose deadline was a wall-clock time would look fresh again for as long as
+    /// the step was wide, and the provider would keep presenting a credential the
+    /// authorization server has already expired.
+    #[tokio::test]
+    async fn a_cached_credential_is_not_reused_after_the_host_clock_steps_backward() {
+        let server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = provider(endpoint(&server.uri()), &clock);
+
+        provider.bearer_token().await.expect("a first credential");
+        assert_eq!(token_requests(&server).await, 1);
+
+        // The whole stated lifetime really elapsed, so the credential is spent.
+        clock.set(NOW + TOKEN_LIFETIME_SECONDS);
+        // Then the host clock is corrected far enough backward that its reading
+        // is before the credential was issued at all.
+        clock.step_wall_clock_backward(TOKEN_LIFETIME_SECONDS * 2);
+        assert!(
+            clock.unix_seconds() < NOW,
+            "the correction lands before the credential was issued"
+        );
+
+        provider
+            .bearer_token()
+            .await
+            .expect("a replacement credential");
+        assert_eq!(
+            token_requests(&server).await,
+            2,
+            "a spent credential was replayed after the host clock stepped backward"
         );
     }
 
@@ -1349,5 +1453,28 @@ mod tests {
         assert!(!rendered.contains(&secret), "{rendered}");
         assert!(!rendered.contains(ISSUED_CREDENTIAL), "{rendered}");
         assert!(rendered.contains(KEY_ID), "the key identifier is public");
+    }
+
+    /// A caller can put userinfo in the token endpoint it names, and a rendering
+    /// that carried it through would print that credential wherever the
+    /// configuration is rendered: a wider `Debug`, a panic message, a tracing
+    /// field.
+    #[test]
+    fn debug_output_withholds_userinfo_the_caller_put_in_the_token_endpoint() {
+        let candidate = config(
+            endpoint("https://client:s3cr3t@issuer.example.org"),
+            client_key(Some(KEY_ID)),
+        );
+
+        let rendered = format!("{candidate:?}");
+
+        assert!(!rendered.contains("s3cr3t"), "{rendered}");
+        // The separator is what makes a userinfo component one, and no other
+        // field of this rendering carries it, so its absence is what proves none
+        // was rendered under any spelling.
+        assert!(!rendered.contains('@'), "{rendered}");
+        // The endpoint still has to be recognizable, or the rendering is no use
+        // for telling one misconfigured deployment from another.
+        assert!(rendered.contains("issuer.example.org/token"), "{rendered}");
     }
 }
