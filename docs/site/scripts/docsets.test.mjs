@@ -7,6 +7,10 @@ import {
   usesCheckedOutCandidate,
   validateDocsets,
 } from './docsets.mjs';
+import {
+  publishedArchiveDocsets,
+  selectableDocsets,
+} from '../src/lib/docset-retention.mjs';
 
 function validDocsets() {
   return {
@@ -72,6 +76,33 @@ function repoManifest() {
 
 test('validateDocsets accepts a valid docset manifest', () => {
   assert.doesNotThrow(() => validateDocsets(validDocsets()));
+});
+
+test('publishes only the latest configured semantic archives', () => {
+  const manifest = validDocsets();
+  manifest.published_archive_limit = 2;
+  manifest.docsets.push(
+    { ...manifest.docsets[1], id: 'v0.16.3', label: 'v0.16.3', path: '/v/0.16.3/' },
+    { ...manifest.docsets[1], id: 'v0.15.2', label: 'v0.15.2', path: '/v/0.15.2/' },
+    { ...manifest.docsets[1], id: 'v0.15.1', label: 'v0.15.1', path: '/v/0.15.1/' },
+  );
+
+  assert.deepEqual(
+    publishedArchiveDocsets(manifest).map((docset) => docset.id),
+    ['v0.16.3', 'v0.15.2'],
+  );
+  assert.deepEqual(
+    selectableDocsets(manifest).map((docset) => docset.id),
+    ['latest', 'v0.16.3', 'v0.15.2'],
+  );
+});
+
+test('validateDocsets rejects an invalid publication limit', () => {
+  for (const limit of [0, -1, 1.5, '3']) {
+    const manifest = validDocsets();
+    manifest.published_archive_limit = limit;
+    assert.throws(() => validateDocsets(manifest), /positive integer/);
+  }
 });
 
 test('validateDocsets rejects duplicate docset ids', () => {

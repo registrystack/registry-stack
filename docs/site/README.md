@@ -67,15 +67,18 @@ The production site uses one indexable namespace:
 
 - `/` serves the latest released documentation with self-canonical URLs and the public sitemap.
 - `/dev/` serves unreleased documentation built from `main` with `noindex,follow`.
-- `/v/<version>/` serves immutable release archives with `noindex,follow`.
+- `/v/<version>/` serves the newest three semantic release archives with `noindex,follow`.
 - `/preview/` keeps old links working by redirecting matching pages to `/`.
 
 The Pages workflow verifies the selected release archive against
 `src/data/archive-lock.yaml` and copies the separately built trees to their
 bound destinations without rewriting either one. The immutable
-`/v/<version>/` tree and its release asset are not changed. Search data and
-machine-readable corpora are sealed into the canonical-root release tree, so
-the canonical site does not depend on unreleased `/dev/` content.
+`/v/<version>/` trees inside the publication window and their release assets are not changed.
+Older release assets remain attached to their GitHub Releases, but Registry Docs does not expand
+them into the Pages artifact. Earlier Pages-only fallback bundles age out with their expanded routes.
+`published_archive_limit` in `src/data/docsets.yaml` sets the window. Search data and
+machine-readable corpora are sealed into the canonical-root release tree, so the canonical site does
+not depend on unreleased `/dev/` content.
 
 ## Content Sources
 

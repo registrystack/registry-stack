@@ -29,6 +29,7 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
 
   assert.equal(current.id, 'latest');
   assert.equal(docsets.released, 'v0.15.2');
+  assert.equal(docsets.published_archive_limit, 3);
   assert.notEqual(docsets.current, docsets.released);
   assert.equal(current.label, 'Development (unreleased)');
   assert.equal(current.path, '/dev/');
