@@ -1,5 +1,5 @@
 {
-  "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=EdDSA, kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes.",
+  "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=ES256, an RFC 7638 thumbprint kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes.",
   "$id": "https://registrystack.org/schemas/evidence/flattened-jws-v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,

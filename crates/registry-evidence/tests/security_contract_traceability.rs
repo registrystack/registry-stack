@@ -245,16 +245,19 @@ fn every_sd_jwt_vc_profile_negative_is_bound_to_a_mapped_security_negative() {
 /// Prove that one mapped reference still names a real Rust test item, so a
 /// renamed, moved, or deleted test fails the traceability checker.
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
-    // Evidence source is the runtime crate and the portable verifier crate
-    // beside it. A reference may name either of those trees and nothing else.
-    let inside_evidence_source = [
+    // Evidence security invariants may be implemented by the runtime, the
+    // portable verifier, or the narrowly shared platform primitives it uses.
+    let permitted_crate = [
         "crates/registry-evidence/",
         "crates/registry-evidence-verifier/",
+        "crates/registry-platform-audit/",
+        "crates/registry-platform-config/",
+        "crates/registry-platform-crypto/",
     ]
     .iter()
-    .any(|tree| test.file.starts_with(tree));
+    .any(|prefix| test.file.starts_with(prefix));
     assert!(
-        inside_evidence_source && test.file.ends_with(".rs") && !test.file.contains(".."),
+        permitted_crate && test.file.ends_with(".rs") && !test.file.contains(".."),
         "{entry_id} has an unsafe source reference"
     );
     let source = fs::read_to_string(root.join(&test.file))

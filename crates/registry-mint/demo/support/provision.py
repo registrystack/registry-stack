@@ -15,6 +15,7 @@ every run and are worthless outside this directory.
 
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import secrets
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.x509.oid import NameOID
 
 MINT_PORT = 8090
@@ -58,6 +59,32 @@ def ed25519_jwk(kid: str) -> tuple[dict, dict]:
     )
     public_jwk = {"kty": "OKP", "crv": "Ed25519", "kid": kid, "alg": "EdDSA", "x": x}
     return {**public_jwk, "d": d}, public_jwk
+
+
+def p256_jwk() -> tuple[dict, dict]:
+    """Return a service ES256 key whose kid is its RFC 7638 thumbprint."""
+    private = ec.generate_private_key(ec.SECP256R1())
+    numbers = private.private_numbers()
+    public_numbers = numbers.public_numbers
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "x": b64(public_numbers.x.to_bytes(32, "big")),
+        "y": b64(public_numbers.y.to_bytes(32, "big")),
+    }
+    thumbprint_members = {
+        member: public_jwk[member] for member in ("crv", "kty", "x", "y")
+    }
+    thumbprint = json.dumps(
+        thumbprint_members, sort_keys=True, separators=(",", ":")
+    ).encode()
+    public_jwk["kid"] = b64(hashlib.sha256(thumbprint).digest())
+    private_jwk = {
+        **public_jwk,
+        "d": b64(numbers.private_value.to_bytes(32, "big")),
+    }
+    return private_jwk, public_jwk
 
 
 def write(path: Path, text: str, mode: int = 0o644) -> Path:
@@ -133,8 +160,10 @@ def issue_tls_certificate(root: Path) -> None:
 
 def provision_mint(root: Path) -> None:
     mint = root / "mint"
-    signing_private, _ = ed25519_jwk("mint-key-1")
+    signing_private, signing_public = p256_jwk()
     write_secret(mint / "secrets/signing.jwk", json.dumps(signing_private))
+    public_file = f"{signing_public['kid']}.jwk.json"
+    write(mint / f"public-keys/{public_file}", json.dumps(signing_public))
     write_secret(mint / "secrets/audit-hmac-key", secrets.token_hex(32))
 
     for client_id in ("scheduler", "service-desk"):
@@ -166,16 +195,23 @@ def provision_mint(root: Path) -> None:
     write(
         mint / "mint.yaml",
         f"""version: 1
+validationMode: supervised-local-development
 issuer: {MINT_ORIGIN}
 listener: {{address: 127.0.0.1, port: {MINT_PORT}}}
 signing:
-  algorithm: EdDSA
-  activeKeyId: mint-key-1
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{public_file}
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file: {{root: {mint / "secrets"}}}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence.demo.invalid]
@@ -214,8 +250,18 @@ def provision_evidence(root: Path, bundle_source: Path) -> None:
     provider_root.mkdir(parents=True, exist_ok=True)
     provider_root.chmod(0o700)  # Evidence refuses a group- or world-readable root
 
-    signing_private, _ = ed25519_jwk("demo-evidence-key")
-    write_secret(provider_root / "signing-key", json.dumps(signing_private))
+    evidence_signing_private = {
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
+        "d": "MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4",
+    }
+    write_secret(
+        provider_root / "evidence-signing", json.dumps(evidence_signing_private)
+    )
     write_secret(provider_root / "audit-hash-key", secrets.token_hex(32))
     write_secret(provider_root / "subject-binding-key", secrets.token_hex(32))
     write_secret(provider_root / "source-token", os.environ["DEMO_SOURCE_TOKEN"])
@@ -237,6 +283,9 @@ listener:
 secretProviders:
   file:
     root: {provider_root}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/evidence-signing
 auditStorage:
   path: {evidence / "audit/evidence.jsonl"}
   maximumFileBytes: 1073741824

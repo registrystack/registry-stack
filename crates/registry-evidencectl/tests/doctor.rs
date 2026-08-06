@@ -16,13 +16,12 @@ use std::{
     process::{Command, Output},
 };
 
-const SIGNING_KID: &str = "doctor-signing-key-1";
 const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
 
 const MATCHING_MINT_CONFIG: &str = r#"version: 1
 issuer: https://identity.invalid
 signing:
-  algorithm: EdDSA
+  algorithm: ES256
   jwksPath: /.well-known/jwks.json
 accessTokens:
   audiences: [evidence-scaffold]
@@ -45,7 +44,7 @@ fn doctor_passes_a_frozen_project_and_leaves_the_public_key_beside_it_alone() {
     // design. The runtime never resolves it as a secret, so doctor must not
     // report it. A walk of the secret directory would; a walk of the secret
     // references the bundle actually names does not.
-    let public_key = project.join("secrets/signing-ed25519-public.jwk.json");
+    let public_key = project.join("secrets/signing-p256-public.jwk.json");
     assert_eq!(
         mode_of(&public_key),
         0o644,
@@ -67,7 +66,7 @@ fn doctor_passes_a_frozen_project_and_leaves_the_public_key_beside_it_alone() {
         "unexpected doctor summary: {stdout}"
     );
     assert!(
-        !stdout.contains("signing-ed25519-public.jwk.json"),
+        !stdout.contains("signing-p256-public.jwk.json"),
         "doctor reported the public key that sits beside the private one: {stdout}"
     );
 }
@@ -282,7 +281,7 @@ fn doctor_reports_every_mint_field_mismatch_without_printing_values() {
             "credential-token-selector-source-audience",
         ),
         (
-            "algorithm: EdDSA",
+            "algorithm: ES256",
             "algorithm: RS256",
             "authentication.algorithms",
             "RS256",
@@ -468,8 +467,8 @@ fn doctor_accepts_set_order_supersets_custom_jwks_and_matching_actor() {
     );
     rewrite_bundle(
         &project,
-        "algorithms: [EdDSA]",
-        "algorithms: [RS256, EdDSA]",
+        "algorithms: [ES256]",
+        "algorithms: [RS256, ES256]",
     );
     rewrite_bundle(
         &project,
@@ -560,7 +559,7 @@ fn doctor_json_aggregates_mismatches_and_redacts_every_value() {
             "audiences: [evidence-scaffold]",
             &format!("audiences: [{}]", sentinels[0]),
         )
-        .replace("algorithm: EdDSA", &format!("algorithm: {}", sentinels[1]))
+        .replace("algorithm: ES256", &format!("algorithm: {}", sentinels[1]))
         .replace("principal: sub", &format!("principal: {}", sentinels[2]));
     write_mint(&mint_config, &mint);
 
@@ -684,7 +683,9 @@ fn doctor_pairing_is_read_only_and_does_not_inspect_mint_authority_material() {
     provision_bearer_token(&project);
     let mut mint = MATCHING_MINT_CONFIG.replace(
         "  jwksPath: /.well-known/jwks.json",
-        &format!("  activeKeyFile: secrets/{SENTINEL}\n  jwksPath: /.well-known/jwks.json"),
+        &format!(
+            "  activePublicJwkFile: public-keys/{SENTINEL}.jwk.json\n  jwksPath: /.well-known/jwks.json"
+        ),
     );
     mint.push_str("clients:\n  directory: clients\n");
     write_mint(&mint_config, &mint);
@@ -750,14 +751,14 @@ fn provision(project: &Path) {
   issuer: https://identity.invalid
   audiences: [evidence-scaffold]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
-signing: secret:file/signing-ed25519-private-jwk
+signing: secret:file/signing-p256-private-jwk
 audit: secret:file/audit-hmac-key
 subjectBinding: secret:file/subject-binding-hmac-key
 sourceToken: secret:file/source-bearer-token
@@ -771,8 +772,6 @@ sourceToken: secret:file/source-bearer-token
         "signing",
         "--out-dir",
         secrets.to_str().expect("secret root"),
-        "--kid",
-        SIGNING_KID,
     ]);
     for name in SECRET_FILES {
         let out = secrets.join(name);

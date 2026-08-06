@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use p256::ecdsa::VerifyingKey;
 use schemars::JsonSchema;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{Number, Value};
@@ -11,7 +12,7 @@ use utoipa::ToSchema;
 
 use crate::AssuranceProfile;
 
-/// Caller-supplied Ed25519 holder public key. `deny_unknown_fields` is the
+/// Caller-supplied P-256 holder public key. `deny_unknown_fields` is the
 /// primary defence against private key members: a body carrying `d` or any
 /// other unexpected member fails to parse.
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
@@ -20,24 +21,25 @@ pub struct HolderPublicKey {
     pub kty: String,
     pub crv: String,
     pub x: String,
+    pub y: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alg: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
 }
 
-/// Exact byte length of a raw Ed25519 public key.
+/// Exact byte length of each P-256 affine coordinate.
 const HOLDER_KEY_DECODED_LENGTH: usize = 32;
 const MAX_HOLDER_KEY_ID_BYTES: usize = 256;
 
 impl HolderPublicKey {
-    /// Accept only a public OKP Ed25519 JWK whose coordinate is the canonical
-    /// unpadded base64url encoding of exactly 32 bytes.
+    /// Accept only a public EC P-256 JWK whose coordinates are canonical
+    /// unpadded base64url encodings of exactly 32 bytes and form a curve point.
     pub fn is_acceptable(&self) -> bool {
-        if self.kty != "OKP" || self.crv != "Ed25519" {
+        if self.kty != "EC" || self.crv != "P-256" {
             return false;
         }
-        if self.alg.as_deref().is_some_and(|alg| alg != "EdDSA") {
+        if self.alg.as_deref().is_some_and(|alg| alg != "ES256") {
             return false;
         }
         if self
@@ -47,9 +49,20 @@ impl HolderPublicKey {
         {
             return false;
         }
-        URL_SAFE_NO_PAD
-            .decode(&self.x)
-            .is_ok_and(|decoded| decoded.len() == HOLDER_KEY_DECODED_LENGTH)
+        let Ok(x) = URL_SAFE_NO_PAD.decode(&self.x) else {
+            return false;
+        };
+        let Ok(y) = URL_SAFE_NO_PAD.decode(&self.y) else {
+            return false;
+        };
+        if x.len() != HOLDER_KEY_DECODED_LENGTH || y.len() != HOLDER_KEY_DECODED_LENGTH {
+            return false;
+        }
+        let mut encoded = Vec::with_capacity(65);
+        encoded.push(0x04);
+        encoded.extend_from_slice(&x);
+        encoded.extend_from_slice(&y);
+        VerifyingKey::from_sec1_bytes(&encoded).is_ok()
     }
 }
 
@@ -334,10 +347,11 @@ mod tests {
             }],
         };
         let holder_key = HolderPublicKey {
-            kty: "OKP".to_owned(),
-            crv: "Ed25519".to_owned(),
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
             x: "protected-holder-coordinate-canary".to_owned(),
-            alg: Some("EdDSA".to_owned()),
+            y: "protected-holder-y-coordinate-canary".to_owned(),
+            alg: Some("ES256".to_owned()),
             kid: Some("protected-holder-key-id-canary".to_owned()),
         };
         let bucket = BucketValue {

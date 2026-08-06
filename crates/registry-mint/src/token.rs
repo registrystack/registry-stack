@@ -18,31 +18,40 @@
 //! refuses any request carrying its own selector values, so a token issued for
 //! one subject cannot be turned toward another, however the caller misbehaves.
 
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+use registry_platform_config::{SecretError, SecretProvider, SecretResolver};
+use registry_platform_crypto::{
+    verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
+    SigningProvider, TransitSigner, TransitSignerConfig,
+};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use crate::{
     assertion::AuthenticatedClient,
-    clients::{contains_private_material, Delegation, RegisteredClient},
-    config::{Algorithm, ClaimNames, MintConfig},
+    clients::{Delegation, RegisteredClient},
+    config::{ClaimNames, MintConfig, SignerConfig},
     error::TokenError,
-    secretfile::{self, SecretFileError},
     ACCESS_TOKEN_TYP,
 };
 
 #[derive(Debug, Error)]
 pub enum MinterError {
-    #[error("the signing key file could not be read: {0}")]
-    SigningKeyFile(#[from] SecretFileError),
+    #[error("the signing secret could not be resolved")]
+    SigningSecret(#[source] SecretError),
     #[error("the signing key is invalid: {0}")]
     SigningKey(&'static str),
-    #[error("a retired public key is invalid: {0}")]
-    RetiredKey(&'static str),
+    #[error("a governed public key is invalid: {0}")]
+    PublicKey(&'static str),
+    #[error("the signing provider configuration is invalid: {0}")]
+    SigningProviderConfiguration(#[source] SigningError),
+    #[error("the signing provider initialization failed: {0}")]
+    SigningProviderInitialization(#[source] SigningError),
+    #[error("the signing provider self-test failed: {0}")]
+    SigningProviderSelfTest(#[source] SigningError),
 }
 
 /// A minted access token and the lifetime the caller should assume.
@@ -82,8 +91,9 @@ pub struct TokenMinter {
     audience: Value,
     lifetime_seconds: i64,
     claims: ClaimNames,
-    algorithm: Algorithm,
-    signer: LocalJwkSigner,
+    signer: Arc<dyn SigningProvider>,
+    governed_active: PublicJwk,
+    recovery_probe: tokio::sync::Mutex<()>,
     jwks: Value,
 }
 
@@ -92,7 +102,7 @@ impl std::fmt::Debug for TokenMinter {
         formatter
             .debug_struct("TokenMinter")
             .field("issuer", &self.issuer)
-            .field("algorithm", &self.algorithm)
+            .field("algorithm", &self.signer.algorithm())
             .field("key_id", &self.signer.key_id())
             .finish_non_exhaustive()
     }
@@ -100,27 +110,15 @@ impl std::fmt::Debug for TokenMinter {
 
 impl TokenMinter {
     /// Load the active signing key and build the published JWK set.
-    pub fn new(config: &MintConfig) -> Result<Self, MinterError> {
-        let key_text = secretfile::read_owner_only(&config.signing.active_key_file)?;
-        let private = PrivateJwk::parse(&key_text)
-            .map_err(|_| MinterError::SigningKey("not a private JWK"))?;
-
-        // A mismatch here would publish one key id and sign with another, so
-        // verifiers would fail to find the key that actually signed.
-        if private.kid.as_deref() != Some(config.signing.active_key_id.as_str()) {
-            return Err(MinterError::SigningKey(
-                "key id does not match the configured active key id",
-            ));
-        }
-        let signer =
-            LocalJwkSigner::new(private).map_err(|_| MinterError::SigningKey("is not usable"))?;
-        if signer.public_jwk().alg.as_deref() != Some(config.signing.algorithm.as_header_value()) {
-            return Err(MinterError::SigningKey(
-                "algorithm does not match the configured signing algorithm",
-            ));
-        }
-
-        let jwks = build_jwks(&signer, &config.signing.retired_public_jwk_files)?;
+    pub async fn new(config: &MintConfig) -> Result<Self, MinterError> {
+        let public_keys = load_public_keys(config)?;
+        let active = public_keys
+            .first()
+            .cloned()
+            .expect("the active governed key is always present");
+        let signer = build_signer(config, &active).await?;
+        self_test(signer.as_ref(), &active).await?;
+        let jwks = json!({ "keys": public_keys });
 
         let audience = if config.access_tokens.audiences.len() == 1 {
             Value::String(config.access_tokens.audiences[0].clone())
@@ -140,8 +138,9 @@ impl TokenMinter {
             audience,
             lifetime_seconds: config.access_tokens.lifetime_seconds as i64,
             claims: config.access_tokens.claims.clone(),
-            algorithm: config.signing.algorithm,
             signer,
+            governed_active: active,
+            recovery_probe: tokio::sync::Mutex::new(()),
             jwks,
         })
     }
@@ -161,6 +160,28 @@ impl TokenMinter {
     #[must_use]
     pub fn claims(&self) -> &ClaimNames {
         &self.claims
+    }
+
+    /// Current availability of the active signing provider.
+    ///
+    /// Transit marks itself unavailable after a failed request. When no token
+    /// traffic reaches an unready replica, the readiness route is the only
+    /// remaining path that can observe provider recovery. One caller therefore
+    /// repeats the bounded startup sign-and-verify proof while concurrent
+    /// probes fail closed rather than queueing more provider work.
+    pub async fn ready(&self) -> bool {
+        if self.signer.readiness() == KeyReadiness::Ready {
+            return true;
+        }
+        let Ok(_probe) = self.recovery_probe.try_lock() else {
+            return false;
+        };
+        if self.signer.readiness() == KeyReadiness::Ready {
+            return true;
+        }
+        self_test(self.signer.as_ref(), &self.governed_active)
+            .await
+            .is_ok()
     }
 
     /// Mint an access token carrying the registry's authority for `client`.
@@ -241,7 +262,7 @@ impl TokenMinter {
         }
 
         let header = json!({
-            "alg": self.algorithm.as_header_value(),
+            "alg": "ES256",
             "typ": ACCESS_TOKEN_TYP,
             "kid": self.signer.key_id(),
         });
@@ -313,71 +334,175 @@ fn encode_json(value: &Value) -> Result<String, TokenError> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Publish the active public key plus any retired public keys whose tokens may
-/// still be in flight.
-fn build_jwks(
-    signer: &LocalJwkSigner,
-    retired: &[std::path::PathBuf],
-) -> Result<Value, MinterError> {
-    let active = serde_json::to_value(signer.public_jwk())
-        .map_err(|_| MinterError::SigningKey("public key could not be serialized"))?;
-    let mut keys = vec![active];
-    for path in retired {
-        keys.push(load_retired_public_key(path)?);
-    }
-    // One key id must resolve to one key. A verifier that indexes the set by
-    // `kid` is free to keep either entry, so a repeated id could leave the
-    // retired key standing in for the key every new token is signed with,
-    // with Mint still reporting itself ready.
-    let mut key_ids = std::collections::BTreeSet::new();
-    for key in &keys {
-        let key_id = key
-            .get("kid")
-            .and_then(Value::as_str)
-            .ok_or(MinterError::RetiredKey("has no key id"))?;
-        if !key_ids.insert(key_id) {
-            return Err(MinterError::RetiredKey(
-                "repeats a key id already in the published set",
-            ));
+async fn build_signer(
+    config: &MintConfig,
+    active: &PublicJwk,
+) -> Result<Arc<dyn SigningProvider>, MinterError> {
+    match &config.signer {
+        SignerConfig::LocalJwk { private_key_ref } => {
+            let resolver = SecretResolver::new(
+                [SecretProvider::File],
+                config.secret_providers.file.root.clone(),
+            )
+            .map_err(MinterError::SigningSecret)?;
+            let secret = resolver
+                .resolve(private_key_ref)
+                .map_err(MinterError::SigningSecret)?;
+            let text = std::str::from_utf8(secret.expose_secret())
+                .map_err(|_| MinterError::SigningKey("private JWK is not UTF-8"))?;
+            let private = PrivateJwk::parse(text)
+                .map_err(|_| MinterError::SigningKey("not an exact ES256 private JWK"))?;
+            let signer = LocalJwkSigner::new(private)
+                .map_err(|_| MinterError::SigningKey("private JWK is not usable"))?;
+            if signer.algorithm() != SigningAlgorithm::Es256 || signer.public_jwk() != *active {
+                return Err(MinterError::SigningKey(
+                    "private JWK does not match the governed active public JWK",
+                ));
+            }
+            Ok(Arc::new(signer))
+        }
+        SignerConfig::Transit {
+            unix_socket_path,
+            mount,
+            key_name,
+            key_version,
+            timeout_milliseconds,
+        } => {
+            let transit = TransitSignerConfig::new(
+                unix_socket_path,
+                mount,
+                key_name,
+                *key_version,
+                active.clone(),
+                Duration::from_millis(*timeout_milliseconds),
+            )
+            .map_err(MinterError::SigningProviderConfiguration)?;
+            let signer = TransitSigner::initialize(transit)
+                .await
+                .map_err(MinterError::SigningProviderInitialization)?;
+            Ok(Arc::new(signer))
         }
     }
-    Ok(json!({ "keys": keys }))
 }
 
-fn load_retired_public_key(path: &Path) -> Result<Value, MinterError> {
+async fn self_test(signer: &dyn SigningProvider, expected: &PublicJwk) -> Result<(), MinterError> {
+    if signer.algorithm() != SigningAlgorithm::Es256
+        || signer.key_id() != expected.kid.as_deref().unwrap_or_default()
+        || signer.public_jwk() != *expected
+    {
+        return Err(MinterError::SigningKey(
+            "provider metadata does not match the governed active public JWK",
+        ));
+    }
+    let probe = b"registry-mint/signing-provider-self-test/v1";
+    let signature = signer
+        .sign(probe)
+        .await
+        .map_err(MinterError::SigningProviderSelfTest)?;
+    if signature.len() != 64 || verify(probe, &signature, expected).is_err() {
+        return Err(MinterError::SigningKey(
+            "provider self-test signature did not verify",
+        ));
+    }
+    Ok(())
+}
+
+fn load_public_keys(config: &MintConfig) -> Result<Vec<PublicJwk>, MinterError> {
+    let revoked = config
+        .signing
+        .revoked_key_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let paths = std::iter::once(&config.signing.active_public_jwk_file)
+        .chain(config.signing.published_public_jwk_files.iter());
+    let mut keys = Vec::with_capacity(1 + config.signing.published_public_jwk_files.len());
+    let mut identifiers = BTreeSet::new();
+    for path in paths {
+        let key = load_public_key(path)?;
+        let kid = key
+            .kid
+            .as_deref()
+            .ok_or(MinterError::PublicKey("key id is missing"))?;
+        let expected_file_name = format!("{kid}.jwk.json");
+        if path.file_name().and_then(|name| name.to_str()) != Some(expected_file_name.as_str()) {
+            return Err(MinterError::PublicKey(
+                "file name must be <thumbprint>.jwk.json",
+            ));
+        }
+        if revoked.contains(kid) {
+            return Err(MinterError::PublicKey("a published key is revoked"));
+        }
+        if !identifiers.insert(kid.to_owned()) {
+            return Err(MinterError::PublicKey(
+                "key id is repeated in the published set",
+            ));
+        }
+        keys.push(key);
+    }
+    Ok(keys)
+}
+
+fn load_public_key(path: &Path) -> Result<PublicJwk, MinterError> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| MinterError::PublicKey("file is unreadable"))?;
+    if !metadata.is_file() {
+        return Err(MinterError::PublicKey("path is not a regular file"));
+    }
+    let bytes = std::fs::read(path).map_err(|_| MinterError::PublicKey("file is unreadable"))?;
+    if bytes.len() > registry_platform_crypto::MAX_JWK_JSON_BYTES {
+        return Err(MinterError::PublicKey("document is too large"));
+    }
     let text =
-        std::fs::read_to_string(path).map_err(|_| MinterError::RetiredKey("is unreadable"))?;
-    let value: Value =
-        serde_json::from_str(&text).map_err(|_| MinterError::RetiredKey("is not JSON"))?;
+        std::str::from_utf8(&bytes).map_err(|_| MinterError::PublicKey("document is not UTF-8"))?;
+    let value: Value = registry_platform_crypto::parse_json_strict(&bytes)
+        .map_err(|_| MinterError::PublicKey("document is not strict JSON"))?;
     let object = value
         .as_object()
-        .ok_or(MinterError::RetiredKey("is not a JSON object"))?;
-    // The whole point of the published set is that it is public.
-    if contains_private_material(object) {
-        return Err(MinterError::RetiredKey("contains private key material"));
+        .ok_or(MinterError::PublicKey("document is not a JSON object"))?;
+    let fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let required = ["alg", "crv", "kid", "kty", "x", "y"]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if fields != required {
+        return Err(MinterError::PublicKey(
+            "must contain exactly kty, crv, x, y, alg, and kid",
+        ));
     }
-    if !object.get("kid").is_some_and(Value::is_string) {
-        return Err(MinterError::RetiredKey("has no key id"));
+    let key =
+        PublicJwk::parse(text).map_err(|_| MinterError::PublicKey("is not a usable public JWK"))?;
+    if key.algorithm().ok() != Some(SigningAlgorithm::Es256)
+        || key.kty != "EC"
+        || key.crv.as_deref() != Some("P-256")
+        || key.alg.as_deref() != Some("ES256")
+    {
+        return Err(MinterError::PublicKey("must be an ES256 P-256 JWK"));
     }
-    // Resource servers parse the whole set into a `JwkSet` before selecting a
-    // key, so an entry that is well-formed JSON but not a usable public key
-    // fails their refresh and takes the active key down with it. Parse it here,
-    // as the same type they will, rather than serving a set Mint has never
-    // proved is loadable.
-    serde_json::from_value::<jsonwebtoken::jwk::Jwk>(value.clone())
-        .map_err(|_| MinterError::RetiredKey("is not a usable public key"))?;
-    Ok(value)
+    let thumbprint = key
+        .jkt()
+        .map_err(|_| MinterError::PublicKey("thumbprint could not be derived"))?;
+    if key.kid.as_deref() != Some(thumbprint.as_str()) || thumbprint.len() != 43 {
+        return Err(MinterError::PublicKey(
+            "kid must be the RFC 7638 thumbprint",
+        ));
+    }
+    Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clients::ClientRegistry;
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use p256::ecdsa::SigningKey as P256SigningKey;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
 
     const NOW: i64 = 1_800_000_000;
 
-    fn ed25519_key(seed: u8, kid: &str) -> (String, Value) {
+    fn client_key(seed: u8, kid: &str) -> (String, Value) {
         let seed_bytes = [seed; 32];
         let signing = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
         let x = URL_SAFE_NO_PAD.encode(signing.verifying_key().to_bytes());
@@ -388,35 +513,69 @@ mod tests {
         (private.to_string(), public)
     }
 
+    fn p256_key(seed: u8) -> (String, Value) {
+        let scalar = [seed; 32];
+        let signing = P256SigningKey::from_slice(&scalar).expect("valid P-256 scalar");
+        let encoded = signing.verifying_key().to_encoded_point(false);
+        let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("uncompressed x"));
+        let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("uncompressed y"));
+        let d = URL_SAFE_NO_PAD.encode(scalar);
+        let public_without_kid = PublicJwk::parse(
+            &json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y}).to_string(),
+        )
+        .expect("public P-256 JWK parses");
+        let kid = public_without_kid.jkt().expect("thumbprint computes");
+        let private = json!({
+            "kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid,
+            "x":x, "y":y, "d":d
+        });
+        let public = json!({
+            "kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid,
+            "x":x, "y":y
+        });
+        (private.to_string(), public)
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         minter: TokenMinter,
         registry: ClientRegistry,
     }
 
-    fn fixture(grant: Option<&str>) -> Fixture {
-        build_fixture(grant, "", "")
+    async fn fixture(grant: Option<&str>) -> Fixture {
+        build_fixture(grant, "", "").await
     }
 
     /// `registration` appends lines to the client registration, `claim` appends
     /// lines to the configured claim names. Both are how the delegation tests
     /// reach a shape the plain fixture does not have.
-    fn build_fixture(grant: Option<&str>, registration: &str, claim: &str) -> Fixture {
+    async fn build_fixture(grant: Option<&str>, registration: &str, claim: &str) -> Fixture {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path();
         fs::create_dir_all(root.join("clients")).expect("client dir");
+        fs::create_dir_all(root.join("public-keys")).expect("public key dir");
+        fs::create_dir_all(root.join("secrets")).expect("secret dir");
 
-        let (private, _public) = ed25519_key(9, "mint-2026-01");
-        let key_path = root.join("signing.jwk");
+        let (private, public) = p256_key(9);
+        let key_path = root.join("secrets/signing.jwk");
         fs::write(&key_path, private).expect("write signing key");
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let public_file = format!(
+            "{}.jwk.json",
+            public["kid"].as_str().expect("service key has kid")
+        );
+        fs::write(
+            root.join("public-keys").join(&public_file),
+            public.to_string(),
+        )
+        .expect("write public key");
 
         let grant_line = grant
             .map(|value| format!("grant: {value}\n"))
             .unwrap_or_default();
         fs::write(
             root.join("clients/client-a.yaml"),
-            format!("clientId: client-a\nprincipal: urn:example:client-a\nevidenceAudience: https://client-a.example.org\nrequesterTags: [ministry-of-health, tier-one]\n{grant_line}keys: [{}]\n{registration}", ed25519_key(1, "client-a-1").1),
+            format!("clientId: client-a\nprincipal: urn:example:client-a\nevidenceAudience: https://client-a.example.org\nrequesterTags: [ministry-of-health, tier-one]\n{grant_line}keys: [{}]\n{registration}", client_key(1, "client-a-1").1),
         )
         .expect("write client");
 
@@ -424,16 +583,23 @@ mod tests {
         let mut document = String::from(
             r#"
 version: 1
-issuer: https://mint.example.org
+validationMode: supervised-local-development
+issuer: http://127.0.0.1:8081
 listener: {address: 127.0.0.1, port: 8081}
 signing:
-  algorithm: EdDSA
-  activeKeyId: mint-2026-01
-  activeKeyFile: signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/PUBLIC
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file: {root: ROOT}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
@@ -449,17 +615,20 @@ accessTokens:
         document.push_str(claim);
         document.push_str(
             r#"clientAssertion:
-  audience: https://mint.example.org/token
+  audience: http://127.0.0.1:8081/token
   algorithms: [EdDSA]
 clients:
   directory: clients
 "#,
         );
+        document = document
+            .replace("ROOT", &root.join("secrets").display().to_string())
+            .replace("PUBLIC", &public_file);
         fs::write(&config_path, document).expect("write config");
 
         let config = MintConfig::load(&config_path).expect("config loads");
         let registry = ClientRegistry::load(&config.clients.directory).expect("registry loads");
-        let minter = TokenMinter::new(&config).expect("minter builds");
+        let minter = TokenMinter::new(&config).await.expect("minter builds");
         Fixture {
             _directory: directory,
             minter,
@@ -467,61 +636,38 @@ clients:
         }
     }
 
-    /// The active signer the published set is built around, matching the
-    /// `mint-2026-01` key id the fixture configuration declares.
-    fn active_signer() -> LocalJwkSigner {
-        let (private, _public) = ed25519_key(9, "mint-2026-01");
-        LocalJwkSigner::new(PrivateJwk::parse(&private).expect("private JWK parses"))
-            .expect("signer builds")
-    }
-
-    fn write_public_key(directory: &Path, name: &str, seed: u8, kid: &str) -> std::path::PathBuf {
-        let path = directory.join(name);
-        let (_private, public) = ed25519_key(seed, kid);
+    fn write_public_key(directory: &Path, seed: u8) -> std::path::PathBuf {
+        let (_private, public) = p256_key(seed);
+        let kid = public["kid"].as_str().expect("key has kid");
+        let path = directory.join(format!("{kid}.jwk.json"));
         fs::write(&path, public.to_string()).expect("write public key");
         path
     }
 
     #[test]
-    fn retired_keys_publish_beside_the_active_key() {
+    fn published_keys_load_beside_the_active_key() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let retired = write_public_key(directory.path(), "retired.jwk", 4, "mint-2025-07");
+        let active = write_public_key(directory.path(), 9);
+        let published = write_public_key(directory.path(), 4);
+        let mut config = crate::config::tests::sample_config();
+        config.signing.active_public_jwk_file = active;
+        config.signing.published_public_jwk_files = vec![published];
 
-        let jwks = build_jwks(&active_signer(), &[retired]).expect("set builds");
-
-        let ids: Vec<&str> = jwks["keys"]
-            .as_array()
-            .expect("keys is an array")
-            .iter()
-            .map(|key| key["kid"].as_str().expect("key id is a string"))
-            .collect();
-        assert_eq!(ids, ["mint-2026-01", "mint-2025-07"]);
+        let keys = load_public_keys(&config).expect("governed set loads");
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0].kid, keys[1].kid);
     }
 
     #[test]
-    fn a_retired_key_may_not_repeat_the_active_key_id() {
+    fn a_public_key_may_not_repeat_the_active_key_id() {
         let directory = tempfile::tempdir().expect("temp dir");
-        // Different key material published under the id the active key already
-        // uses. A verifier keyed by `kid` would be free to resolve either, so
-        // the retired key could displace the key every new token is signed
-        // with while Mint went on reporting itself ready.
-        let retired = write_public_key(directory.path(), "retired.jwk", 4, "mint-2026-01");
+        let active = write_public_key(directory.path(), 9);
+        let mut config = crate::config::tests::sample_config();
+        config.signing.active_public_jwk_file = active.clone();
+        config.signing.published_public_jwk_files = vec![active];
 
-        let error = build_jwks(&active_signer(), &[retired]).expect_err("duplicate id is rejected");
-
-        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
-    }
-
-    #[test]
-    fn two_retired_keys_may_not_repeat_one_key_id() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let first = write_public_key(directory.path(), "first.jwk", 4, "mint-2025-07");
-        let second = write_public_key(directory.path(), "second.jwk", 5, "mint-2025-07");
-
-        let error =
-            build_jwks(&active_signer(), &[first, second]).expect_err("duplicate id is rejected");
-
-        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+        let error = load_public_keys(&config).expect_err("duplicate id is rejected");
+        assert!(matches!(error, MinterError::PublicKey(_)), "{error:?}");
     }
 
     /// Consumers parse the whole set into `JwkSet` before selecting a key, so a
@@ -531,15 +677,14 @@ clients:
     /// ready. Checking for a `kid` string is not the same as checking the entry
     /// is a key.
     #[test]
-    fn a_retired_entry_that_is_not_a_usable_public_key_is_refused() {
+    fn an_entry_that_is_not_an_exact_es256_public_key_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("retired.jwk");
         fs::write(&path, r#"{"kid":"mint-2025-07"}"#).expect("write retired key");
 
-        let error =
-            build_jwks(&active_signer(), &[path]).expect_err("an unusable entry is rejected");
+        let error = load_public_key(&path).expect_err("an unusable entry is rejected");
 
-        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+        assert!(matches!(error, MinterError::PublicKey(_)), "{error:?}");
     }
 
     /// RFC 7518 section 6.3.2.7 puts the remaining prime factors of a
@@ -547,7 +692,7 @@ clients:
     /// and is caught by that, but the published set must not depend on which
     /// private member happens to be present.
     #[test]
-    fn a_retired_entry_carrying_other_prime_material_is_refused() {
+    fn a_public_entry_carrying_private_material_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("retired.jwk");
         fs::write(
@@ -556,10 +701,63 @@ clients:
         )
         .expect("write retired key");
 
-        let error =
-            build_jwks(&active_signer(), &[path]).expect_err("private material is rejected");
+        let error = load_public_key(&path).expect_err("private material is rejected");
 
-        assert!(matches!(error, MinterError::RetiredKey(_)), "{error:?}");
+        assert!(matches!(error, MinterError::PublicKey(_)), "{error:?}");
+    }
+
+    #[test]
+    fn revoked_keys_cannot_be_active_or_published() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let active = write_public_key(directory.path(), 9);
+        let active_key = load_public_key(&active).expect("key loads");
+        let mut config = crate::config::tests::sample_config();
+        config.signing.active_public_jwk_file = active;
+        config.signing.revoked_key_ids = vec![active_key.kid.expect("kid")];
+
+        let error = load_public_keys(&config).expect_err("revoked active key is rejected");
+        assert!(matches!(error, MinterError::PublicKey(_)), "{error:?}");
+    }
+
+    #[test]
+    fn governed_key_ids_and_file_names_are_derived_not_chosen() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (_private, mut public) = p256_key(9);
+        public["kid"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        let chosen_path = directory
+            .path()
+            .join("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.jwk.json");
+        fs::write(&chosen_path, public.to_string()).expect("write chosen-id key");
+        assert!(load_public_key(&chosen_path).is_err());
+
+        let valid_path = write_public_key(directory.path(), 8);
+        let wrong_name = directory.path().join("active.jwk.json");
+        fs::rename(&valid_path, &wrong_name).expect("rename valid key");
+        let mut config = crate::config::tests::sample_config();
+        config.signing.active_public_jwk_file = wrong_name;
+        assert!(load_public_keys(&config).is_err());
+    }
+
+    #[tokio::test]
+    async fn local_private_material_must_match_the_governed_active_key() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (private, _) = p256_key(8);
+        let secret_path = directory.path().join("mint-signing");
+        fs::write(&secret_path, private).expect("write private key");
+        fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (_, governed_value) = p256_key(9);
+        let governed = PublicJwk::parse(&governed_value.to_string()).expect("public JWK parses");
+        let mut config = crate::config::tests::sample_config();
+        config.validation_mode = crate::config::ValidationMode::SupervisedLocalDevelopment;
+        config.signer = SignerConfig::LocalJwk {
+            private_key_ref: "secret:file/mint-signing".to_owned(),
+        };
+        config.secret_providers.file.root = directory.path().to_path_buf();
+
+        assert!(
+            build_signer(&config, &governed).await.is_err(),
+            "a private key for another public JWK must be rejected"
+        );
     }
 
     fn undelegated(client: &std::sync::Arc<RegisteredClient>) -> AuthenticatedClient {
@@ -583,7 +781,7 @@ clients:
 
     #[tokio::test]
     async fn minted_claims_come_from_the_registry() {
-        let fixture = fixture(None);
+        let fixture = fixture(None).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let minted = fixture
             .minter
@@ -592,7 +790,7 @@ clients:
             .expect("token mints");
 
         let claims = decode_claims(&minted.access_token);
-        assert_eq!(claims["iss"], json!("https://mint.example.org"));
+        assert_eq!(claims["iss"], json!("http://127.0.0.1:8081"));
         assert_eq!(claims["aud"], json!("evidence"));
         assert_eq!(claims["sub"], json!("urn:example:client-a"));
         assert_eq!(claims["client_id"], json!("client-a"));
@@ -613,7 +811,7 @@ clients:
 
     #[tokio::test]
     async fn the_header_names_the_active_key_and_access_token_type() {
-        let fixture = fixture(None);
+        let fixture = fixture(None).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let minted = fixture
             .minter
@@ -621,15 +819,19 @@ clients:
             .await
             .expect("token mints");
 
+        let header = decode_header(&minted.access_token);
+        assert_eq!(header["alg"], json!("ES256"));
+        assert_eq!(header["typ"], json!("at+jwt"));
         assert_eq!(
-            decode_header(&minted.access_token),
-            json!({"alg": "EdDSA", "typ": "at+jwt", "kid": "mint-2026-01"})
+            header["kid"].as_str().map(str::len),
+            Some(43),
+            "service kid is an RFC 7638 SHA-256 thumbprint"
         );
     }
 
     #[tokio::test]
     async fn a_grant_is_minted_as_a_matched_pair_or_not_at_all() {
-        let without = fixture(None);
+        let without = fixture(None).await;
         let client = without.registry.get("client-a").expect("client registered");
         let claims = decode_claims(
             &without
@@ -642,7 +844,7 @@ clients:
         assert!(claims.get("evidence_grant_id").is_none());
         assert!(claims.get("evidence_authority").is_none());
 
-        let with = fixture(Some("{id: grant-1, authority: statute-7}"));
+        let with = fixture(Some("{id: grant-1, authority: statute-7}")).await;
         let client = with.registry.get("client-a").expect("client registered");
         let claims = decode_claims(
             &with
@@ -658,7 +860,7 @@ clients:
 
     #[tokio::test]
     async fn every_token_carries_a_distinct_identifier() {
-        let fixture = fixture(None);
+        let fixture = fixture(None).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let first = fixture
             .minter
@@ -680,8 +882,8 @@ clients:
         "delegation:\n  actors: [urn:example:agent-one]\n  subjectClaims:\n    given_name: identity.given_name\n    birth_date: identity.birth_date\n";
     const ACTOR_CLAIM: &str = "    actor: evidence_actor\n";
 
-    fn delegated_fixture() -> Fixture {
-        build_fixture(None, DELEGATION, ACTOR_CLAIM)
+    async fn delegated_fixture() -> Fixture {
+        build_fixture(None, DELEGATION, ACTOR_CLAIM).await
     }
 
     fn delegation(subject: &[(&str, Value)]) -> crate::assertion::ResolvedDelegation {
@@ -709,7 +911,7 @@ clients:
     /// selector it will not accept from the request body.
     #[tokio::test]
     async fn a_delegated_token_carries_the_actor_and_the_subject_at_their_declared_paths() {
-        let fixture = delegated_fixture();
+        let fixture = delegated_fixture().await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let minted = fixture
             .minter
@@ -741,7 +943,7 @@ clients:
     /// server reading the subject from the token has nothing to read.
     #[tokio::test]
     async fn an_undelegated_token_carries_no_actor_and_no_subject() {
-        let fixture = delegated_fixture();
+        let fixture = delegated_fixture().await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let minted = fixture
             .minter
@@ -759,7 +961,7 @@ clients:
     /// than mint a token whose subject no resource server can attribute.
     #[tokio::test]
     async fn minting_a_delegation_without_a_configured_actor_claim_is_a_server_error() {
-        let fixture = build_fixture(None, DELEGATION, "");
+        let fixture = build_fixture(None, DELEGATION, "").await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let error = fixture
             .minter
@@ -783,7 +985,7 @@ clients:
 
     #[tokio::test]
     async fn a_delegation_resolved_for_an_undelegated_client_is_a_server_error() {
-        let fixture = build_fixture(None, "", ACTOR_CLAIM);
+        let fixture = build_fixture(None, "", ACTOR_CLAIM).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let error = fixture
             .minter
@@ -801,7 +1003,7 @@ clients:
     #[tokio::test]
     async fn subject_claims_sharing_a_path_prefix_nest_into_one_object() {
         let deep = "delegation:\n  subjectClaims:\n    given_name: subject.identity.given_name\n    region: subject.residence.region\n";
-        let fixture = build_fixture(None, deep, ACTOR_CLAIM);
+        let fixture = build_fixture(None, deep, ACTOR_CLAIM).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let minted = fixture
             .minter
@@ -828,7 +1030,7 @@ clients:
     async fn a_subject_path_colliding_with_an_authority_claim_is_a_server_error() {
         let colliding =
             "delegation:\n  subjectClaims:\n    given_name: evidence_audience.given_name\n";
-        let fixture = build_fixture(None, colliding, ACTOR_CLAIM);
+        let fixture = build_fixture(None, colliding, ACTOR_CLAIM).await;
         let client = fixture.registry.get("client-a").expect("client registered");
         let error = fixture
             .minter
@@ -841,9 +1043,9 @@ clients:
         );
     }
 
-    #[test]
-    fn the_published_key_set_carries_public_material_only() {
-        let fixture = fixture(None);
+    #[tokio::test]
+    async fn the_published_key_set_carries_public_material_only() {
+        let fixture = fixture(None).await;
         let rendered = serde_json::to_string(fixture.minter.jwks()).expect("jwks serializes");
         for member in [
             "\"d\"", "\"p\"", "\"q\"", "\"dp\"", "\"dq\"", "\"qi\"", "\"k\"",
@@ -853,17 +1055,18 @@ clients:
                 "the published key set must not contain {member}"
             );
         }
-        assert!(rendered.contains("mint-2026-01"));
+        assert!(rendered.contains("ES256"));
     }
 
-    #[test]
-    fn debug_output_never_reveals_the_signing_key() {
-        let fixture = fixture(None);
+    #[tokio::test]
+    async fn debug_output_never_reveals_the_signing_key() {
+        let fixture = fixture(None).await;
         let rendered = format!("{:?}", fixture.minter);
 
         // Useful for operators: which key is live, and under what identity.
-        assert!(rendered.contains("mint-2026-01"));
-        assert!(rendered.contains("https://mint.example.org"));
+        let kid = fixture.minter.signer.key_id();
+        assert!(rendered.contains(kid));
+        assert!(rendered.contains("http://127.0.0.1:8081"));
 
         // The private scalar of the fixture's signing key, verbatim. Debug is
         // the easiest place for key material to escape into a log line.
@@ -872,5 +1075,118 @@ clients:
             !rendered.contains(&private_scalar),
             "the debug output must never carry private key material"
         );
+    }
+
+    struct RecoverableSigner {
+        inner: LocalJwkSigner,
+        available: AtomicBool,
+        ready: AtomicBool,
+        attempts: AtomicUsize,
+    }
+
+    impl RecoverableSigner {
+        fn new() -> Self {
+            let (private, _) = p256_key(9);
+            let private = PrivateJwk::parse(&private).expect("private JWK parses");
+            Self {
+                inner: LocalJwkSigner::new(private).expect("test signer builds"),
+                available: AtomicBool::new(true),
+                ready: AtomicBool::new(true),
+                attempts: AtomicUsize::new(0),
+            }
+        }
+
+        fn set_available(&self, available: bool) {
+            self.available.store(available, Ordering::Release);
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::Acquire)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for RecoverableSigner {
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        fn readiness(&self) -> KeyReadiness {
+            if self.ready.load(Ordering::Acquire) {
+                KeyReadiness::Ready
+            } else {
+                KeyReadiness::NotReady
+            }
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            self.attempts.fetch_add(1, Ordering::AcqRel);
+            if !self.available.load(Ordering::Acquire) {
+                self.ready.store(false, Ordering::Release);
+                return Err(SigningError::external("provider-token-secret"));
+            }
+            let result = self.inner.sign(payload).await;
+            self.ready.store(result.is_ok(), Ordering::Release);
+            result
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_probes_recover_the_provider_without_exposing_failures() {
+        let mut fixture = fixture(None).await;
+        let signer = Arc::new(RecoverableSigner::new());
+        fixture.minter.signer = signer.clone();
+        assert!(fixture.minter.ready().await, "the signer starts ready");
+        assert_eq!(signer.attempts(), 0, "a ready signer is not probed");
+
+        let client = fixture.registry.get("client-a").expect("client registered");
+        let authenticated = undelegated(client);
+        signer.set_available(false);
+        let error = fixture
+            .minter
+            .mint(&authenticated, NOW)
+            .await
+            .expect_err("provider loss fails the request");
+        assert_eq!(signer.readiness(), KeyReadiness::NotReady);
+        assert!(
+            !format!("{error:?}").contains("provider-token-secret"),
+            "provider details must not escape through the request error"
+        );
+        assert!(
+            !fixture.minter.ready().await,
+            "a failed recovery probe remains unready"
+        );
+
+        signer.set_available(true);
+        assert!(
+            fixture.minter.ready().await,
+            "readiness proves provider recovery without request traffic"
+        );
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+
+        signer.set_available(false);
+        fixture
+            .minter
+            .mint(&authenticated, NOW)
+            .await
+            .expect_err("a second provider loss fails closed");
+        signer.set_available(true);
+        fixture
+            .minter
+            .mint(&authenticated, NOW)
+            .await
+            .expect("request-path signing also recovers readiness");
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
     }
 }

@@ -321,6 +321,7 @@ export default defineConfig({
                 { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
                 { label: 'Configure Evidence Gateway', slug: 'configure/evidence' },
                 { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
+                { label: 'Configure Transit signing', slug: 'tutorials/move-evidence-to-production-signing' },
                 { label: 'Deploy with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
               ],
             },
@@ -347,7 +348,7 @@ export default defineConfig({
               label: 'Operate Evidence Gateway',
               collapsed: true,
               items: [
-                { label: 'Rotate signing keys', slug: 'tutorials/move-evidence-to-production-signing' },
+                { label: 'Rotate signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
                 { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
               ],
             },

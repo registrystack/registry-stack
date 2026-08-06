@@ -7,6 +7,10 @@ summary: >-
   decision, fixed source execution, bounded derivation, output validation,
   audience-scoped subject binding, and the same durable access and
   disclosure-release audit ordering.
+standards_profile:
+  selective_disclosure_jwt: RFC 9901
+  sd_jwt_vc: draft-ietf-oauth-sd-jwt-vc-18
+  evolution_rule: A later draft or RFC is a reviewed profile revision, never an implicit library upgrade.
 response:
   media_type: application/dc+sd-jwt
   serialization: sd-jwt-vc-compact
@@ -17,7 +21,7 @@ response:
 protected_header:
   exact_members: [alg, typ, kid]
   alg:
-    allowed: [EdDSA]
+    allowed: [ES256]
     rule: Must equal the algorithm bound to the trusted key. Identical to the signed-JWS profile.
   typ: {const: dc+sd-jwt}
   kid:
@@ -91,7 +95,11 @@ claims:
         embeds it and never validates a presentation. Key-binding JWT
         verification is the relying party's responsibility.
       constraints:
-        key_type: OKP Ed25519 public JWK
+        key_type: EC P-256 public JWK
+        required_members: [kty, crv, x, y]
+        optional_members: [alg, kid]
+        optional_algorithm: ES256 only
+        wallet_kid: Wallet-owned and not required to be an RFC 7638 thumbprint.
         private_members_prohibited: [d, p, q, dp, dq, qi, k]
         rule: A key carrying any private member, a non-allowlisted algorithm, or an unparseable body fails before credential acquisition or source access.
   prohibited:
@@ -126,14 +134,14 @@ key_discovery:
   jwks_path: /.well-known/evidence/jwks.json
   issuer_metadata_path: /.well-known/jwt-vc-issuer
   issuer_metadata_media_type: application/json
-  issuer_metadata_members: [issuer, jwks]
-  content: public keys only
+  issuer_metadata_members: [issuer, jwks_uri]
+  issuer_rule: Exact service.providerId, which is a stable HTTPS origin whenever this format is enabled outside local assurance.
+  jwks_uri_rule: Exact service.providerId plus signing.jwksPath; the metadata contains no inline key set.
   trust_rule: >-
     Discovery is not a trust anchor. Provider identity and key set remain
-    pinned through governed verifier configuration. JWT VC Issuer Metadata
-    resolution applies only when service.providerId is the HTTPS origin of the
-    deployment; a URN provider identity is valid for the assertion and simply
-    has no metadata resolution path.
+    pinned through governed verifier configuration. Outside local assurance,
+    enabling this format requires service.providerId to be the stable HTTPS
+    origin of the deployment.
 profile_non_goals:
   rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
   items:
@@ -148,6 +156,7 @@ verifier_rules:
   - Split the compact serialization on tilde with strict rejection of an empty issuer-signed segment.
   - Reject any protected member outside the exact allowlist and require the allowlisted algorithm.
   - Resolve kid only in the pinned provider key set.
+  - Reject a policy-denied kid before selecting a pinned public key.
   - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
   - Recompute every root-value and structured-field disclosure digest and require an exact match against its owning _sd; reject unmatched disclosures and unmatched digests alike.
   - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.

@@ -134,7 +134,7 @@ pub async fn prepare_local_verification_context_for_format(
         subject_binding_secret,
         signer: _,
         jwks,
-    } = validate_verification_material(bundle, &secrets)
+    } = validate_verification_material(bundle, &deployment.runtime.config.signer, &secrets)
         .await
         .map_err(|_| LocalVerificationError)?;
     let expected_subjects = resolved
@@ -183,6 +183,7 @@ pub async fn prepare_local_verification_context_for_format(
                     ),
                 })
                 .collect(),
+            revoked_key_ids: bundle.config.signing.revoked_key_ids.clone(),
             maximum_assertion_lifetime_seconds: requirement.validity_seconds,
             clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds,
         },

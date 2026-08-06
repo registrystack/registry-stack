@@ -52,7 +52,7 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
 }
 
 #[test]
-fn local_openapi_is_retained_byte_for_byte_without_premature_artifacts() {
+fn local_openapi_is_retained_byte_for_byte_with_automatic_disposable_keys() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
@@ -63,7 +63,7 @@ fn local_openapi_is_retained_byte_for_byte_without_premature_artifacts() {
         fs::read(project.join("source.openapi.yaml")).expect("retained OpenAPI"),
         OPENAPI.as_bytes()
     );
-    assert_minimal_project(&project, false);
+    assert_minimal_project(&project, true);
     assert!(stdout(&output).contains("retained exactly"));
     assert!(stdout(&output).contains("No question, fixture case, runtime"));
     assert!(stdout(&output).contains("evidencectl source suggest --project"));
@@ -83,7 +83,7 @@ fn remote_openapi_is_retained_byte_for_byte() {
         fs::read(project.join("source.openapi.yaml")).expect("retained remote OpenAPI"),
         remote
     );
-    assert_minimal_project(&project, false);
+    assert_minimal_project(&project, true);
 }
 
 #[test]
@@ -153,11 +153,11 @@ fn unsafe_remote_urls_are_value_free_and_fail_before_network_or_writes() {
 }
 
 #[test]
-fn generate_keys_is_transactional_unbound_owner_only_and_prints_no_secret() {
+fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
     let project = workspace.path().join("project");
-    let output = openapi_new(&project, path(&spec), &["--generate-keys"]);
+    let output = openapi_new(&project, path(&spec), &[]);
     assert!(output.status.success(), "{}", stderr(&output));
 
     assert_minimal_project(&project, true);
@@ -170,8 +170,8 @@ fn generate_keys_is_transactional_unbound_owner_only_and_prints_no_secret() {
         0o700
     );
     for (name, mode) in [
-        ("signing-ed25519-private-jwk", 0o600),
-        ("signing-ed25519-public.jwk.json", 0o644),
+        ("signing-p256-private-jwk", 0o600),
+        ("signing-p256-public.jwk.json", 0o644),
         ("audit-hmac-key", 0o600),
         ("subject-binding-hmac-key", 0o600),
     ] {
@@ -185,8 +185,8 @@ fn generate_keys_is_transactional_unbound_owner_only_and_prints_no_secret() {
         );
     }
 
-    let private = fs::read_to_string(project.join("secrets/signing-ed25519-private-jwk"))
-        .expect("private JWK");
+    let private =
+        fs::read_to_string(project.join("secrets/signing-p256-private-jwk")).expect("private JWK");
     let private: serde_json::Value = serde_json::from_str(&private).expect("private JWK JSON");
     let secret = private["d"].as_str().expect("private key member");
     assert!(!stdout(&output).contains(secret));

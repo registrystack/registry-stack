@@ -1193,7 +1193,8 @@ mod tests {
 
     const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
     const AUDIENCE: &str = "urn:example:fixture:audience";
-    const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"supported-values-fixture-key"}"#;
+    const SUPPORTED_VALUE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
     fn projection() -> ValueProjection<'static> {
         ValueProjection {
@@ -1769,7 +1770,7 @@ mod tests {
         assert_eq!(first.supported_values[0].value, PublicValue::Boolean(false));
         assert_eq!(first.subjects[0].role, "child");
         assert_eq!(first.subjects[1].role, "candidate-parent");
-        assert_eq!(first.valid_until, "2026-08-03T00:00:01Z");
+        assert_eq!(first.valid_until, "2026-08-02T00:05:01Z");
     }
 
     #[tokio::test]
@@ -2249,7 +2250,7 @@ mod tests {
         let private = PrivateJwk::parse(SUPPORTED_VALUE_PRIVATE_JWK).expect("fixture key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
-        EvidenceSigner::initialize(provider, "supported-values-fixture-key")
+        EvidenceSigner::initialize(provider, SUPPORTED_VALUE_KEY_ID)
             .await
             .expect("fixture signer initializes")
     }
@@ -2293,7 +2294,7 @@ mod tests {
                 &evidence,
                 &evidence.request_nonce,
                 StdDuration::from_secs(48 * 60 * 60),
-                "2026-08-02T12:00:00Z".parse().expect("time"),
+                "2026-08-02T00:03:00Z".parse().expect("time"),
                 StdDuration::from_secs(30),
             ),
         )

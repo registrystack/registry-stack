@@ -24,6 +24,7 @@ http.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-oidc.workspace = true
 reqwest.workspace = true
@@ -44,5 +45,6 @@ zeroize.workspace = true
 [dev-dependencies]
 axum-test.workspace = true
 ed25519-dalek.workspace = true
+p256.workspace = true
 registry-evidence.workspace = true
 tempfile.workspace = true

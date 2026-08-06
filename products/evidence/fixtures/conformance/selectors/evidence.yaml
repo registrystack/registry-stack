@@ -9,13 +9,15 @@ authentication:
   issuer: https://identity.invalid
   audiences: [selector-conformance]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit:
   format: keyed-jsonl
   hashSecretRef: secret:file/audit-key
@@ -30,12 +32,12 @@ rateLimits:
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 100
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: selector-evidence-key
-  activeKeyRef: secret:file/signing-key
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 responseFormats: [signed-jws]
 
@@ -271,7 +273,7 @@ requirements:
       - {role: subject, cardinality: one, selectorProfiles: [opaque-record-v1]}
     referenceFrameworks: [urn:example:fixture:framework:classification:v1]
     evidenceType: urn:example:fixture:evidence-type:classification:v1
-    validitySeconds: 3600
+    validitySeconds: 300
     derivation: {script: derivations/classification.rhai, parameters: {}}
     concepts:
       - {id: urn:example:fixture:concept:classification, form: boolean, required: true, constraints: {}}
@@ -286,7 +288,7 @@ requirements:
       - {role: subject, cardinality: one, selectorProfiles: [demographics-v1]}
     referenceFrameworks: [urn:example:fixture:framework:property:v1]
     evidenceType: urn:example:fixture:evidence-type:property:v1
-    validitySeconds: 3600
+    validitySeconds: 300
     derivation: {script: derivations/property.rhai, parameters: {}}
     concepts:
       - {id: urn:example:fixture:concept:property, form: boolean, required: true, constraints: {}}
@@ -301,7 +303,7 @@ requirements:
       - {role: subject, cardinality: one, selectorProfiles: [demographics-with-event-v1]}
     referenceFrameworks: [urn:example:fixture:framework:property-with-event:v1]
     evidenceType: urn:example:fixture:evidence-type:property-with-event:v1
-    validitySeconds: 3600
+    validitySeconds: 300
     derivation: {script: derivations/property-with-event.rhai, parameters: {}}
     concepts:
       - {id: urn:example:fixture:concept:property-with-event, form: boolean, required: true, constraints: {}}
@@ -317,7 +319,7 @@ requirements:
       - {role: subject-b, cardinality: one, selectorProfiles: [demographics-v1, demographics-with-event-v1]}
     referenceFrameworks: [urn:example:fixture:framework:relationship:v1]
     evidenceType: urn:example:fixture:evidence-type:relationship:v1
-    validitySeconds: 3600
+    validitySeconds: 300
     derivation: {script: derivations/relationship.rhai, parameters: {}}
     concepts:
       - {id: urn:example:fixture:concept:relationship, form: boolean, required: true, constraints: {}}
@@ -332,7 +334,7 @@ requirements:
       - {role: subject, cardinality: one, selectorProfiles: [opaque-coordinates-v1]}
     referenceFrameworks: [urn:example:fixture:framework:opaque:v1]
     evidenceType: urn:example:fixture:evidence-type:opaque:v1
-    validitySeconds: 3600
+    validitySeconds: 300
     derivation: {script: derivations/opaque.rhai, parameters: {}}
     concepts:
       - {id: urn:example:fixture:concept:opaque, form: boolean, required: true, constraints: {}}

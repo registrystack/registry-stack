@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -52,9 +52,9 @@ You need:
 
 - The registered clients this deployment will serve: one client id, principal, evidence
   audience, and set of requester tags per client.
-- A private JWK signing key for Registry Mint itself, in the algorithm the deployment will run
-  (`EdDSA`, `ES256`, or `RS256`), stored in a file owner-only and not reachable through a
-  symlink. `crates/registry-mint/src/secretfile.rs` enforces both at load time.
+- A governed public P-256 JWK for Registry Mint itself. Its service `kid` is the derived RFC 7638
+  thumbprint. Strict deployments use a workload-local Vault or OpenBao Transit proxy; supervised
+  local development may use an owner-only local P-256 private JWK.
 - An independently generated audit HMAC key containing at least 32 bytes, stored in another
   owner-only, non-symlink file.
 - A private JWK per client. Registry Mint only ever stores and reads each client's public half;
@@ -66,9 +66,9 @@ You need:
 - The claim names the resource server (Evidence Gateway, for example) reads its principal, requester
   tags, evidence audience, and grant pair from, so Registry Mint's `accessTokens.claims` can be
   set to match them exactly.
-- TLS in front of Registry Mint. Registry Mint serves plain HTTP and expects TLS termination it
-  does not manage; Evidence Gateway in turn requires the token issuer and its key set to be HTTPS, with
-  no exception for loopback (`crates/registry-mint/demo/README.md`).
+- TLS in front of Registry Mint for strict deployments. Registry Mint serves plain HTTP and expects
+  TLS termination it does not manage. Supervised local development alone admits the exact
+  `http://127.0.0.1:<nonzero-port>` issuer and matching token and JWKS paths.
 
 ## Configure the deployment
 
@@ -78,18 +78,30 @@ the listener, or token policy means restarting the process.
 
 ```yaml
 version: 1
+validationMode: strict
 issuer: https://mint.example.org
 listener:
   address: 127.0.0.1
   port: 8081
 signing:
-  algorithm: EdDSA
-  activeKeyId: mint-2026-01
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/<thumbprint>.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-mint/transit-proxy.sock
+  mount: transit
+  keyName: mint-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+secretProviders:
+  file:
+    root: /run/registry-mint/secrets
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
@@ -102,7 +114,7 @@ accessTokens:
     grantAuthority: evidence_authority
 clientAssertion:
   audience: https://mint.example.org/token
-  algorithms: [EdDSA]
+  algorithms: [EdDSA, ES256, RS256]
 clients:
   directory: clients
 ```
@@ -115,7 +127,14 @@ that is the only place the two configurations have to agree. `clientAssertion.au
 value every client's signed request must carry as its own `aud`, which stops a request built for
 one endpoint from being replayed at another.
 
-`audit.hashKeyFile` must contain at least 32 bytes and remain separate from the signing key. Mint
+`validationMode` defaults to `strict`, which requires the Transit signer. Set it to
+`supervised-local-development` only for the disposable local developer environment; that mode may
+use `signer.kind: local-jwk` with `privateKeyRef: secret:file/<name>`.
+Use
+[Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/)
+to provision a strict signer and its governed public JWK.
+
+The secret named by `audit.hashKeyRef` must contain at least 32 bytes and remain separate from the signing key. Mint
 verifies the keyed JSONL chain and takes a single-writer lock at startup. Before returning an
 access token it synchronizes a token-release record to the chain and its parent directory. If the
 write fails, Mint returns `server_error`, does not release the token, and fails readiness. The
@@ -159,7 +178,8 @@ Validate the deployment before opening a socket:
 mint check --config /etc/mint/mint.yaml
 ```
 
-`check` loads the configuration, signing key, audit key, and client registry, then exits. It
+`check` loads the configuration, governed public keys, signer, audit key, and client registry, then
+performs the signer self-test before it exits. It
 deliberately does not open the audit chain, which admits one writer at a time, so you can check
 an edited configuration against the deployment it is about to replace. `check`, `serve`, and
 `verify-audit` accept `MINT_CONFIG` in place of `--config`.
@@ -227,7 +247,7 @@ curl -sS https://mint.example.org/token \
 
 Confirm the published key set resolves at the configured `signing.jwksPath` (default
 `/.well-known/jwks.json`), and that `GET /ready` returns success once at least one client is
-registered and the audit writer is healthy.
+registered, the audit writer is healthy, and the signing provider passes its self-test.
 
 Verify the retained keyed chain with the same configuration and audit key:
 
@@ -244,9 +264,9 @@ records were corrupted or reordered.
 | --- | --- | --- |
 | The token request fails with `401 invalid_client` | Registry Mint collapses every client authentication failure, an unknown client id, a bad signature, a replayed `jti`, an expired assertion, into this one code, so the endpoint cannot be used to probe which client ids are registered. | Check the client id, the signing key, the assertion's `iat`/`exp`, and that the `jti` has not already been used. |
 | The token request fails with `400 unsupported_grant_type` | `grant_type` is missing or is not exactly `client_credentials`. | Send `grant_type=client_credentials` in the form body. |
-| `mint check` or `mint serve` refuses to start over the signing key | The key file is not a regular, owner-only, single-link file, or its `kid` and algorithm do not match `signing.activeKeyId` and `signing.algorithm`. | Regenerate or re-permission the private JWK so it is owned by the running user, unreadable by group and other, and not a symlink. |
+| `mint check` or `mint serve` refuses to start over signing | The active public key is not an ES256 P-256 JWK with its RFC 7638 `kid`, a revoked key is published, or the signer cannot prove it matches the governed active key. | Correct the governed key set and signer configuration. In strict mode, restore the local Transit proxy and its pinned key version. |
 | `mint serve` refuses to start over audit | The audit key, directory, chain, or lock file is unsafe, another writer holds the chain, or retained records do not verify. | Check owner-only permissions, run one writer per `audit.path`, then run `mint verify-audit` before deciding whether recovery is needed. Do not discard the chain to make startup pass. |
 | `mint check` refuses the configuration over audit | The audit hash key file is missing, is not owner-only, or is too short. `check` does not open the chain, so it never reports a running writer as a fault. | Restore the key file with owner-only permissions. Use `mint verify-audit` for the chain itself. |
 | The token request fails with `500 server_error` and readiness changes to `503` | Mint could not durably append the audit decision and permanently poisoned the writer for this process. | Stop traffic, restore writable durable storage, preserve and verify the retained chain, then restart Mint. The failed request did not receive an access token. |
 | Evidence Gateway rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
-| `GET /ready` returns `503` | No client is currently registered, the client registry directory failed to load, or the audit writer is poisoned. | Check the startup or reload log and the audit storage. Add a valid client or restore and verify audit storage as indicated. |
+| `GET /ready` returns `503` | No client is currently registered, the client registry failed to load, the audit writer is poisoned, or the signing provider is unavailable. | Check startup or reload diagnostics and audit storage. Add a valid client, restore and verify audit storage, or restore the Transit proxy and pinned version. Provider readiness recovers after a successful self-test. |

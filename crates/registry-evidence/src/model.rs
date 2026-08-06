@@ -224,6 +224,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn holder_public_key_rejects_coordinates_that_are_not_on_p256() {
+        let key = HolderPublicKey {
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
+            x: "A".repeat(43),
+            y: "A".repeat(43),
+            alg: Some("ES256".to_owned()),
+            kid: Some("wallet-owned-key-7".to_owned()),
+        };
+
+        assert!(!key.is_acceptable());
+    }
+
+    #[test]
     fn schema_integer_lexical_forms_canonicalize_to_safe_i64() {
         for input in ["1", "1.0", "1e0"] {
             assert_eq!(

@@ -41,7 +41,8 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"selector-auth-key"}"#;
-const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"selector-evidence-key"}"#;
+const EVIDENCE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 const TOKEN_ISSUER: &str = "https://identity.invalid";
 const TOKEN_AUDIENCE: &str = "selector-conformance";
 const EVIDENCE_AUDIENCE: &str = "urn:example:fixture:audience:requester-a";
@@ -1042,7 +1043,7 @@ async fn prepare_service(write_source_secret: bool) -> PreparedService {
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("Evidence test key parses");
     let provider: Arc<dyn SigningProvider> =
         Arc::new(LocalJwkSigner::new(private).expect("Evidence signer builds"));
-    let signer = EvidenceSigner::initialize(provider, "selector-evidence-key")
+    let signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
         .await
         .expect("Evidence signer self-test succeeds");
     PreparedService {
@@ -1542,6 +1543,12 @@ fn rewrite_source_origin(bundle_root: &Path, source_origin: &str) {
     let path = bundle_root.join("evidence.yaml");
     let mut text = fs::read_to_string(&path).expect("copied selector config is readable");
     replace_exact(&mut text, "https://source.invalid", source_origin, 5);
+    replace_exact(
+        &mut text,
+        "assuranceProfile: evidence-grade",
+        "assuranceProfile: local",
+        1,
+    );
     fs::write(path, text).expect("deployment-only selector rewrite succeeds");
 }
 
@@ -1562,6 +1569,9 @@ fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, au
             "secretProviders:\n",
             "  file:\n",
             "    root: {}\n",
+            "signer:\n",
+            "  kind: local-jwk\n",
+            "  privateKeyRef: secret:file/signing-key\n",
             "auditStorage:\n",
             "  path: {}\n",
             "  maximumFileBytes: 10485760\n",

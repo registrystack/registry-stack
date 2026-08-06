@@ -43,7 +43,7 @@ disclosure_release:
   decision: released
   disclosedConcepts: [urn:example:fixture:concept:boolean-a]
   evidenceId: urn:example:fixture:evidence:001
-  signingKeyId: fixture-key-2026-01
+  signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
   durationMilliseconds: 12
 unsigned_disclosure_release:
   schema: registry.evidence.audit/v1

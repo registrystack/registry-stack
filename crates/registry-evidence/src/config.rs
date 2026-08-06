@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Component, Path};
 use std::str::FromStr;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -386,9 +387,17 @@ impl EvidenceConfig {
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
+        if self.audit.hash_secret_ref == self.subject_binding.secret_ref {
+            return invalid("audit and subject-binding secret references must be distinct");
+        }
         self.rate_limits.validate()?;
         self.signing.validate()?;
         validate_response_formats(&self.response_formats, "bundle response formats")?;
+        if self.assurance_profile != AssuranceProfile::Local
+            && self.response_formats.contains(&ResponseFormat::SdJwtVc)
+        {
+            validate_https_origin(&self.service.provider_id)?;
+        }
         validate_named_map(&self.selector_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
@@ -701,6 +710,23 @@ impl EvidenceConfig {
     }
 }
 
+fn validate_https_origin(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value)
+        .map_err(|_| ConfigError::Invalid("service providerId is not a stable HTTPS origin"))?;
+    if url.scheme() != "https"
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || value.ends_with('/')
+    {
+        return invalid("SD-JWT VC requires service.providerId to be a stable HTTPS origin");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceConfig {
@@ -725,6 +751,9 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: RuntimeSecretProviders,
+    /// Process-local binding to the signer that controls the governed active
+    /// public key. This cannot change the governed key set or algorithm.
+    pub signer: RuntimeSignerConfig,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
 }
@@ -751,8 +780,75 @@ impl RuntimeConfig {
             metrics.validate(&self.listener)?;
         }
         self.secret_providers.validate()?;
+        self.signer.validate()?;
         self.audit_storage.validate()?;
         self.outbound_tls.validate()
+    }
+}
+
+/// Closed process-local signer binding. Production deployments reach Transit
+/// only over a workload-local Unix socket and never receive a provider token.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RuntimeSignerConfig {
+    LocalJwk {
+        #[serde(rename = "privateKeyRef")]
+        private_key_ref: SecretRef,
+    },
+    Transit {
+        #[serde(rename = "unixSocketPath")]
+        unix_socket_path: String,
+        mount: String,
+        #[serde(rename = "keyName")]
+        key_name: String,
+        #[serde(rename = "keyVersion")]
+        key_version: u32,
+        #[serde(rename = "timeoutMilliseconds")]
+        timeout_milliseconds: u64,
+    },
+}
+
+impl RuntimeSignerConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::LocalJwk { .. } => Ok(()),
+            Self::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                key_version,
+                timeout_milliseconds,
+            } => {
+                validate_absolute_path(unix_socket_path)?;
+                if !valid_local_id(mount) || !valid_local_id(key_name) {
+                    return invalid("Transit signer mount and keyName must be local identifiers");
+                }
+                if *key_version == 0 {
+                    return invalid("Transit signer keyVersion must be positive");
+                }
+                validate_range(
+                    *timeout_milliseconds,
+                    1,
+                    30_000,
+                    "Transit signer timeoutMilliseconds",
+                )
+            }
+        }
+    }
+
+    pub fn is_local_jwk(&self) -> bool {
+        matches!(self, Self::LocalJwk { .. })
+    }
+
+    pub fn is_transit(&self) -> bool {
+        matches!(self, Self::Transit { .. })
+    }
+
+    pub fn private_key_ref(&self) -> Option<&SecretRef> {
+        match self {
+            Self::LocalJwk { private_key_ref } => Some(private_key_ref),
+            Self::Transit { .. } => None,
+        }
     }
 }
 
@@ -957,6 +1053,11 @@ pub struct AuthenticationConfig {
     pub evidence_audience_claim: String,
     pub grant_id_claim: String,
     pub grant_authority_claim: String,
+    /// Maximum lifetime accepted for inbound access tokens. The verifier
+    /// requires `iat`, requires `exp > iat`, and applies this bound.
+    pub maximum_token_lifetime_seconds: u64,
+    /// Emergency denylist applied before JWKS cache selection.
+    pub revoked_key_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
 }
@@ -984,6 +1085,27 @@ impl AuthenticationConfig {
         validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
+        validate_range(
+            self.maximum_token_lifetime_seconds,
+            1,
+            86_400,
+            "authentication maximumTokenLifetimeSeconds",
+        )?;
+        validate_unique_strings(
+            &self.revoked_key_ids,
+            0,
+            32,
+            1,
+            256,
+            "authentication revokedKeyIds",
+        )?;
+        if self
+            .revoked_key_ids
+            .iter()
+            .any(|kid| kid.chars().any(char::is_control))
+        {
+            return invalid("authentication revokedKeyIds contain a control character");
+        }
         // Ordered principal first, because `sub` is legitimate for that claim
         // alone and the shadowing check below reads the rest of the list.
         let claims = [
@@ -1220,9 +1342,9 @@ impl RateLimitConfig {
 pub struct SigningConfig {
     pub format: SigningFormat,
     pub algorithm: SigningAlgorithm,
-    pub active_key_id: String,
-    pub active_key_ref: SecretRef,
-    pub retired_public_jwk_files: Vec<PublicJwkPath>,
+    pub active_public_jwk_file: PublicJwkPath,
+    pub published_public_jwk_files: Vec<PublicJwkPath>,
+    pub revoked_key_ids: Vec<String>,
     pub jwks_path: String,
     pub maximum_assertion_validity_seconds: u64,
     pub verifier_clock_skew_seconds: u64,
@@ -1230,16 +1352,20 @@ pub struct SigningConfig {
 
 impl SigningConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_string(&self.active_key_id, 1, 256, "active signing key id")?;
-        if self.active_key_id.chars().any(char::is_control) {
-            return invalid("active signing key id contains a control character");
-        }
         validate_unique(
-            &self.retired_public_jwk_files,
+            &self.published_public_jwk_files,
             0,
             32,
-            "retired public JWK paths",
+            "published public JWK paths",
         )?;
+        if self
+            .published_public_jwk_files
+            .iter()
+            .any(|path| path == &self.active_public_jwk_file)
+        {
+            return invalid("the active public JWK file must not also be published");
+        }
+        validate_key_identifiers(&self.revoked_key_ids, 33, "signing revokedKeyIds")?;
         if self.jwks_path != "/.well-known/evidence/jwks.json" {
             return invalid("JWKS path is not the Version 1 discovery path");
         }
@@ -1269,7 +1395,27 @@ pub enum SigningFormat {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 pub enum SigningAlgorithm {
-    EdDSA,
+    ES256,
+}
+
+fn validate_key_identifiers(
+    identifiers: &[String],
+    maximum: usize,
+    label: &'static str,
+) -> Result<(), ConfigError> {
+    validate_unique_strings(identifiers, 0, maximum, 43, 43, label)?;
+    if identifiers.iter().any(|identifier| {
+        let alphabet_is_valid = identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+        let encoding_is_canonical = URL_SAFE_NO_PAD.decode(identifier).is_ok_and(|decoded| {
+            decoded.len() == 32 && URL_SAFE_NO_PAD.encode(&decoded) == *identifier
+        });
+        !alphabet_is_valid || !encoding_is_canonical
+    }) {
+        return invalid("key identifiers must be RFC 7638 SHA-256 thumbprints");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -3901,8 +4047,12 @@ mod tests {
         );
         assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
         let shrunk_maximum = yaml.replace(
-            "maximumAssertionValiditySeconds: 86400",
-            "maximumAssertionValiditySeconds: 3600",
+            "maximumAssertionValiditySeconds: 300",
+            "maximumAssertionValiditySeconds: 299",
+        );
+        assert_ne!(
+            shrunk_maximum, yaml,
+            "fixture mutation must remain effective"
         );
         assert!(matches!(
             EvidenceConfig::parse_yaml(shrunk_maximum.as_bytes()),
@@ -4211,8 +4361,8 @@ mod tests {
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
         assert!(EvidenceConfig::parse_yaml(unexpected.as_bytes()).is_err());
         let literal_secret = valid.replacen(
-            "activeKeyRef: secret:file/signing-key",
-            "activeKeyRef: literal-private-key",
+            "hashSecretRef: secret:file/audit-hash-key",
+            "hashSecretRef: literal-audit-key",
             1,
         );
         assert_ne!(
@@ -4220,15 +4370,27 @@ mod tests {
             "fixture mutation must remain effective"
         );
         assert!(EvidenceConfig::parse_yaml(literal_secret.as_bytes(),).is_err());
-        assert!(EvidenceConfig::parse_yaml(
-            valid
-                .replace(
-                    "activeKeyId: fixture-key-2026-01",
-                    "activeKeyId: \"fixture-key\\u000A2026-01\"",
-                )
-                .as_bytes(),
-        )
-        .is_err());
+        let invalid_revocation = valid.replacen(
+            "revokedKeyIds: []",
+            "revokedKeyIds: [\"invalid\\u000Akey\"]",
+            1,
+        );
+        assert_ne!(
+            invalid_revocation, valid,
+            "fixture mutation must remain effective"
+        );
+        assert!(EvidenceConfig::parse_yaml(invalid_revocation.as_bytes()).is_err());
+
+        let external_revocation = valid.replacen(
+            "revokedKeyIds: []",
+            "revokedKeyIds: [external-issuer-key-v7]",
+            1,
+        );
+        assert_ne!(
+            external_revocation, valid,
+            "fixture mutation must remain effective"
+        );
+        assert!(EvidenceConfig::parse_yaml(external_revocation.as_bytes()).is_ok());
     }
 
     #[test]
@@ -4570,6 +4732,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4653,6 +4822,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4728,6 +4904,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4825,5 +5008,15 @@ outboundTls:
         assert!(SecretRef::parse("secret:file/source-token").is_ok());
         assert!(SecretRef::parse("secret:env/SOURCE_TOKEN").is_err());
         assert!(SecretRef::parse("literal-token").is_err());
+    }
+
+    #[test]
+    fn service_revoked_key_ids_require_canonical_sha256_thumbprints() {
+        let canonical = "A".repeat(43);
+        assert!(validate_key_identifiers(&[canonical], 33, "revoked keys").is_ok());
+
+        let noncanonical = format!("{}B", "A".repeat(42));
+        assert_eq!(noncanonical.len(), 43);
+        assert!(validate_key_identifiers(&[noncanonical], 33, "revoked keys").is_err());
     }
 }

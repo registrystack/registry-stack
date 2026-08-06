@@ -120,7 +120,9 @@ records, not from the credential.
 
 An unprojected value has one root disclosure. A configured structured value has one disclosure for
 each direct field. Evidence Gateway's current verifier checks the complete stored credential. It does not
-verify a selectively disclosed presentation from a wallet.
+verify a selectively disclosed presentation from a wallet. The profile emits `application/dc+sd-jwt`,
+`typ: dc+sd-jwt`, `vct`, SHA-256 disclosures, optional `cnf.jwk`, and a trailing tilde without a
+key-binding JWT. It is pinned to RFC 9901 and SD-JWT VC draft v18.
 
 ## Keep the boundary explicit
 
@@ -131,9 +133,14 @@ This response is not a credential lifecycle:
 - no presentation exchange or key-binding JWT;
 - no general multi-verifier subject identifier.
 
-The subject binding remains scoped to the assertion's audience and purpose. An optional
-`holderKey` can place a public JWK in `cnf`, but that inclusion alone proves no possession and is
-outside this minimum path.
+The subject binding remains scoped to the assertion's audience and purpose. An optional `holderKey`
+can place only a public P-256 JWK in `cnf`: `kty: EC`, `crv: P-256`, `x`, and `y` are required;
+optional `alg` must be `ES256`; an optional wallet-owned `kid` is allowed; private and unknown members
+are refused. Its inclusion alone proves no possession and is outside this minimum path.
+
+Outside local mode, the service provider identifier must be a stable HTTPS origin. It is the signed
+`iss`, and issuer metadata publishes its exact `issuer` and `jwks_uri`. This shape prepares a future
+standards-based wallet adapter; it makes no compatibility claim for Inji, walt.id, or another wallet.
 
 Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
 `/.well-known/evidence/jwks.json`. Both are discovery. Approve trust independently through

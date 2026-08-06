@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -40,15 +40,16 @@ evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
   questions/           empty question-authoring directory
   derivations/         empty derivation-authoring directory
   fixtures/            empty production-fixture directory
-  secrets/             optional owner-only, unbound local keys
+  secrets/             owner-only, unbound disposable local keys
 ```
 
 The command retains the OpenAPI bytes exactly and creates no fixture content, question, source policy,
-Mint configuration, README, production target, or deployable bundle. Add `--generate-keys` to create disposable local
+Mint configuration, README, production target, or deployable bundle. It automatically creates disposable local
 signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
 editable artifacts from the retained contract. After you add a question, `evidencectl dev`
 compiles the authoring objects into a private local runtime and delegates validation to the real
-Evidence Gateway loader.
+Evidence Gateway loader. Each development session also scaffolds disposable P-256 keys for Registry
+Mint, its caller, and the optional SD-JWT VC holder.
 
 ## The runtime file
 
@@ -86,11 +87,11 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | Section | Declares |
 | --- | --- |
 | `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
-| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. |
+| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. |
 | `audit` | Keyed JSONL audit: the hash secret reference, key version, and fixed fail-closed behavior. |
 | `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
 | `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
-| `signing` | The active EdDSA signing key reference, retired public JWK files, the fixed JWKS path, and assertion validity and clock-skew bounds. |
+| `signing` | Fixed ES256 signing, governed active and published public JWK files, revoked service key identifiers, the fixed JWKS path, and assertion validity and clock-skew bounds. |
 | `responseFormats` (optional) | The bundle-wide ceiling on releasable serializations; defaults to signed JWS alone and must always include it. |
 | `selectorProfiles` | Named, bounded scalar field sets a subject role may be looked up by. |
 | `sources` | Named fixed HTTP JSON sources: transport, base URL, acquisition posture, authentication, the fixed request shape, and the response, extraction, and fact schemas bound to it. |
@@ -151,21 +152,36 @@ after output validation.
 
 ## Key material
 
-Generate each secret independently and keep the private files inside the configured secret root.
-`evidencectl keygen` writes private material as owner-only files and never prints its contents
-(`crates/registry-evidencectl/src/keygen.rs`):
+Generate the audit and subject-binding secrets independently and keep the private files inside the
+configured secret root. `evidencectl keygen` writes private material as owner-only files and never
+prints its contents (`crates/registry-evidencectl/src/keygen.rs`):
 
 ```sh
-evidencectl keygen signing --out-dir "<secrets-dir>" --kid "<active-signing-key-id>"
 evidencectl keygen secret --out "<secrets-dir>/audit-hmac-key"
 evidencectl keygen secret --out "<secrets-dir>/subject-binding-hmac-key"
 ```
 
-### `signing-ed25519-private-jwk` and `signing-ed25519-public.jwk.json`
+### Local P-256 signing JWKs
 
-Evidence Gateway signs assertions with the private Ed25519 JSON Web Key (JWK). Verifiers use the public
-JWK to check the signature without receiving the private key. The key identifier must match
-`signing.activeKeyId` in `bundle/evidence.yaml`.
+For local assurance, Evidence Gateway signs with a P-256 private JSON Web Key (JWK) referenced by
+`signer.privateKeyRef`. The governed public half lives under `bundle/public-keys/`; its service
+`kid` is the RFC 7638 thumbprint that the runtime derives, not an operator-chosen value.
+
+Generate a disposable local pair with:
+
+```sh
+evidencectl keygen signing --out-dir "<owner-only-local-directory>"
+```
+
+Do not use this command to provision a production signer.
+
+Production and evidence-grade deployments use a workload-local Vault or OpenBao Transit proxy.
+The runtime names its Unix socket, mount, key name, pinned nonzero version, and bounded timeout.
+The private key stays in Transit. Startup validates the configured public P-256 JWK, pinned version,
+custody controls, and a sign-and-verify operation before the deployment is ready.
+Follow
+[Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/)
+for provider key, public JWK, proxy, and policy setup.
 
 ### `audit-hmac-key`
 
@@ -210,8 +226,8 @@ evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml
 
 `evidence check` loads, compiles, and validates the complete bundle and runtime file together:
 every selector, role, profile, authority, and source binding resolves, every script compiles
-against the frozen ABI, and mounted secret and signing material parses, all without opening the
-audit chain or contacting a source. `evidence evaluate` replays one fixture file's synthetic
+against the frozen ABI, and mounted signing material passes its provider self-test, all without
+opening the audit chain or contacting a source. `evidence evaluate` replays one fixture file's synthetic
 cases through the reviewed adapter, derivation, and output gate, with no source and no network
 involved.
 
@@ -225,14 +241,16 @@ operator supplies those deployment artifacts, both `check` and `fixtures run` mu
 
 ## Build a production candidate
 
-An editable project is not a deployment input. Add one explicit target under
-`deployment-targets/production/` when the reviewed source, questions, and fixtures are ready:
+An editable project is not a deployment input. Add complete named targets when the reviewed source,
+questions, and fixtures are ready. Keep them in the deployment-operator Git repository with public
+keys and nonsecret Transit settings, but never private JWKs, audit masters, provider tokens, or live
+identifiers. There are no overlays, environment branches, substitutions, or symlinks:
 
 ```text
-deployment-targets/
-  production/
-    governance.yaml
-    runtime.yaml
+environments/
+  local/evidence/{governance.yaml,runtime.yaml,public-keys/}
+  staging/evidence/{governance.yaml,runtime.yaml,public-keys/}
+  production/evidence/{governance.yaml,runtime.yaml,public-keys/}
 ```
 
 `governance.yaml` supplies the production-owned bundle fields, including service, issuer,
@@ -250,7 +268,7 @@ Build a new candidate directory with explicit target and output paths:
 ```sh
 evidencectl build \
   --project "<editable-project>" \
-  --target "<editable-project>/deployment-targets/production" \
+  --target "<editable-project>/environments/production/evidence" \
   --output "<new-candidate-directory>"
 ```
 

@@ -167,7 +167,10 @@ fn check_secrets(
     runtime_path: &Path,
     bundle: &YamlValue,
 ) -> Vec<Check> {
-    let references = secret_references(bundle);
+    // Signing providers and other runtime-only facilities can name file
+    // secrets independently of the governed bundle. Inspect both inputs so
+    // `doctor` follows the same complete startup configuration as Evidence.
+    let references = secret_references([bundle, runtime]);
     let root = runtime
         .get("secretProviders")
         .and_then(|providers| providers.get("file"))
@@ -683,9 +686,11 @@ fn resolve_bundle_directory(
 /// rather than by the field carrying it, so a secret a future field names is
 /// checked without this walk learning that field. `evidence check` is left to
 /// reject a bundle that is otherwise malformed.
-fn secret_references(bundle: &YamlValue) -> Vec<String> {
+fn secret_references<'a>(documents: impl IntoIterator<Item = &'a YamlValue>) -> Vec<String> {
     let mut names = Vec::new();
-    collect_secret_references(bundle, &mut names);
+    for document in documents {
+        collect_secret_references(document, &mut names);
+    }
     names
 }
 

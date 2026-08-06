@@ -28,47 +28,6 @@
         ],
         "type": "object"
       },
-      "Ed25519PublicJwk": {
-        "additionalProperties": false,
-        "properties": {
-          "alg": {
-            "enum": [
-              "EdDSA"
-            ],
-            "type": "string"
-          },
-          "crv": {
-            "enum": [
-              "Ed25519"
-            ],
-            "type": "string"
-          },
-          "kid": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-            "type": "string"
-          },
-          "kty": {
-            "enum": [
-              "OKP"
-            ],
-            "type": "string"
-          },
-          "x": {
-            "pattern": "^[A-Za-z0-9_-]{43}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kty",
-          "kid",
-          "alg",
-          "crv",
-          "x"
-        ],
-        "type": "object"
-      },
       "EntityReferenceValue": {
         "additionalProperties": false,
         "properties": {
@@ -414,7 +373,7 @@
         "properties": {
           "alg": {
             "enum": [
-              "EdDSA"
+              "ES256"
             ],
             "type": "string"
           },
@@ -425,9 +384,7 @@
             "type": "string"
           },
           "kid": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001F\\u007F]+$",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
             "type": "string"
           },
           "typ": {
@@ -723,13 +680,13 @@
         "properties": {
           "alg": {
             "enum": [
-              "EdDSA"
+              "ES256"
             ],
             "type": "string"
           },
           "crv": {
             "enum": [
-              "Ed25519"
+              "P-256"
             ],
             "type": "string"
           },
@@ -740,11 +697,15 @@
           },
           "kty": {
             "enum": [
-              "OKP"
+              "EC"
             ],
             "type": "string"
           },
           "x": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "y": {
             "pattern": "^[A-Za-z0-9_-]{43}$",
             "type": "string"
           }
@@ -752,7 +713,8 @@
         "required": [
           "kty",
           "crv",
-          "x"
+          "x",
+          "y"
         ],
         "type": "object"
       },
@@ -761,7 +723,7 @@
         "properties": {
           "keys": {
             "items": {
-              "$ref": "#/components/schemas/Ed25519PublicJwk"
+              "$ref": "#/components/schemas/P256PublicJwk"
             },
             "maxItems": 33,
             "minItems": 1,
@@ -782,13 +744,59 @@
             "maxLength": 512,
             "type": "string"
           },
-          "jwks": {
-            "$ref": "#/components/schemas/JwksDocument"
+          "jwks_uri": {
+            "format": "uri",
+            "maxLength": 1024,
+            "type": "string"
           }
         },
         "required": [
           "issuer",
-          "jwks"
+          "jwks_uri"
+        ],
+        "type": "object"
+      },
+      "P256PublicJwk": {
+        "additionalProperties": false,
+        "properties": {
+          "alg": {
+            "enum": [
+              "ES256"
+            ],
+            "type": "string"
+          },
+          "crv": {
+            "enum": [
+              "P-256"
+            ],
+            "type": "string"
+          },
+          "kid": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "kty": {
+            "enum": [
+              "EC"
+            ],
+            "type": "string"
+          },
+          "x": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "y": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kty",
+          "kid",
+          "alg",
+          "crv",
+          "x",
+          "y"
         ],
         "type": "object"
       },

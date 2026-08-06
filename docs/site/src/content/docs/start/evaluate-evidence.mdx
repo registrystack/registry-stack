@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-06"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -19,9 +19,10 @@ the next one: what does running it actually cost.
 ## Runtime footprint
 
 Evidence Gateway is one crate, `registry-evidence`, and one binary, `evidence`
-(`crates/registry-evidence/Cargo.toml`). There is no separate control plane,
-worker process, or sidecar: one process serves one operator-controlled trust
-domain (`products/evidence/README.md`).
+(`crates/registry-evidence/Cargo.toml`). There is no separate control plane or worker process: one
+Evidence Gateway process serves one operator-controlled trust domain. Production and evidence-grade
+signing also requires an operator-managed workload-local Transit proxy
+(`products/evidence/README.md`).
 
 At startup the process reads two inputs, both mounted read-only: a closed
 operator `runtime.yaml` that binds one listener, bundle directory, secret
@@ -31,11 +32,11 @@ scripts, schemas, codelists, and fixtures. Neither input may be writable to
 the service process; startup and readiness fail when either is incomplete,
 inconsistent, or mutable (`products/evidence/OPERATOR-CONTRACT.md`).
 
-It also needs key material on local disk before it can start: an Ed25519
-signing key whose `kid` matches `signing.activeKeyId`, plus two independently
-generated raw secrets of at least 32 bytes, one for the audit hash chain and
-one for subject-binding pseudonyms. All three live under an owner-only (mode
-`0700`) secret root, each file mode `0600`
+It needs a governed ES256 P-256 public key whose `kid` is its RFC 7638 thumbprint, plus two
+independently generated raw secrets of at least 32 bytes, one for the audit hash chain and one
+for subject-binding pseudonyms. Production and evidence-grade mode use a workload-local Vault or
+OpenBao Transit proxy over a Unix socket. Local assurance may use an owner-only P-256 private JWK
+under the secret root (mode `0700`, file mode `0600`)
 (`products/evidence/OPERATOR-CONTRACT.md`).
 
 The runtime requires a complete deployment layout like this:
@@ -48,15 +49,17 @@ project_root/
     derivations/          requirement derivation (Rhai)
     schemas/              closed adapter-parameter, response, and fact schemas
     fixtures/             synthetic acceptance cases
+    public-keys/           governed active and published public signing keys
   runtime.yaml            process-local paths and listener, not governed
-  secrets/                key material, created empty with mode 0700
+  secrets/                audit, subject-binding, and source secrets, mode 0700
+  transit-proxy.sock      strict-mode signing boundary, outside the secret root
   audit/                  audit records written by the service
 ```
 
 `evidencectl new <dir> --openapi <file-or-url> --profile local` starts an editable authoring
 workspace. It retains the OpenAPI document and creates directories for reusable selector and
-source objects, source scripts and schemas, questions, and derivations. `--generate-keys` adds
-disposable owner-only local keys. `evidencectl source suggest --project <dir>` drafts one source
+source objects, source scripts and schemas, questions, and derivations, plus disposable owner-only
+local Evidence keys. `evidencectl source suggest --project <dir>` drafts one source
 from the retained contract, and `evidencectl dev` compiles complete authoring objects into the
 private local runtime layout shown here (`crates/registry-evidencectl/src/scaffold.rs`,
 `crates/registry-evidencectl/src/authoring.rs`).
@@ -131,10 +134,11 @@ suitable OIDC issuer.
 
 ### Keys
 
-`evidencectl keygen` generates the signing key and the two HMAC secrets;
-nothing about generation happens automatically on deploy. Rotation is the
-operator's job too: a deployment keeps one active signing key at a time and
-must retain every retired public key in the published JWKS for at least the
+`evidencectl keygen signing` generates a local P-256 signing key pair, while
+`evidencectl keygen secret` generates one audit or subject-binding secret at a
+time. Nothing about production generation happens automatically on deploy.
+Rotation is the operator's job too: a deployment keeps one active signing key
+at a time and must retain every previous public key in the published JWKS for at least the
 maximum assertion validity plus allowed clock skew, or a verifier holding an
 older cached assertion will fail to check it
 (`products/evidence/OPERATOR-CONTRACT.md`).

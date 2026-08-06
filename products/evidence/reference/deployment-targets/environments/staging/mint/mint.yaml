@@ -1,0 +1,28 @@
+version: 1
+validationMode: strict
+issuer: https://mint.staging.example.org
+listener: {address: 127.0.0.1, port: 8081}
+signing:
+  algorithm: ES256
+  activePublicJwkFile: public-keys/OpDYNpGmiwmJssZoDA8LScYy-4pym3al9Fow6MMsFA4.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-mint/transit-proxy.sock
+  mount: transit
+  keyName: mint-signing
+  keyVersion: 5
+  timeoutMilliseconds: 2000
+secretProviders:
+  file: {root: /run/registry-mint/secrets}
+audit: {path: /var/lib/registry-mint/staging/mint.jsonl, maximumFileBytes: 1073741824, hashKeyRef: secret:file/mint-audit-hmac, hashKeyVersion: 1}
+accessTokens:
+  audiences: [evidence.staging.example.org]
+  lifetimeSeconds: 300
+  claims: {principal: sub, requesterTags: evidence_tags, evidenceAudience: evidence_audience, grantId: evidence_grant_id, grantAuthority: evidence_authority, actor: evidence_actor}
+clientAssertion:
+  audience: https://mint.staging.example.org/token
+  maximumLifetimeSeconds: 300
+  algorithms: [EdDSA, ES256, RS256]
+clients: {directory: clients}

@@ -239,7 +239,7 @@ impl SourceExecutor {
         if source.tls_trust_profile.is_some() {
             return Err(SourceError::InvalidPlan);
         }
-        Self::compile(source, allowed_selector_sets, None, secrets)
+        Self::compile(source, allowed_selector_sets, None, false, secrets)
     }
 
     /// Compile a source against runtime-owned TLS trust bindings. System roots
@@ -255,14 +255,27 @@ impl SourceExecutor {
             source,
             allowed_selector_sets,
             Some((outbound_tls, captured_ca_bundles)),
+            false,
             secrets,
         )
+    }
+
+    /// Compile the non-credential request material used only by the hidden
+    /// bundle fixture evaluator. Runtime-owned private CA bytes are not needed
+    /// because this executor can materialize requests but is never executed.
+    pub fn new_for_offline_fixture(
+        source: &SourceConfig,
+        allowed_selector_sets: &[SourceSelectorSet],
+        secrets: Arc<SecretResolver>,
+    ) -> Result<Self, SourceError> {
+        Self::compile(source, allowed_selector_sets, None, true, secrets)
     }
 
     fn compile(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
         outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
+        offline_fixture: bool,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
         if matches!(source.authentication, SourceAuthentication::None {})
@@ -290,7 +303,7 @@ impl SourceExecutor {
             base_url,
             &authentication,
         )?;
-        let client = build_client(timeout, source, outbound_tls)?;
+        let client = build_client(timeout, source, outbound_tls, offline_fixture)?;
         Ok(Self {
             client,
             request,
@@ -437,6 +450,7 @@ fn build_client(
     timeout: Duration,
     source: &SourceConfig,
     outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
+    offline_fixture: bool,
 ) -> Result<reqwest::Client, SourceError> {
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
@@ -454,6 +468,9 @@ fn build_client(
         // contract.
         .retry(reqwest::retry::never());
     if let Some(profile_name) = source.tls_trust_profile.as_deref() {
+        if offline_fixture && outbound_tls.is_none() {
+            return builder.build().map_err(|_| SourceError::InvalidPlan);
+        }
         let (tls, captured_ca_bundles) = outbound_tls.ok_or(SourceError::InvalidPlan)?;
         if !tls.system_roots {
             return Err(SourceError::InvalidPlan);
@@ -1702,7 +1719,8 @@ mod tests {
             "factSchema": "schemas/facts.schema.yaml"
         }))
         .expect("source config deserializes");
-        let client = build_client(Duration::from_secs(5), &source, None).expect("client builds");
+        let client =
+            build_client(Duration::from_secs(5), &source, None, false).expect("client builds");
         let error = client
             .get(format!("https://{address}/"))
             .send()

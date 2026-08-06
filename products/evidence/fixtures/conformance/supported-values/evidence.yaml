@@ -9,13 +9,15 @@ authentication:
   issuer: https://identity.invalid
   audiences: [evidence-fixture]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit:
   format: keyed-jsonl
   hashSecretRef: secret:file/audit-hash-key
@@ -30,12 +32,12 @@ rateLimits:
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: supported-values-fixture-key
-  activeKeyRef: secret:file/signing-key
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 responseFormats: [signed-jws]
 
@@ -97,7 +99,7 @@ requirements:
     referenceFrameworks: [urn:example:fixture:framework:supported-values:v1]
     evidenceType: urn:example:fixture:evidence-type:supported-values:v1
     observationTimezone: UTC
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/values.rhai
       parameters: {}

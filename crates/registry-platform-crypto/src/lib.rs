@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
 use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use ed25519_dalek::{
     Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
@@ -16,6 +16,9 @@ use p256::ecdsa::{
     signature::Verifier as _, Signature as P256Signature, SigningKey as P256SigningKey,
     VerifyingKey as P256VerifyingKey,
 };
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::pkcs8::DecodePublicKey as _;
+use p256::PublicKey as P256PublicKey;
 use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
 pub use registry_platform_canonical_json::{
     canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
@@ -26,7 +29,10 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::net::IpAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
@@ -435,6 +441,371 @@ impl SigningProvider for LocalJwkSigner {
     }
 }
 
+const MAX_TRANSIT_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_TRANSIT_SIGNING_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_TRANSIT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const TRANSIT_SELF_TEST_MESSAGE: &[u8] = b"registry-platform-transit-signing-readiness-v1";
+const TRANSIT_READINESS_UNKNOWN: u8 = 0;
+const TRANSIT_READINESS_READY: u8 = 1;
+const TRANSIT_READINESS_NOT_READY: u8 = 2;
+
+/// Validated connection and key binding for a Vault/OpenBao Transit signer.
+///
+/// The Transit API is reached only through a Unix socket. Authentication and
+/// token renewal therefore remain the responsibility of a dedicated local
+/// proxy rather than entering the application process. Configuration details
+/// are deliberately redacted from `Debug` because socket, mount, and key names
+/// reveal deployment topology.
+#[derive(Clone)]
+pub struct TransitSignerConfig {
+    socket_path: PathBuf,
+    mount_path: String,
+    key_name: String,
+    key_version: u32,
+    public_jwk: PublicJwk,
+    request_timeout: Duration,
+}
+
+impl TransitSignerConfig {
+    /// Bind one immutable ES256 public identity to one explicit Transit key
+    /// version. `key_version = 0` (the provider's "latest" alias) is refused so
+    /// rotation cannot silently replace key bytes below an unchanged `kid`.
+    pub fn new(
+        socket_path: impl Into<PathBuf>,
+        mount_path: impl Into<String>,
+        key_name: impl Into<String>,
+        key_version: u32,
+        public_jwk: PublicJwk,
+        request_timeout: Duration,
+    ) -> Result<Self, SigningError> {
+        let socket_path = socket_path.into();
+        let mount_path = mount_path.into();
+        let key_name = key_name.into();
+        if !socket_path.is_absolute()
+            || !valid_transit_path(&mount_path)
+            || !valid_transit_segment(&key_name)
+            || key_version == 0
+            || request_timeout.is_zero()
+            || request_timeout > MAX_TRANSIT_REQUEST_TIMEOUT
+            || public_jwk.algorithm().ok() != Some(SigningAlgorithm::Es256)
+            || public_jwk.kid.as_deref().is_none_or(|kid| {
+                kid.trim().is_empty() || kid.len() > 256 || kid.chars().any(char::is_control)
+            })
+        {
+            return Err(transit_error("transit signer configuration is invalid"));
+        }
+        public_jwk
+            .validate_public()
+            .map_err(|_| transit_error("transit signer configuration is invalid"))?;
+        Ok(Self {
+            socket_path,
+            mount_path,
+            key_name,
+            key_version,
+            public_jwk,
+            request_timeout,
+        })
+    }
+}
+
+impl fmt::Debug for TransitSignerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransitSignerConfig")
+            .field("algorithm", &SigningAlgorithm::Es256)
+            .field("key_id", &self.public_jwk.kid)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Non-exportable ES256 signer backed by the common Vault/OpenBao Transit API.
+///
+/// Construction validates provider custody metadata, the pinned version, and
+/// the provider's PEM public key before a sign-and-verify self-test marks the
+/// signer ready. Every later signature is verified locally before release.
+pub struct TransitSigner {
+    client: reqwest::Client,
+    metadata_url: String,
+    sign_url: String,
+    key_version: u32,
+    public_jwk: PublicJwk,
+    key_id: String,
+    request_timeout: Duration,
+    readiness: AtomicU8,
+}
+
+impl TransitSigner {
+    /// Connect to Transit, validate custody and public identity metadata, and
+    /// prove signing access without exporting private material.
+    pub async fn initialize(config: TransitSignerConfig) -> Result<Self, SigningError> {
+        let client = build_transit_client(&config)?;
+        let signer = Self {
+            client,
+            metadata_url: format!(
+                "http://localhost/v1/{}/keys/{}",
+                config.mount_path, config.key_name
+            ),
+            sign_url: format!(
+                "http://localhost/v1/{}/sign/{}/sha2-256",
+                config.mount_path, config.key_name
+            ),
+            key_version: config.key_version,
+            key_id: config
+                .public_jwk
+                .kid
+                .as_deref()
+                .expect("TransitSignerConfig validates kid")
+                .to_owned(),
+            public_jwk: config.public_jwk,
+            request_timeout: config.request_timeout,
+            readiness: AtomicU8::new(TRANSIT_READINESS_UNKNOWN),
+        };
+        let metadata = signer
+            .request_json(reqwest::Method::GET, &signer.metadata_url, None)
+            .await
+            .map_err(|_| transit_error("transit signer metadata is unavailable"))?;
+        signer
+            .validate_metadata(&metadata)
+            .map_err(|_| transit_error("transit signer metadata is invalid"))?;
+        signer
+            .sign(TRANSIT_SELF_TEST_MESSAGE)
+            .await
+            .map_err(|_| transit_error("transit signer self-test failed"))?;
+        Ok(signer)
+    }
+
+    async fn request_json(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, SigningError> {
+        let mut request = self
+            .client
+            .request(method, url)
+            .header("X-Vault-Request", "true")
+            .timeout(self.request_timeout);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| transit_error("transit provider request failed"))?;
+        if !response.status().is_success() {
+            return Err(transit_error("transit provider request failed"));
+        }
+        let bytes = read_bounded_transit_response(response).await?;
+        parse_json_strict(&bytes).map_err(|_| transit_error("transit provider response is invalid"))
+    }
+
+    fn validate_metadata(&self, document: &Value) -> Result<(), SigningError> {
+        let data = document
+            .get("data")
+            .and_then(Value::as_object)
+            .ok_or_else(|| transit_error("transit provider metadata is invalid"))?;
+        let required_false = ["derived", "exportable", "allow_plaintext_backup"];
+        if data.get("type").and_then(Value::as_str) != Some("ecdsa-p256")
+            || data.get("supports_signing").and_then(Value::as_bool) != Some(true)
+            || required_false
+                .iter()
+                .any(|field| data.get(*field).and_then(Value::as_bool) != Some(false))
+        {
+            return Err(transit_error("transit provider custody is invalid"));
+        }
+
+        let latest_version = data
+            .get("latest_version")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| transit_error("transit provider version is invalid"))?;
+        let minimum_signing_version = data
+            .get("min_encryption_version")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| transit_error("transit provider version is invalid"))?;
+        if self.key_version > latest_version || self.key_version < minimum_signing_version {
+            return Err(transit_error("transit provider version is invalid"));
+        }
+
+        let version = self.key_version.to_string();
+        let pem = data
+            .get("keys")
+            .and_then(Value::as_object)
+            .and_then(|keys| keys.get(&version))
+            .and_then(Value::as_object)
+            .and_then(|key| key.get("public_key"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| transit_error("transit provider public key is invalid"))?;
+        validate_transit_public_key(pem, &self.public_jwk)
+    }
+
+    fn set_readiness(&self, readiness: KeyReadiness) {
+        let encoded = match readiness {
+            KeyReadiness::Ready => TRANSIT_READINESS_READY,
+            KeyReadiness::NotReady | KeyReadiness::Degraded => TRANSIT_READINESS_NOT_READY,
+            KeyReadiness::Unknown => TRANSIT_READINESS_UNKNOWN,
+        };
+        self.readiness.store(encoded, Ordering::Release);
+    }
+}
+
+impl fmt::Debug for TransitSigner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransitSigner")
+            .field("algorithm", &SigningAlgorithm::Es256)
+            .field("key_id", &self.key_id)
+            .field("readiness", &self.readiness())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl SigningProvider for TransitSigner {
+    fn algorithm(&self) -> SigningAlgorithm {
+        SigningAlgorithm::Es256
+    }
+
+    fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    fn public_jwk(&self) -> PublicJwk {
+        self.public_jwk.clone()
+    }
+
+    fn readiness(&self) -> KeyReadiness {
+        match self.readiness.load(Ordering::Acquire) {
+            TRANSIT_READINESS_READY => KeyReadiness::Ready,
+            TRANSIT_READINESS_NOT_READY => KeyReadiness::NotReady,
+            _ => KeyReadiness::Unknown,
+        }
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+        if payload.len() > MAX_TRANSIT_SIGNING_INPUT_BYTES {
+            return Err(transit_error("transit signing input is too large"));
+        }
+        let digest = Sha256::digest(payload);
+        let body = serde_json::json!({
+            "input": STANDARD.encode(digest),
+            "key_version": self.key_version,
+            "marshaling_algorithm": "jws",
+            "prehashed": true,
+        });
+        let result = async {
+            let document = self
+                .request_json(reqwest::Method::POST, &self.sign_url, Some(&body))
+                .await?;
+            let signature = document
+                .get("data")
+                .and_then(|data| data.get("signature"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| transit_error("transit provider signature is invalid"))?;
+            let prefix = format!("vault:v{}:", self.key_version);
+            let encoded = signature
+                .strip_prefix(&prefix)
+                .ok_or_else(|| transit_error("transit provider signature is invalid"))?;
+            let signature = URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| transit_error("transit provider signature is invalid"))?;
+            if signature.len() != 64 {
+                return Err(transit_error("transit provider signature is invalid"));
+            }
+            verify(payload, &signature, &self.public_jwk)
+                .map_err(|_| transit_error("transit provider signature is invalid"))?;
+            Ok(signature)
+        }
+        .await;
+        match result {
+            Ok(signature) => {
+                self.set_readiness(KeyReadiness::Ready);
+                Ok(signature)
+            }
+            Err(error) => {
+                self.set_readiness(KeyReadiness::NotReady);
+                Err(error)
+            }
+        }
+    }
+}
+
+fn build_transit_client(config: &TransitSignerConfig) -> Result<reqwest::Client, SigningError> {
+    #[cfg(unix)]
+    {
+        reqwest::Client::builder()
+            .no_proxy()
+            .unix_socket(config.socket_path.clone())
+            .build()
+            .map_err(|_| transit_error("transit signer configuration is invalid"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = config;
+        Err(transit_error(
+            "transit signer requires Unix-domain socket support",
+        ))
+    }
+}
+
+async fn read_bounded_transit_response(
+    mut response: reqwest::Response,
+) -> Result<Vec<u8>, SigningError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_TRANSIT_RESPONSE_BYTES as u64)
+    {
+        return Err(transit_error("transit provider response is too large"));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| transit_error("transit provider response is invalid"))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_TRANSIT_RESPONSE_BYTES {
+            return Err(transit_error("transit provider response is too large"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn validate_transit_public_key(pem: &str, configured: &PublicJwk) -> Result<(), SigningError> {
+    let provider = P256PublicKey::from_public_key_pem(pem)
+        .map_err(|_| transit_error("transit provider public key is invalid"))?;
+    let x = decode_fixed(configured.x.as_deref(), 32, "x")
+        .map_err(|_| transit_error("transit provider public key is invalid"))?;
+    let y = decode_fixed(configured.y.as_deref(), 32, "y")
+        .map_err(|_| transit_error("transit provider public key is invalid"))?;
+    let mut configured_sec1 = Vec::with_capacity(65);
+    configured_sec1.push(0x04);
+    configured_sec1.extend_from_slice(&x);
+    configured_sec1.extend_from_slice(&y);
+    if provider.to_encoded_point(false).as_bytes() != configured_sec1 {
+        return Err(transit_error("transit provider public key does not match"));
+    }
+    Ok(())
+}
+
+fn valid_transit_path(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && value.split('/').all(valid_transit_segment)
+}
+
+fn valid_transit_segment(value: &str) -> bool {
+    !value.is_empty()
+        && !matches!(value, "." | "..")
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn transit_error(message: &'static str) -> SigningError {
+    SigningError::external(message)
+}
+
 impl PrivateJwk {
     pub fn parse(json: &str) -> Result<Self, JwkError> {
         if json.len() > MAX_JWK_JSON_BYTES {
@@ -565,8 +936,14 @@ impl PublicJwk {
                 if self.kty != "EC" || self.crv.as_deref() != Some("P-256") {
                     return Err(JwkError::Invalid("ES256 keys must be EC/P-256"));
                 }
-                decode_fixed(self.x.as_deref(), 32, "x")?;
-                decode_fixed(self.y.as_deref(), 32, "y")?;
+                let x = decode_fixed(self.x.as_deref(), 32, "x")?;
+                let y = decode_fixed(self.y.as_deref(), 32, "y")?;
+                let mut encoded = Vec::with_capacity(65);
+                encoded.push(0x04);
+                encoded.extend_from_slice(&x);
+                encoded.extend_from_slice(&y);
+                P256PublicKey::from_sec1_bytes(&encoded)
+                    .map_err(|_| JwkError::Invalid("ES256 public point"))?;
             }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
@@ -1159,10 +1536,255 @@ fn hex_value(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use p256::pkcs8::{EncodePublicKey as _, LineEnding};
     use serde_json::json;
+    #[cfg(unix)]
+    use tempfile::TempDir;
+    #[cfg(unix)]
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    #[cfg(unix)]
+    use tokio::net::UnixListener;
+    #[cfg(unix)]
+    use tokio::task::JoinHandle;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
+
+    #[cfg(unix)]
+    struct MockTransitReply {
+        method: &'static str,
+        path: &'static str,
+        body: Option<Value>,
+        status: u16,
+        response: Vec<u8>,
+        delay: Duration,
+    }
+
+    #[cfg(unix)]
+    fn spawn_transit_mock(replies: Vec<MockTransitReply>) -> (TempDir, PathBuf, JoinHandle<()>) {
+        let directory = tempfile::tempdir().expect("temporary Transit directory");
+        let socket_path = directory.path().join("transit.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind mock Transit socket");
+        let task = tokio::spawn(async move {
+            for reply in replies {
+                let (mut stream, _) = listener.accept().await.expect("accept Transit request");
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0_u8; 4096];
+                    let read = stream.read(&mut chunk).await.expect("read Transit request");
+                    assert_ne!(read, 0, "Transit request ended before its headers");
+                    request.extend_from_slice(&chunk[..read]);
+                    assert!(request.len() <= 128 * 1024, "mock request stayed bounded");
+                    if let Some(position) =
+                        request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                    {
+                        break position + 4;
+                    }
+                };
+                let headers = std::str::from_utf8(&request[..header_end])
+                    .expect("Transit request headers are UTF-8");
+                let mut lines = headers.lines();
+                let request_line = lines.next().expect("request line");
+                let mut request_parts = request_line.split_whitespace();
+                assert_eq!(request_parts.next(), Some(reply.method));
+                assert_eq!(request_parts.next(), Some(reply.path));
+                let lower_headers = headers.to_ascii_lowercase();
+                assert!(
+                    lower_headers.contains("x-vault-request: true"),
+                    "Transit request marks the trusted proxy hop"
+                );
+                let content_length = lines
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .map(|(_, value)| value.trim().parse::<usize>().expect("content length"))
+                    .unwrap_or(0);
+                while request.len() < header_end + content_length {
+                    let mut chunk = [0_u8; 4096];
+                    let read = stream
+                        .read(&mut chunk)
+                        .await
+                        .expect("read Transit request body");
+                    assert_ne!(read, 0, "Transit request body ended early");
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let actual_body = &request[header_end..header_end + content_length];
+                match reply.body {
+                    Some(expected) => {
+                        let actual: Value =
+                            serde_json::from_slice(actual_body).expect("Transit request JSON");
+                        assert_eq!(actual, expected);
+                    }
+                    None => assert!(actual_body.is_empty()),
+                }
+
+                if !reply.delay.is_zero() {
+                    tokio::time::sleep(reply.delay).await;
+                }
+                let reason = if reply.status == 200 { "OK" } else { "ERROR" };
+                let response_headers = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.status,
+                    reason,
+                    reply.response.len()
+                );
+                let _ = stream.write_all(response_headers.as_bytes()).await;
+                let _ = stream.write_all(&reply.response).await;
+            }
+        });
+        (directory, socket_path, task)
+    }
+
+    #[cfg(unix)]
+    fn p256_public_pem(private: &PrivateJwk) -> String {
+        let scalar = decode_fixed(private.d.as_deref(), 32, "d").expect("P-256 scalar");
+        let signing = P256SigningKey::from_slice(&scalar).expect("P-256 signing key");
+        let encoded = signing.verifying_key().to_encoded_point(false);
+        let public = P256PublicKey::from_sec1_bytes(encoded.as_bytes()).expect("P-256 public key");
+        public
+            .to_public_key_pem(LineEnding::LF)
+            .expect("P-256 public PEM")
+    }
+
+    #[cfg(unix)]
+    fn transit_metadata(public_key: &str) -> Value {
+        json!({
+            "data": {
+                "type": "ecdsa-p256",
+                "derived": false,
+                "exportable": false,
+                "allow_plaintext_backup": false,
+                "imported": true,
+                "deletion_allowed": true,
+                "supports_signing": true,
+                "latest_version": 9,
+                "min_encryption_version": 2,
+                "keys": {
+                    "7": {
+                        "creation_time": "2026-08-06T00:00:00Z",
+                        "public_key": public_key,
+                    }
+                }
+            }
+        })
+    }
+
+    // Mirrors the documented Vault Transit read-key response, extended with
+    // the versioned P-256 public-key object returned for an asymmetric key.
+    #[cfg(unix)]
+    fn vault_transit_metadata_response_fixture(public_key: &str) -> Value {
+        json!({
+            "data": {
+                "type": "ecdsa-p256",
+                "deletion_allowed": false,
+                "derived": false,
+                "exportable": false,
+                "allow_plaintext_backup": false,
+                "keys": {
+                    "7": {
+                        "creation_time": "2026-08-06T00:00:00Z",
+                        "public_key": public_key,
+                    }
+                },
+                "latest_version": 9,
+                "min_decryption_version": 1,
+                "min_encryption_version": 2,
+                "name": "vault-evidence-key",
+                "supports_encryption": false,
+                "supports_decryption": false,
+                "supports_derivation": false,
+                "supports_signing": true,
+                "imported": false,
+            }
+        })
+    }
+
+    // OpenBao documents the same Transit read-key wire schema. Keep a
+    // separate fixture so a future provider divergence cannot be hidden by a
+    // generic compatibility test.
+    #[cfg(unix)]
+    fn openbao_transit_metadata_response_fixture(public_key: &str) -> Value {
+        json!({
+            "data": {
+                "type": "ecdsa-p256",
+                "deletion_allowed": true,
+                "derived": false,
+                "exportable": false,
+                "allow_plaintext_backup": false,
+                "keys": {
+                    "7": {
+                        "creation_time": "2026-08-06T00:00:00Z",
+                        "public_key": public_key,
+                    }
+                },
+                "latest_version": 9,
+                "min_decryption_version": 1,
+                "min_encryption_version": 2,
+                "name": "openbao-evidence-key",
+                "supports_encryption": false,
+                "supports_decryption": false,
+                "supports_derivation": false,
+                "supports_signing": true,
+                "imported": true,
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    fn transit_signature(private: &PrivateJwk, payload: &[u8], version: u32) -> Value {
+        let signature = sign(payload, private).expect("mock Transit signature");
+        json!({
+            "data": {
+                "signature": format!("vault:v{version}:{}", URL_SAFE_NO_PAD.encode(signature))
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    fn vault_transit_sign_response_fixture(
+        private: &PrivateJwk,
+        payload: &[u8],
+        version: u32,
+    ) -> Value {
+        transit_signature(private, payload, version)
+    }
+
+    #[cfg(unix)]
+    fn openbao_transit_sign_response_fixture(
+        private: &PrivateJwk,
+        payload: &[u8],
+        version: u32,
+    ) -> Value {
+        transit_signature(private, payload, version)
+    }
+
+    #[cfg(unix)]
+    fn transit_request(payload: &[u8], version: u32) -> Value {
+        let digest = Sha256::digest(payload);
+        json!({
+            "input": STANDARD.encode(digest),
+            "key_version": version,
+            "marshaling_algorithm": "jws",
+            "prehashed": true,
+        })
+    }
+
+    #[cfg(unix)]
+    fn transit_reply(
+        method: &'static str,
+        path: &'static str,
+        body: Option<Value>,
+        response: Value,
+    ) -> MockTransitReply {
+        MockTransitReply {
+            method,
+            path,
+            body,
+            status: 200,
+            response: serde_json::to_vec(&response).expect("mock response JSON"),
+            delay: Duration::ZERO,
+        }
+    }
 
     // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256). Generated once
     // with openssl and converted to JWK; used only by RS256 tests. Not a
@@ -1183,7 +1805,9 @@ mod tests {
         assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
         assert!(debug.contains("[redacted]"));
 
-        let public = private.public();
+        let projected = private.public();
+        let encoded = serde_json::to_string(&projected).expect("public JWK serializes");
+        let public = PublicJwk::parse(&encoded).expect("P-256 public JWK parses");
         let public_json = serde_json::to_value(&public).expect("public jwk serializes");
         assert_eq!(
             public_json.get("x").and_then(Value::as_str),
@@ -1343,6 +1967,413 @@ mod tests {
         assert!(!debug.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_uses_the_common_vault_openbao_es256_wire_contract() {
+        const METADATA_PATH: &str = "/v1/registry-transit/keys/custody-key";
+        const SIGN_PATH: &str = "/v1/registry-transit/sign/custody-key/sha2-256";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let public = private.public();
+        let payload = &[0xfb, 0xff];
+        assert_eq!(
+            transit_request(payload, 7)["input"],
+            "24/tVBWa/kCs5bSdcCJZ/YjJxACTBxgYJEh7qrXGveo="
+        );
+        assert_ne!(transit_request(payload, 7)["input"], "+/8=");
+        let replies = vec![
+            transit_reply(
+                "GET",
+                METADATA_PATH,
+                None,
+                transit_metadata(&p256_public_pem(&private)),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                transit_signature(&private, TRANSIT_SELF_TEST_MESSAGE, 7),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(payload, 7)),
+                transit_signature(&private, payload, 7),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let socket_marker = socket_path.display().to_string();
+        let config = TransitSignerConfig::new(
+            socket_path,
+            "registry-transit",
+            "custody-key",
+            7,
+            public.clone(),
+            Duration::from_secs(2),
+        )
+        .expect("Transit config");
+        let config_debug = format!("{config:?}");
+        assert!(!config_debug.contains(&socket_marker));
+        assert!(!config_debug.contains("registry-transit"));
+        assert!(!config_debug.contains("custody-key"));
+
+        let signer = TransitSigner::initialize(config)
+            .await
+            .expect("Transit signer initializes");
+        assert_eq!(signer.algorithm(), SigningAlgorithm::Es256);
+        assert_eq!(signer.key_id(), "did:web:issuer.test#p256-key-1");
+        assert_eq!(signer.public_jwk(), public);
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+        let signature = signer.sign(payload).await.expect("Transit signs");
+        assert_eq!(signature.len(), 64);
+        verify(payload, &signature, &signer.public_jwk()).expect("signature verifies");
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+
+        server.await.expect("mock Transit server completed");
+        drop(directory);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_accepts_vault_native_metadata_and_sign_response_fixtures() {
+        const METADATA_PATH: &str = "/v1/vault-transit/keys/evidence-key";
+        const SIGN_PATH: &str = "/v1/vault-transit/sign/evidence-key/sha2-256";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let replies = vec![
+            transit_reply(
+                "GET",
+                METADATA_PATH,
+                None,
+                vault_transit_metadata_response_fixture(&p256_public_pem(&private)),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                vault_transit_sign_response_fixture(&private, TRANSIT_SELF_TEST_MESSAGE, 7),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let signer = TransitSigner::initialize(
+            TransitSignerConfig::new(
+                socket_path,
+                "vault-transit",
+                "evidence-key",
+                7,
+                private.public(),
+                Duration::from_secs(1),
+            )
+            .expect("Vault Transit config"),
+        )
+        .await
+        .expect("Vault Transit fixtures initialize the signer");
+
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+        server.await.expect("mock Vault Transit server completed");
+        drop(directory);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_accepts_openbao_native_metadata_and_sign_response_fixtures() {
+        const METADATA_PATH: &str = "/v1/openbao-transit/keys/evidence-key";
+        const SIGN_PATH: &str = "/v1/openbao-transit/sign/evidence-key/sha2-256";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let replies = vec![
+            transit_reply(
+                "GET",
+                METADATA_PATH,
+                None,
+                openbao_transit_metadata_response_fixture(&p256_public_pem(&private)),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                openbao_transit_sign_response_fixture(&private, TRANSIT_SELF_TEST_MESSAGE, 7),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let signer = TransitSigner::initialize(
+            TransitSignerConfig::new(
+                socket_path,
+                "openbao-transit",
+                "evidence-key",
+                7,
+                private.public(),
+                Duration::from_secs(1),
+            )
+            .expect("OpenBao Transit config"),
+        )
+        .await
+        .expect("OpenBao Transit fixtures initialize the signer");
+
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+        server.await.expect("mock OpenBao Transit server completed");
+        drop(directory);
+    }
+
+    #[test]
+    fn transit_signer_config_rejects_unpinned_or_non_es256_bindings() {
+        let public = PrivateJwk::parse(P256_JWK)
+            .expect("P-256 private JWK")
+            .public();
+        let build = |socket: &str,
+                     mount: &str,
+                     name: &str,
+                     version: u32,
+                     key: PublicJwk,
+                     timeout: Duration| {
+            TransitSignerConfig::new(socket, mount, name, version, key, timeout)
+        };
+        assert!(build(
+            "relative.sock",
+            "transit",
+            "key",
+            7,
+            public.clone(),
+            Duration::from_secs(1)
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "../transit",
+            "key",
+            7,
+            public.clone(),
+            Duration::from_secs(1)
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "transit",
+            "key/name",
+            7,
+            public.clone(),
+            Duration::from_secs(1)
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "transit",
+            "key",
+            0,
+            public.clone(),
+            Duration::from_secs(1)
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "transit",
+            "key",
+            7,
+            public.clone(),
+            Duration::ZERO
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "transit",
+            "key",
+            7,
+            public,
+            MAX_TRANSIT_REQUEST_TIMEOUT + Duration::from_millis(1)
+        )
+        .is_err());
+        assert!(build(
+            "/run/transit.sock",
+            "transit",
+            "key",
+            7,
+            PrivateJwk::parse(RAW_JWK).expect("Ed25519 JWK").public(),
+            Duration::from_secs(1)
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_rejects_unsafe_or_mismatched_metadata() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let public = private.public();
+        let pem = p256_public_pem(&private);
+        let mut cases = Vec::new();
+        for field in ["derived", "exportable", "allow_plaintext_backup"] {
+            let mut metadata = transit_metadata(&pem);
+            metadata["data"][field] = Value::Bool(true);
+            cases.push(metadata);
+        }
+        let mut wrong_type = transit_metadata(&pem);
+        wrong_type["data"]["type"] = Value::String("ed25519".to_owned());
+        cases.push(wrong_type);
+        let mut no_signing = transit_metadata(&pem);
+        no_signing["data"]["supports_signing"] = Value::Bool(false);
+        cases.push(no_signing);
+        let mut version_too_old = transit_metadata(&pem);
+        version_too_old["data"]["min_encryption_version"] = json!(8);
+        cases.push(version_too_old);
+        let mut missing_version = transit_metadata(&pem);
+        missing_version["data"]["keys"]
+            .as_object_mut()
+            .expect("keys object")
+            .remove("7");
+        cases.push(missing_version);
+
+        let other_scalar = [42_u8; 32];
+        let other_signing = P256SigningKey::from_slice(&other_scalar).expect("second P-256 key");
+        let other_point = other_signing.verifying_key().to_encoded_point(false);
+        let other_public =
+            P256PublicKey::from_sec1_bytes(other_point.as_bytes()).expect("second public key");
+        let mut wrong_public = transit_metadata(
+            &other_public
+                .to_public_key_pem(LineEnding::LF)
+                .expect("second public PEM"),
+        );
+        wrong_public["data"]["latest_version"] = json!(7);
+        cases.push(wrong_public);
+
+        for metadata in cases {
+            let replies = vec![transit_reply("GET", METADATA_PATH, None, metadata)];
+            let (directory, socket_path, server) = spawn_transit_mock(replies);
+            let config = TransitSignerConfig::new(
+                socket_path,
+                "transit",
+                "key",
+                7,
+                public.clone(),
+                Duration::from_secs(1),
+            )
+            .expect("Transit config");
+            let error = TransitSigner::initialize(config)
+                .await
+                .expect_err("unsafe Transit metadata must reject");
+            assert!(error.to_string().contains("metadata is invalid"));
+            server.await.expect("mock Transit server completed");
+            drop(directory);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_fails_closed_without_leaking_provider_responses_then_recovers() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        const SIGN_PATH: &str = "/v1/transit/sign/key/sha2-256";
+        const CANARY: &str = "PRIVATE_PROVIDER_DIAGNOSTIC_CANARY";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let public = private.public();
+        let payload = b"protected.payload";
+        let replies = vec![
+            transit_reply(
+                "GET",
+                METADATA_PATH,
+                None,
+                transit_metadata(&p256_public_pem(&private)),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(TRANSIT_SELF_TEST_MESSAGE, 7)),
+                transit_signature(&private, TRANSIT_SELF_TEST_MESSAGE, 7),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(payload, 7)),
+                json!({"data": {"signature": format!("vault:v8:{CANARY}")}}),
+            ),
+            transit_reply(
+                "POST",
+                SIGN_PATH,
+                Some(transit_request(payload, 7)),
+                transit_signature(&private, payload, 7),
+            ),
+        ];
+        let (directory, socket_path, server) = spawn_transit_mock(replies);
+        let signer = TransitSigner::initialize(
+            TransitSignerConfig::new(
+                socket_path,
+                "transit",
+                "key",
+                7,
+                public,
+                Duration::from_secs(1),
+            )
+            .expect("Transit config"),
+        )
+        .await
+        .expect("Transit signer initializes");
+
+        let error = signer
+            .sign(payload)
+            .await
+            .expect_err("wrong version rejects");
+        assert!(!error.to_string().contains(CANARY));
+        assert_eq!(signer.readiness(), KeyReadiness::NotReady);
+        signer.sign(payload).await.expect("provider recovery signs");
+        assert_eq!(signer.readiness(), KeyReadiness::Ready);
+
+        server.await.expect("mock Transit server completed");
+        drop(directory);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transit_signer_bounds_time_and_response_bytes() {
+        const METADATA_PATH: &str = "/v1/transit/keys/key";
+        let private = PrivateJwk::parse(P256_JWK).expect("P-256 private JWK");
+        let public = private.public();
+        let delayed = MockTransitReply {
+            method: "GET",
+            path: METADATA_PATH,
+            body: None,
+            status: 200,
+            response: serde_json::to_vec(&transit_metadata(&p256_public_pem(&private)))
+                .expect("metadata JSON"),
+            delay: Duration::from_millis(50),
+        };
+        let (directory, socket_path, server) = spawn_transit_mock(vec![delayed]);
+        let config = TransitSignerConfig::new(
+            socket_path,
+            "transit",
+            "key",
+            7,
+            public.clone(),
+            Duration::from_millis(5),
+        )
+        .expect("Transit config");
+        let timeout = TransitSigner::initialize(config)
+            .await
+            .expect_err("slow Transit metadata times out");
+        assert!(timeout.to_string().contains("metadata is unavailable"));
+        server.await.expect("slow mock completed");
+        drop(directory);
+
+        let oversized = MockTransitReply {
+            method: "GET",
+            path: METADATA_PATH,
+            body: None,
+            status: 200,
+            response: vec![b'x'; MAX_TRANSIT_RESPONSE_BYTES + 1],
+            delay: Duration::ZERO,
+        };
+        let (directory, socket_path, server) = spawn_transit_mock(vec![oversized]);
+        let config = TransitSignerConfig::new(
+            socket_path,
+            "transit",
+            "key",
+            7,
+            public,
+            Duration::from_secs(1),
+        )
+        .expect("Transit config");
+        let oversized = TransitSigner::initialize(config)
+            .await
+            .expect_err("oversized Transit metadata rejects");
+        assert!(oversized.to_string().contains("metadata is unavailable"));
+        server.await.expect("oversized mock completed");
+        drop(directory);
+    }
+
     #[test]
     fn external_signing_error_messages_are_bounded_and_single_line() {
         let message = format!("{}{}", "provider unavailable\n", "x".repeat(512));
@@ -1415,6 +2446,24 @@ mod tests {
         assert_eq!(public.alg.as_deref(), Some("ES256"));
         assert!(public_json.get("d").is_none());
         assert!(matches!(public.algorithm(), Ok(SigningAlgorithm::Es256)));
+    }
+
+    #[test]
+    fn es256_public_jwk_rejects_length_correct_off_curve_coordinates() {
+        let zero_coordinate = URL_SAFE_NO_PAD.encode([0_u8; 32]);
+        let candidate = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": zero_coordinate.clone(),
+            "y": zero_coordinate,
+            "alg": "ES256",
+            "kid": "invalid-point",
+        });
+
+        assert!(matches!(
+            PublicJwk::parse(&candidate.to_string()),
+            Err(JwkError::Invalid("ES256 public point"))
+        ));
     }
 
     #[test]

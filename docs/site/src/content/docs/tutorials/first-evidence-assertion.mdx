@@ -185,13 +185,12 @@ Create a local project from the registry's OpenAPI description:
 ```sh
 evidencectl new adult-status \
   --openapi http://127.0.0.1:8000/openapi.json \
-  --profile local \
-  --generate-keys
+  --profile local
 cd adult-status
 ```
 
 `--profile local` creates a loopback-only development project, not a production deployment.
-`--generate-keys` creates owner-only local keys for signing, subject binding, and audit integrity.
+The command creates owner-only local keys for signing, subject binding, and audit integrity.
 OpenAPI describes the source, but you still decide the question and what the answer may disclose.
 
 The new project separates those decisions from the retained API description:

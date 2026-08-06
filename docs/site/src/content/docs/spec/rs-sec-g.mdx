@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-06"
 doc_type: specification
 doc_id: RS-SEC-G
 category: normative
@@ -113,9 +113,9 @@ The OpenAPI document requires authentication unless the deployment opts out. A r
 
 A verifier needs the issuer's public key to check a signed artifact, and it needs that key without holding a credential of its own. The model therefore separates the published public half from the private signing material, which never leaves the issuer.
 
-REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while artifacts it signed are still within their validity, so a verifier can check previously signed artifacts across a rotation. Evidence Gateway signs with exactly one active key and retains a retired public key for at least the maximum assertion validity plus the accepted clock skew.
+REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while artifacts it signed are still within their validity, so a verifier can check previously signed artifacts across a rotation. Evidence Gateway signs with exactly one active ES256/P-256 key, identifies service keys by their RFC 7638 thumbprints, and retains a previous public key for at least the maximum assertion validity plus the accepted clock skew.
 
-The custody mechanism for the private key (environment, file, or hardware module) is a deployment choice, described in [Move Evidence Gateway to production signing](../../tutorials/move-evidence-to-production-signing/) and out of scope here (Section 9).
+The approved custody mechanism depends on assurance: local assurance uses a file-backed private JWK, while production and evidence-grade assurance require Vault/OpenBao Transit through a workload-local Unix-socket proxy. See [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
 
 Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 9.
 

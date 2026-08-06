@@ -36,7 +36,8 @@ The script starts the demo server, performs every request with plain `curl`,
 waits for the server's own checks, and finishes with the shipped offline
 verifier. Its six steps are:
 
-1. fetch the issuer identity and key set from `/.well-known/jwt-vc-issuer`;
+1. fetch the exact issuer metadata from `/.well-known/jwt-vc-issuer`, then its
+   governed key set from `/.well-known/evidence/jwks.json`;
 2. request the signed default with `Accept: application/jose+json`;
 3. request the same assertion with `Accept: application/dc+sd-jwt`;
 4. decode the credential's protected header and disclosures;
@@ -51,7 +52,7 @@ the printed form shows `$EVIDENCE_ACCESS_TOKEN` rather than its value.
 Expected output, abbreviated:
 
 ```text
-1. Fetch the issuer keys from the published metadata route (no token)
+1. Fetch the exact issuer metadata and its governed key set (no token)
    $ curl \
        --header 'Accept: application/json' \
        --output 'products/evidence/.sd-jwt-vc-demo/issuer-metadata.json' \
@@ -59,6 +60,7 @@ Expected output, abbreviated:
        http://127.0.0.1:18081/.well-known/jwt-vc-issuer
    HTTP 200 application/json
    issuer: urn:example:fixture:provider:evidence
+   jwks_uri: urn:example:fixture:provider:evidence/.well-known/evidence/jwks.json
 2. Request the signed default (Accept: application/jose+json)
    $ curl \
        --request 'POST' \
@@ -80,7 +82,7 @@ PASS: the same assertion was released as a signed JWS and as an SD-JWT VC, ...
 4. The credential: an issuer-signed JWT, one root disclosure for this value,
    and a trailing tilde where a key-binding JWT would go
    1 disclosure(s), no key-binding JWT
-   protected header: {"alg":"EdDSA","kid":"acceptance-evidence-key","typ":"dc+sd-jwt"}
+   protected header: {"alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo","typ":"dc+sd-jwt"}
    disclosures (salt, claim name, claim value):
      ["7MNkDxEPeSWvyGbI2ziaRw","urn:example:fixture:concept:adult-status",true]
 
@@ -151,9 +153,9 @@ curl --fail-with-body --silent \
   --output products/evidence/.sd-jwt-vc-demo/issuer-metadata.json \
   http://127.0.0.1:18081/.well-known/jwt-vc-issuer
 
-jq '{keys: .jwks.keys}' \
-  products/evidence/.sd-jwt-vc-demo/issuer-metadata.json \
-  >products/evidence/.sd-jwt-vc-demo/trusted.jwks.json
+curl --fail-with-body --silent \
+  --output products/evidence/.sd-jwt-vc-demo/trusted.jwks.json \
+  http://127.0.0.1:18081/.well-known/evidence/jwks.json
 ```
 
 Then load the short-lived synthetic bearer token and request the signed default

@@ -121,5 +121,20 @@ governed operator process.
 - Record retention, deletion, recovery, and requester-identity mapping responsibilities outside the
   Evidence Gateway bundle.
 
+## Rotate an audit master as a new epoch
+
+An audit master rotation never appends a new key to an existing chain. Treat it as a new audit
+epoch, with a fresh path and a new `hashKeyVersion`:
+
+1. Drain traffic and stop Evidence Gateway.
+2. Verify the old chain and record its head and the applicable configuration revisions.
+3. Archive the old runtime, master key, sealed segments, active segment, and recorded head together.
+4. Generate a fresh master, increment `hashKeyVersion`, choose a new audit path, and run the full
+   deployment check.
+5. Start the new revision and verify its new chain independently.
+
+The matching master remains necessary to verify an archived epoch. Do not replace a retained master
+in place, merge segments from distinct epochs, or delete a chain to make a replacement key work.
+
 Continue with [Retention and persistent state](../retention-and-persistent-state/) and
 [Backup and restore](../backup-and-restore/) for the surrounding operator procedures.

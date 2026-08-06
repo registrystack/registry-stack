@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
@@ -137,14 +138,50 @@ impl ListenerConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SigningConfig {
     pub algorithm: Algorithm,
-    pub active_key_id: String,
-    /// Path to the private JWK, resolved relative to the configuration file.
-    pub active_key_file: PathBuf,
-    /// Public JWKs of keys that no longer sign but may still have live tokens.
+    /// Governed public JWK of the key that signs newly issued tokens.
+    pub active_public_jwk_file: PathBuf,
+    /// Public JWKs whose already-issued tokens may still be live.
     #[serde(default)]
-    pub retired_public_jwk_files: Vec<PathBuf>,
+    pub published_public_jwk_files: Vec<PathBuf>,
+    /// Compromised key identifiers that must never be published or activated.
+    #[serde(default)]
+    pub revoked_key_ids: Vec<String>,
     #[serde(default = "default_jwks_path")]
     pub jwks_path: String,
+}
+
+/// Process-local access to the active signing key.
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SignerConfig {
+    /// A mounted private JWK, admitted only in supervised local development.
+    LocalJwk { private_key_ref: String },
+    /// Vault/OpenBao Transit reached only through a workload-local Unix socket.
+    Transit {
+        unix_socket_path: PathBuf,
+        mount: String,
+        key_name: String,
+        key_version: u32,
+        timeout_milliseconds: u64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretProvidersConfig {
+    pub file: FileSecretProviderConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSecretProviderConfig {
+    /// Absolute directory beneath which logical `secret:file/...` names resolve.
+    pub root: PathBuf,
 }
 
 /// Required, fail-closed audit storage for token decisions.
@@ -155,8 +192,8 @@ pub struct AuditConfig {
     pub path: PathBuf,
     /// Per-segment rotation threshold. Sealed segments are never deleted.
     pub maximum_file_bytes: u64,
-    /// Owner-only master HMAC key, resolved relative to the configuration.
-    pub hash_key_file: PathBuf,
+    /// Owner-only master HMAC key resolved through the configured provider.
+    pub hash_key_ref: String,
     /// Version label written into privacy-preserving audit handles.
     pub hash_key_version: u32,
 }
@@ -279,6 +316,8 @@ pub struct MintConfig {
     pub issuer: String,
     pub listener: ListenerConfig,
     pub signing: SigningConfig,
+    pub signer: SignerConfig,
+    pub secret_providers: SecretProvidersConfig,
     pub audit: AuditConfig,
     pub access_tokens: AccessTokenConfig,
     pub client_assertion: ClientAssertionConfig,
@@ -286,8 +325,8 @@ pub struct MintConfig {
 }
 
 impl MintConfig {
-    /// Load and validate a configuration document, resolving every path
-    /// relative to the document's own directory.
+    /// Load and validate a configuration document, resolving governed public
+    /// keys, audit storage, and the client registry relative to its directory.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|_| ConfigError::Unavailable)?;
         let mut config: Self = serde_norway::from_str(&text)
@@ -308,15 +347,14 @@ impl MintConfig {
                 root.join(path)
             }
         };
-        self.signing.active_key_file = resolve(&self.signing.active_key_file);
-        self.signing.retired_public_jwk_files = self
+        self.signing.active_public_jwk_file = resolve(&self.signing.active_public_jwk_file);
+        self.signing.published_public_jwk_files = self
             .signing
-            .retired_public_jwk_files
+            .published_public_jwk_files
             .iter()
             .map(|path| resolve(path))
             .collect();
         self.audit.path = resolve(&self.audit.path);
-        self.audit.hash_key_file = resolve(&self.audit.hash_key_file);
         self.clients.directory = resolve(&self.clients.directory);
     }
 
@@ -329,14 +367,85 @@ impl MintConfig {
         match self.validation_mode {
             ValidationMode::Strict => validate_https_issuer(&self.issuer)?,
             ValidationMode::SupervisedLocalDevelopment => {
-                self.validate_supervised_local_development_transport()?;
+                if self.issuer.starts_with("https://") {
+                    validate_https_issuer(&self.issuer)?;
+                    validate_https_endpoint(&self.client_assertion.audience)?;
+                } else {
+                    self.validate_supervised_local_development_transport()?;
+                }
             }
         }
         self.listener.bind_address()?;
         self.listener.validate()?;
 
-        if self.signing.active_key_id.trim().is_empty() || self.signing.active_key_id.len() > 256 {
-            return Err(ConfigError::Invalid("active key id must be 1..=256 bytes"));
+        if self.signing.algorithm != Algorithm::ES256 {
+            return Err(ConfigError::Invalid(
+                "Mint service signing algorithm must be ES256",
+            ));
+        }
+        if self.signing.active_public_jwk_file.as_os_str().is_empty() {
+            return Err(ConfigError::Invalid("active public JWK file is required"));
+        }
+        if self.signing.published_public_jwk_files.len() > 32 {
+            return Err(ConfigError::Invalid(
+                "active and published public key set must contain at most 33 keys",
+            ));
+        }
+        if self.signing.revoked_key_ids.len() > 33
+            || self
+                .signing
+                .revoked_key_ids
+                .iter()
+                .any(|kid| !is_thumbprint_key_id(kid))
+            || self
+                .signing
+                .revoked_key_ids
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.signing.revoked_key_ids.len()
+        {
+            return Err(ConfigError::Invalid(
+                "revoked key ids must be unique 43-character RFC 7638 thumbprints",
+            ));
+        }
+        match (&self.validation_mode, &self.signer) {
+            (ValidationMode::Strict, SignerConfig::Transit { .. })
+            | (ValidationMode::SupervisedLocalDevelopment, SignerConfig::LocalJwk { .. })
+            | (ValidationMode::SupervisedLocalDevelopment, SignerConfig::Transit { .. }) => {}
+            (ValidationMode::Strict, SignerConfig::LocalJwk { .. }) => {
+                return Err(ConfigError::Invalid(
+                    "strict mode requires a Transit signer",
+                ));
+            }
+        }
+        match &self.signer {
+            SignerConfig::LocalJwk { private_key_ref } => {
+                validate_file_secret_ref(private_key_ref)?;
+            }
+            SignerConfig::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                key_version,
+                timeout_milliseconds,
+            } => {
+                if !unix_socket_path.is_absolute()
+                    || !valid_transit_name(mount)
+                    || !valid_transit_name(key_name)
+                    || *key_version == 0
+                    || !(1..=30_000).contains(timeout_milliseconds)
+                {
+                    return Err(ConfigError::Invalid(
+                        "Transit signer requires an absolute Unix socket, simple mount and key names, a non-zero key version, and a 1..=30000 millisecond timeout",
+                    ));
+                }
+            }
+        }
+        if !self.secret_providers.file.root.is_absolute() {
+            return Err(ConfigError::Invalid(
+                "secret provider file root must be absolute",
+            ));
         }
         if !self.signing.jwks_path.starts_with('/') {
             return Err(ConfigError::Invalid("jwks path must be absolute"));
@@ -351,25 +460,33 @@ impl MintConfig {
                 "jwks path must not take a route Mint already serves",
             ));
         }
-        if self.audit.path.as_os_str().is_empty()
-            || self.audit.hash_key_file.as_os_str().is_empty()
-            || self.audit.hash_key_version == 0
-        {
+        if self.audit.path.as_os_str().is_empty() || self.audit.hash_key_version == 0 {
             return Err(ConfigError::Invalid(
-                "audit path, hash key file, and non-zero hash key version are required",
+                "audit path, hash key reference, and non-zero hash key version are required",
             ));
         }
+        validate_file_secret_ref(&self.audit.hash_key_ref)?;
         if !(1_048_576..=1_099_511_627_776).contains(&self.audit.maximum_file_bytes) {
             return Err(ConfigError::Invalid(
                 "audit maximumFileBytes must be 1048576..=1099511627776",
             ));
         }
-        if self.audit.path == self.audit.hash_key_file
-            || self.audit.path == self.signing.active_key_file
-            || self.audit.hash_key_file == self.signing.active_key_file
+        let audit_secret_path = self
+            .secret_providers
+            .file
+            .root
+            .join(file_secret_name(&self.audit.hash_key_ref));
+        if self.audit.path == audit_secret_path
+            || matches!(
+                &self.signer,
+                SignerConfig::LocalJwk { private_key_ref }
+                    if private_key_ref == &self.audit.hash_key_ref
+                        || self.audit.path
+                            == self.secret_providers.file.root.join(file_secret_name(private_key_ref))
+            )
         {
             return Err(ConfigError::Invalid(
-                "audit storage and secret paths must be distinct from signing material",
+                "audit storage, audit key, and local signing material must be distinct",
             ));
         }
 
@@ -460,6 +577,50 @@ fn is_plain_route_path(path: &str) -> bool {
     })
 }
 
+fn is_thumbprint_key_id(value: &str) -> bool {
+    if value.len() != 43 {
+        return false;
+    }
+    URL_SAFE_NO_PAD
+        .decode(value)
+        .is_ok_and(|bytes| bytes.len() == 32 && URL_SAFE_NO_PAD.encode(bytes) == value)
+}
+
+fn validate_file_secret_ref(reference: &str) -> Result<(), ConfigError> {
+    let Some(name) = reference.strip_prefix("secret:file/") else {
+        return Err(ConfigError::Invalid(
+            "secret references must use the exact secret:file/<name> grammar",
+        ));
+    };
+    let bytes = name.as_bytes();
+    if !matches!(bytes.first(), Some(b'a'..=b'z'))
+        || bytes.len() > 128
+        || !bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+    {
+        return Err(ConfigError::Invalid(
+            "secret references must use the exact secret:file/<name> grammar",
+        ));
+    }
+    Ok(())
+}
+
+fn file_secret_name(reference: &str) -> &str {
+    reference
+        .strip_prefix("secret:file/")
+        .expect("validated file secret reference")
+}
+
+fn valid_transit_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 /// Parse the only HTTP origin admitted for supervised local development.
 ///
 /// Exact reconstruction rejects URL-parser aliases such as a trailing slash,
@@ -541,13 +702,23 @@ version: 1
 issuer: https://mint.example.org
 listener: {address: 127.0.0.1, port: 8081}
 signing:
-  algorithm: EdDSA
-  activeKeyId: mint-2026-01
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/mint.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-mint/transit-proxy.sock
+  mount: transit
+  keyName: mint-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+secretProviders:
+  file: {root: /run/registry-mint/secrets}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
@@ -592,16 +763,13 @@ clients:
         assert_eq!(config.issuer, "https://mint.example.org");
         assert_eq!(config.validation_mode, ValidationMode::Strict);
         assert_eq!(
-            config.signing.active_key_file,
-            directory.path().join("secrets/signing.jwk")
+            config.signing.active_public_jwk_file,
+            directory.path().join("public-keys/mint.jwk.json")
         );
         assert_eq!(config.clients.directory, directory.path().join("clients"));
         assert_eq!(config.audit.path, directory.path().join("audit/mint.jsonl"));
         assert_eq!(config.audit.maximum_file_bytes, 1_073_741_824);
-        assert_eq!(
-            config.audit.hash_key_file,
-            directory.path().join("secrets/audit-hmac-key")
-        );
+        assert_eq!(config.audit.hash_key_ref, "secret:file/audit-hmac-key");
         assert_eq!(config.audit.hash_key_version, 1);
         assert_eq!(config.signing.jwks_path, "/.well-known/jwks.json");
         assert_eq!(config.client_assertion.maximum_lifetime_seconds, 300);
@@ -610,14 +778,14 @@ clients:
     #[test]
     fn audit_configuration_is_required_bounded_and_separate_from_secrets() {
         assert!(load_from(&VALID.replace(
-            "audit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyFile: secrets/audit-hmac-key\n  hashKeyVersion: 1\n",
+            "audit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyRef: secret:file/audit-hmac-key\n  hashKeyVersion: 1\n",
             ""
         ))
         .is_err());
         assert_eq!(
             load_error(&VALID.replace("hashKeyVersion: 1", "hashKeyVersion: 0")),
             ConfigError::Invalid(
-                "audit path, hash key file, and non-zero hash key version are required"
+                "audit path, hash key reference, and non-zero hash key version are required"
             )
         );
         assert_eq!(
@@ -626,11 +794,11 @@ clients:
         );
         assert_eq!(
             load_error(&VALID.replace(
-                "hashKeyFile: secrets/audit-hmac-key",
-                "hashKeyFile: secrets/signing.jwk"
+                "path: audit/mint.jsonl",
+                "path: /run/registry-mint/secrets/audit-hmac-key"
             )),
             ConfigError::Invalid(
-                "audit storage and secret paths must be distinct from signing material"
+                "audit storage, audit key, and local signing material must be distinct"
             )
         );
     }
@@ -639,8 +807,8 @@ clients:
     fn a_jwks_path_may_not_take_a_route_mint_already_serves() {
         for path in MINT_FIXED_ROUTES {
             let text = VALID.replace(
-                "activeKeyFile: secrets/signing.jwk",
-                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: {path}"),
+                "activePublicJwkFile: public-keys/mint.jwk.json",
+                &format!("activePublicJwkFile: public-keys/mint.jwk.json\n  jwksPath: {path}"),
             );
             assert_eq!(
                 load_error(&text),
@@ -669,8 +837,8 @@ clients:
             "/keys%2ftoken",
         ] {
             let text = VALID.replace(
-                "activeKeyFile: secrets/signing.jwk",
-                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: \"{path}\""),
+                "activePublicJwkFile: public-keys/mint.jwk.json",
+                &format!("activePublicJwkFile: public-keys/mint.jwk.json\n  jwksPath: \"{path}\""),
             );
             assert_eq!(
                 load_error(&text),
@@ -689,8 +857,8 @@ clients:
             "/a~b-c_d",
         ] {
             let text = VALID.replace(
-                "activeKeyFile: secrets/signing.jwk",
-                &format!("activeKeyFile: secrets/signing.jwk\n  jwksPath: \"{path}\""),
+                "activePublicJwkFile: public-keys/mint.jwk.json",
+                &format!("activePublicJwkFile: public-keys/mint.jwk.json\n  jwksPath: \"{path}\""),
             );
             let config = load_from(&text).expect("a plain absolute path loads");
             assert_eq!(config.signing.jwks_path, path);
@@ -754,6 +922,10 @@ clients:
             .replace(
                 "audience: https://mint.example.org/token",
                 "audience: http://127.0.0.1:8081/token",
+            )
+            .replace(
+                "signer:\n  kind: transit\n  unixSocketPath: /run/registry-mint/transit-proxy.sock\n  mount: transit\n  keyName: mint-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+                "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/mint-signing",
             );
         let config = load_from(&local).expect("the supervised local transport is valid");
         assert_eq!(
@@ -825,8 +997,8 @@ clients:
         }
 
         let wrong_jwks = local.replace(
-            "activeKeyFile: secrets/signing.jwk",
-            "activeKeyFile: secrets/signing.jwk\n  jwksPath: /.well-known/keys.json",
+            "activePublicJwkFile: public-keys/mint.jwk.json",
+            "activePublicJwkFile: public-keys/mint.jwk.json\n  jwksPath: /.well-known/keys.json",
         );
         assert!(
             load_from(&wrong_jwks).is_err(),
@@ -876,6 +1048,54 @@ clients:
             assert!(
                 load_from(&invalid).is_err(),
                 "strict Mint accepted assertion audience {invalid_audience}"
+            );
+        }
+    }
+
+    #[test]
+    fn signer_kind_follows_the_assurance_matrix() {
+        let strict_local = VALID.replace(
+            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-mint/transit-proxy.sock\n  mount: transit\n  keyName: mint-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/mint-signing",
+        );
+        assert_eq!(
+            load_error(&strict_local),
+            ConfigError::Invalid("strict mode requires a Transit signer")
+        );
+
+        let supervised_transit = VALID
+            .replace(
+                "version: 1",
+                "version: 1\nvalidationMode: supervised-local-development",
+            )
+            .replace(
+                "issuer: https://mint.example.org",
+                "issuer: http://127.0.0.1:8081",
+            )
+            .replace(
+                "audience: https://mint.example.org/token",
+                "audience: http://127.0.0.1:8081/token",
+            );
+        load_from(&supervised_transit).expect("supervised local mode also permits Transit");
+    }
+
+    #[test]
+    fn service_signing_is_fixed_to_es256_and_thumbprint_revocations() {
+        assert_eq!(
+            load_error(&VALID.replace("algorithm: ES256", "algorithm: EdDSA")),
+            ConfigError::Invalid("Mint service signing algorithm must be ES256")
+        );
+        let noncanonical = format!("{}B", "A".repeat(42));
+        for revoked in [
+            "short",
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+            &noncanonical,
+        ] {
+            let document =
+                VALID.replace("revokedKeyIds: []", &format!("revokedKeyIds: [{revoked}]"));
+            assert!(
+                load_from(&document).is_err(),
+                "accepted revoked id {revoked}"
             );
         }
     }

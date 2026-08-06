@@ -1,0 +1,18 @@
+version: 1
+bundleDirectory: /tmp/registry-evidence-local/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 16
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 10000
+secretProviders:
+  file: {root: /tmp/registry-evidence-local/secrets}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/evidence-signing
+auditStorage: {path: /tmp/registry-evidence-local/audit/evidence.jsonl, maximumFileBytes: 1048576}
+outboundTls: {systemRoots: true, trustProfiles: {}}

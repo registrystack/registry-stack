@@ -1,17 +1,18 @@
 //! Fail-closed Mint audit over one durable, segmented keyed JSONL chain.
 
 use registry_platform_audit::{
-    verify_segmented_audit_chain, AuditChainHasher, AuditEnvelope, AuditError, AuditHashSecret,
-    AuditKeyHasher, ChainState, DurableSegmentedJsonlSink,
+    verify_segmented_audit_chain, AuditEnvelope, AuditError, AuditKeyHasher, AuditProfile,
+    ChainState, DurableSegmentedJsonlSink,
 };
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::{SecretError, SecretProvider, SecretResolver};
 use serde::Serialize;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{
     assertion::AuthenticatedClient,
-    config::AuditConfig,
-    secretfile::{self, SecretFileError},
+    config::{AuditConfig, SecretProvidersConfig},
     token::MintedToken,
 };
 
@@ -20,7 +21,7 @@ const AUDIT_SCHEMA: &str = "registry.mint.audit/v1";
 #[derive(Debug, Error)]
 pub enum MintAuditError {
     #[error("the audit hash key could not be read")]
-    Secret(#[source] SecretFileError),
+    Secret(#[source] SecretError),
     #[error("the audit chain could not be initialized or written")]
     Audit(#[from] AuditError),
     #[error("an audit-safe reference could not be constructed")]
@@ -103,18 +104,18 @@ impl std::fmt::Debug for MintAuditLog {
 }
 
 impl MintAuditLog {
-    pub async fn initialize(config: &AuditConfig, issuer: &str) -> Result<Self, MintAuditError> {
-        let secret =
-            secretfile::read_owner_only(&config.hash_key_file).map_err(MintAuditError::Secret)?;
-        let secret = AuditHashSecret::new(secret.as_bytes().to_vec())?;
-        let chain_hasher = AuditChainHasher::keyed(secret.clone());
-        let key_hasher = AuditKeyHasher::Keyed(secret);
+    pub async fn initialize(
+        config: &AuditConfig,
+        secrets: &SecretProvidersConfig,
+        issuer: &str,
+    ) -> Result<Self, MintAuditError> {
+        let profile = audit_profile(config, secrets)?;
         let sink = DurableSegmentedJsonlSink::open(config.path.clone(), config.maximum_file_bytes)?;
-        let chain = ChainState::bootstrap_or_start_empty(&sink, chain_hasher).await?;
+        let chain = profile.bootstrap_or_start_empty(&sink).await?;
         Ok(Self {
             sink,
             chain,
-            key_hasher,
+            key_hasher: profile.key_hasher(),
             key_version: config.hash_key_version,
             scope: issuer.to_owned(),
         })
@@ -127,25 +128,28 @@ impl MintAuditLog {
     /// that process. Opening the sink here would report a healthy deployment
     /// back as a broken one. The hash key is what a misconfigured deployment
     /// actually gets wrong, and reading it takes nothing the writer holds.
-    pub fn check(config: &AuditConfig) -> Result<(), MintAuditError> {
-        let secret =
-            secretfile::read_owner_only(&config.hash_key_file).map_err(MintAuditError::Secret)?;
-        AuditHashSecret::new(secret.as_bytes().to_vec())?;
+    pub fn check(
+        config: &AuditConfig,
+        secrets: &SecretProvidersConfig,
+    ) -> Result<(), MintAuditError> {
+        audit_profile(config, secrets)?;
         Ok(())
     }
 
     /// Verify the retained chain without taking the serving writer lock.
-    pub fn verify(config: &AuditConfig) -> Result<MintAuditSummary, MintAuditError> {
-        let secret =
-            secretfile::read_owner_only(&config.hash_key_file).map_err(MintAuditError::Secret)?;
-        let secret = AuditHashSecret::new(secret.as_bytes().to_vec())?;
-        let summary = verify_segmented_audit_chain(&config.path, &AuditChainHasher::keyed(secret))
-            .map_err(|error| match error {
+    pub fn verify(
+        config: &AuditConfig,
+        secrets: &SecretProvidersConfig,
+    ) -> Result<MintAuditSummary, MintAuditError> {
+        let profile = audit_profile(config, secrets)?;
+        let summary = verify_segmented_audit_chain(&config.path, &profile.chain_hasher()).map_err(
+            |error| match error {
                 AuditError::SegmentMissing { sequence } => {
                     MintAuditError::SegmentMissing { sequence }
                 }
                 error => MintAuditError::Audit(error),
-            })?;
+            },
+        )?;
         Ok(MintAuditSummary {
             segments: summary.segments,
             records: summary.records,
@@ -252,6 +256,19 @@ impl MintAuditLog {
     }
 }
 
+fn audit_profile(
+    config: &AuditConfig,
+    secrets: &SecretProvidersConfig,
+) -> Result<AuditProfile, MintAuditError> {
+    let resolver = SecretResolver::new([SecretProvider::File], secrets.file.root.clone())
+        .map_err(MintAuditError::Secret)?;
+    let secret = resolver
+        .resolve(&config.hash_key_ref)
+        .map_err(MintAuditError::Secret)?;
+    AuditProfile::production_from_secret_bytes(Zeroizing::new(secret.expose_secret().to_vec()))
+        .map_err(MintAuditError::Audit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,7 +279,7 @@ mod tests {
     // assignment of a live credential.
     const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
 
-    fn fixture() -> (tempfile::TempDir, AuditConfig) {
+    fn fixture() -> (tempfile::TempDir, AuditConfig, SecretProvidersConfig) {
         let directory = tempfile::tempdir().expect("temp dir");
         let secret = directory.path().join("audit-key");
         fs::write(&secret, AUDIT_HASH_KEY).expect("write audit key");
@@ -270,17 +287,22 @@ mod tests {
         let config = AuditConfig {
             path: directory.path().join("audit/mint.jsonl"),
             maximum_file_bytes: 1_048_576,
-            hash_key_file: secret,
+            hash_key_ref: "secret:file/audit-key".to_owned(),
             hash_key_version: 1,
         };
-        (directory, config)
+        let secrets = SecretProvidersConfig {
+            file: crate::config::FileSecretProviderConfig {
+                root: directory.path().to_path_buf(),
+            },
+        };
+        (directory, config, secrets)
     }
 
     #[tokio::test]
     async fn a_keyed_chain_restarts_and_verifies() {
-        let (_directory, config) = fixture();
+        let (_directory, config, secrets) = fixture();
         {
-            let audit = MintAuditLog::initialize(&config, "https://mint.example.org")
+            let audit = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
                 .await
                 .expect("audit initializes");
             audit
@@ -289,7 +311,7 @@ mod tests {
                 .expect("first decision is durable");
         }
         {
-            let audit = MintAuditLog::initialize(&config, "https://mint.example.org")
+            let audit = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
                 .await
                 .expect("audit restarts");
             audit
@@ -297,7 +319,7 @@ mod tests {
                 .await
                 .expect("second decision is durable");
         }
-        let summary = MintAuditLog::verify(&config).expect("chain verifies");
+        let summary = MintAuditLog::verify(&config, &secrets).expect("chain verifies");
         assert_eq!(summary.segments, 1);
         assert_eq!(summary.records, 2);
         assert!(summary.last_hash.is_some());
@@ -306,20 +328,20 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_writer_is_refused() {
-        let (_directory, config) = fixture();
-        let first = MintAuditLog::initialize(&config, "https://mint.example.org")
+        let (_directory, config, secrets) = fixture();
+        let first = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
             .await
             .expect("first writer initializes");
-        let second = MintAuditLog::initialize(&config, "https://mint.example.org").await;
+        let second = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org").await;
         assert!(second.is_err(), "a second writer must not fork the chain");
         drop(first);
     }
 
     #[tokio::test]
     async fn corruption_is_refused_at_restart_and_verification() {
-        let (_directory, config) = fixture();
+        let (_directory, config, secrets) = fixture();
         {
-            let audit = MintAuditLog::initialize(&config, "https://mint.example.org")
+            let audit = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
                 .await
                 .expect("audit initializes");
             audit
@@ -330,20 +352,47 @@ mod tests {
         let mut contents = fs::read_to_string(&config.path).expect("read chain");
         contents = contents.replace("invalid-client", "invalid-request");
         fs::write(&config.path, contents).expect("tamper with chain");
-        assert!(MintAuditLog::verify(&config).is_err());
+        assert!(MintAuditLog::verify(&config, &secrets).is_err());
         assert!(
-            MintAuditLog::initialize(&config, "https://mint.example.org")
+            MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
                 .await
                 .is_err()
         );
     }
 
     #[tokio::test]
+    async fn a_replacement_master_cannot_append_to_an_existing_epoch() {
+        let (directory, config, secrets) = fixture();
+        {
+            let audit = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
+                .await
+                .expect("audit initializes");
+            audit
+                .append_rejected("urn:ulid:01K00000000000000000000000", "invalid-client")
+                .await
+                .expect("decision is durable");
+        }
+        fs::write(
+            directory.path().join("audit-key"),
+            b"abcdef0123456789abcdef0123456789",
+        )
+        .expect("replace audit key");
+
+        assert!(MintAuditLog::verify(&config, &secrets).is_err());
+        assert!(
+            MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
+                .await
+                .is_err(),
+            "a new audit master must start a fresh path and epoch"
+        );
+    }
+
+    #[tokio::test]
     async fn rotation_seals_history_without_breaking_restart_or_verification() {
-        let (_directory, mut config) = fixture();
+        let (_directory, mut config, secrets) = fixture();
         config.maximum_file_bytes = 550;
         {
-            let audit = MintAuditLog::initialize(&config, "https://mint.example.org")
+            let audit = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
                 .await
                 .expect("audit initializes");
             for index in 0..8 {
@@ -358,12 +407,12 @@ mod tests {
         }
         let first_segment = config.path.with_extension("jsonl.00000001");
         assert!(first_segment.exists(), "rotation seals the active segment");
-        let summary = MintAuditLog::verify(&config).expect("segmented chain verifies");
+        let summary = MintAuditLog::verify(&config, &secrets).expect("segmented chain verifies");
         assert_eq!(summary.records, 8);
         assert!(summary.segments > 1);
         assert_eq!(summary.first_sequence, Some(1));
 
-        let restarted = MintAuditLog::initialize(&config, "https://mint.example.org")
+        let restarted = MintAuditLog::initialize(&config, &secrets, "https://mint.example.org")
             .await
             .expect("audit restarts from the segmented tail");
         restarted

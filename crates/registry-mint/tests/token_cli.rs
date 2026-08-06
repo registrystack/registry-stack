@@ -17,10 +17,9 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_crypto::PublicJwk;
 use serde_json::{json, Value};
 
-const ISSUER: &str = "https://mint.example.org";
-const ASSERTION_AUDIENCE: &str = "https://mint.example.org/token";
 const ACTOR: &str = "urn:example:agent:scheduler";
 
 /// Deterministic Ed25519 material, so a test knows which identity signed what.
@@ -36,6 +35,23 @@ fn key_pair(seed: u8) -> (Value, Value) {
     )
 }
 
+fn service_key_pair(seed: u8) -> (Value, Value) {
+    let scalar = [seed; 32];
+    let signing = p256::ecdsa::SigningKey::from_slice(&scalar).expect("valid P-256 scalar");
+    let encoded = signing.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("uncompressed x"));
+    let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("uncompressed y"));
+    let bare = PublicJwk::parse(
+        &json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y}).to_string(),
+    )
+    .expect("public JWK parses");
+    let kid = bare.jkt().expect("thumbprint computes");
+    (
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y}),
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y, "d":URL_SAFE_NO_PAD.encode(scalar)}),
+    )
+}
+
 /// A running `mint serve`, killed when the test drops it however it ends.
 struct Server {
     _directory: tempfile::TempDir,
@@ -43,6 +59,7 @@ struct Server {
     port: u16,
     root: PathBuf,
     config: PathBuf,
+    issuer: String,
 }
 
 impl Drop for Server {
@@ -60,6 +77,10 @@ impl Server {
     fn caller_key(&self, client_id: &str) -> PathBuf {
         self.root.join(format!("{client_id}.jwk"))
     }
+
+    fn assertion_audience(&self) -> String {
+        format!("{}/token", self.issuer)
+    }
 }
 
 fn write_owner_only(path: &Path, contents: &str) {
@@ -73,8 +94,18 @@ fn server() -> Server {
     let root = directory.path().to_path_buf();
     fs::create_dir(root.join("secrets")).expect("create secrets directory");
     fs::create_dir(root.join("clients")).expect("create clients directory");
+    fs::create_dir(root.join("public-keys")).expect("create public key directory");
 
-    let (_, signing_private) = key_pair(9);
+    let (signing_public, signing_private) = service_key_pair(9);
+    let public_file = format!(
+        "{}.jwk.json",
+        signing_public["kid"].as_str().expect("service key id")
+    );
+    fs::write(
+        root.join("public-keys").join(&public_file),
+        signing_public.to_string(),
+    )
+    .expect("write governed public key");
     write_owner_only(
         &root.join("secrets/signing.jwk"),
         &signing_private.to_string(),
@@ -91,6 +122,8 @@ fn server() -> Server {
         .local_addr()
         .expect("the reserved port")
         .port();
+    let issuer = format!("http://127.0.0.1:{port}");
+    let assertion_audience = format!("{issuer}/token");
 
     let (scheduler_public, scheduler_private) = key_pair(1);
     write_owner_only(&root.join("scheduler.jwk"), &scheduler_private.to_string());
@@ -132,16 +165,23 @@ keys: [{reporter_public}]
         &config,
         format!(
             "version: 1
-issuer: {ISSUER}
+validationMode: supervised-local-development
+issuer: {issuer}
 listener: {{address: 127.0.0.1, port: {port}}}
 signing:
-  algorithm: EdDSA
-  activeKeyId: key-9
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{public_file}
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file: {{root: {}}}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence.example.org]
@@ -154,11 +194,12 @@ accessTokens:
     grantAuthority: evidence_authority
     actor: evidence_actor
 clientAssertion:
-  audience: {ASSERTION_AUDIENCE}
+  audience: {assertion_audience}
   algorithms: [EdDSA]
 clients:
   directory: clients
-"
+",
+            root.join("secrets").display()
         ),
     )
     .expect("write config");
@@ -178,6 +219,7 @@ clients:
         port,
         root,
         config,
+        issuer,
     };
     wait_for_listener(port);
     server
@@ -210,7 +252,7 @@ fn mint_token(server: &Server, client_id: &str, extra: &[&str]) -> Output {
         // audience is its public URL, which is the deployment shape behind a
         // TLS terminator and the reason the flag exists.
         .arg("--audience")
-        .arg(ASSERTION_AUDIENCE)
+        .arg(server.assertion_audience())
         .arg("--client-id")
         .arg(client_id)
         .arg("--key")
@@ -245,7 +287,7 @@ fn the_subcommand_obtains_a_token_the_endpoint_agreed_to_issue() {
     assert_eq!(stdout.lines().count(), 1, "stdout was: {stdout:?}");
     let claims = claims_of(stdout.trim());
 
-    assert_eq!(claims["iss"], json!(ISSUER));
+    assert_eq!(claims["iss"], json!(server.issuer));
     assert_eq!(claims["sub"], json!("urn:example:principal:reporter"));
     assert_eq!(claims["client_id"], json!("reporter"));
     assert_eq!(claims["evidence_tags"], json!(["reporter"]));
@@ -402,7 +444,7 @@ fn a_refusal_does_not_echo_the_signed_assertion_back() {
         .arg("--url")
         .arg(format!("http://127.0.0.1:{port}/token"))
         .arg("--audience")
-        .arg(ASSERTION_AUDIENCE)
+        .arg(server.assertion_audience())
         .arg("--client-id")
         .arg("scheduler")
         .arg("--key")

@@ -26,17 +26,21 @@ properties:
   signing:
     type: object
     additionalProperties: false
-    required: [format, algorithm, activeKeyId, activeKeyRef, retiredPublicJwkFiles, jwksPath, maximumAssertionValiditySeconds, verifierClockSkewSeconds]
+    required: [format, algorithm, activePublicJwkFile, publishedPublicJwkFiles, revokedKeyIds, jwksPath, maximumAssertionValiditySeconds, verifierClockSkewSeconds]
     properties:
       format: {const: flattened-jws-json}
-      algorithm: {const: EdDSA}
-      activeKeyId: {type: string, minLength: 1, maxLength: 256, pattern: '^[^\u0000-\u001F\u007F-\u009F]+$'}
-      activeKeyRef: {$ref: '#/$defs/secret-ref'}
-      retiredPublicJwkFiles:
+      algorithm: {const: ES256}
+      activePublicJwkFile: {$ref: '#/$defs/public-jwk-path'}
+      publishedPublicJwkFiles:
         type: array
         maxItems: 32
         uniqueItems: true
         items: {$ref: '#/$defs/public-jwk-path'}
+      revokedKeyIds:
+        type: array
+        maxItems: 33
+        uniqueItems: true
+        items: {$ref: '#/$defs/service-key-id'}
       jwksPath: {const: /.well-known/evidence/jwks.json}
       maximumAssertionValiditySeconds: {type: integer, minimum: 1, maximum: 31536000}
       verifierClockSkewSeconds: {type: integer, minimum: 0, maximum: 300}
@@ -91,6 +95,18 @@ allOf:
                   type: object
                   required: [kind]
                   properties: {kind: {const: none}}
+  - if:
+      properties:
+        assuranceProfile: {enum: [production, evidence-grade]}
+        responseFormats: {contains: {const: sd-jwt-vc}}
+      required: [assuranceProfile, responseFormats]
+    then:
+      properties:
+        service:
+          properties:
+            providerId:
+              type: string
+              pattern: '^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$'
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   uri: {type: string, format: uri, maxLength: 512}
@@ -109,10 +125,11 @@ $defs:
     {type: string, pattern: '^secret:file/[a-z][a-z0-9._-]{0,127}$'}
   relative-path: {type: string, pattern: '^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$'}
   public-jwk-path: {type: string, pattern: '^public-keys/[A-Za-z0-9._-]+\.jwk\.json$'}
+  service-key-id: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
   authentication:
     type: object
     additionalProperties: false
-    required: [kind, issuer, audiences, tokenTypes, algorithms, jwksUri, principalClaim, requesterTagsClaim, evidenceAudienceClaim, grantIdClaim, grantAuthorityClaim]
+    required: [kind, issuer, audiences, tokenTypes, algorithms, jwksUri, principalClaim, requesterTagsClaim, evidenceAudienceClaim, grantIdClaim, grantAuthorityClaim, maximumTokenLifetimeSeconds, revokedKeyIds]
     properties:
       kind: {const: oidc-access-token}
       issuer: {type: string, pattern: '^https?://', maxLength: 512}
@@ -140,6 +157,12 @@ $defs:
       evidenceAudienceClaim: {$ref: '#/$defs/claim-name'}
       grantIdClaim: {$ref: '#/$defs/claim-name'}
       grantAuthorityClaim: {$ref: '#/$defs/claim-name'}
+      maximumTokenLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
+      revokedKeyIds:
+        type: array
+        maxItems: 32
+        uniqueItems: true
+        items: {type: string, minLength: 1, maxLength: 256, pattern: '^[^\u0000-\u001F\u007F-\u009F]+$'}
       actorClaim: {$ref: '#/$defs/claim-name'}
   audit:
     type: object
@@ -733,7 +756,9 @@ startup_checks:
   - Configured authority claim names are distinct and none names a registered JWT claim; `sub` is permitted for principalClaim alone, because it already carries the principal. A repeated or shadowing name would read one verified token member as something the issuer wrote for another purpose.
   - For authenticated-grant origin, verified token values at authentication.grantIdClaim and grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must bind requirement, purpose, audience, role, selector profile, and valueClaims result before selector resolution.
   - Required signing, audit, credential, and source dependencies are ready.
-  - Every retired public JWK file is public-only, has a unique kid, uses the configured allowlisted algorithm, and remains available for the maximum assertion validity plus clock skew.
+  - The active and published public JWK files are public-only exact ES256 P-256 JWKs whose 43-character kid equals their RFC 7638 thumbprint; paths, kids, and key material are unique and no revoked identifier is active, published, or served.
+  - The active plus published set contains at most 33 keys. A published predecessor remains available for the maximum assertion validity plus clock skew, unless emergency revocation requires immediate removal and denylisting.
+  - The runtime signer matches the governed active public JWK exactly and passes a startup sign-and-verify test; local assurance uses local-jwk and production or evidence-grade uses Transit.
   - Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml secretProviders.file.root.
   - Fixed path and selector-bound path-template forms are mutually exclusive and every template placeholder has one authorized selector binding.
   - Every selector set an authority grant can activate for a source carries each role and profile that source's path template binds. The sets are derived one per grant, so covering a bound role across their union is not enough: a single grant omitting one yields a set with no value to substitute, which fails startup rather than every request that grant would serve.

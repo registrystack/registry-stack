@@ -6,8 +6,8 @@ Crypto primitives shared by registry services.
 
 - `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519, EC/P-256, and RSA JWKs.
 - EdDSA, ES256, and RS256 signing and verification helpers.
-- `SigningProvider` and `LocalJwkSigner` for code that should sign without
-  depending directly on in-process private JWK ownership.
+- `SigningProvider`, `LocalJwkSigner`, and `TransitSigner` for code that should
+  sign without depending directly on one private-key storage model.
 - `KeyProviderKind`, `KeyStatus`, `KeyReadiness`, and `KeyReadinessSnapshot`
   for provider-neutral readiness reporting and live-apply gates.
 - Public JWK thumbprints through `PublicJwk::jkt`.
@@ -80,11 +80,14 @@ policy.
 - `LocalJwkSigner` requires a non-empty `kid`, stores local key material behind
   shared ownership, and exposes only public JWK metadata through
   `SigningProvider`.
-- Production deployments that require key isolation should implement
-  `SigningProvider` over an external service such as Vault Transit or a cloud
-  KMS. Adapters must bound timeouts and error messages, avoid secret-bearing
-  logs, and provide configured public JWK metadata when the backing service
-  cannot export it directly.
+- `TransitSigner` supports the common Vault/OpenBao ES256 Transit API through a
+  dedicated local proxy's Unix socket. It requires a pinned key version,
+  non-exportable and non-backup custody metadata, an exact configured public
+  JWK match, bounded requests and responses, and a successful local
+  sign-and-verify check before reporting ready. Signing inputs are SHA-256
+  hashed locally and sent with Transit `prehashed: true`, so assertion bytes do
+  not cross the signing-provider boundary. The proxy owns authentication and
+  token renewal; the application never receives its token.
 - Readiness-gated live apply should use `KeyReadinessSnapshot`; only
   `status = active` plus `readiness = ready` is accepted. Degraded,
   not-ready, unknown, publish-only, and disabled keys fail closed before

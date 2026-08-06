@@ -1,0 +1,22 @@
+version: 1
+validationMode: supervised-local-development
+issuer: http://127.0.0.1:8081
+listener: {address: 127.0.0.1, port: 8081}
+signing:
+  algorithm: ES256
+  activePublicJwkFile: public-keys/ikcxvSn8zzbLoIRz2qq6D8OyYi7Qi0o-NhZLTPuf3e4.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer: {kind: local-jwk, privateKeyRef: secret:file/mint-signing}
+secretProviders:
+  file: {root: /tmp/registry-mint-local/secrets}
+audit: {path: /tmp/registry-mint-local/audit/mint.jsonl, maximumFileBytes: 1048576, hashKeyRef: secret:file/mint-audit-hmac, hashKeyVersion: 1}
+accessTokens:
+  audiences: [evidence.local]
+  lifetimeSeconds: 300
+  claims: {principal: sub, requesterTags: evidence_tags, evidenceAudience: evidence_audience, grantId: evidence_grant_id, grantAuthority: evidence_authority, actor: evidence_actor}
+clientAssertion:
+  audience: http://127.0.0.1:8081/token
+  maximumLifetimeSeconds: 300
+  algorithms: [EdDSA, ES256, RS256]
+clients: {directory: clients}

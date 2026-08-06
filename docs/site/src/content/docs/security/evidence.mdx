@@ -204,7 +204,9 @@ Owner-only key files. Each secret file below the configured
 `secretProviders.file.root` must be a regular, non-symlink file owned by the
 service identity with mode `0600`; the file provider rejects anything else.
 Audit and subject-binding secret files must contain independently generated
-raw key bytes and be at least 32 bytes.
+raw key bytes and be at least 32 bytes. The runtime derives separated audit-chain and identifier
+subkeys from each master, but Evidence Gateway also requires the two secret references and resolved
+master bytes to be distinct.
 
 Immutable bundle and runtime file. The operator mounts one reviewed governed
 bundle and one closed `runtime.yaml` read-only at startup; the bundle
@@ -214,13 +216,14 @@ write bits. There is no runtime upload, editor, approval API, hot reload,
 merge, mutation, governed-field override, or fallback bundle or runtime
 file: a new revision is a new deployment, not a live change.
 
-Secret handling. Source credentials and private signing material reach
+Secret handling. Source credentials and local-development private signing material reach
 Evidence Gateway only through the secret-reference mechanism and must not appear in
 YAML values, Rhai, command arguments, environment dumps, logs, audit,
-errors, snapshots, or generated contracts. The operator configures exactly
-one active signing key, whose `kid` matches `signing.activeKeyId`, and
-retains each retired public key in the published JWKS for at least the
-maximum assertion validity plus allowed clock skew.
+errors, snapshots, or generated contracts. Production and evidence-grade deployment uses a
+workload-local Vault or OpenBao Transit proxy over a Unix socket, leaving the service private key
+non-exportable. The operator configures one active public ES256 P-256 JWK, whose derived RFC 7638
+thumbprint is its `kid`, and retains published public keys for at least the maximum assertion
+validity plus allowed clock skew. A revoked key can be neither active nor published.
 
 ## Report a vulnerability
 
