@@ -2075,9 +2075,9 @@ fn compute_requirement_revisions(
 /// one requirement: its own derivation script, fixtures, concept codelists,
 /// reviewed schemas and bucket codelists, the artifacts of the single source it
 /// names, and the codelists of the selector profiles its subject roles and
-/// grants use. The retired public signing keys are deployment-wide and stay in
-/// every requirement's closure, so this narrows nothing beyond separating one
-/// requirement from another.
+/// grants use. The active and published public signing keys are deployment-wide
+/// and stay in every requirement's closure, so this narrows nothing beyond
+/// separating one requirement from another.
 fn requirement_artifact_paths(
     config: &EvidenceConfig,
     requirement: &RequirementConfig,
@@ -2118,7 +2118,8 @@ fn requirement_artifact_paths(
             }
         }
     }
-    for path in &config.signing.retired_public_jwk_files {
+    paths.insert(config.signing.active_public_jwk_file.as_str().to_owned());
+    for path in &config.signing.published_public_jwk_files {
         paths.insert(path.as_str().to_owned());
     }
     paths.extend(reviewed_schema_paths(requirement.concepts.iter(), files)?);
@@ -2189,10 +2190,12 @@ fn canonical_projection(
     let profiles = requirement_selector_profiles(config, requirement);
     retain_members(members, "sources", |name| name == requirement.source)?;
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
+    preserve_selector_field_order(members, config, &profiles)?;
     project_authority_profiles(members, &requirement.id)?;
-    // RFC 8785 canonicalization, shared with the rest of the stack, so a
-    // revision depends on the configuration alone. No dependency's member
-    // ordering or number formatting can silently change one.
+    // RFC 8785 canonicalization, shared with the rest of the stack, makes
+    // order-insensitive mappings and number formatting deterministic. The one
+    // mapping whose declaration order changes assertion bytes is projected as
+    // a sequence first, so canonicalization cannot erase that distinction.
     canonicalize_json(&document)
         .map_err(|_| invalid_artifact("the projection does not canonicalize"))
 }
@@ -2208,6 +2211,47 @@ fn retain_members(
         .and_then(JsonValue::as_object_mut)
         .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
     mapping.retain(|name, _| keep(name));
+    Ok(())
+}
+
+/// Preserve the declaration order that defines canonical selector encoding.
+///
+/// `OrderedMap` serializes as a JSON object, whose member order RFC 8785
+/// deliberately erases. Selector field order is not presentation: it orders
+/// the normalized values used by subject binding. Project each retained field
+/// mapping as `[name, value]` pairs before canonicalization so a reorder moves
+/// the revision with the assertion behavior it protects.
+fn preserve_selector_field_order(
+    members: &mut JsonMap<String, JsonValue>,
+    config: &EvidenceConfig,
+    retained_profiles: &BTreeSet<String>,
+) -> Result<(), BundleError> {
+    let projected_profiles = members
+        .get_mut("selectorProfiles")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the selector profiles do not project as a mapping"))?;
+    for name in retained_profiles {
+        let configured = config
+            .selector_profiles
+            .get(name)
+            .ok_or_else(|| invalid_artifact("a retained selector profile is not configured"))?;
+        let projected = projected_profiles
+            .get_mut(name)
+            .and_then(JsonValue::as_object_mut)
+            .ok_or_else(|| invalid_artifact("a selector profile does not project as a mapping"))?;
+        let fields = configured
+            .fields
+            .iter()
+            .map(|(field_name, field)| {
+                serde_json::to_value(field)
+                    .map(|value| {
+                        JsonValue::Array(vec![JsonValue::String(field_name.to_owned()), value])
+                    })
+                    .map_err(|_| invalid_artifact("a selector field does not project"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        projected.insert("fields".to_owned(), JsonValue::Array(fields));
+    }
     Ok(())
 }
 
@@ -2418,12 +2462,18 @@ mod tests {
         let (before, after) = revisions_across_edit(|root| {
             let path = root.join(CONFIG_FILE);
             let text = fs::read_to_string(&path).expect("the configuration reads");
-            // The only requirement configured with this validity is the edited
-            // one, so the replacement cannot reach a sibling.
-            assert_eq!(text.matches("validitySeconds: 43200").count(), 1);
+            // The only requirement configured with this observation timezone
+            // is the edited one, so the replacement cannot reach a sibling.
+            assert_eq!(
+                text.matches("observationTimezone: Africa/Nairobi").count(),
+                1
+            );
             fs::write(
                 &path,
-                text.replace("validitySeconds: 43200", "validitySeconds: 43201"),
+                text.replace(
+                    "observationTimezone: Africa/Nairobi",
+                    "observationTimezone: Africa/Accra",
+                ),
             )
             .expect("the configuration writes");
         });
@@ -2434,6 +2484,41 @@ mod tests {
                 assert_eq!(
                     revision, &after[requirement],
                     "`{requirement}` was not edited and keeps its revision"
+                );
+            }
+        }
+    }
+
+    /// Selector field declaration order controls normalized subject values and
+    /// therefore the audience-scoped subject binding. RFC 8785 sorts object
+    /// members, so the projection must preserve this order explicitly.
+    #[cfg(unix)]
+    #[test]
+    fn selector_field_reordering_changes_the_affected_requirement_revision() {
+        const EDITED: &str = "urn:example:fixture:requirement:adult-status:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            let original = concat!(
+                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      birth_date: {type: date}\n",
+            );
+            let reordered = concat!(
+                "      birth_date: {type: date}\n",
+                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+            );
+            assert_eq!(text.matches(original).count(), 1);
+            fs::write(&path, text.replace(original, reordered)).expect("the configuration writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` does not use the reordered selector profile"
                 );
             }
         }

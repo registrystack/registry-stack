@@ -197,7 +197,7 @@ impl std::fmt::Debug for OfflineKernel {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OfflineKernel")
-            .field("configuration_revision", &self.bundle.revision())
+            .field("bundle_revision", &self.bundle.revision())
             .field("source_count", &self.extractions.len())
             .field("requirement_count", &self.derivations.len())
             .finish()

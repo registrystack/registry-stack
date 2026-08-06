@@ -359,7 +359,7 @@ impl std::fmt::Debug for EvidenceRuntime {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EvidenceRuntime")
-            .field("configuration_revision", &self.kernel.bundle().revision())
+            .field("bundle_revision", &self.kernel.bundle().revision())
             .field("source_count", &self.sources.len())
             .field("signing_key_id", &self.signer.key_id())
             .finish_non_exhaustive()

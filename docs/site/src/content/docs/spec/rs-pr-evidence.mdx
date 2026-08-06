@@ -497,8 +497,12 @@ trust domain, issuer governance boundary, bundle lifecycle, signer, and audit bo
 (invariant `V1-I19`).
 
 REQ-PR-EVIDENCE-056: The bundle revision MUST be a digest over the complete atomic bundle bytes and
-layout manifest, and MUST be carried in every assertion and in every native audit event in the form
-fixed by `products/evidence/contracts/evidence.schema.yaml` and
+layout manifest and MUST be carried in every native audit event.
+Every assertion MUST instead carry the configuration revision for its requirement, computed over
+that requirement's configuration and artifact closure and published with the requirement through
+authenticated definition discovery, in the forms fixed by
+`products/evidence/contracts/definitions.schema.yaml`,
+`products/evidence/contracts/evidence.schema.yaml`, and
 `products/evidence/contracts/audit-event.schema.yaml`
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
@@ -626,9 +630,10 @@ An Evidence Gateway deployment conforms to this specification when it:
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,
   REQ-PR-EVIDENCE-051);
 - treats deployment input as immutable, restricts the runtime file to process-local bindings, fails
-  readiness on an untrusted bundle, serves one trust domain, and carries the bundle revision in every
-  assertion and audit event (REQ-PR-EVIDENCE-052, REQ-PR-EVIDENCE-053, REQ-PR-EVIDENCE-054,
-  REQ-PR-EVIDENCE-055, REQ-PR-EVIDENCE-056);
+  readiness on an untrusted bundle, serves one trust domain, carries the bundle revision in every
+  native audit event, and carries the requirement-scoped configuration revision in every assertion
+  (REQ-PR-EVIDENCE-052, REQ-PR-EVIDENCE-053, REQ-PR-EVIDENCE-054, REQ-PR-EVIDENCE-055,
+  REQ-PR-EVIDENCE-056);
 - carries the governed assurance profile through discovery, assertions, audit, and verification,
   confines fixture omission and credential-free loopback sources to `local`, and refuses those
   exceptions under `production` and `evidence-grade` (REQ-PR-EVIDENCE-057,
