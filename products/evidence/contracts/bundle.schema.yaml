@@ -39,7 +39,7 @@ properties:
         items: {$ref: '#/$defs/public-jwk-path'}
       jwksPath: {const: /.well-known/evidence/jwks.json}
       maximumAssertionValiditySeconds: {type: integer, minimum: 1, maximum: 31536000}
-      verifierClockSkewSeconds: {type: integer, minimum: 0, maximum: 600}
+      verifierClockSkewSeconds: {type: integer, minimum: 0, maximum: 300}
   responseFormats: {$ref: '#/$defs/response-formats'}
   selectorProfiles:
     type: object
