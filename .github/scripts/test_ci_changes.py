@@ -237,6 +237,24 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
+    def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
+        # Both bindings are Cargo path-dependents of the SDK and the verifier,
+        # so either can change the native surface or the error envelope the
+        # packages wrap. Selecting the job from changed paths alone would skip
+        # the npm suite, the type-drift check, and the Python unittest suite for
+        # exactly the changes most able to break them.
+        for path in (
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-evidence-verifier/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertIn(
+                    "registry-evidence-client-node", outputs["rust_packages"]
+                )
+                self.assertIn("registry-evidence-client-py", outputs["rust_packages"])
+
     def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("\n  evidence-contracts:\n", workflow)

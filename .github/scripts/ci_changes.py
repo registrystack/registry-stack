@@ -482,11 +482,11 @@ def classify(
         for path in paths
     )
     editors = complete or any(path.startswith("editors/") for path in paths)
-    client_bindings = complete or any(
-        path.startswith(f"crates/{package}/")
-        for path in paths
-        for package in EVIDENCE_BINDING_PACKAGES
-    )
+    # Reverse dependents, not changed paths: both bindings are Cargo path
+    # dependents of the SDK and the verifier, so a change to either can move
+    # the native surface or the error envelope the packages wrap without
+    # touching a file inside a binding crate.
+    client_bindings = complete or bool(affected & EVIDENCE_BINDING_PACKAGES)
 
     tutorial_infrastructure = any(
         path
