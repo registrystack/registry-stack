@@ -43,7 +43,8 @@ The normative source set is:
 - `rhai-abi.yaml` and `primitive-library.yaml`: the closed `prepare/2`,
   `extract/2`, and selector-aware `derive/3` entry points, domain-neutral
   primitive allowlist, and resource limits;
-- `source-contract.yaml`: the single fixed HTTP JSON source boundary; and
+- `source-contract.yaml`: the fixed HTTP JSON source boundary and closed
+  single or search-then-fetch acquisition; and
 - `security-invariant-matrix.yaml`: threat, enforcement point, and required
   negative test for every Version 1 trust and privacy invariant; and
 - `security-test-traceability.yaml`: exact executable Rust tests satisfying

@@ -73,12 +73,12 @@ body. Do not give that script request-execution authority.
 ```text
 validate and authorize selectors in Rust
     -> durably accept the access-attempt audit
-    -> prepare(source_required_selectors, adapter_parameters)
+    -> prepare(source_required_selectors, {parameters, prior_facts})
     -> validate RequestParts in Rust
     -> resolve credentials in Rust
-    -> execute one fixed request in Rust
+    -> execute the fixed single request, or fixed search then fixed fetch, in Rust
     -> parse and bound the response in Rust
-    -> extract(response, adapter_parameters)
+    -> extract(response, {parameters, prior_facts})
     -> validate LookupResult in Rust
     -> derive(facts, declared_authorized_selectors, evaluation_context)
     -> validate minimum-disclosure values in Rust
@@ -113,9 +113,9 @@ paginators, partition routers, transformations, and custom-component escape
 hatches accumulate.
 
 Evidence should keep the component separation but not reproduce the component
-catalog. Version 1 needs exactly one evidence-data request, not streams,
-partitions, cursor state, pagination, incremental synchronization, discovery,
-or retries that create additional evidence reads.
+catalog. Version 1 needs only the closed single or two-call search-then-fetch
+acquisition, not streams, partitions, cursor state, pagination, incremental
+synchronization, discovery, retries, or response-led routing.
 
 Useful references:
 
@@ -170,8 +170,8 @@ One reviewed source definition uses two scripts with separate inputs, entry
 points, and result validators. Each requirement has one derivation script:
 
 ```text
-prepare(authorized_selectors, adapter_parameters) -> RequestParts
-extract(source_response, adapter_parameters) -> LookupResult
+prepare(authorized_selectors, adapter_context) -> RequestParts
+extract(source_response, adapter_context) -> LookupResult
 derive(facts, declared_authorized_selectors, evaluation_context)
     -> array<DerivedConceptValue>
 ```
@@ -192,11 +192,15 @@ already resolved, validated, and authorized. It has this conceptual shape:
 }
 ```
 
-`adapter_parameters` is trusted, non-secret, startup-only data. It contains
+`adapter_context` has exactly `parameters` and `prior_facts`.
+`parameters` is trusted, non-secret, startup-only data. It contains
 provider field identifiers, fixed program or event identifiers, fixed
 projection declarations, and other constants needed by both directions of the
 adapter. It contains no credentials or runtime authorization context. A closed
 schema validates its exact keys, types, and bounds at startup.
+`prior_facts` is empty for a single or search stage. For the fetch stage it is
+exactly the closed FactSet already extracted from the search response and
+validated by Rust.
 
 Each source also declares closed `selectorInputs`: permitted roles, profiles,
 and fields, but no query/body placements. Rust intersects that declaration
@@ -272,7 +276,8 @@ The source definition still fixes:
 - whether a query and/or JSON body is permitted;
 - generic Basic, static Bearer, or OAuth client-credentials authentication;
 - permitted content type and core-owned headers;
-- one evidence-data request;
+- the closed `single` or `search-then-fetch` acquisition and its one- or
+  two-request ceiling;
 - denied redirects;
 - timeout;
 - maximum response bytes;
@@ -284,9 +289,9 @@ The trusted script owns provider semantics inside the permitted query/body. A
 generic runtime cannot know that `pageSize`, `limit`, or a provider-specific
 filter means what the provider documents. That guarantee comes from the
 reviewed adapter, exact request fixtures, and mock contract, just as it comes
-from reviewed fixed YAML today. Rust still enforces the bounds it can know:
-one request, no page traversal, fixed transport authority, bounded output, and
-bounded response parsing.
+from reviewed fixed YAML today. Rust still enforces the bounds it can know: the
+closed one- or two-call acquisition, no page traversal, fixed transport
+authority, bounded output, and bounded response parsing.
 
 ## Reference layouts
 
@@ -493,7 +498,7 @@ Every preparation adapter should have tests in these groups.
 
 ### Execution and extraction
 
-- Exactly one request reaches the sanitized mock.
+- Exactly the configured one or two requests reach the sanitized mock.
 - Redirect, timeout, response-size, and concurrency limits remain Rust-owned.
 - Zero, one, two, and provider totals above two map safely.
 - No second page or response-provided URL is followed.

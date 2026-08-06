@@ -267,7 +267,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:classification:v1
     kind: criterion
-    source: classification-source
+    acquisition:
+      kind: single
+      source: classification-source
     purposes: [fixture-procedure]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [opaque-record-v1]}
@@ -282,7 +284,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:property:v1
     kind: information-requirement
-    source: context-source
+    acquisition:
+      kind: single
+      source: context-source
     purposes: [fixture-procedure]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [demographics-v1]}
@@ -297,7 +301,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:property-with-event:v1
     kind: information-requirement
-    source: grant-source
+    acquisition:
+      kind: single
+      source: grant-source
     purposes: [fixture-procedure]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [demographics-with-event-v1]}
@@ -312,7 +318,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:relationship:v1
     kind: criterion
-    source: relationship-source
+    acquisition:
+      kind: single
+      source: relationship-source
     purposes: [fixture-procedure]
     subjectRoles:
       - {role: subject-a, cardinality: one, selectorProfiles: [opaque-record-v1, opaque-coordinates-v1]}
@@ -328,7 +336,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:opaque:v1
     kind: information-requirement
-    source: opaque-source
+    acquisition:
+      kind: single
+      source: opaque-source
     purposes: [fixture-procedure]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [opaque-coordinates-v1]}

@@ -1,4 +1,5 @@
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let records = source_response["records"];
     if records.len > parameters["resultLimit"] {

@@ -278,3 +278,10 @@ entries:
     tests: [{file: crates/registry-evidence/src/config.rs, name: authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims}]
   - id: sec-path-binding-unreachable-selector-set
     tests: [{file: crates/registry-evidence/tests/source_contracts.rs, name: an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused}]
+  - id: sec-search-then-fetch-bounded
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
+      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}

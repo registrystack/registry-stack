@@ -4431,6 +4431,261 @@ async fn acceptance_runtime() -> AcceptanceRuntime {
     }
 }
 
+#[tokio::test]
+async fn search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_search_then_fetch(bundle_root, &source_origin),
+    );
+    let captured = Arc::new(
+        crate::bundle::Bundle::load(&prepared.bundle_root)
+            .unwrap_or_else(|error| panic!("search-then-fetch bundle loads: {error:?}")),
+    );
+    assert_eq!(
+        captured
+            .config
+            .requirement_acquisition_posture(&adult_request().requirement),
+        Some(crate::config::AcquisitionPosture::RecordTransformed)
+    );
+    let kernel = crate::kernel::OfflineKernel::compile(captured)
+        .unwrap_or_else(|error| panic!("search-then-fetch kernel compiles: {error:?}"));
+    let prior_facts = BTreeMap::from([("record_id".to_owned(), json!("record-001"))]);
+    let facts = match kernel
+        .extract_source(
+            "source-a-fetch",
+            &json!({"date_of_birth": "2000-01-01"}),
+            &prior_facts,
+        )
+        .expect("fetch response extracts")
+    {
+        crate::model::LookupResult::Match(facts) => facts,
+        _ => panic!("fetch response is a unique match"),
+    };
+    kernel
+        .derive_and_validate(
+            &adult_request().requirement,
+            &facts,
+            Utc::now(),
+            crate::kernel::ValueProjection {
+                audience: EVIDENCE_AUDIENCE,
+                binding_key: b"subject-binding-secret-canary-32-bytes-minimum",
+                binding_key_version: 1,
+            },
+        )
+        .unwrap_or_else(|error| panic!("fetch facts derive: {error:?}"));
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("search-then-fetch runtime initializes"),
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(json!({
+            "lookup": {
+                "given_name": "Amina",
+                "family_name": "Diallo",
+                "birth_date": "2000-01-01"
+            },
+            "fields": ["record_id"],
+            "limit": 2
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request = adult_request();
+    let jws = runtime
+        .evaluate("operation-search-then-fetch", &access_token(None), &request)
+        .await
+        .expect("the fixed chain produces Evidence");
+    let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let evidence = verify_flattened_jws(
+        &serialized,
+        runtime.jwks(),
+        &verification_policy(&runtime, &request, &serialized),
+    )
+    .expect("the chained assertion verifies");
+    assert_eq!(
+        evidence.supported_values[0].value,
+        PublicValue::Boolean(true)
+    );
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].url.path(), "/v1/search");
+    assert_eq!(requests[1].url.path(), "/v1/records/record-001");
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit event is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["record"]["phase"], "access-attempt");
+    assert_eq!(events[0]["record"]["sourceId"], "source-a");
+    assert_eq!(events[1]["record"]["phase"], "access-attempt");
+    assert_eq!(events[1]["record"]["sourceId"], "source-a-fetch");
+    assert_eq!(events[2]["record"]["phase"], "disclosure-release");
+    assert_eq!(events[2]["record"]["sourceId"], "source-a-fetch");
+    assert!(!audit.contains("record-001"));
+}
+
+#[tokio::test]
+async fn search_then_fetch_stops_after_an_unresolved_search() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_search_then_fetch(bundle_root, &source_origin),
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("search-then-fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"total": 0})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-search-without-match",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an unresolved search releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::EvidenceNotAvailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/v1/search");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.lines().count(), 2);
+    assert!(audit.contains("\"sourceId\":\"source-a\""));
+    assert!(!audit.contains("source-a-fetch"));
+}
+
+#[tokio::test]
+async fn search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, &source_origin);
+            fs::write(
+                bundle_root.join("adapters/adult-status-fetch-source.rhai"),
+                r#"fn extract(source_response, context) {
+    #{outcome: "no_match"}
+}
+"#,
+            )
+            .expect("unresolved fetch extraction is written");
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("search-then-fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-unresolved-fetch",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an unresolved fetch is not authoritative absence");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .len(),
+        2
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains("record-001"));
+}
+
+#[test]
+fn search_then_fetch_rejects_an_unbound_prior_fact_at_startup() {
+    let source_origin = "http://127.0.0.1:18081";
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, source_origin);
+            let configuration_path = bundle_root.join("evidence.yaml");
+            let mut configuration =
+                fs::read_to_string(&configuration_path).expect("chained configuration is readable");
+            replace_exact(
+                &mut configuration,
+                "record_id: {from: prior-fact, field: record_id}",
+                "record_id: {from: prior-fact, field: missing_record_id}",
+                1,
+            );
+            fs::write(configuration_path, configuration)
+                .expect("invalid prior-fact binding is written");
+        },
+    );
+    let error = crate::bundle::Bundle::load(&prepared.bundle_root)
+        .expect_err("an unbound prior fact fails before serving");
+    assert_eq!(
+        error.to_string(),
+        "an Evidence bundle artifact is invalid: fetch path binding references an unknown search fact"
+    );
+}
+
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
     let server = MockServer::start().await;
     let prepared = prepare_fixture(
@@ -4455,6 +4710,15 @@ fn prepare_fixture(
     source_origin: &str,
     ceilings: &FixtureCeilings,
 ) -> PreparedFixture {
+    prepare_fixture_with_mutation(binding_secret, source_origin, ceilings, |_| {})
+}
+
+fn prepare_fixture_with_mutation(
+    binding_secret: &str,
+    source_origin: &str,
+    ceilings: &FixtureCeilings,
+    mutate_bundle: impl FnOnce(&Path),
+) -> PreparedFixture {
     let temporary = tempfile::tempdir().expect("temporary acceptance root");
     let bundle_root = temporary.path().join("bundle");
     let runtime_path = temporary.path().join("runtime.yaml");
@@ -4472,6 +4736,7 @@ fn prepare_fixture(
 
     rewrite_deployment_values(&bundle_root, source_origin);
     apply_fixture_ceilings(&bundle_root, ceilings);
+    mutate_bundle(&bundle_root);
     write_secret(
         &secret_root,
         "audit-hash-key",
@@ -5044,6 +5309,162 @@ fn rewrite_deployment_values(bundle_root: &Path, source_origin: &str) {
         1,
     );
     fs::write(path, text).expect("deployment-only fixture rewrite succeeds");
+}
+
+fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("copied configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "    acquisition:\n      kind: single\n      source: source-a",
+        "    acquisition:\n      kind: search-then-fetch\n      search: source-a\n      fetch: source-a-fetch",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        &format!(
+            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
+        ),
+        &format!(
+            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
+        ),
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      adapterParameters: {requestedFields: [date_of_birth], resultLimit: 2}",
+        "      adapterParameters: {requestedFields: [record_id], resultLimit: 2}",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      projection: [/total, /date_of_birth]",
+        "      projection: [/total, /record_id]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "  source-b:\n",
+        r#"  source-a-fetch:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: GET
+      pathTemplate: /v1/records/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/adult-status-fetch-prepare.rhai
+      adapterParameters: {profile: fetch}
+      adapterParametersSchema: schemas/adult-status-fetch-adapter-parameters.schema.yaml
+      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+      projection: [/date_of_birth]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-fetch-response.schema.yaml
+    extractScript: adapters/adult-status-fetch-source.rhai
+    factSchema: schemas/adult-status-fetch-facts.schema.yaml
+  source-b:
+"#,
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    baseUrl: https://source.invalid",
+        &format!("    baseUrl: {source_origin}"),
+        1,
+    );
+    fs::write(configuration_path, configuration).expect("chained configuration is written");
+
+    fs::write(
+        bundle_root.join("adapters/adult-status-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
+    let subject = selectors["subject"];
+    #{query: [], body: #{lookup: #{given_name: subject["values"]["given_name"], family_name: subject["values"]["family_name"], birth_date: subject["values"]["birth_date"]}, fields: parameters["requestedFields"], limit: parameters["resultLimit"]}}
+}
+"#,
+    )
+    .expect("search preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-source.rhai"),
+        r#"fn extract(source_response, context) {
+    let total = source_response["total"];
+    if total == 0 { return #{outcome: "no_match"}; }
+    if total > 1 { return #{outcome: "ambiguous"}; }
+    #{outcome: "match", facts: #{record_id: required(get_path(source_response, "/record_id"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("search extraction is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-fetch-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    required(context["prior_facts"]["record_id"], "required_fact_missing");
+    #{query: [], body: ()}
+}
+"#,
+    )
+    .expect("fetch preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-fetch-source.rhai"),
+        r#"fn extract(source_response, context) {
+    required(context["prior_facts"]["record_id"], "required_fact_missing");
+    #{outcome: "match", facts: #{date_of_birth: required(get_path(source_response, "/date_of_birth"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("fetch extraction is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-adapter-parameters.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [record_id]}\n  resultLimit: {const: 2}\n",
+    )
+    .expect("search parameter schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-response.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  record_id: {type: string, minLength: 1, maxLength: 128}\n",
+    )
+    .expect("search response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-facts.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [record_id]\nproperties:\n  record_id: {type: string, minLength: 1, maxLength: 128}\n",
+    )
+    .expect("search fact schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-adapter-parameters.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [profile]\nproperties:\n  profile: {const: fetch}\n",
+    )
+    .expect("fetch parameter schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-response.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string, format: date}\n",
+    )
+    .expect("fetch response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-facts.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [date_of_birth]\nproperties:\n  date_of_birth: {type: string, format: date}\n",
+    )
+    .expect("fetch fact schema is written");
+    fs::write(
+        bundle_root.join("derivations/adult-status.rhai"),
+        r#"fn derive(facts, selectors, evaluation_context) {
+    [#{concept_id: "urn:example:fixture:concept:adult-status", value: facts["date_of_birth"] == "2000-01-01"}]
+}
+"#,
+    )
+    .expect("chained derivation is written");
 }
 
 /// The deployment ceilings a prepared fixture runs under.

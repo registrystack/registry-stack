@@ -53,7 +53,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
-    source: source-c
+    acquisition:
+      kind: single
+      source: source-c
     purposes: [fixture-registration]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}]
     referenceFrameworks: [urn:example:fixture:framework:professional-licence:v1]

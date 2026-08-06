@@ -95,6 +95,7 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
             "pathTemplate": "/v1/datasets/synthetic-units/entities/unit-record/records/{record}",
             "pathBindings": {
                 "record": {
+                    "from": "selector",
                     "role": "subject",
                     "profile": "residence-record-v1",
                     "field": "record_reference"

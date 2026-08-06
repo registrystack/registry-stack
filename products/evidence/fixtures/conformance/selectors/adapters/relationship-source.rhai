@@ -1,4 +1,5 @@
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     if source_response["matched"] {
         return #{outcome: "match", facts: #{result: true}};
     }

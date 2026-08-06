@@ -372,6 +372,7 @@ impl Bundle {
 
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
+        validate_prior_fact_bindings(&config, &fact_schemas)?;
         let codelists = load_codelists(&config, &files)?;
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(&config, &files)?;
@@ -1052,6 +1053,61 @@ fn load_fact_schemas(
             .map_err(|error| error.in_artifact(schema_path))?;
     }
     Ok(schemas)
+}
+
+/// Prove at startup that every Rust-owned fetch path binding can be filled by
+/// the exact search fact schema that precedes it. Fact schemas require their
+/// complete closed property set, so a declared scalar property exists on every
+/// validated search match.
+fn validate_prior_fact_bindings(
+    config: &EvidenceConfig,
+    schemas: &BTreeMap<String, JsonValue>,
+) -> Result<(), BundleError> {
+    for requirement in &config.requirements {
+        let crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } =
+            &requirement.acquisition
+        else {
+            continue;
+        };
+        let search_source = config
+            .sources
+            .get(search)
+            .ok_or(invalid_artifact("search source is unavailable"))?;
+        let fetch_source = config
+            .sources
+            .get(fetch)
+            .ok_or(invalid_artifact("fetch source is unavailable"))?;
+        let search_schema = schemas
+            .get(search_source.fact_schema.as_str())
+            .and_then(JsonValue::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(JsonValue::as_object)
+            .ok_or(invalid_artifact("search fact schema is unavailable"))?;
+        for (_, binding) in fetch_source.request.path_bindings.iter() {
+            let crate::config::PathBindingConfig::PriorFact { field } = binding else {
+                continue;
+            };
+            let property = search_schema
+                .get(field.as_str())
+                .and_then(JsonValue::as_object)
+                .ok_or(invalid_artifact(
+                    "fetch path binding references an unknown search fact",
+                ))?;
+            let scalar_type = property
+                .get("type")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| matches!(value, "string" | "integer" | "boolean"));
+            let scalar_const = property
+                .get("const")
+                .is_some_and(|value| value.is_string() || value.is_i64() || value.is_boolean());
+            if !scalar_type && !scalar_const {
+                return Err(invalid_artifact(
+                    "fetch path binding requires a scalar search fact",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn load_fact_schema(
@@ -2073,8 +2129,8 @@ fn compute_requirement_revisions(
 ///
 /// This is the bundle-wide closure of [`validate_file_closure`] restricted to
 /// one requirement: its own derivation script, fixtures, concept codelists,
-/// reviewed schemas and bucket codelists, the artifacts of the single source it
-/// names, and the codelists of the selector profiles its subject roles and
+/// reviewed schemas and bucket codelists, the artifacts of every source its
+/// bounded acquisition names, and the codelists of the selector profiles its subject roles and
 /// grants use. The active and published public signing keys are deployment-wide
 /// and stay in every requirement's closure, so this narrows nothing beyond
 /// separating one requirement from another.
@@ -2084,14 +2140,16 @@ fn requirement_artifact_paths(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeSet<String>, BundleError> {
     let mut paths = BTreeSet::new();
-    let source = config.sources.get(&requirement.source).ok_or_else(|| {
-        invalid_artifact("the requirement names a source the configuration does not define")
-    })?;
-    paths.insert(source.request.prepare_script.as_str().to_owned());
-    paths.insert(source.extract_script.as_str().to_owned());
-    paths.insert(source.request.adapter_parameters_schema.as_str().to_owned());
-    paths.insert(source.response_schema.as_str().to_owned());
-    paths.insert(source.fact_schema.as_str().to_owned());
+    for source_id in requirement.acquisition.source_ids() {
+        let source = config.sources.get(source_id).ok_or_else(|| {
+            invalid_artifact("the requirement names a source the configuration does not define")
+        })?;
+        paths.insert(source.request.prepare_script.as_str().to_owned());
+        paths.insert(source.extract_script.as_str().to_owned());
+        paths.insert(source.request.adapter_parameters_schema.as_str().to_owned());
+        paths.insert(source.response_schema.as_str().to_owned());
+        paths.insert(source.fact_schema.as_str().to_owned());
+    }
     paths.insert(requirement.derivation.script.as_str().to_owned());
     if let Some(fixtures) = &requirement.fixtures {
         paths.insert(fixtures.as_str().to_owned());
@@ -2161,8 +2219,8 @@ fn requirement_selector_profiles(
 ///
 /// The projection starts from the complete parsed configuration and replaces
 /// only the four members that hold per-requirement configuration, keeping this
-/// requirement's own entries: the requirement itself, the single source it
-/// names, the selector profiles it can be served through, and the authority
+/// requirement's own entries: the requirement itself, every source its bounded
+/// acquisition names, the selector profiles it can be served through, and the authority
 /// grants that offer it. Every other member is kept exactly as configured, so a
 /// configuration member added later is covered without revisiting this
 /// projection.
@@ -2188,7 +2246,14 @@ fn canonical_projection(
         JsonValue::Array(vec![requirement_value]),
     );
     let profiles = requirement_selector_profiles(config, requirement);
-    retain_members(members, "sources", |name| name == requirement.source)?;
+    let acquisition_sources = requirement
+        .acquisition
+        .source_ids()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    retain_members(members, "sources", |name| {
+        acquisition_sources.contains(name)
+    })?;
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
     preserve_selector_field_order(members, config, &profiles)?;
     project_authority_profiles(members, &requirement.id)?;

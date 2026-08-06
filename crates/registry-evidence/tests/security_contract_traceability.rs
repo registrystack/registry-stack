@@ -298,7 +298,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         "registry.evidence.acceptance-test-traceability/v1"
     );
 
-    let expected = (1..=63)
+    let expected = (1..=64)
         .map(|row| format!("acceptance-row-{row:02}"))
         .collect::<Vec<_>>();
     let mapped = traceability
@@ -308,7 +308,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         .collect::<Vec<_>>();
     assert_eq!(
         mapped, expected,
-        "acceptance row mapping is not the 63 required rows in order"
+        "acceptance row mapping is not the 64 required rows in order"
     );
 
     for entry in &traceability.entries {

@@ -92,7 +92,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:supported-values:v1
     kind: information-requirement
-    source: synthetic-source
+    acquisition:
+      kind: single
+      source: synthetic-source
     purposes: [conformance]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [synthetic-subject-v1]}

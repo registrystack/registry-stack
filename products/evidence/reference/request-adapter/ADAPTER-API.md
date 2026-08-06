@@ -27,8 +27,8 @@ not need to inspect the Rust implementation to determine whether a script is
 supported.
 
 ```text
-prepare(selectors: map, parameters: map) -> RequestParts
-extract(response: JSON, parameters: map) -> LookupResult
+prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
+extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
 ```
@@ -52,8 +52,8 @@ A source has two separately compiled adapter scripts, and each requirement has
 one separately compiled derivation script:
 
 ```text
-prepare(selectors: map, parameters: map) -> RequestParts
-extract(response: JSON, parameters: map) -> LookupResult
+prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
+extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
 ```
@@ -67,6 +67,9 @@ derive(facts: map, selectors: map, evaluation_context: map)
   declared entry point. Calls remain statically named in reviewed source.
 - Preparation runs after successful authorization and durable access-attempt
   audit, but before credential resolution or source access.
+- `context.parameters` is the source's closed startup-validated configuration.
+  `context.prior_facts` is empty for single and search stages and is exactly the
+  schema-validated search FactSet for the fixed fetch stage.
 - Extraction receives neither selectors nor prepared request parts.
 - Derivation runs only for `match`, receives only the authorized roles and
   fields declared by the requirement's closed `derivation.selectorInputs`, and
@@ -133,9 +136,9 @@ The ceiling of at most two minimally projected results, which lets one bounded
 request separate a unique match from ambiguity, is governed adapter policy. Its
 value is declared by the reviewed source configuration, here
 `adapterParameters: {resultLimit: 2}`, and rendered into the request by that
-source's `prepareScript`. Rust enforces only the generic one-request,
-projection, and response bounds around it. Two is not a Rust domain rule, not a
-built-in operation, and not a property of any source product.
+source's `prepareScript`. Rust enforces only the generic one-request-per-stage,
+projection, and response bounds around it. The adapter's result limit is not a
+Rust domain rule, built-in operation, or property of any source product.
 
 ## Inputs
 
@@ -303,17 +306,19 @@ content type, timeout, redirect policy, retry policy, pagination, proxy use,
 response limit, concurrency, or number of requests
 ```
 
-Rust executes exactly one evidence-data request. A response cannot supply a
-second URL, next page, or retry request.
+Rust executes only the requirement's closed acquisition: one request for
+`single`, or one fixed search followed by one fixed fetch after a unique
+validated match. A response cannot supply a source, URL, next page, retry, or
+third request.
 
-A bundle may define a Rust-owned `pathTemplate` with complete-segment
-`pathBindings` to already validated and authorized selector fields. Those
-bindings are not `RequestParts` and are never supplied by the script. Each
-placeholder occupies one complete path segment. Values reject `/`, `\`, `%`,
+A bundle may define a Rust-owned `pathTemplate` with tagged complete-segment
+`pathBindings`. `from: selector` binds an already validated and authorized
+selector field. `from: prior-fact` is valid only on a fetch source and binds a
+scalar property required by the preceding search fact schema. Bindings are not
+`RequestParts` and are never selected by a script. Values reject `/`, `\`, `%`,
 controls, `.` and `..`, then Rust percent-encodes them exactly once. Expansion
 cannot change the configured origin, endpoint family, method, credentials, or
-request count. A source declares exactly one of fixed `path` or
-`pathTemplate`.
+request count. A source declares exactly one of fixed `path` or `pathTemplate`.
 
 Bundle-fixed `fixedHeaders` are ordered, non-secret constants. Names are unique
 after ASCII case folding and cannot set authentication, host/routing, cookies,

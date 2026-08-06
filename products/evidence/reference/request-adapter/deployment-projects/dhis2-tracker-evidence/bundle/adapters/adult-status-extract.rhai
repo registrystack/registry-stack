@@ -3,7 +3,8 @@
 // requiring the page count to agree with the total, so a truncated or
 // inconsistent envelope is not read as an authoritative no-match or unique
 // match, and matching the one attribute this requirement names.
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let pager = source_response["pager"];
     let records = source_response["trackedEntities"];
     let total = pager["total"];

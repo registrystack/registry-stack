@@ -295,7 +295,7 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}
       - {file: crates/registry-evidence/src/bundle.rs, name: symlinked_artifact_fails_before_file_access}
   - id: acceptance-row-46
-    summary: Fixed paths and selector-bound path templates pass exact encoding tests; missing, extra, duplicated, slash, backslash, percent, control, empty, and dot-segment bindings fail before credential acquisition or source access.
+    summary: Fixed paths and tagged selector or fetch prior-fact path templates pass exact encoding tests; missing, extra, duplicated, slash, backslash, percent, control, empty, and dot-segment bindings fail before credential acquisition or source access.
     tests:
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: path_binding_contract_rejects_empty_missing_and_extra_material_before_credentials}
@@ -424,3 +424,11 @@ entries:
       - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
+  - id: acceptance-row-64
+    summary: A search-then-fetch requirement executes one fixed audited search and, only after a unique schema-valid match, one fixed audited fetch using declared scalar prior-fact path binding; only final facts reach derivation, the weaker posture governs, unresolved search makes no fetch, intermediate facts stay out of audit, and no third call or response-led routing exists.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
+      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}

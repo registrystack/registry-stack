@@ -1,4 +1,5 @@
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     if len(source_response) != 2 ||
        !source_response.contains("total") ||
        type_of(source_response["total"]) != "i64" ||

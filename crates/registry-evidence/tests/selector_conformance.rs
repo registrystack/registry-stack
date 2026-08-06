@@ -1380,13 +1380,13 @@ fn source_identity(bundle: &Bundle, requirement_id: &str) -> (String, String) {
     let source = bundle
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .expect("source is configured");
     let adapter = Path::new(source.extract_script.as_str())
         .file_stem()
         .and_then(|name| name.to_str())
         .expect("adapter has a local identifier");
-    (requirement.source.clone(), adapter.to_owned())
+    (requirement.initial_source().to_owned(), adapter.to_owned())
 }
 
 fn selector_value_canaries() -> &'static [&'static str] {

@@ -322,11 +322,11 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    "    source: source-a\n",
-                    &format!("    source: {CANARY}\n"),
+                    "      source: source-a\n",
+                    &format!("      source: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement references an unknown source\n",
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement acquisition references an unknown source\n",
             suffix: "",
         },
         FailureCase {

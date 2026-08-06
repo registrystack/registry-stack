@@ -54,7 +54,8 @@ fn restriction_recorded(enrollment, parameters) {
     unrecorded_restriction(parameters)
 }
 
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let pager = source_response["pager"];
     let records = source_response["trackedEntities"];
     let total = pager["total"];

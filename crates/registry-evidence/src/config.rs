@@ -366,6 +366,22 @@ pub use registry_evidence_verifier::AssuranceProfile;
 pub type SourceSelectorSet = Vec<(String, String)>;
 
 impl EvidenceConfig {
+    pub fn requirement_acquisition_posture(
+        &self,
+        requirement_id: &str,
+    ) -> Option<AcquisitionPosture> {
+        let requirement = self
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == requirement_id)?;
+        requirement
+            .acquisition
+            .source_ids()
+            .into_iter()
+            .filter_map(|source_id| self.sources.get(source_id).map(|source| source.posture))
+            .reduce(AcquisitionPosture::weakest)
+    }
+
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
@@ -473,12 +489,13 @@ impl EvidenceConfig {
         let requirement_sources = self
             .requirements
             .iter()
-            .map(|requirement| (requirement.id.as_str(), requirement.source.as_str()))
-            .collect::<BTreeMap<_, _>>();
+            .filter(|requirement| requirement.acquisition.uses_source(source_id))
+            .map(|requirement| requirement.id.as_str())
+            .collect::<BTreeSet<_>>();
         let mut sets = BTreeSet::new();
         for (_, authority) in self.authority_profiles.iter() {
             for grant in &authority.grants {
-                if requirement_sources.get(grant.requirement.as_str()) != Some(&source_id) {
+                if !requirement_sources.contains(grant.requirement.as_str()) {
                     continue;
                 }
                 let mut set = grant
@@ -494,7 +511,7 @@ impl EvidenceConfig {
                     })
                     .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
                     .collect::<SourceSelectorSet>();
-                if set.is_empty() {
+                if set.is_empty() && !source.request.selector_inputs.is_empty() {
                     continue;
                 }
                 set.sort();
@@ -525,30 +542,65 @@ impl EvidenceConfig {
                 }
             }
             for (_, binding) in source.request.path_bindings.iter() {
-                let profile =
-                    self.selector_profiles
-                        .get(&binding.profile)
-                        .ok_or(ConfigError::Invalid(
-                            "source path binding references an unknown selector profile",
-                        ))?;
-                if !profile.fields.contains_key(&binding.field) {
-                    return invalid("source path binding references an unknown selector field");
-                }
-                if !source.request.selector_inputs.iter().any(|input| {
-                    input.role == binding.role
-                        && input.alternatives.iter().any(|alternative| {
-                            alternative.profile == binding.profile
-                                && alternative.fields.contains(&binding.field)
-                        })
-                }) {
-                    return invalid("source path binding is not declared as a selector input");
+                if let PathBindingConfig::Selector {
+                    role,
+                    profile,
+                    field,
+                } = binding
+                {
+                    let profile_config =
+                        self.selector_profiles
+                            .get(profile)
+                            .ok_or(ConfigError::Invalid(
+                                "source path binding references an unknown selector profile",
+                            ))?;
+                    if !profile_config.fields.contains_key(field) {
+                        return invalid("source path binding references an unknown selector field");
+                    }
+                    if !source.request.selector_inputs.iter().any(|input| {
+                        input.role == *role
+                            && input.alternatives.iter().any(|alternative| {
+                                alternative.profile == *profile
+                                    && alternative.fields.contains(field)
+                            })
+                    }) {
+                        return invalid("source path binding is not declared as a selector input");
+                    }
                 }
             }
         }
 
+        let initial_sources = self
+            .requirements
+            .iter()
+            .map(|requirement| requirement.acquisition.initial_source())
+            .collect::<BTreeSet<_>>();
+        let fetch_sources = self
+            .requirements
+            .iter()
+            .filter_map(|requirement| requirement.acquisition.fetch_source())
+            .collect::<BTreeSet<_>>();
+        for (source_id, source) in self.sources.iter() {
+            if initial_sources.contains(source_id) && source.request.selector_inputs.is_empty() {
+                return invalid("single and search sources must declare selector inputs");
+            }
+            if source
+                .request
+                .path_bindings
+                .iter()
+                .map(|(_, binding)| binding)
+                .any(PathBindingConfig::is_prior_fact)
+                && (!fetch_sources.contains(source_id) || initial_sources.contains(source_id))
+            {
+                return invalid("prior-fact path bindings are permitted only on fetch sources");
+            }
+        }
+
         for requirement in &self.requirements {
-            if !self.sources.contains_key(&requirement.source) {
-                return invalid("requirement references an unknown source");
+            for source_id in requirement.acquisition.source_ids() {
+                if !self.sources.contains_key(source_id) {
+                    return invalid("requirement acquisition references an unknown source");
+                }
             }
             if requirement.validity_seconds > self.signing.maximum_assertion_validity_seconds {
                 return invalid("requirement validity exceeds signing maximum validity");
@@ -591,14 +643,7 @@ impl EvidenceConfig {
                 if grant.subjects.len() != requirement.subject_roles.len() {
                     return invalid("authority grant must bind the complete subject-role set");
                 }
-                let source = self
-                    .sources
-                    .get(&requirement.source)
-                    .ok_or(ConfigError::Invalid(
-                        "requirement references an unknown source",
-                    ))?;
                 let mut seen_roles = BTreeSet::new();
-                let mut source_selector_set = Vec::with_capacity(grant.subjects.len());
                 for subject in &grant.subjects {
                     if !seen_roles.insert(subject.role.as_str()) {
                         return invalid("authority grant subject roles must be unique");
@@ -630,16 +675,6 @@ impl EvidenceConfig {
                         subject.role.as_str(),
                         subject.selector_profile.as_str(),
                     ));
-                    if source.request.selector_inputs.iter().any(|input| {
-                        input.role == subject.role
-                            && input
-                                .alternatives
-                                .iter()
-                                .any(|alternative| alternative.profile == subject.selector_profile)
-                    }) {
-                        source_selector_set
-                            .push((subject.role.clone(), subject.selector_profile.clone()));
-                    }
                 }
                 if requirement
                     .subject_roles
@@ -648,16 +683,35 @@ impl EvidenceConfig {
                 {
                     return invalid("authority grant omits a required subject role");
                 }
-                if source_selector_set.is_empty() {
-                    return invalid(
-                        "authority path does not activate any declared source selector input",
-                    );
+                for source_id in requirement.acquisition.source_ids() {
+                    let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
+                        "requirement acquisition references an unknown source",
+                    ))?;
+                    let mut source_selector_set = grant
+                        .subjects
+                        .iter()
+                        .filter(|subject| {
+                            source.request.selector_inputs.iter().any(|input| {
+                                input.role == subject.role
+                                    && input.alternatives.iter().any(|alternative| {
+                                        alternative.profile == subject.selector_profile
+                                    })
+                            })
+                        })
+                        .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
+                        .collect::<SourceSelectorSet>();
+                    if source_selector_set.is_empty() && !source.request.selector_inputs.is_empty()
+                    {
+                        return invalid(
+                            "authority path does not activate any declared source selector input",
+                        );
+                    }
+                    source_selector_set.sort();
+                    source_selector_sets
+                        .entry(source_id.to_owned())
+                        .or_default()
+                        .insert(source_selector_set);
                 }
-                source_selector_set.sort();
-                source_selector_sets
-                    .entry(requirement.source.clone())
-                    .or_default()
-                    .insert(source_selector_set);
             }
         }
 
@@ -1705,6 +1759,19 @@ pub enum AcquisitionPosture {
     RecordTransformed,
 }
 
+impl AcquisitionPosture {
+    /// Return the least-minimized posture in a bounded acquisition. A chained
+    /// requirement may claim no stronger posture than either of its sources.
+    pub fn weakest(self, other: Self) -> Self {
+        use AcquisitionPosture::{FieldProjected, RecordTransformed, SourceDerived};
+        match (self, other) {
+            (RecordTransformed, _) | (_, RecordTransformed) => RecordTransformed,
+            (FieldProjected, _) | (_, FieldProjected) => FieldProjected,
+            (SourceDerived, SourceDerived) => SourceDerived,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceAuthentication {
@@ -1943,22 +2010,41 @@ pub struct SelectorInputAlternative {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PathBindingConfig {
-    pub role: String,
-    pub profile: String,
-    pub field: String,
+#[serde(tag = "from", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PathBindingConfig {
+    Selector {
+        role: String,
+        profile: String,
+        field: String,
+    },
+    PriorFact {
+        field: String,
+    },
 }
 
 impl PathBindingConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if !valid_local_id(&self.role)
-            || !valid_local_id(&self.profile)
-            || !valid_field_name(&self.field)
-        {
-            return invalid("source selector binding identifier is invalid");
+        match self {
+            Self::Selector {
+                role,
+                profile,
+                field,
+            } => {
+                if !valid_local_id(role) || !valid_local_id(profile) || !valid_field_name(field) {
+                    return invalid("source selector binding identifier is invalid");
+                }
+            }
+            Self::PriorFact { field } => {
+                if !valid_field_name(field) {
+                    return invalid("source prior-fact binding identifier is invalid");
+                }
+            }
         }
         Ok(())
+    }
+
+    pub fn is_prior_fact(&self) -> bool {
+        matches!(self, Self::PriorFact { .. })
     }
 }
 
@@ -2205,12 +2291,69 @@ pub enum ValueOrigin {
     Request,
 }
 
+/// The complete bounded evidence-data acquisition profile for one requirement.
+///
+/// Each named source remains one immutable HTTP request. `search-then-fetch`
+/// is the only multi-call form and therefore fixes the acquisition ceiling at
+/// two calls without introducing a general workflow or source-planning model.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum AcquisitionConfig {
+    Single { source: String },
+    SearchThenFetch { search: String, fetch: String },
+}
+
+impl AcquisitionConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::Single { source } => {
+                if !valid_local_id(source) {
+                    return invalid("requirement acquisition source identifier is invalid");
+                }
+            }
+            Self::SearchThenFetch { search, fetch } => {
+                if !valid_local_id(search) || !valid_local_id(fetch) || search == fetch {
+                    return invalid("search-then-fetch source identifiers are invalid");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn source_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Single { source } => vec![source.as_str()],
+            Self::SearchThenFetch { search, fetch } => {
+                vec![search.as_str(), fetch.as_str()]
+            }
+        }
+    }
+
+    pub fn uses_source(&self, source_id: &str) -> bool {
+        self.source_ids().contains(&source_id)
+    }
+
+    pub fn initial_source(&self) -> &str {
+        match self {
+            Self::Single { source } => source,
+            Self::SearchThenFetch { search, .. } => search,
+        }
+    }
+
+    pub fn fetch_source(&self) -> Option<&str> {
+        match self {
+            Self::Single { .. } => None,
+            Self::SearchThenFetch { fetch, .. } => Some(fetch),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementConfig {
     pub id: String,
     pub kind: RequirementKind,
-    pub source: String,
+    pub acquisition: AcquisitionConfig,
     pub purposes: Vec<String>,
     pub subject_roles: Vec<SubjectRole>,
     pub reference_frameworks: Vec<String>,
@@ -2227,11 +2370,13 @@ pub struct RequirementConfig {
 }
 
 impl RequirementConfig {
+    pub fn initial_source(&self) -> &str {
+        self.acquisition.initial_source()
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         validate_uri(&self.id)?;
-        if !valid_local_id(&self.source) {
-            return invalid("requirement source identifier is invalid");
-        }
+        self.acquisition.validate()?;
         validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
         for purpose in &self.purposes {
             validate_purpose(purpose)?;
@@ -2526,7 +2671,7 @@ fn require_artifact_prefix(path: &ArtifactPath, prefix: &'static str) -> Result<
 }
 
 fn validate_selector_inputs(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
-    validate_len(inputs.len(), 1, 8, "source selector inputs")?;
+    validate_len(inputs.len(), 0, 8, "source selector inputs")?;
     validate_derivation_input_shape(inputs)
 }
 
@@ -4951,7 +5096,7 @@ outboundTls:
     #[test]
     fn path_templates_headers_and_projection_fail_closed() {
         let bindings: OrderedMap<PathBindingConfig> = serde_norway::from_str(
-            "record_reference: {role: subject, profile: record-reference-v1, field: record_reference}\n",
+            "record_reference: {from: selector, role: subject, profile: record-reference-v1, field: record_reference}\n",
         )
         .expect("path binding parses");
         assert!(validate_path_template("/records/{record_reference}", &bindings).is_ok());

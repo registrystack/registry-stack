@@ -206,7 +206,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
-    source: source-a
+    acquisition:
+      kind: single
+      source: source-a
     purposes: [fixture-eligibility]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}
@@ -225,7 +227,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
-    source: source-b
+    acquisition:
+      kind: single
+      source: source-b
     purposes: [fixture-routing]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [residence-record-v1]}
@@ -246,7 +250,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
-    source: source-c
+    acquisition:
+      kind: single
+      source: source-c
     purposes: [fixture-registration]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}
@@ -275,7 +281,9 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
-    source: source-d
+    acquisition:
+      kind: single
+      source: source-d
     purposes: [fixture-enrolment]
     subjectRoles:
       - {role: child, cardinality: one, selectorProfiles: [civil-record-reference-v1]}

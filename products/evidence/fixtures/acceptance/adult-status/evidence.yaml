@@ -76,7 +76,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
-    source: source-a
+    acquisition:
+      kind: single
+      source: source-a
     purposes: [fixture-eligibility]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}]
     referenceFrameworks: [urn:example:fixture:framework:adult-status:v1]

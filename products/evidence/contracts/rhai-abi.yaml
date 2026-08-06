@@ -5,10 +5,13 @@ trust_model:
   boundary: Trust permits scripts to implement provider and requirement semantics, but never grants transport, credential, authorization, signing, audit, or evidence-construction authority.
 functions:
   preparation:
-    signature: prepare(source_required_selectors, adapter_parameters) -> RequestParts
+    signature: prepare(source_required_selectors, adapter_context) -> RequestParts
     input:
-      source_required_selectors: Exact role, profile, and field map selected from the source request selectorInputs after validation and authorization.
-      adapter_parameters: Closed non-secret JSON parameters validated at startup against adapterParametersSchema.
+      source_required_selectors: Exact role, profile, and field map selected from the source request selectorInputs after validation and authorization; the map is empty for a fetch source with no selectorInputs.
+      adapter_context:
+        exact_keys: [parameters, prior_facts]
+        parameters: Closed non-secret JSON parameters validated at startup against adapterParametersSchema.
+        prior_facts: Empty for single and search calls; for the fetch call, exactly the closed schema-validated FactSet returned by the search extraction.
       prohibited:
         - requester, actor, purpose, audience, authority, entitlement, or grant objects
         - source origin, method, path, path bindings, headers, credentials, TLS, proxy, timeout, redirect, pagination, concurrency, or request-count controls
@@ -26,15 +29,18 @@ functions:
         maximum_depth: 32
       validation: Rust applies the source preparationLimits and validates the complete normalized RequestParts before credential resolution.
     core_owned_transport:
-      - source and fixed origin
-      - fixed method and fixed path, or complete-segment selector-bound pathTemplate and pathBindings
+      - source and fixed origin selected by the requirement acquisition, never by a script or response
+      - fixed method and fixed path, or complete-segment pathTemplate and pathBindings bound to authorized selectors or, on a fetch source only, a scalar prior fact
       - fixed non-secret headers and every authentication header
-      - credentials, TLS trust, hostname verification, redirect denial, proxy denial, timeout, response limit, concurrency, and one-request ceiling
+      - credentials, TLS trust, hostname verification, redirect denial, proxy denial, timeout, response limit, concurrency, and one request per source stage
   extraction:
-    signature: extract(projected_source_response, adapter_parameters) -> LookupResult
+    signature: extract(projected_source_response, adapter_context) -> LookupResult
     input:
-      projected_source_response: Parsed JSON from the one completed evidence-data request after pre-projection response bounds, the Rust-enforced extended JSON Pointer allowlist, and validation against the source's declared responseSchema, so a response outside its declared shape never reaches this script. The projected tree handed to extraction is limited to 65536 serialized bytes; the 1 MiB wire-response maximum bounds the pre-projection response and the two limits are compatible layers. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float; provider identifiers outside that range must be represented as strings.
-      adapter_parameters: A fresh copy of the same closed non-secret parameters supplied to preparation.
+      projected_source_response: Parsed JSON from the completed source stage after pre-projection response bounds, the Rust-enforced extended JSON Pointer allowlist, and validation against the source's declared responseSchema, so a response outside its declared shape never reaches this script. The projected tree handed to extraction is limited to 65536 serialized bytes; the 1 MiB wire-response maximum bounds the pre-projection response and the two limits are compatible layers. Integer tokens outside the signed 64-bit range fail before Rhai rather than converting to a precision-losing float; provider identifiers outside that range must be represented as strings.
+      adapter_context:
+        exact_keys: [parameters, prior_facts]
+        parameters: A fresh copy of the same closed non-secret parameters supplied to preparation.
+        prior_facts: The same empty or schema-validated prior FactSet supplied to preparation for this stage.
       prohibited:
         - selectors or prepared request parts
         - unprojected response fields
@@ -54,7 +60,8 @@ functions:
       prohibited: [candidates, count, scores, confidence, hints, diagnostics, comparisons]
     rules:
       - Facts are legal only on match and must exactly satisfy the declared fact schema.
-      - No-match and ambiguous stop evaluation; derivation is not invoked.
+      - Search no-match and ambiguous stop evaluation; derivation and fetch are not invoked.
+      - Fetch no-match or ambiguous after a unique search match is a dependency inconsistency, never a signed absence claim.
       - Extraction may map provider-owned cardinality from a count plus one minimized record, or at most two minimally projected records solely to detect ambiguity.
       - Extraction never chooses a candidate and never turns protocol inconsistency into a closed lookup outcome.
   derivation:
@@ -112,7 +119,7 @@ capabilities:
   syntax_contract: The detailed pinned Rhai 1.25.1 syntax surface and forbidden constructs are defined by the trusted request-adapter API and enforced by startup compilation tests. Startup review also rewrites every index operand through a host-owned guard that rejects a negative index whether it is written literally or computed. The lexical restriction is an enforceable reviewed-language contract; the raw engine capability set remains the isolation boundary.
 lifecycle:
   compilation: Startup only; each script must expose exactly one public entry point at the required arity before readiness.
-  state: Fresh invocation state and fresh input copies; no cross-stage, cross-request, or cross-definition mutable state.
+  state: Fresh invocation state and fresh input copies; only the immutable schema-validated search FactSet crosses into the fetch stage, with no cross-request or cross-definition mutable state.
   identity: Script path and exact bytes are covered by the governed bundle revision.
 failure:
   preparation: adapter_input_error
@@ -132,7 +139,7 @@ core_projection:
     output: 'urn:evidence:entity:v<key-version>_<base64url-no-pad HMAC-SHA256>'
     confidentiality: Seed is protected source-derived data and is absent from evidence, logs, audit, errors, traces, metrics, snapshots, and script diagnostics.
 anti_capabilities:
-  - source, origin, path, header, authentication, credential, TLS, proxy, pagination, retry, or request-count selection
+  - source sequence, origin, path binding origin, header, authentication, credential, TLS, proxy, pagination, retry, or request-count selection
   - broad candidate retrieval, probabilistic or fuzzy scoring, ranking, deduplication, or candidate selection
   - authorization or disclosure-profile selection
   - evidence, identifier, subject-binding, JWS, or audit construction

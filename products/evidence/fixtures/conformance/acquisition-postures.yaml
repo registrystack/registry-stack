@@ -21,7 +21,7 @@ cases:
     negative: full-lifecycle-minimization-overclaim
 shared_expectations:
   - same fixed HTTP JSON executor and Rhai ABI
-  - exactly one evidence-data request
+  - each posture case uses a single acquisition with exactly one evidence-data request
   - response and facts remain in one bounded evaluation
   - no raw field reaches evidence, audit, logs, errors, snapshots, or disk
   - declared posture is included in bundle review metadata, never caller-selected

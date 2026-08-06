@@ -22,7 +22,10 @@ use registry_evidence::{
         EvidenceAuditError,
     },
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
-    config::{AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
+    config::{
+        AcquisitionConfig, AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig,
+        SelectorInput,
+    },
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
@@ -975,7 +978,7 @@ async fn evaluate_fixture(
         let observed_at =
             fixture_observed_at(case, common, requirement.observation_timezone.as_deref())?;
 
-        if let Some(source) = case.get("source") {
+        if case.get("source").is_some() || case.get("sources").is_some() {
             let resolved = resolve_offline_fixture_authorization(
                 bundle,
                 requirement,
@@ -996,25 +999,14 @@ async fn evaluate_fixture(
                     ));
                 }
             }
-            let source_config = bundle
-                .config
-                .sources
-                .get(&requirement.source)
-                .ok_or(CliError("fixture source is unavailable"))?;
-            let outcome = match project_fixture_response(source_config, source) {
-                Ok(projected) => kernel.evaluate_with_selectors(
-                    &requirement.id,
-                    &projected,
-                    &derivation_selectors,
-                    observed_at,
-                    ValueProjection {
-                        audience: OFFLINE_AUDIENCE,
-                        binding_key: &OFFLINE_BINDING_KEY,
-                        binding_key_version: 1,
-                    },
-                ),
-                Err(_) => Err(KernelError::SourceProtocol),
-            };
+            let outcome = evaluate_fixture_acquisition(
+                bundle,
+                kernel,
+                requirement,
+                case,
+                &derivation_selectors,
+                observed_at,
+            )?;
             if let Some(values) = validate_case_outcome(id, case, outcome)? {
                 successful_values.push(
                     sign_and_verify_fixture_evidence(
@@ -1060,6 +1052,108 @@ async fn evaluate_fixture(
     Ok(summary)
 }
 
+fn evaluate_fixture_acquisition(
+    bundle: &Bundle,
+    kernel: &OfflineKernel,
+    requirement: &registry_evidence::config::RequirementConfig,
+    case: &JsonMap<String, Value>,
+    derivation_selectors: &Value,
+    observed_at: DateTime<Utc>,
+) -> Result<Result<KernelOutcome, KernelError>, CliError> {
+    let projection = || ValueProjection {
+        audience: OFFLINE_AUDIENCE,
+        binding_key: &OFFLINE_BINDING_KEY,
+        binding_key_version: 1,
+    };
+    match &requirement.acquisition {
+        AcquisitionConfig::Single { source } => {
+            if case.contains_key("sources") {
+                return Err(CliError("single fixture must use source"));
+            }
+            let response = case
+                .get("source")
+                .ok_or(CliError("single fixture source is unavailable"))?;
+            let source_config = bundle
+                .config
+                .sources
+                .get(source)
+                .ok_or(CliError("fixture source is unavailable"))?;
+            Ok(match project_fixture_response(source_config, response) {
+                Ok(projected) => kernel.evaluate_with_selectors(
+                    &requirement.id,
+                    &projected,
+                    derivation_selectors,
+                    observed_at,
+                    projection(),
+                ),
+                Err(_) => Err(KernelError::SourceProtocol),
+            })
+        }
+        AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            if case.contains_key("source") {
+                return Err(CliError("search-then-fetch fixture must use sources"));
+            }
+            let responses = case
+                .get("sources")
+                .and_then(Value::as_object)
+                .ok_or(CliError("chained fixture sources are unavailable"))?;
+            if responses.len() != 2
+                || !responses.contains_key(search)
+                || !responses.contains_key(fetch)
+            {
+                return Err(CliError("chained fixture sources are not exact"));
+            }
+            let search_config = bundle
+                .config
+                .sources
+                .get(search)
+                .ok_or(CliError("fixture search source is unavailable"))?;
+            let search_response = project_fixture_response(
+                search_config,
+                responses
+                    .get(search)
+                    .ok_or(CliError("fixture search response is unavailable"))?,
+            )
+            .map_err(|_| CliError("fixture search response projection failed"))?;
+            let search_facts =
+                match kernel.extract_source(search, &search_response, &BTreeMap::new()) {
+                    Ok(LookupResult::Match(facts)) => facts,
+                    Ok(LookupResult::NoMatch) => return Ok(Ok(KernelOutcome::NoMatch)),
+                    Ok(LookupResult::Ambiguous) => return Ok(Ok(KernelOutcome::Ambiguous)),
+                    Err(error) => return Ok(Err(error)),
+                };
+            let fetch_config = bundle
+                .config
+                .sources
+                .get(fetch)
+                .ok_or(CliError("fixture fetch source is unavailable"))?;
+            let fetch_response = project_fixture_response(
+                fetch_config,
+                responses
+                    .get(fetch)
+                    .ok_or(CliError("fixture fetch response is unavailable"))?,
+            )
+            .map_err(|_| CliError("fixture fetch response projection failed"))?;
+            let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
+                Ok(LookupResult::Match(facts)) => facts,
+                Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
+                    return Ok(Err(KernelError::SourceProtocol));
+                }
+                Err(error) => return Ok(Err(error)),
+            };
+            Ok(kernel
+                .derive_and_validate_with_selectors(
+                    &requirement.id,
+                    &facts,
+                    derivation_selectors,
+                    observed_at,
+                    projection(),
+                )
+                .map(KernelOutcome::Match))
+        }
+    }
+}
+
 async fn evaluate_reference_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1092,14 +1186,23 @@ async fn evaluate_reference_fixture(
             "derivationSelectorInputs",
             "expectedRequestParts",
             "expectedTransport",
+            "expectedFetchRequestParts",
+            "expectedFetchTransport",
         ],
     )?;
-    for required in [
+    let mut required_common = vec![
         "observed_at",
         "selectors",
         "expectedRequestParts",
         "expectedTransport",
-    ] {
+    ];
+    if matches!(
+        requirement.acquisition,
+        AcquisitionConfig::SearchThenFetch { .. }
+    ) {
+        required_common.extend(["expectedFetchRequestParts", "expectedFetchTransport"]);
+    }
+    for required in required_common {
         if !common.contains_key(required) {
             return Err(CliError("reference fixture common block is incomplete"));
         }
@@ -1123,6 +1226,7 @@ async fn evaluate_reference_fixture(
                 "id",
                 "purpose",
                 "response",
+                "responses",
                 "sourceFailure",
                 "bundleMutation",
                 "requestMutation",
@@ -1169,6 +1273,7 @@ async fn evaluate_reference_fixture(
         }
         let forms = [
             "response",
+            "responses",
             "sourceFailure",
             "bundleMutation",
             "requestMutation",
@@ -1220,10 +1325,10 @@ async fn evaluate_reference_fixture(
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .ok_or(CliError("reference fixture source is unavailable"))?;
         let source_plan = source_plans
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .ok_or(CliError("reference fixture source plan is unavailable"))?;
         let preparation_selectors =
             fixture_selector_value(&resolved, &source.request.selector_inputs)?;
@@ -1323,29 +1428,143 @@ async fn evaluate_reference_fixture(
             continue;
         }
 
-        let response = case
-            .get("response")
-            .ok_or(CliError("reference fixture response is unavailable"))?;
-        let projected = project_fixture_response(source, response)
-            .map_err(|_| CliError("reference fixture source projection failed"))?;
-        if let Some(values) = validate_reference_response(
-            ReferenceResponseContext {
-                bundle,
-                kernel,
-                signer,
-                requirement,
-                resolved: &resolved,
-            },
-            &projected,
-            &derivation_selectors,
-            observed_at,
-            expected,
-        )
-        .await?
-        {
+        let response_context = ReferenceResponseContext {
+            bundle,
+            kernel,
+            signer,
+            requirement,
+            resolved: &resolved,
+        };
+        let (values, source_request_count) = match &requirement.acquisition {
+            AcquisitionConfig::Single { .. } => {
+                let response = case
+                    .get("response")
+                    .ok_or(CliError("reference fixture response is unavailable"))?;
+                let projected = project_fixture_response(source, response)
+                    .map_err(|_| CliError("reference fixture source projection failed"))?;
+                (
+                    validate_reference_response(
+                        response_context,
+                        &projected,
+                        &derivation_selectors,
+                        observed_at,
+                        expected,
+                    )
+                    .await?,
+                    1,
+                )
+            }
+            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+                let responses = case
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .ok_or(CliError("reference chained responses are unavailable"))?;
+                if responses.len() != 2
+                    || !responses.contains_key(search)
+                    || !responses.contains_key(fetch)
+                {
+                    return Err(CliError("reference chained responses are not exact"));
+                }
+                let search_response = responses
+                    .get(search)
+                    .ok_or(CliError("reference search response is unavailable"))?;
+                let projected_search = project_fixture_response(source, search_response)
+                    .map_err(|_| CliError("reference search response projection failed"))?;
+                let search_lookup =
+                    match kernel.extract_source(search, &projected_search, &BTreeMap::new()) {
+                        Ok(lookup) => lookup,
+                        Err(error) => {
+                            validate_reference_error(expected, error, false)?;
+                            require_reference_request_count(expected, 1)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                    };
+                let prior_facts = match search_lookup {
+                    LookupResult::NoMatch => {
+                        validate_reference_unresolved(expected, "no_match")?;
+                        require_reference_request_count(expected, 1)?;
+                        summary.evaluated_cases += 1;
+                        continue;
+                    }
+                    LookupResult::Ambiguous => {
+                        validate_reference_unresolved(expected, "ambiguous")?;
+                        require_reference_request_count(expected, 1)?;
+                        summary.evaluated_cases += 1;
+                        continue;
+                    }
+                    LookupResult::Match(facts) => facts,
+                };
+                let fetch_source = bundle
+                    .config
+                    .sources
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch source is unavailable"))?;
+                let fetch_plan = source_plans
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch source plan is unavailable"))?;
+                let fetch_preparation_selectors =
+                    fixture_selector_value(&resolved, &fetch_source.request.selector_inputs)?;
+                let fetch_parts = kernel
+                    .prepare_source(fetch, &fetch_preparation_selectors, &prior_facts)
+                    .map_err(|_| CliError("reference fetch request preparation failed"))?;
+                validate_reference_request_parts_named(
+                    common,
+                    "expectedFetchRequestParts",
+                    &fetch_parts,
+                )?;
+                let fetch_selectors =
+                    reference_source_selectors(&resolved, &fetch_source.request.selector_inputs)?;
+                validate_reference_transport_with_prior_facts(
+                    fetch_source,
+                    fetch_plan,
+                    &fetch_selectors,
+                    &prior_facts,
+                    &fetch_parts,
+                    common
+                        .get("expectedFetchTransport")
+                        .and_then(Value::as_object)
+                        .ok_or(CliError("reference fetch transport expectation is invalid"))?,
+                )?;
+                let fetch_response = responses
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch response is unavailable"))?;
+                let projected_fetch = project_fixture_response(fetch_source, fetch_response)
+                    .map_err(|_| CliError("reference fetch response projection failed"))?;
+                let fetch_lookup =
+                    match kernel.extract_source(fetch, &projected_fetch, &prior_facts) {
+                        Ok(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            validate_reference_error(expected, KernelError::SourceProtocol, false)?;
+                            require_reference_request_count(expected, 2)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                        Ok(lookup) => lookup,
+                        Err(error) => {
+                            validate_reference_error(expected, error, false)?;
+                            require_reference_request_count(expected, 2)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                    };
+                (
+                    validate_reference_lookup(
+                        &response_context,
+                        fetch_lookup,
+                        &Value::Object(responses.clone()),
+                        &derivation_selectors,
+                        observed_at,
+                        expected,
+                    )
+                    .await?,
+                    2,
+                )
+            }
+        };
+        if let Some(values) = values {
             successful_values.push(values);
         }
-        require_reference_request_count(expected, 1)?;
+        require_reference_request_count(expected, source_request_count)?;
         summary.evaluated_cases += 1;
         let _ = id;
     }
@@ -1376,6 +1595,17 @@ async fn validate_reference_response(
             return Ok(None);
         }
     };
+    validate_reference_lookup(&context, lookup, response, selectors, observed_at, expected).await
+}
+
+async fn validate_reference_lookup(
+    context: &ReferenceResponseContext<'_>,
+    lookup: LookupResult,
+    protected_response: &Value,
+    selectors: &Value,
+    observed_at: DateTime<Utc>,
+    expected: &JsonMap<String, Value>,
+) -> Result<Option<Value>, CliError> {
     match lookup {
         LookupResult::NoMatch => {
             validate_reference_unresolved(expected, "no_match")?;
@@ -1466,7 +1696,7 @@ async fn validate_reference_response(
                 let encoded = serde_json::to_string(values.as_slice())
                     .map_err(|_| CliError("reference values are not representable"))?;
                 let mut protected_source_strings = Vec::new();
-                collect_strings(response, &mut protected_source_strings);
+                collect_strings(protected_response, &mut protected_source_strings);
                 if protected_source_strings
                     .iter()
                     .filter(|value| value.len() >= 8)
@@ -1645,7 +1875,7 @@ fn validate_reference_expectation_keys(
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
     let allowed: &[&str] = match form {
-        "response" => &[
+        "response" | "responses" => &[
             "lookup",
             "facts",
             "value",
@@ -1718,8 +1948,16 @@ fn validate_reference_request_parts(
     common: &JsonMap<String, Value>,
     actual: &RequestParts,
 ) -> Result<(), CliError> {
+    validate_reference_request_parts_named(common, "expectedRequestParts", actual)
+}
+
+fn validate_reference_request_parts_named(
+    common: &JsonMap<String, Value>,
+    expectation_name: &str,
+    actual: &RequestParts,
+) -> Result<(), CliError> {
     let expected = common
-        .get("expectedRequestParts")
+        .get(expectation_name)
         .and_then(Value::as_object)
         .ok_or(CliError("reference request-parts expectation is invalid"))?;
     require_exact_keys(expected, &["query", "body"])?;
@@ -1755,9 +1993,27 @@ fn validate_reference_transport(
     parts: &RequestParts,
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
+    validate_reference_transport_with_prior_facts(
+        source,
+        source_plan,
+        selectors,
+        &BTreeMap::new(),
+        parts,
+        expected,
+    )
+}
+
+fn validate_reference_transport_with_prior_facts(
+    source: &registry_evidence::config::SourceConfig,
+    source_plan: &SourceExecutor,
+    selectors: &[ResolvedSourceSelector],
+    prior_facts: &BTreeMap<String, Value>,
+    parts: &RequestParts,
+    expected: &JsonMap<String, Value>,
+) -> Result<(), CliError> {
     require_allowed_keys(expected, &["path", "query", "body", "fixedHeaders"])?;
     let materialized = source_plan
-        .materialize_request(selectors, parts)
+        .materialize_request_with_prior_facts(selectors, prior_facts, parts)
         .map_err(|_| CliError("reference transport materialization failed"))?;
     if expected
         .get("path")
@@ -2022,7 +2278,7 @@ fn validate_reference_parameter_mutation(
     let source = disposable
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .ok_or(CliError("reference disposable source is unavailable"))?;
     let projected = project_fixture_response(source, positive)
         .map_err(|_| CliError("reference positive response projection failed"))?;
@@ -2051,7 +2307,7 @@ fn require_reference_request_count(
         .get("sourceRequestCount")
         .and_then(Value::as_u64)
         .is_some_and(|count| count != actual)
-        || actual > 1
+        || actual > 2
     {
         return Err(CliError("reference source request count did not match"));
     }
@@ -2958,6 +3214,21 @@ mod tests {
             transport.as_object().expect("object"),
         )
         .is_err());
+
+        let chained = serde_json::json!({
+            "lookup": "match",
+            "derivationRuns": true,
+            "signed": true,
+            "sourceRequestCount": 2
+        });
+        let chained = chained.as_object().expect("object");
+        assert_eq!(
+            validate_reference_expectation_keys("responses", chained),
+            Ok(())
+        );
+        assert_eq!(require_reference_request_count(chained, 2), Ok(()));
+        assert!(require_reference_request_count(chained, 1).is_err());
+        assert!(require_reference_request_count(chained, 3).is_err());
     }
 
     #[test]

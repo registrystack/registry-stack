@@ -87,6 +87,12 @@ authorized selectors through the production request materializer and compares
 the path, encoded query, and JSON body. There is no case-level
 `expectedRequestParts` override.
 
+A `search-then-fetch` fixture also supplies
+`common.expectedFetchRequestParts` and `common.expectedFetchTransport`. The
+harness validates them only after the search returns a unique schema-valid
+FactSet, using that exact FactSet as the fetch adapter context and declared
+prior-fact path input.
+
 `common.expectedTransport` contains the exact fixed path or expanded path and
 the exact configured non-secret headers. Authentication and Rust-owned framing
 headers are checked by dedicated redacted transport assertions, never copied
@@ -95,11 +101,14 @@ encoded query and normalized body for an encoding-focused case.
 
 ## Case input vocabulary
 
-Every case has a required `id` and exactly one of these seven tagged forms:
+Every case has a required `id` and exactly one of these eight tagged forms:
 
 - `response`: raw provider JSON returned by the local mock. Rust applies the
   configured projection before extraction. The fixture never pre-projects or
   synthesizes an envelope.
+- `responses`: the exact search-source and fetch-source response map for a
+  `search-then-fetch` requirement. An unresolved search stops before fetch;
+  the fetch response is evaluated only after a unique search match.
 - `sourceFailure`: one closed mock failure, currently `timeout`,
   `connection-refused`, `invalid-media-type`, `oversized`, or `malformed-json`.
 - `bundleMutation`: one named startup mutation below.
@@ -149,11 +158,11 @@ those stages apply. Omission is not treated as a wildcard.
 | `bundle` | `accepted` or `rejected` | Startup bundle result. |
 | `outputGate` | `accepted` or `rejected` | Derived-value gate result. |
 | `rejectedBefore` | `credential`, `source`, `derivation`, or `signing` | Latest boundary that must not be crossed. |
-| `sourceRequestCount` | integer | Exact number of evidence-data requests. Version 1 permits only `0` or `1`. |
+| `sourceRequestCount` | integer | Exact number of evidence-data requests. Version 1 permits `0`, `1`, or `2` according to the requirement's acquisition. |
 | `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case. |
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.
-Successful `response` cases require `lookup: match`, `derivationRuns: true`,
+Successful `response` and `responses` cases require `lookup: match`, `derivationRuns: true`,
 and `signed: true`. The harness creates a fresh in-memory P-256 key for the
 evaluation, signs the constructed Evidence, and verifies the JWS and exact
 payload policy. The private key is never read from deployment secrets, written
@@ -203,8 +212,9 @@ under `expected`:
   credential acquisition;
 - no request-parts failure acquires credentials or reaches the source;
 - zero or multiple provider results never run derivation or sign evidence;
-- no case performs more than one evidence-data request, follows pagination,
-  redirects, retries, or response-provided URLs;
+- no case performs more calls than its acquisition permits, follows pagination,
+  redirects, retries, or response-provided URLs; single permits one and
+  search-then-fetch permits at most its fixed two;
 - an error, failed audit, failed output gate, or failed signing never returns an
   unsigned success;
 - expected facts and values are compared with redacted failure messages;
