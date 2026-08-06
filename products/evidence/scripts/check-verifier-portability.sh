@@ -38,9 +38,12 @@ for package in "${forbidden_packages[@]}"; do
   # A search that neither matches nor reports "no match" is a broken check, not
   # a clean tree, so separate the two outcomes from every other status.
   search_status=0
+  # `grep -E` rather than ripgrep: the hosted runner that gates this has no
+  # ripgrep, and a search command that is absent exits 127, which reads as a
+  # clean tree in any construct that only distinguishes match from no match.
   matches=$(
     printf '%s\n' "$dependency_tree" |
-      rg "(^|[^0-9A-Za-z_-])${package}([-_][0-9A-Za-z_-]+)* v[0-9]"
+      grep -E "(^|[^0-9A-Za-z_-])${package}([-_][0-9A-Za-z_-]+)* v[0-9]"
   ) || search_status=$?
   case "$search_status" in
   0)
