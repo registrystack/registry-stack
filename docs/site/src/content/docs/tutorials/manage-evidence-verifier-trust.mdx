@@ -72,6 +72,26 @@ not issuer, provider, audience, purpose, requirement, concept, or configuration 
 Approve and atomically activate the candidate through your normal configuration process. Keep the
 previous trust file and approval record for rollback and audit.
 
+## Revoke a compromised key immediately
+
+Treat the current revocation list as a separate governed trust input, not as metadata learned from
+the issuer or from the response. When a provider reports a compromised service key:
+
+1. verify the affected RFC 7638 thumbprint through the emergency onboarding channel;
+2. add it to the application's current `revokedKeyIds` (Node) or `revoked_key_ids` (Rust and
+   Python) configuration;
+3. remove the key from the current pinned JWKS;
+4. reconstruct or restart the client so every instance uses both changes; and
+5. prove that a response signed by the revoked key is refused before resuming decisions.
+
+The current denylist takes precedence even when the key remains in a cached JWKS or an older
+prepared request retained it in its verification policy. This lets an application stop accepting a
+compromised key without waiting for caches or prepared work to expire.
+
+Keep current acceptance separate from historical verification. If policy permits historical replay,
+retain the exact trust set, denylist, decision instant, and approval record that governed the
+original decision. Never remove a key from today's denylist merely to replay an older record.
+
 ## Retire the old key deliberately
 
 Remove a retiring key from current verification only after:

@@ -91,9 +91,9 @@ curl --fail --silent --show-error \
   "https://<evidence-host>/.well-known/evidence/jwks.json"
 ```
 
-The proxy ACL continues to grant read and sign access to the named key path. Ordinary Vault and
-OpenBao ACLs do not filter the request-body `key_version`. Keep the provider key's
-`min_encryption_version` low enough for both application versions during the rollout.
+Before the overlap deployment, update the proxy policy's `allowed_parameters.key_version` to list
+both the old and new numeric versions. Keep the provider key's `min_encryption_version` low enough
+for both application versions during the rollout. No other signing versions should be permitted.
 
 ## Activate the new version
 
@@ -108,6 +108,9 @@ authorized synthetic request and verify its `kid` with the consumer's approved o
 
 Missing, unreadable, or mismatched signing material fails closed. Evidence Gateway never falls back
 to an unsigned success.
+
+After every replica uses the new version and the validity-plus-skew window has elapsed, remove the
+old version from `allowed_parameters.key_version` as part of retiring the old public key.
 
 ## Retire the old version
 

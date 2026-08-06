@@ -21,7 +21,7 @@ Python threads keep running.
 ```python
 from registry_evidence_client import EvidenceClient
 
-client = EvidenceClient(base_url, trusted_jwks, revoked_key_ids, token, ...)
+client = EvidenceClient(base_url, trusted_jwks, revoked_key_ids, token)
 
 prepared = client.prepare(spec)              # synchronous, no I/O
 definitions = client.discover()
