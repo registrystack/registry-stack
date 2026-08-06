@@ -44,21 +44,26 @@ const DEFINITIONS_DOCUMENT = {
   ],
 };
 
-function clientAgainst(stub) {
+function clientAgainst(stub, bounds = {}) {
   return new EvidenceClient({
     baseUrl: stub.baseUrl,
     trustedJwks: GOLDEN_JWKS,
     token: { static: 'discovery-test-token' },
+    ...bounds,
   });
 }
 
-test('discover reads a valid definitions document from a stub deployment', async () => {
-  const stub = await startStubServer({
+function definitionsStub() {
+  return startStubServer({
     'GET /v1/evidence-definitions': (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(DEFINITIONS_DOCUMENT));
     },
   });
+}
+
+test('discover reads a valid definitions document from a stub deployment', async () => {
+  const stub = await definitionsStub();
   try {
     const client = clientAgainst(stub);
     const document = await client.discover();
@@ -66,6 +71,29 @@ test('discover reads a valid definitions document from a stub deployment', async
     assert.equal(document.definitions.length, 1);
     assert.equal(document.definitions[0].requirement, 'urn:example:node-test:requirement:status:v1');
     assert.equal(stub.requests.length, 1);
+  } finally {
+    await stub.close();
+  }
+});
+
+// The two bounds answer different questions: `maxResponseBytes` is derived from
+// what the verifier accepts as a signed response, and the discovery document is
+// neither signed nor verified. Tightening one must not silently disable the
+// other endpoint.
+test('the metadata bound governs discovery, and the signed response bound does not', async () => {
+  const stub = await definitionsStub();
+  try {
+    const document = await clientAgainst(stub, { maxResponseBytes: 1 }).discover();
+    assert.equal(document.definitions.length, 1);
+
+    const bounded = clientAgainst(stub, {
+      maxMetadataBytes: JSON.stringify(DEFINITIONS_DOCUMENT).length - 1,
+    });
+    await assert.rejects(bounded.discover(), (error) => {
+      assert.equal(error.kind, 'transport');
+      assert.equal(error.transportKind, 'response_too_large');
+      return true;
+    });
   } finally {
     await stub.close();
   }

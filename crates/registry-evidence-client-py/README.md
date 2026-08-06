@@ -58,10 +58,17 @@ checks `status` without also checking `kind` can misclassify a 429 rate limit
 as a generic protocol failure, or vice versa. See
 `registry-evidence-client`'s `problem.rs` for the authoritative mapping table.
 
-A response that exceeds `max_response_bytes` maps to `kind: "transport"` with
+A response that exceeds its size bound maps to `kind: "transport"` with
 `transport_kind: "response_too_large"`, not `kind: "protocol"`, even when the
 response status itself was a plain 200: the size limit is enforced against the
 transport, before any attempt to interpret the body as a problem response.
+
+Which bound applies depends on the call. `max_response_bytes` bounds the signed
+response body that `send()` and `request_and_verify()` read, and its default
+follows what the verifier will accept as a signed response.
+`max_metadata_bytes` bounds the documents `discover()` and `fetch_jwks()` read,
+neither of which is signed or verified. Tightening one does not tighten the
+other.
 
 No string reaching Python carries unbounded remote text; no exception carries
 response bytes, a credential, a header value, a selector value, or a subject

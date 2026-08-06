@@ -591,6 +591,7 @@ pub fn config_from_parts(
     user_agent: Option<String>,
     trusted_root_certificates: Option<Vec<u8>>,
     max_response_bytes: Option<u64>,
+    max_metadata_bytes: Option<u64>,
 ) -> Result<EvidenceClientConfig, ConfigError> {
     let base_url = parse_url(base_url, "`base_url`").map_err(ConfigError::Shape)?;
 
@@ -623,6 +624,9 @@ pub fn config_from_parts(
     }
     if let Some(max_bytes) = max_response_bytes {
         config = config.with_max_response_bytes(max_bytes);
+    }
+    if let Some(max_bytes) = max_metadata_bytes {
+        config = config.with_max_metadata_bytes(max_bytes);
     }
 
     Ok(config)
@@ -1078,6 +1082,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("the configuration is well-shaped");
         assert_eq!(config.base_url().as_str(), "https://evidence.example/");
@@ -1101,6 +1106,7 @@ mod tests {
             Some("test-agent".to_owned()),
             None,
             Some(1024),
+            Some(2048),
         )
         .expect("the configuration is well-shaped");
     }
@@ -1111,6 +1117,7 @@ mod tests {
             "not a url",
             &serde_json::json!({ "keys": [] }),
             &Value::String("token".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1127,6 +1134,7 @@ mod tests {
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
             &serde_json::json!({ "static": "token" }),
+            None,
             None,
             None,
             None,
@@ -1150,6 +1158,7 @@ mod tests {
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
             &token,
+            None,
             None,
             None,
             None,
@@ -1404,6 +1413,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect_err("a newline is refused");
         assert!(matches!(
@@ -1433,6 +1443,7 @@ mod tests {
             "https://evidence.example/",
             &serde_json::json!({ "keys": [] }),
             &token,
+            None,
             None,
             None,
             None,

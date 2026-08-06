@@ -287,10 +287,14 @@ struct EvidenceClient {
 impl EvidenceClient {
     /// Build a client for one deployment.
     ///
-    /// `trusted_jwks` is mandatory: an empty key set is refused, exactly as
-    /// the wrapped Rust configuration refuses it. `token` is either a static
-    /// bearer string or the private-key-JWT provider's own settings; there is
-    /// no caller-supplied token provider in this binding.
+    /// `trusted_jwks` is mandatory: a key set the verifier could never use is
+    /// refused, exactly as the wrapped Rust configuration refuses it. `token`
+    /// is either a static bearer string or the private-key-JWT provider's own
+    /// settings; there is no caller-supplied token provider in this binding.
+    ///
+    /// `max_response_bytes` bounds the signed response `send` reads.
+    /// `max_metadata_bytes` bounds the documents `discover` and `fetch_jwks`
+    /// read, which are neither signed nor verified, and is a separate decision.
     #[new]
     #[pyo3(signature = (
         base_url,
@@ -301,6 +305,7 @@ impl EvidenceClient {
         user_agent=None,
         trusted_root_certificates=None,
         max_response_bytes=None,
+        max_metadata_bytes=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -313,6 +318,7 @@ impl EvidenceClient {
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
         max_response_bytes: Option<u64>,
+        max_metadata_bytes: Option<u64>,
     ) -> PyResult<Self> {
         let trusted_jwks_json = python_to_json(trusted_jwks)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
@@ -327,6 +333,7 @@ impl EvidenceClient {
             user_agent,
             trusted_root_certificates,
             max_response_bytes,
+            max_metadata_bytes,
         )
         .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
         let inner = py

@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     config::EvidenceClientConfig,
-    definitions::EvidenceDefinitionsDocument,
+    definitions::{EvidenceDefinitionsDocument, EVIDENCE_DEFINITIONS_SCHEMA_V1},
     error::EvidenceClientError,
     outbound::{self, OutboundOptions},
     prepare::{EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations},
@@ -41,6 +41,16 @@ const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 
 /// The opaque per-request identifier the deployment returns.
 const CORRELATION_HEADER: &str = "x-request-id";
+
+/// Longest `Retry-After` wait this client reports as actionable.
+///
+/// The problem contract permits a wait only for bounded transient failures, and
+/// states no value, so the bound is the client's own. `Retry-After` is a
+/// response-controlled field: a caller that honors an unbounded one would stop
+/// for as long as any hop on the path chose, and a wait of zero would invite an
+/// immediate retry loop. A longer wait is not reported at all, which leaves the
+/// caller its own backoff rather than an instruction it did not ask for.
+pub const MAXIMUM_RETRY_AFTER_SECONDS: u64 = 60;
 
 /// Whether an exchange carries the relying party's bearer credential.
 ///
@@ -165,8 +175,22 @@ impl EvidenceClient {
     /// party what it may ask for; it never supplies verification expectations
     /// for a request already in flight.
     pub async fn discover(&self) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
-        self.get_json(DEFINITIONS_PATH, JSON_MEDIA_TYPE, Credential::Required)
-            .await
+        let (document, operation): (EvidenceDefinitionsDocument, _) = self
+            .get_json(DEFINITIONS_PATH, JSON_MEDIA_TYPE, Credential::Required)
+            .await?;
+        // These types would accept a later document that happened to fit them, and
+        // the relying party would then author requests for a shape whose meaning
+        // it guessed. The rest of the definitions contract is the deployment's to
+        // apply; only the version this client reads is checked here.
+        if document.schema != EVIDENCE_DEFINITIONS_SCHEMA_V1 {
+            return Err(EvidenceClientError::Protocol {
+                status: StatusCode::OK.as_u16(),
+                code: None,
+                operation,
+                retry_after_seconds: None,
+            });
+        }
+        Ok(document)
     }
 
     /// Read the deployment's published verification key set.
@@ -180,8 +204,10 @@ impl EvidenceClient {
         // The published key set is public, and it is not a trust anchor here, so
         // there is nothing to gain by presenting the relying party's credential
         // to fetch it.
-        self.get_json(JWKS_PATH, JWKS_MEDIA_TYPE, Credential::None)
-            .await
+        let (document, _operation) = self
+            .get_json(JWKS_PATH, JWKS_MEDIA_TYPE, Credential::None)
+            .await?;
+        Ok(document)
     }
 
     /// Send one prepared request and read the signed response.
@@ -211,7 +237,12 @@ impl EvidenceClient {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .body(body);
         let response = self.exchange(request, Credential::Required).await?;
-        self.expect_success(response, EVIDENCE_JWS_MEDIA_TYPE).await
+        self.expect_success(
+            response,
+            EVIDENCE_JWS_MEDIA_TYPE,
+            self.config.max_response_bytes,
+        )
+        .await
     }
 
     /// Verify a signed response against the policy its request closed.
@@ -306,25 +337,32 @@ impl EvidenceClient {
     /// both authoring input rather than verification input, and a body that does
     /// not parse is a protocol failure rather than a refusal: the deployment
     /// answered, and the answer was not the document it promised.
+    /// The deployment's own identifier for the exchange is returned beside the
+    /// document, so a caller that refuses the parsed document still has the one
+    /// value the problem contract calls safe for support correlation.
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         media_type: &str,
         credential: Credential,
-    ) -> Result<T, EvidenceClientError> {
+    ) -> Result<(T, Option<String>), EvidenceClientError> {
         let url = self.endpoint(path)?;
         let request = self
             .http
             .request(Method::GET, url)
             .header(ACCEPT, media_type);
         let response = self.exchange(request, credential).await?;
-        let body = self.expect_success(response, media_type).await?;
-        serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
-            status: StatusCode::OK.as_u16(),
-            code: None,
-            operation: body.operation,
-            retry_after_seconds: None,
-        })
+        let body = self
+            .expect_success(response, media_type, self.config.max_metadata_bytes)
+            .await?;
+        let document =
+            serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
+                status: StatusCode::OK.as_u16(),
+                code: None,
+                operation: body.operation.clone(),
+                retry_after_seconds: None,
+            })?;
+        Ok((document, body.operation))
     }
 
     /// Resolve one endpoint under the configured base URL.
@@ -380,10 +418,15 @@ impl EvidenceClient {
 
     /// Read a successful response of exactly one media type, or map the
     /// deployment's answer onto a client failure.
+    ///
+    /// `max_bytes` is the caller's, because the signed response and the
+    /// deployment's metadata documents are bounded by separate configuration
+    /// decisions.
     async fn expect_success(
         &self,
         response: reqwest::Response,
         expected_media_type: &str,
+        max_bytes: u64,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
         let operation = response
@@ -400,9 +443,10 @@ impl EvidenceClient {
             .headers()
             .get(RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<u64>().ok());
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|seconds| (1..=MAXIMUM_RETRY_AFTER_SECONDS).contains(seconds));
 
-        let body = match read_bounded(response, self.config.max_response_bytes).await {
+        let body = match read_bounded(response, max_bytes).await {
             Ok(body) => body,
             // The status and the correlation identifier arrived before the body
             // did. A refusal keeps them, because they are the whole support
@@ -1038,6 +1082,186 @@ mod tests {
             read_failure_kind(&BoundedReadError::Transport(refused)),
             TransportKind::Exchange
         );
+    }
+
+    /// One discovery document, minimal but complete: the schema discriminator is
+    /// what these two tests vary, and an empty entitlement list is a shape the
+    /// definitions contract permits.
+    fn definitions_json(schema: &str) -> String {
+        format!(
+            r#"{{"schema":"{schema}","assuranceProfile":"local","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","issuedBy":"urn:example:client:issuer","providedBy":"urn:example:client:provider","definitions":[]}}"#
+        )
+    }
+
+    async fn discovery_client(
+        server: &MockServer,
+        fixture: &SignedEvidenceFixture,
+        body: String,
+    ) -> EvidenceClient {
+        discovery_client_with(server, fixture, body, |config| config).await
+    }
+
+    async fn discovery_client_with(
+        server: &MockServer,
+        fixture: &SignedEvidenceFixture,
+        body: String,
+        bounds: impl FnOnce(EvidenceClientConfig) -> EvidenceClientConfig,
+    ) -> EvidenceClient {
+        Mock::given(method("GET"))
+            .and(path("/v1/evidence-definitions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(CORRELATION_HEADER, OPERATION)
+                    .set_body_raw(body.into_bytes(), JSON_MEDIA_TYPE),
+            )
+            .mount(server)
+            .await;
+        EvidenceClient::new(bounds(config_for(&server.uri(), fixture)))
+            .expect("the client is configured")
+    }
+
+    /// The signed response bound is derived from what the verifier will accept as
+    /// a signed response, and discovery is neither signed nor verified. A relying
+    /// party that tightens the response bound to what its own assertions need must
+    /// keep being able to read discovery, and one that raises the discovery bound
+    /// for a deployment publishing many definitions must not thereby accept a
+    /// larger signed body than it decided to.
+    #[tokio::test]
+    async fn the_metadata_bound_is_not_the_signed_response_bound() {
+        let fixture = signed_evidence();
+        let document = definitions_json(EVIDENCE_DEFINITIONS_SCHEMA_V1);
+        let document_bytes = document.len() as u64;
+
+        let server = MockServer::start().await;
+        let client = discovery_client_with(&server, &fixture, document.clone(), |config| {
+            config.with_max_response_bytes(1)
+        })
+        .await;
+        let read = client
+            .discover()
+            .await
+            .expect("the signed response bound does not reach discovery");
+        assert_eq!(read.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
+
+        let server = MockServer::start().await;
+        let client = discovery_client_with(&server, &fixture, document, |config| {
+            config.with_max_metadata_bytes(document_bytes - 1)
+        })
+        .await;
+        assert_eq!(
+            client
+                .discover()
+                .await
+                .expect_err("a document past the metadata bound is not read"),
+            EvidenceClientError::transport(TransportKind::ResponseTooLarge)
+        );
+    }
+
+    /// Discovery is authoring input, so a document announcing a schema version
+    /// this client does not understand must not become authoring input anyway.
+    /// These Rust types would accept a later document that happens to fit them,
+    /// and the relying party would then author requests for a shape whose meaning
+    /// it guessed.
+    #[tokio::test]
+    async fn a_discovery_document_announcing_another_schema_is_a_protocol_failure() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = discovery_client(
+            &server,
+            &fixture,
+            definitions_json("registry.evidence-definitions/v2"),
+        )
+        .await;
+
+        assert_eq!(
+            client
+                .discover()
+                .await
+                .expect_err("the announced schema is not the one this client reads"),
+            EvidenceClientError::Protocol {
+                status: 200,
+                code: None,
+                // The deployment's own identifier for the exchange survives, so an
+                // adopter has something to quote when the versions disagree.
+                operation: Some(OPERATION.to_owned()),
+                retry_after_seconds: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_discovery_document_announcing_the_read_schema_is_accepted() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = discovery_client(
+            &server,
+            &fixture,
+            definitions_json(EVIDENCE_DEFINITIONS_SCHEMA_V1),
+        )
+        .await;
+
+        let document = client
+            .discover()
+            .await
+            .expect("the document is the v1 shape");
+        assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
+        assert!(document.definitions.is_empty());
+    }
+
+    /// `Retry-After` is a response-controlled value, and the client documents the
+    /// wait it reports as actionable. A hostile or misconfigured hop answering with
+    /// a day would have a caller that honors it stop for a day, and a zero would
+    /// invite an immediate retry loop, so only a wait a relying party would
+    /// plausibly honor is reported at all.
+    #[tokio::test]
+    async fn a_wait_the_transient_contract_does_not_bound_is_not_reported_as_actionable() {
+        let bound = MAXIMUM_RETRY_AFTER_SECONDS.to_string();
+        for (header, expected_wait) in [
+            ("1", Some(1)),
+            (bound.as_str(), Some(MAXIMUM_RETRY_AFTER_SECONDS)),
+            ("0", None),
+            ("86400", None),
+            // The field grammar also permits an HTTP date, which this client has
+            // never read and must not read as a count of seconds.
+            ("Fri, 31 Dec 1999 23:59:59 GMT", None),
+        ] {
+            let fixture = signed_evidence();
+            let server = MockServer::start().await;
+            let client = client_for(&server.uri(), &fixture);
+            let prepared = client
+                .prepare(spec(SubjectExpectations::AcceptFirstUse))
+                .expect("the specification is accepted");
+            Mock::given(method("POST"))
+                .and(path("/v1/evidence"))
+                .respond_with(
+                    ResponseTemplate::new(429)
+                        .insert_header(CORRELATION_HEADER, OPERATION)
+                        .insert_header(RETRY_AFTER.as_str(), header)
+                        .set_body_raw(
+                            format!(
+                                r#"{{"type":"https://registrystack.org/problems/evidence/rate_limited","title":"Request rate exceeded","status":429,"code":"rate_limited","operation":"{OPERATION}"}}"#
+                            )
+                            .into_bytes(),
+                            "application/problem+json",
+                        ),
+                )
+                .mount(&server)
+                .await;
+
+            assert_eq!(
+                client
+                    .send(&prepared)
+                    .await
+                    .expect_err("the deployment refused the request"),
+                EvidenceClientError::Denied {
+                    status: 429,
+                    code: "rate_limited".to_owned(),
+                    operation: Some(OPERATION.to_owned()),
+                    retry_after_seconds: expected_wait,
+                },
+                "the wait reported for a `Retry-After` of {header}"
+            );
+        }
     }
 
     /// A gateway can answer a refusal with a body far larger than the contract's,

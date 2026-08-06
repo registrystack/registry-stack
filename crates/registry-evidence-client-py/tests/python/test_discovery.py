@@ -45,26 +45,43 @@ class DiscoveryTest(unittest.TestCase):
         self.server = StubServer({})
         self.addCleanup(self.server.close)
 
-    def _client(self):
+    def _client(self, **bounds):
         return revc.EvidenceClient(
-            self.server.base_url, fixtures.VALID_JWKS, "test-token"
+            self.server.base_url, fixtures.VALID_JWKS, "test-token", **bounds
         )
 
-    def test_discover_returns_the_definitions_document_as_a_dict(self):
+    def _serve_definitions(self) -> bytes:
+        body = json.dumps(DEFINITIONS_DOCUMENT).encode("utf-8")
         self.server.routes["GET /v1/evidence-definitions"] = StubRoute(
             status=200,
             headers={"Content-Type": JSON_MEDIA_TYPE},
-            body=json.dumps(DEFINITIONS_DOCUMENT).encode("utf-8"),
+            body=body,
         )
+        return body
+
+    def test_discover_returns_the_definitions_document_as_a_dict(self):
+        self._serve_definitions()
         document = self._client().discover()
         self.assertEqual(document, DEFINITIONS_DOCUMENT)
 
+    def test_the_metadata_bound_governs_discovery_and_the_response_bound_does_not(self):
+        """The two bounds answer different questions.
+
+        `max_response_bytes` is derived from what the verifier accepts as a
+        signed response, and the discovery document is neither signed nor
+        verified, so tightening one must not silently disable the other
+        endpoint.
+        """
+        body = self._serve_definitions()
+        document = self._client(max_response_bytes=1).discover()
+        self.assertEqual(document, DEFINITIONS_DOCUMENT)
+
+        with self.assertRaises(revc.TransportError) as raised:
+            self._client(max_metadata_bytes=len(body) - 1).discover()
+        self.assertEqual(raised.exception.transport_kind, "response_too_large")
+
     def test_discover_sends_a_bearer_credential(self):
-        self.server.routes["GET /v1/evidence-definitions"] = StubRoute(
-            status=200,
-            headers={"Content-Type": JSON_MEDIA_TYPE},
-            body=json.dumps(DEFINITIONS_DOCUMENT).encode("utf-8"),
-        )
+        self._serve_definitions()
         self._client().discover()
         self.assertEqual(len(self.server.requests), 1)
         self.assertEqual(
