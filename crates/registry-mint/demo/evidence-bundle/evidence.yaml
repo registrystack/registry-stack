@@ -88,7 +88,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:demo:requirement:residence-region:v1
     kind: information-requirement
-    source: demo-source
+    acquisition:
+      kind: single
+      source: demo-source
     purposes: [demo-routing]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [demographics-v1]}]
     referenceFrameworks: [urn:example:demo:framework:residence-region:v1]

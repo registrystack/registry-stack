@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 persona:
   - assertion provider
@@ -116,6 +116,7 @@ request:
   pathTemplate: /people/{person_id}
   pathBindings:
     person_id:
+      from: selector
       role: person
       profile: person-reference-v1
       field: person_id

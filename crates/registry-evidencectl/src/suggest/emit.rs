@@ -185,7 +185,8 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
 }
 
 fn render_prepare_script() -> String {
-    r#"fn prepare(selectors, parameters) {
+    r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     // TODO(evidencectl): bind only reviewed selector fields and fixed parameters.
     #{query: [], body: ()}
 }
@@ -1040,7 +1041,7 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
         "// multiple matches, and return the matching outcome instead of the",
     );
     push_line(&mut out, 0, "// unconditional match below.");
-    push_line(&mut out, 0, "fn extract(source_response, parameters) {");
+    push_line(&mut out, 0, "fn extract(source_response, context) {");
 
     for (index, (extended_pointer, get_path_pointer)) in get_paths.iter().enumerate() {
         let variable = format!("leaf_{}", index + 1);

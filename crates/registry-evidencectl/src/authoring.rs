@@ -1452,7 +1452,7 @@ fn compile_question_plan(
     });
 
     let prepare_script =
-        "fn prepare(selectors, parameters) {\n    #{query: [], body: ()}\n}\n".to_owned();
+        "fn prepare(selectors, context) {\n    #{query: [], body: ()}\n}\n".to_owned();
     let extract_script = compiled_facts.extract_script;
     let derivation_script = render_derivation(&authored.derivation, &concepts);
     let subjects = authored_subjects
@@ -2427,7 +2427,7 @@ fn schema_at_extended_pointer<'a>(schema: &'a Value, pointer: &str) -> Result<&'
 
 fn render_fact_extraction(facts: &[QuestionFact]) -> String {
     let mut rendered =
-        String::from("fn extract(source_response, parameters) {\n    let facts = #{};\n");
+        String::from("fn extract(source_response, context) {\n    let facts = #{};\n");
     for (index, fact) in facts.iter().enumerate() {
         let name = json_string(&fact.name);
         match fact.combine {
@@ -2538,6 +2538,7 @@ fn render_question_bundle_parts(
         (
             subject.selector_field.clone(),
             json!({
+                "from": "selector",
                 "role": subject.role,
                 "profile": subject.selector_profile,
                 "field": subject.selector_field,
@@ -2703,7 +2704,10 @@ fn render_governance_parts(
     let mut requirement_value = json!({
             "id": requirement.requirement_uri,
             "kind": requirement.kind,
-            "source": source_id,
+            "acquisition": {
+                "kind": "single",
+                "source": source_id,
+            },
             "purposes": [question.purpose],
             "subjectRoles": subject_roles,
             "referenceFrameworks": reference_frameworks,
@@ -3693,7 +3697,11 @@ properties:
         );
         assert_eq!(
             bundle["sources"][&source_id]["request"]["pathBindings"]["person_id"],
-            json!({"role": "person", "profile": selector_profile, "field": "person_id"})
+            json!({"from": "selector", "role": "person", "profile": selector_profile, "field": "person_id"})
+        );
+        assert_eq!(
+            bundle["requirements"][0]["acquisition"],
+            json!({"kind": "single", "source": source_id})
         );
         assert!(bundle["requirements"][0].get("fixtures").is_none());
         assert_eq!(
@@ -3976,7 +3984,7 @@ request:
   method: GET
   pathTemplate: /people/{person_id}
   pathBindings:
-    person_id: {role: person, profile: person-reference-v1, field: person_id}
+    person_id: {from: selector, role: person, profile: person-reference-v1, field: person_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: person
@@ -4007,8 +4015,8 @@ request:
   method: GET
   pathTemplate: /children/{child_id}/candidates/{candidate_id}
   pathBindings:
-    child_id: {role: child, profile: child-reference-v1, field: child_id}
-    candidate_id: {role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
+    child_id: {from: selector, role: child, profile: child-reference-v1, field: child_id}
+    candidate_id: {from: selector, role: candidate-parent, profile: candidate-reference-v1, field: candidate_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: child
@@ -4035,11 +4043,11 @@ factSchema: schemas/source-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/source-prepare.rhai",
-                "fn prepare(selectors, parameters) { #{query: [], body: ()} }\n",
+                "fn prepare(selectors, context) { #{query: [], body: ()} }\n",
             ),
             (
                 "adapters/source-extract.rhai",
-                "fn extract(response, parameters) { #{outcome: \"match\", facts: response} }\n",
+                "fn extract(response, context) { #{outcome: \"match\", facts: response} }\n",
             ),
             (
                 "schemas/source-parameters.schema.yaml",
@@ -4456,7 +4464,7 @@ request:
   method: GET
   pathTemplate: /people/{person_id}
   pathBindings:
-    person_id: {role: person, profile: person-reference-v1, field: person_id}
+    person_id: {from: selector, role: person, profile: person-reference-v1, field: person_id}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: person
@@ -4480,11 +4488,11 @@ factSchema: schemas/people-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/people-prepare.rhai",
-                "fn prepare(s, p) { #{query: [], body: ()} }\n",
+                "fn prepare(s, context) { #{query: [], body: ()} }\n",
             ),
             (
                 "adapters/people-extract.rhai",
-                "fn extract(r, p) { #{outcome: \"match\", facts: r} }\n",
+                "fn extract(r, context) { #{outcome: \"match\", facts: r} }\n",
             ),
             (
                 "schemas/people-parameters.schema.yaml",
@@ -4603,7 +4611,7 @@ request:
   method: GET
   pathTemplate: /children/{child_reference}/relationships
   pathBindings:
-    child_reference: {role: child, profile: child-reference-v1, field: child_reference}
+    child_reference: {from: selector, role: child, profile: child-reference-v1, field: child_reference}
   selectorInputs:
     - role: child
       alternatives:
@@ -4626,11 +4634,11 @@ factSchema: schemas/family-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/family-prepare.rhai",
-                "fn prepare(s, p) { #{query: [], body: ()} }\n",
+                "fn prepare(s, context) { #{query: [], body: ()} }\n",
             ),
             (
                 "adapters/family-extract.rhai",
-                "fn extract(r, p) { #{outcome: \"match\", facts: r} }\n",
+                "fn extract(r, context) { #{outcome: \"match\", facts: r} }\n",
             ),
             (
                 "schemas/family-parameters.schema.yaml",
