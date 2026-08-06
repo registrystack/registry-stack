@@ -221,12 +221,32 @@ impl PreparedEvidenceRequest {
 /// A signed response, read but not yet judged.
 ///
 /// There is no constructor exposed to Python; the only way to obtain one is
-/// [`EvidenceClient::send`]. It carries no attributes: nothing in it has been
-/// trusted yet, and `verify` is what judges it, never Python code inspecting
-/// its bytes directly.
+/// [`EvidenceClient::send`]. Its two readings are the wrapped Rust type's own,
+/// and reading either one judges nothing: `verify` is what decides whether
+/// these bytes are trustworthy, never Python code inspecting them.
 #[pyclass(name = "RawEvidenceResponse", module = "registry_evidence_client")]
 struct RawEvidenceResponse {
     inner: RealRawEvidenceResponse,
+}
+
+#[pymethods]
+impl RawEvidenceResponse {
+    /// The exact bytes the deployment served. Retain them with the
+    /// transaction record: re-verifying later needs the bytes that were
+    /// verified, not a re-serialization of them.
+    #[getter]
+    fn body(&self) -> &[u8] {
+        self.inner.body()
+    }
+
+    /// The deployment's opaque identifier for this exchange, if the response
+    /// carried one, for support correlation. Present here as well as on
+    /// `VerifiedEvidence`, so a response that fails verification can still be
+    /// reported against the deployment's own audit trail.
+    #[getter]
+    fn operation(&self) -> Option<&str> {
+        self.inner.operation()
+    }
 }
 
 /// A response that satisfied every expectation.
