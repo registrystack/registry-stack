@@ -1,7 +1,7 @@
 ---
 title: Issue an immunization summary from DHIS2
 description: Author and verify a signed, multi-concept immunization summary from synthetic DHIS2 Tracker events.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -17,10 +17,8 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
 You will apply that pattern to the public DHIS2 Tracker demo, combine two immunization events into
-one governed answer, and verify the signed assertion returned across the Evidence Gateway HTTP boundary.
-
-{/* Target tutorial for evidencectl UX2, UX3, UX5, and UX10. Keep status draft until the
-    commands and authoring shapes on this page pass the tutorial gate. */}
+one governed answer, and verify the signed assertion returned across the Evidence Gateway HTTP
+boundary.
 
 <QuickstartMeta
   outcome="A verified assertion containing five governed immunization readings from DHIS2."
@@ -80,8 +78,8 @@ immunization fields contain values.
 
 Note its tracked entity identifier and keep it out of tracked files.
 The identifier selects the source record.
-It will be used for the DHIS2 read and the Evidence Gateway request, but it will not appear in the signed
-assertion.
+It will be used for the DHIS2 read and the Evidence Gateway request, but it will not appear in the
+signed assertion.
 
 ## See the DHIS2 boundary
 
@@ -123,8 +121,8 @@ curl --silent --show-error --fail \
 The response contains the tracked entity, its programme enrollment, the two events, and their
 data values.
 Some event data values are unrelated to the five concepts.
-Evidence Gateway will receive the bounded response, discard unrelated values during extraction, and
-release only the five declared concepts.
+Evidence Gateway will receive the bounded response, discard unrelated values during extraction,
+and release only the five declared concepts.
 
 This distinction is deliberate.
 The source uses the `record-transformed` posture because DHIS2 cannot filter the `dataValues`
@@ -132,17 +130,17 @@ array to individual data-element identifiers in this response shape.
 
 ## Create the authoring project
 
-Download the Tracker OpenAPI document and create an editable local project:
+Download the full DHIS2 OpenAPI document and create an editable local project:
 
 ```sh
 curl --silent --show-error --fail \
   --config .local/dhis2.curl \
   --header 'Accept: application/x-yaml' \
-  --url "$DHIS2_BASE_URL/api/tracker/openapi.yaml" \
-  --output .local/dhis2-tracker.openapi.yaml
+  --url "$DHIS2_BASE_URL/api/openapi.yaml" \
+  --output .local/dhis2.openapi.yaml
 
 evidencectl new dhis2-immunization \
-  --openapi .local/dhis2-tracker.openapi.yaml \
+  --openapi .local/dhis2.openapi.yaml \
   --profile local \
   --generate-keys
 
@@ -171,6 +169,11 @@ evidencectl source suggest \
   --select '/enrollments/*/events/*/dataValues/*/dataElement' \
   --select '/enrollments/*/events/*/dataValues/*/value'
 ```
+
+The full DHIS2 response schema contains unions and `uid` formats outside the closed authoring
+subset that `evidencectl` accepts.
+The command reports those skipped fields and the bounds that still need review.
+Continue only when the command exits successfully and writes the six files listed next.
 
 The command creates one editable source, two scripts, and three schemas:
 
@@ -310,8 +313,8 @@ It cannot read the source credential, the caller identity, the purpose, or the s
 
 ## Close the response bounds
 
-Evidence Gateway validates the projected response before extraction runs, and every array in a schema
-must state its bound.
+Evidence Gateway validates the projected response before extraction runs, and every array in a
+schema must state its bound.
 Replace `schemas/child-tracker-response.schema.yaml` with:
 
 ```yaml
@@ -579,9 +582,9 @@ curl --silent --show-error --fail-with-body \
 ```
 
 The caller contacts Evidence Gateway.
-Evidence Gateway authenticates and authorizes the caller, performs one bounded authenticated DHIS2 read,
-derives the five concepts, audits the disclosure, and returns a signed flattened JSON Web
-Signature (JWS).
+Evidence Gateway authenticates and authorizes the caller, performs one bounded authenticated
+DHIS2 read, derives the five concepts, audits the disclosure, and returns a signed flattened JSON
+Web Signature (JWS).
 
 ## Verify before reading
 
@@ -651,8 +654,16 @@ evidencectl audit show --last-operation
 The audit records the authorized access and the five disclosed concept identifiers.
 It does not record their values or the DHIS2 response.
 
-Delete `.local/dhis2-response.json` and `.local/dhis2.curl` if they were created only for this
-tutorial.
+Remove the stopped local generation and the local DHIS2 artifacts:
+
+```sh
+evidencectl dev clean
+cd ..
+rm -f .local/dhis2-response.json \
+  .local/dhis2.curl \
+  .local/dhis2.openapi.yaml
+```
+
 Keep the project editable while evaluating the source.
 Before deployment, add project-specific fixtures, replace the demo account with a least-privilege
 service account, review the source acquisition posture, and build a reviewed production candidate.
