@@ -101,14 +101,14 @@ class ErrorMappingTest(unittest.TestCase):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=400,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(400, "bad_request"),
+            body=fixtures.problem_body(400, "malformed_request"),
         )
         with self.assertRaises(revc.ProtocolError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "protocol")
         self.assertEqual(error.status, 400)
-        self.assertEqual(error.code, "bad_request")
+        self.assertEqual(error.code, "malformed_request")
 
     def test_a_success_with_the_wrong_media_type_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(

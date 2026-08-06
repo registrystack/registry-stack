@@ -19,6 +19,24 @@ const EVIDENCE_NOT_AVAILABLE: &str = "evidence_not_available";
 /// Longest accepted problem body. The closed contract is far smaller.
 pub(crate) const MAXIMUM_PROBLEM_BYTES: usize = 4 * 1024;
 
+/// Every `(status, code)` pair the frozen problem contract registers, as
+/// `products/evidence/contracts/problem-contract.yaml` states them. The status
+/// belongs to the pair: one code may be registered for one status only, and two
+/// codes may share a status. `type` and `title` are deliberately absent, because
+/// the contract does not pin the `type` URI and `title` is human facing text a
+/// deployment may word or localize as it chooses.
+const REGISTERED_PROBLEMS: [(u16, &str); 9] = [
+    (400, "malformed_request"),
+    (400, "invalid_selector"),
+    (401, "authentication_failed"),
+    (403, "not_authorized"),
+    (406, "response_format_not_acceptable"),
+    (422, EVIDENCE_NOT_AVAILABLE),
+    (429, "rate_limited"),
+    (503, "dependency_unavailable"),
+    (503, "service_unavailable"),
+];
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProblemBody {
@@ -59,19 +77,29 @@ pub(crate) fn map_problem(
     };
     let operation =
         sanitized_operation(&problem.operation).or_else(|| header_operation.map(str::to_owned));
-    match (status, problem.code.as_str()) {
-        (401 | 403 | 429, code) => EvidenceClientError::Denied {
+    // The code is honored only under a status the contract registered it for.
+    // A code the contract never registered, or a registered one arriving under
+    // another status, is a body the deployment did not promise, so it becomes an
+    // uninterpreted protocol failure rather than a refusal a caller could act on.
+    let code = REGISTERED_PROBLEMS
+        .iter()
+        .find(|(registered_status, registered_code)| {
+            *registered_status == status && *registered_code == problem.code
+        })
+        .map(|(_, registered_code)| *registered_code);
+    match (status, code) {
+        (401 | 403 | 429, Some(code)) => EvidenceClientError::Denied {
             status,
             code: code.to_owned(),
             operation,
             retry_after_seconds: retry_after_seconds.filter(|_| status == 429),
         },
-        (422, EVIDENCE_NOT_AVAILABLE) => EvidenceClientError::NotAvailable { operation },
+        (422, Some(EVIDENCE_NOT_AVAILABLE)) => EvidenceClientError::NotAvailable { operation },
         (_, code) => EvidenceClientError::Protocol {
             status,
-            code: Some(code.to_owned()),
+            code: code.map(str::to_owned),
             operation,
-            retry_after_seconds: retry_after_seconds.filter(|_| status == 503),
+            retry_after_seconds: retry_after_seconds.filter(|_| status == 503 && code.is_some()),
         },
     }
 }
@@ -195,9 +223,6 @@ mod tests {
             (406, "response_format_not_acceptable"),
             (503, "dependency_unavailable"),
             (503, "service_unavailable"),
-            // A 422 that is not the collapsed answer is not something this
-            // client can interpret.
-            (422, "malformed_request"),
         ] {
             let mapped = map_problem(
                 status,
@@ -218,6 +243,42 @@ mod tests {
         }
     }
 
+    /// The contract registers nine `(status, code)` pairs. A code that is merely
+    /// shaped like one of them, or a registered code arriving under a status it
+    /// was never registered for, is not something this client can explain, so it
+    /// must not become a refusal or a reported code.
+    #[test]
+    fn a_code_outside_the_registered_problem_set_is_never_read_as_a_refusal() {
+        for (status, code) in [
+            // Lexically valid, entirely unregistered.
+            (403_u16, "custom_failure"),
+            // Registered, but under another status.
+            (429, "not_authorized"),
+            (400, "rate_limited"),
+            (422, "malformed_request"),
+        ] {
+            let mapped = map_problem(
+                status,
+                Some(PROBLEM_MEDIA_TYPE),
+                &problem_json(status, code),
+                Some(30),
+                None,
+            );
+            assert_eq!(
+                mapped,
+                EvidenceClientError::Protocol {
+                    status,
+                    code: None,
+                    // The identifier still survives: it is the one member the
+                    // contract calls safe for support correlation, and losing it
+                    // would leave an adopter nothing to quote.
+                    operation: Some(OPERATION.to_owned()),
+                    retry_after_seconds: None,
+                }
+            );
+        }
+    }
+
     /// The contract permits a bounded wait on a transient failure, which is the
     /// answer a relying party can politely back off from.
     #[test]
@@ -227,8 +288,8 @@ mod tests {
             (503, "service_unavailable", Some(30)),
             // Nothing else in the coarse mapping surfaces a wait.
             (400, "malformed_request", None),
+            (400, "invalid_selector", None),
             (406, "response_format_not_acceptable", None),
-            (422, "malformed_request", None),
         ] {
             let mapped = map_problem(
                 status,
