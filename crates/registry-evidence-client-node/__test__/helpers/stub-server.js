@@ -13,14 +13,18 @@ const http = require('node:http');
  */
 function startStubServer(routes) {
   const requests = [];
+  // A Map, not the caller's object: the lookup key carries a request line the
+  // test client controls, and a plain object would let one resolve to an
+  // inherited `Object.prototype` member instead of a stub route.
+  const table = new Map(Object.entries(routes));
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
       const body = Buffer.concat(chunks);
       requests.push({ method: req.method, url: req.url, headers: req.headers, body });
-      const handler = routes[`${req.method} ${req.url}`];
-      if (!handler) {
+      const handler = table.get(`${req.method} ${req.url}`);
+      if (typeof handler !== 'function') {
         res.writeHead(404, { 'content-type': 'text/plain' });
         res.end('no stub route for this request');
         return;
