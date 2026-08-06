@@ -162,13 +162,15 @@ for (const file of files) {
 for (const file of files) {
   const html = await readFile(file, 'utf8');
   const sourcePath = pageUrl(file);
+  const sourceArchive = archiveRoot(file);
   const isFrozenPublishedPage =
-    productionCurrentMountExists &&
-    !isWithinRoot(sourcePath, CURRENT_PRODUCTION_DOCSET_PATH) &&
-    !isWithinRoot(sourcePath, LEGACY_PREVIEW_PATH);
+    Boolean(sourceArchive) ||
+    (productionCurrentMountExists &&
+      !isWithinRoot(sourcePath, CURRENT_PRODUCTION_DOCSET_PATH) &&
+      !isWithinRoot(sourcePath, LEGACY_PREVIEW_PATH));
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
-    const root = archiveRoot(file);
+    const root = sourceArchive;
     const rawPath = splitUrl(raw)[0];
     if (
       root &&
