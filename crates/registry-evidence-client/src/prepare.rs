@@ -14,7 +14,8 @@ use std::{
 
 use registry_evidence_verifier::{
     verifier::{
-        EvidenceVerificationPolicyDocument, ExpectedOutputDocument, ExpectedSubjectDocument,
+        EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedOutputDocument,
+        ExpectedSubjectDocument,
     },
     AssuranceProfile,
 };
@@ -46,6 +47,14 @@ pub const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
 pub const MINIMUM_SELECTOR_INTEGER: i64 = -9_007_199_254_740_991;
 /// Largest selector integer the request contract accepts.
 pub const MAXIMUM_SELECTOR_INTEGER: i64 = 9_007_199_254_740_991;
+/// Longest maximum assertion lifetime a policy may state, per the
+/// verification policy contract the deployment applies.
+pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 31_536_000;
+/// Largest clock skew tolerance a policy may state, per the same contract.
+pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
+/// Largest list cardinality, minimum or maximum, a list-form expected output
+/// may state, per the same contract.
+pub const MAXIMUM_LIST_ITEMS: usize = 64;
 
 /// One requested subject, before the request body exists.
 #[derive(Debug, Clone)]
@@ -370,6 +379,9 @@ fn validate(spec: &EvidenceRequestSpec) -> Result<(), EvidenceClientError> {
         ));
     }
     let mut concepts = BTreeSet::new();
+    // Ties the message below to the constant, so the constant cannot drift
+    // from the number the message states.
+    const _: () = assert!(MAXIMUM_LIST_ITEMS == 64);
     for output in &spec.expected_outputs {
         if output.concept.is_empty()
             || output.concept.len() > MAXIMUM_IDENTIFIER_BYTES
@@ -379,11 +391,37 @@ fn validate(spec: &EvidenceRequestSpec) -> Result<(), EvidenceClientError> {
                 "each expected output must name a bounded concept once",
             ));
         }
+        if let ExpectedFormDocument::List(list) = &output.form {
+            let minimum_items = list.list.minimum_items;
+            let maximum_items = list.list.maximum_items;
+            // A specification with a minimum above its maximum can never be
+            // satisfied, so accepting it would only defer the failure to the
+            // deployment, where the caller cannot diagnose it.
+            if !(1..=MAXIMUM_LIST_ITEMS).contains(&minimum_items)
+                || !(1..=MAXIMUM_LIST_ITEMS).contains(&maximum_items)
+                || minimum_items > maximum_items
+            {
+                return Err(EvidenceClientError::configuration(
+                    "each list-form output must state a cardinality within 1..=64 items, with the minimum no greater than the maximum",
+                ));
+            }
+        }
     }
 
-    if spec.maximum_assertion_lifetime_seconds == 0 {
+    // Ties the message below to the constant, so the constant cannot drift
+    // from the number the message states.
+    const _: () = assert!(MAXIMUM_ASSERTION_LIFETIME_SECONDS == 31_536_000);
+    if !(1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&spec.maximum_assertion_lifetime_seconds)
+    {
         return Err(EvidenceClientError::configuration(
-            "the maximum assertion lifetime must be greater than zero",
+            "the maximum assertion lifetime must be within 1..=31536000 seconds",
+        ));
+    }
+
+    const _: () = assert!(MAXIMUM_CLOCK_SKEW_SECONDS == 300);
+    if spec.clock_skew_seconds > MAXIMUM_CLOCK_SKEW_SECONDS {
+        return Err(EvidenceClientError::configuration(
+            "the clock skew must be within 0..=300 seconds",
         ));
     }
 
@@ -483,12 +521,27 @@ fn bounded_lowercase(value: &str, maximum_bytes: usize, acceptable: impl Fn(u8) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_evidence_verifier::verifier::{ExpectedFormDocument, ExpectedScalarFormDocument};
+    use registry_evidence_verifier::verifier::{
+        ExpectedFormDocument, ExpectedListDocument, ExpectedListFormDocument,
+        ExpectedScalarFormDocument,
+    };
 
     fn expected_output() -> ExpectedOutputDocument {
         ExpectedOutputDocument {
             concept: "urn:example:client:concept:status-holds".to_owned(),
             form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
+        }
+    }
+
+    fn list_expected_output(minimum_items: usize, maximum_items: usize) -> ExpectedOutputDocument {
+        ExpectedOutputDocument {
+            concept: "urn:example:client:concept:list-output".to_owned(),
+            form: ExpectedFormDocument::List(ExpectedListFormDocument {
+                list: ExpectedListDocument {
+                    minimum_items,
+                    maximum_items,
+                },
+            }),
         }
     }
 
@@ -730,6 +783,34 @@ mod tests {
                 Box::new(|spec| spec.maximum_assertion_lifetime_seconds = 0),
             ),
             (
+                "a lifetime above the contract's ceiling",
+                Box::new(|spec| {
+                    spec.maximum_assertion_lifetime_seconds =
+                        MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1;
+                }),
+            ),
+            (
+                "a clock skew above the contract's ceiling",
+                Box::new(|spec| {
+                    spec.clock_skew_seconds = MAXIMUM_CLOCK_SKEW_SECONDS + 1;
+                }),
+            ),
+            (
+                "a list cardinality of zero",
+                Box::new(|spec| spec.expected_outputs.push(list_expected_output(0, 1))),
+            ),
+            (
+                "a list cardinality above the contract's ceiling",
+                Box::new(|spec| {
+                    spec.expected_outputs
+                        .push(list_expected_output(1, MAXIMUM_LIST_ITEMS + 1));
+                }),
+            ),
+            (
+                "a list minimum above its maximum",
+                Box::new(|spec| spec.expected_outputs.push(list_expected_output(2, 1))),
+            ),
+            (
                 "a pinned role the request does not ask for",
                 Box::new(|spec| {
                     spec.subject_expectations =
@@ -824,6 +905,42 @@ mod tests {
             MAXIMUM_SELECTOR_VALUES, 16,
             "a refusal says \"between one and sixteen of them\""
         );
+        assert_eq!(
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS, 31_536_000,
+            "a refusal says \"1..=31536000 seconds\""
+        );
+        assert_eq!(
+            MAXIMUM_CLOCK_SKEW_SECONDS, 300,
+            "a refusal says \"0..=300 seconds\""
+        );
+        assert_eq!(MAXIMUM_LIST_ITEMS, 64, "a refusal says \"1..=64 items\"");
+
+        // The ceiling itself, and the floor itself, are still legal: a refusal
+        // one step past an edge does not mean the edge itself is refused.
+        let mut at_the_lifetime_ceiling = spec();
+        at_the_lifetime_ceiling.maximum_assertion_lifetime_seconds =
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS;
+        PreparedEvidenceRequest::new(at_the_lifetime_ceiling)
+            .expect("the lifetime ceiling itself is accepted");
+
+        let mut at_the_skew_ceiling = spec();
+        at_the_skew_ceiling.clock_skew_seconds = MAXIMUM_CLOCK_SKEW_SECONDS;
+        PreparedEvidenceRequest::new(at_the_skew_ceiling)
+            .expect("the clock skew ceiling itself is accepted");
+
+        let mut at_the_list_floor_and_ceiling = spec();
+        at_the_list_floor_and_ceiling
+            .expected_outputs
+            .push(list_expected_output(1, MAXIMUM_LIST_ITEMS));
+        PreparedEvidenceRequest::new(at_the_list_floor_and_ceiling)
+            .expect("a list cardinality spanning the floor to the ceiling is accepted");
+
+        let mut equal_at_the_list_ceiling = spec();
+        equal_at_the_list_ceiling
+            .expected_outputs
+            .push(list_expected_output(MAXIMUM_LIST_ITEMS, MAXIMUM_LIST_ITEMS));
+        PreparedEvidenceRequest::new(equal_at_the_list_ceiling)
+            .expect("a minimum equal to the maximum is accepted, even at the ceiling");
     }
 
     /// The contract's integer bounds are the ones a double can represent
