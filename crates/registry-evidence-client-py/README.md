@@ -176,4 +176,10 @@ then copies the resulting dylib to a scratch directory as
 `registry_evidence_client.so` and puts that directory on `sys.path`, so the
 suite never depends on `maturin`, `pip install -e`, or any packaging step.
 
-`maturin` itself is a local-development convenience only; CI never invokes it.
+No test path invokes `maturin`, on a developer's machine or in CI. Two things
+do: `uv run maturin develop` above, for local development, and
+`.github/workflows/evidence-dev.yml`, which builds the wheel published with
+each Evidence development prerelease and smokes it from a fresh virtual
+environment. That workflow stamps the prerelease version into `pyproject.toml`
+before building, so this crate's own copy of the workspace version stays the
+released one.
