@@ -161,6 +161,11 @@ for (const file of files) {
 
 for (const file of files) {
   const html = await readFile(file, 'utf8');
+  const sourcePath = pageUrl(file);
+  const isFrozenPublishedPage =
+    productionCurrentMountExists &&
+    !isWithinRoot(sourcePath, CURRENT_PRODUCTION_DOCSET_PATH) &&
+    !isWithinRoot(sourcePath, LEGACY_PREVIEW_PATH);
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
     const root = archiveRoot(file);
@@ -191,7 +196,11 @@ for (const file of files) {
 
     checked += 1;
     const [path, fragment] = splitUrl(url);
-    if (archivedRoot && retiredArchivedRoots.has(archivedRoot)) {
+    if (
+      isFrozenPublishedPage &&
+      archivedRoot &&
+      retiredArchivedRoots.has(archivedRoot)
+    ) {
       continue;
     }
     const target = resolveTarget(path);
