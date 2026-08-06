@@ -438,7 +438,7 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
         "expected_outputs": [
             { "concept": "urn:example:concept:status-holds", "form": "boolean" }
         ],
-        "maximum_assertion_lifetime_seconds": 3650 * 24 * 60 * 60_i64,
+        "maximum_assertion_lifetime_seconds": 30 * 24 * 60 * 60_i64,
         "clock_skew_seconds": 30,
         "subject_expectations": "accept_first_use",
     });
