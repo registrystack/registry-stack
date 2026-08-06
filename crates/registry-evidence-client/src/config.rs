@@ -4,23 +4,40 @@
 //! integrator, out of band. The client never replaces it with keys a response
 //! or a discovery document named.
 
-use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
-use registry_evidence_verifier::model::JwksDocument;
+use registry_evidence_verifier::{model::JwksDocument, verifier::trusted_keys_are_usable};
 use registry_platform_httputil::DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
 use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    error::EvidenceClientError, outbound::transport_protects_the_credential, token::TokenProvider,
+    error::EvidenceClientError,
+    outbound::{base_url_without_userinfo, transport_protects_the_credential},
+    token::TokenProvider,
 };
 
-/// Longest response body the client will read.
+/// Longest signed response body the client will read.
 ///
 /// The verifier refuses a signed response larger than 256 KiB, so a bigger
 /// body could never verify and reading it would only waste the relying party's
 /// memory.
 pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
+
+/// Longest deployment metadata document the client will read: the discovery
+/// document, and the published key set.
+///
+/// This is a separate decision from [`DEFAULT_MAX_RESPONSE_BYTES`], which is
+/// derived from what the verifier will accept as a signed response. Neither
+/// document is signed and neither is verified, so that reasoning does not reach
+/// them, and a relying party that tightens one bound to what its own assertions
+/// need must not thereby stop being able to read discovery. The definitions
+/// contract permits far more than this: 16,384 authorized shapes, which even at
+/// the smallest conforming entry is several megabytes. This carries roughly five
+/// hundred definitions, which is past what a deployment publishes, and
+/// [`EvidenceClientConfig::with_max_metadata_bytes`] raises it for one that
+/// publishes more.
+pub const DEFAULT_MAX_METADATA_BYTES: u64 = 256 * 1024;
 
 /// Total time allowed for one exchange, including reading the response body.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -38,6 +55,7 @@ pub struct EvidenceClientConfig {
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
     pub(crate) max_response_bytes: u64,
+    pub(crate) max_metadata_bytes: u64,
 }
 
 impl EvidenceClientConfig {
@@ -62,6 +80,7 @@ impl EvidenceClientConfig {
             user_agent: None,
             trusted_root_certificates: None,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
         }
     }
 
@@ -91,9 +110,20 @@ impl EvidenceClientConfig {
         self
     }
 
+    /// Bound the signed response body, which only [`crate::EvidenceClient::send`]
+    /// reads.
     #[must_use]
     pub fn with_max_response_bytes(mut self, max_response_bytes: u64) -> Self {
         self.max_response_bytes = max_response_bytes;
+        self
+    }
+
+    /// Bound the discovery document and the published key set, which
+    /// [`crate::EvidenceClient::discover`] and
+    /// [`crate::EvidenceClient::fetch_jwks`] read.
+    #[must_use]
+    pub fn with_max_metadata_bytes(mut self, max_metadata_bytes: u64) -> Self {
+        self.max_metadata_bytes = max_metadata_bytes;
         self
     }
 
@@ -111,6 +141,11 @@ impl EvidenceClientConfig {
     #[must_use]
     pub fn max_response_bytes(&self) -> u64 {
         self.max_response_bytes
+    }
+
+    #[must_use]
+    pub fn max_metadata_bytes(&self) -> u64 {
+        self.max_metadata_bytes
     }
 
     /// Refuse a configuration that cannot carry a credential safely or that
@@ -148,16 +183,18 @@ impl EvidenceClientConfig {
             }
         }
         // The pinned key set is the load-bearing decision, so it fails here
-        // rather than once per request inside the verifier, where an empty set
-        // looks to an adopter like a deployment fault.
-        if self.trusted_jwks.keys.is_empty() {
+        // rather than once per request inside the verifier, where a set that
+        // could never verify anything looks to an adopter like a deployment
+        // fault. The rule is the verifier's own, asked once at the point the
+        // decision was made instead of restated here where it could drift.
+        if trusted_keys_are_usable(&self.trusted_jwks).is_err() {
             return Err(EvidenceClientError::configuration(
-                "the pinned key set must carry at least one verification key",
+                "the pinned key set must be one the verifier can use",
             ));
         }
-        if self.max_response_bytes == 0 {
+        if self.max_response_bytes == 0 || self.max_metadata_bytes == 0 {
             return Err(EvidenceClientError::configuration(
-                "the response bound must allow at least one byte",
+                "the response bounds must allow at least one byte",
             ));
         }
         if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
@@ -167,25 +204,6 @@ impl EvidenceClientConfig {
         }
         Ok(())
     }
-}
-
-/// The base URL with any userinfo removed.
-///
-/// [`EvidenceClientConfig::validate`] refuses a base URL carrying credentials,
-/// but it runs inside `EvidenceClient::new`, so the rendering cannot rely on
-/// having been reached after construction.
-fn base_url_without_userinfo(base_url: &Url) -> Cow<'_, str> {
-    if base_url.username().is_empty() && base_url.password().is_none() {
-        return Cow::Borrowed(base_url.as_str());
-    }
-    let mut stripped = base_url.clone();
-    // Both setters refuse only a URL that cannot carry userinfo at all, and this
-    // point is reached only for a URL that carries some, so neither can refuse
-    // here. A refusal withholds the whole URL rather than rendering a credential.
-    if stripped.set_username("").is_err() || stripped.set_password(None).is_err() {
-        return Cow::Borrowed("<a base URL whose userinfo could not be removed>");
-    }
-    Cow::Owned(stripped.into())
 }
 
 impl fmt::Debug for EvidenceClientConfig {
@@ -200,6 +218,7 @@ impl fmt::Debug for EvidenceClientConfig {
             .field("connect_timeout", &self.connect_timeout)
             .field("user_agent", &self.user_agent)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_metadata_bytes", &self.max_metadata_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -339,15 +358,73 @@ mod tests {
         assert_eq!(
             config.validate().expect_err("an empty key set is refused"),
             EvidenceClientError::configuration(
-                "the pinned key set must carry at least one verification key"
+                "the pinned key set must be one the verifier can use"
             )
         );
+    }
+
+    /// Emptiness is only one of the ways a pinned set can be unusable, and every
+    /// other way costs the adopter the same: a client that constructs, then
+    /// refuses every response for a reason that reads as a deployment fault. The
+    /// rule belongs to the verifier, so this asks the verifier rather than
+    /// restating what it accepts.
+    #[test]
+    fn a_pinned_key_set_the_verifier_could_never_use_is_refused_at_construction() {
+        let usable = one_key().keys[0].clone();
+        let mut private_material = usable.clone();
+        private_material["d"] = serde_json::json!("cHJpdmF0ZS1zY2FsYXItcGxhY2Vob2xkZXI");
+        let mut absent_kid = usable.clone();
+        absent_kid
+            .as_object_mut()
+            .expect("the key is an object")
+            .remove("kid");
+        let mut empty_kid = usable.clone();
+        empty_kid["kid"] = serde_json::json!("");
+        for (description, keys) in [
+            ("an empty set", vec![]),
+            (
+                "private material a public set must never carry",
+                vec![private_material],
+            ),
+            ("a key with no identifier", vec![absent_kid]),
+            ("a key with an empty identifier", vec![empty_kid]),
+            (
+                "two keys claiming one identifier",
+                vec![usable.clone(), usable.clone()],
+            ),
+            (
+                "a key of an algorithm the profile does not fix",
+                vec![
+                    serde_json::json!({"kty": "EC", "crv": "P-256", "kid": "es256",
+                    "alg": "ES256",
+                    "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+                    "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}),
+                ],
+            ),
+        ] {
+            let mut config = config("https://evidence.example.org");
+            config.trusted_jwks = JwksDocument { keys };
+            let Err(error) = config.validate() else {
+                panic!("{description} was accepted");
+            };
+            assert_eq!(
+                error,
+                EvidenceClientError::configuration(
+                    "the pinned key set must be one the verifier can use"
+                ),
+                "{description}"
+            );
+        }
     }
 
     #[test]
     fn unusable_bounds_are_refused() {
         assert!(config("https://evidence.example.org")
             .with_max_response_bytes(0)
+            .validate()
+            .is_err());
+        assert!(config("https://evidence.example.org")
+            .with_max_metadata_bytes(0)
             .validate()
             .is_err());
         assert!(config("https://evidence.example.org")

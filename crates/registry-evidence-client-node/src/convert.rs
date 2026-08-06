@@ -440,6 +440,9 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
     if let Some(max_bytes) = optional_u64(object, "maxResponseBytes").map_err(ConfigError::Shape)? {
         config = config.with_max_response_bytes(max_bytes);
     }
+    if let Some(max_bytes) = optional_u64(object, "maxMetadataBytes").map_err(ConfigError::Shape)? {
+        config = config.with_max_metadata_bytes(max_bytes);
+    }
 
     Ok(config)
 }

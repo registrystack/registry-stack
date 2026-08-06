@@ -226,8 +226,13 @@ pub struct EvidenceClient {
 
 #[napi]
 impl EvidenceClient {
-    /// Build a client for one deployment. `trustedJwks` is mandatory; an empty
-    /// key set is refused, exactly as the Rust configuration is.
+    /// Build a client for one deployment. `trustedJwks` is mandatory; a key set
+    /// the verifier could never use is refused, exactly as the Rust
+    /// configuration refuses it.
+    ///
+    /// `maxResponseBytes` bounds the signed response `send` reads.
+    /// `maxMetadataBytes` bounds the documents `discover` and `fetchJwks` read,
+    /// which are neither signed nor verified, and is a separate decision.
     #[napi(constructor)]
     pub fn new(config: serde_json::Value) -> Result<Self> {
         catch_panic("constructing the client", || {
