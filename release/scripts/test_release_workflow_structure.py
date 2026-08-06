@@ -611,7 +611,20 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Deploy to GitHub Pages"
         )
         self.assertEqual(recheck + 1, deployment)
-        self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 1_200_000)
+        self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
+
+        build_steps = document["jobs"]["build"]["steps"]
+        cache = next(
+            step
+            for step in build_steps
+            if step.get("name") == "Cache Registryctl authoring-reference build"
+        )
+        self.assertEqual(
+            cache["uses"],
+            "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+        )
+        self.assertEqual(cache["with"]["key"], "docs-authoring-reference")
+        self.assertTrue(cache["with"]["save-if"])
 
     def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,
