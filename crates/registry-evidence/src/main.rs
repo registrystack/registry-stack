@@ -755,7 +755,13 @@ fn verify_stored_response(
     let document: EvidenceVerificationPolicyDocument =
         serde_norway::from_slice(&read_verification_input(policy_path)?)
             .map_err(|_| VERIFY_MALFORMED)?;
-    let policy = document.into_policy(instant);
+    // A policy stating a time bound the contract forbids is an unusable input
+    // document. Reading it already refuses it; this is the same refusal for the
+    // conversion, and both are the malformed-input class rather than a
+    // verification outcome.
+    let policy = document
+        .try_into_policy(instant)
+        .map_err(|_| VERIFY_MALFORMED)?;
 
     // One policy document, one set of expectations, and one report shape serve
     // both response formats; only the serialization the operator named is
@@ -1636,10 +1642,11 @@ async fn sign_and_verify_fixture_evidence(
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &evidence,
         registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-        std::time::Duration::from_secs(31_536_000),
+        registry_evidence::verifier::MAXIMUM_ASSERTION_LIFETIME_SECONDS,
         issued_at,
-        std::time::Duration::ZERO,
-    );
+        0,
+    )
+    .map_err(|_| CliError("fixture verification policy is outside its contract bounds"))?;
     policy.issued_by = bundle.config.issuer.id.clone();
     policy.provided_by = bundle.config.service.provider_id.clone();
     policy.requirement = requirement.id.clone();
@@ -2878,7 +2885,11 @@ mod tests {
             let policy: EvidenceVerificationPolicyDocument = serde_norway::from_str(&document)
                 .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
             assert_eq!(
-                policy.into_policy(Utc::now()).expected_outputs[0].form,
+                policy
+                    .try_into_policy(Utc::now())
+                    .expect("the fixture policy states bounds the contract allows")
+                    .expected_outputs[0]
+                    .form,
                 expected,
                 "`{written}` parsed as a different form"
             );

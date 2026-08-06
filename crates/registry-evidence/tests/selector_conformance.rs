@@ -6,7 +6,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
@@ -383,10 +382,11 @@ async fn every_selector_profile_runs_the_complete_signed_service_path() {
         let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
             &unverified,
             &request.request_nonce,
-            Duration::from_secs(48 * 60 * 60),
+            48 * 60 * 60,
             Utc::now(),
-            Duration::from_secs(30),
-        );
+            30,
+        )
+        .expect("the transaction states bounds the contract allows");
         policy.issued_by = service.bundle.config.issuer.id.clone();
         policy.provided_by = service.bundle.config.service.provider_id.clone();
         policy.requirement = request.requirement.clone();

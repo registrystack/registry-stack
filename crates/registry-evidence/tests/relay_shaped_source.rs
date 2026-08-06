@@ -18,7 +18,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -491,10 +490,11 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &evidence,
         registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-        Duration::from_secs(31_536_000),
+        31_536_000,
         observed_at,
-        Duration::from_secs(0),
-    );
+        0,
+    )
+    .expect("the fixture policy states bounds the contract allows");
     policy.issued_by = "urn:example:fixture:issuer:authority".to_owned();
     policy.provided_by = "urn:example:fixture:provider:evidence".to_owned();
     policy.requirement = REQUIREMENT.to_owned();

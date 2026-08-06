@@ -1181,7 +1181,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::Duration as StdDuration;
 
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
     use serde_json::json;
@@ -2293,10 +2292,11 @@ mod tests {
             &EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
                 &evidence.request_nonce,
-                StdDuration::from_secs(48 * 60 * 60),
+                48 * 60 * 60,
                 "2026-08-02T00:03:00Z".parse().expect("time"),
-                StdDuration::from_secs(30),
-            ),
+                30,
+            )
+            .expect("the fixture policy states bounds the contract allows"),
         )
         .expect("signed Evidence verifies");
         assert_eq!(

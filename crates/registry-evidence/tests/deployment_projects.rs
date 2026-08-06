@@ -7,7 +7,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use registry_evidence::bundle::{Bundle, DeploymentInputs};
@@ -586,10 +585,11 @@ async fn execute_response(
             let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
                 registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-                Duration::from_secs(31_536_000),
+                31_536_000,
                 issued_at,
-                Duration::from_secs(0),
-            );
+                0,
+            )
+            .expect("the fixture policy states bounds the contract allows");
             policy.issued_by = bundle.config.issuer.id.clone();
             policy.provided_by = bundle.config.service.provider_id.clone();
             policy.requirement = requirement.id.clone();

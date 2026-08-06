@@ -15,7 +15,8 @@ use std::{
 use registry_evidence_verifier::{
     verifier::{
         EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedOutputDocument,
-        ExpectedSubjectDocument,
+        ExpectedSubjectDocument, MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CLOCK_SKEW_SECONDS,
+        MINIMUM_ASSERTION_LIFETIME_SECONDS,
     },
     AssuranceProfile,
 };
@@ -47,11 +48,6 @@ pub const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
 pub const MINIMUM_SELECTOR_INTEGER: i64 = -9_007_199_254_740_991;
 /// Largest selector integer the request contract accepts.
 pub const MAXIMUM_SELECTOR_INTEGER: i64 = 9_007_199_254_740_991;
-/// Longest maximum assertion lifetime a policy may state, per the
-/// verification policy contract the deployment applies.
-pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 31_536_000;
-/// Largest clock skew tolerance a policy may state, per the same contract.
-pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
 /// Largest list cardinality, minimum or maximum, a list-form expected output
 /// may state, per the same contract.
 pub const MAXIMUM_LIST_ITEMS: usize = 64;
@@ -419,8 +415,10 @@ fn validate(spec: &EvidenceRequestSpec) -> Result<(), EvidenceClientError> {
 
     // Ties the message below to the constant, so the constant cannot drift
     // from the number the message states.
+    const _: () = assert!(MINIMUM_ASSERTION_LIFETIME_SECONDS == 1);
     const _: () = assert!(MAXIMUM_ASSERTION_LIFETIME_SECONDS == 31_536_000);
-    if !(1..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&spec.maximum_assertion_lifetime_seconds)
+    if !(MINIMUM_ASSERTION_LIFETIME_SECONDS..=MAXIMUM_ASSERTION_LIFETIME_SECONDS)
+        .contains(&spec.maximum_assertion_lifetime_seconds)
     {
         return Err(EvidenceClientError::configuration(
             "the maximum assertion lifetime must be within 1..=31536000 seconds",

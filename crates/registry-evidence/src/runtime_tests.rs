@@ -59,7 +59,8 @@ use crate::{
     server::{build_app, build_app_at_for_test, build_app_with_metrics, serve_listener_for_test},
     signing::EvidenceSigner,
     verifier::{
-        verify_flattened_jws, verify_sd_jwt_vc, EvidenceVerificationPolicy, ExpectedValueForm,
+        verify_flattened_jws, verify_sd_jwt_vc, EvidenceVerificationPolicy,
+        EvidenceVerificationPolicyDocument, ExpectedValueForm,
     },
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
@@ -2572,10 +2573,11 @@ async fn sd_jwt_format_not_permitted_by_grant() {
     let policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &expected,
         &request.request_nonce,
-        Duration::from_secs(48 * 60 * 60),
+        48 * 60 * 60,
         Utc::now(),
-        Duration::from_secs(30),
-    );
+        30,
+    )
+    .expect("the transaction states bounds the contract allows");
 
     let credential = http
         .post("/v1/evidence")
@@ -2984,8 +2986,8 @@ fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> Str
             .map(|output| json!({"concept": output.concept, "form": expected_form_document(&output.form)}))
             .collect::<Vec<_>>(),
         "revokedKeyIds": policy.revoked_key_ids,
-        "maximumAssertionLifetimeSeconds": policy.maximum_assertion_lifetime.as_secs(),
-        "clockSkewSeconds": policy.clock_skew.as_secs(),
+        "maximumAssertionLifetimeSeconds": policy.maximum_assertion_lifetime().as_secs(),
+        "clockSkewSeconds": policy.clock_skew().as_secs(),
     });
     serde_norway::to_string(&document).expect("the policy document serializes as YAML")
 }
@@ -3114,8 +3116,8 @@ fn verification_policy_stub(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .expect("requirement is loaded");
-    EvidenceVerificationPolicy {
-        assurance_profile: runtime.bundle().config.assurance_profile,
+    EvidenceVerificationPolicyDocument {
+        expected_assurance_profile: runtime.bundle().config.assurance_profile,
         issued_by: runtime.bundle().config.issuer.id.clone(),
         provided_by: runtime.bundle().config.service.provider_id.clone(),
         requirement: request.requirement.clone(),
@@ -3127,10 +3129,11 @@ fn verification_policy_stub(
         expected_subjects: Vec::new(),
         expected_outputs: Vec::new(),
         revoked_key_ids: Vec::new(),
-        maximum_assertion_lifetime: Duration::from_secs(48 * 60 * 60),
-        now: Utc::now(),
-        clock_skew: Duration::from_secs(30),
+        maximum_assertion_lifetime_seconds: 48 * 60 * 60,
+        clock_skew_seconds: 30,
     }
+    .try_into_policy(Utc::now())
+    .expect("the stub policy states bounds the contract allows")
 }
 
 #[tokio::test]
@@ -4648,10 +4651,11 @@ fn verification_policy(
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &evidence,
         &request.request_nonce,
-        Duration::from_secs(48 * 60 * 60),
+        48 * 60 * 60,
         Utc::now(),
-        Duration::from_secs(30),
-    );
+        30,
+    )
+    .expect("the transaction states bounds the contract allows");
     policy.issued_by = runtime.bundle().config.issuer.id.clone();
     policy.provided_by = runtime.bundle().config.service.provider_id.clone();
     policy.requirement = request.requirement.clone();
