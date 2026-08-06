@@ -368,6 +368,15 @@ fn token_provider_from_json(
         .ok_or_else(|| ConversionError::new("`token` must be present"))
         .map_err(ConfigError::Shape)?;
     let token_object = as_object(token, "`token`").map_err(ConfigError::Shape)?;
+    // Before dispatching on which provider is named: selecting the first one
+    // present would let a merge of two authentication configurations, or a
+    // misspelled key left beside a real one, run with a credential the caller
+    // did not choose.
+    if token_object.len() != 1 {
+        return Err(ConfigError::Shape(ConversionError::new(
+            "`token` must carry exactly one of `static` or `privateKeyJwt`",
+        )));
+    }
 
     if let Some(value) = token_object.get("static") {
         let value = value
@@ -833,6 +842,40 @@ mod tests {
             },
         });
         config_from_json(&config_json).expect("the config converts");
+    }
+
+    #[test]
+    fn a_token_naming_more_than_one_provider_is_a_shape_error() {
+        // Selecting the first provider present would let a botched merge of two
+        // authentication configurations run with a credential the caller did
+        // not mean to send, so an over-specified `token` fails closed.
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "token": {
+                "static": "header-safe-token",
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": generated_client_key_json("signing-key-1"),
+                    "audience": "https://issuer.example.org/",
+                },
+            },
+        });
+        assert!(matches!(
+            config_from_json(&config_json),
+            Err(ConfigError::Shape(_))
+        ));
+    }
+
+    #[test]
+    fn a_token_carrying_a_stray_key_beside_a_provider_is_a_shape_error() {
+        let mut config = valid_config_json_with_static_token();
+        config["token"]["privateKyeJwt"] = Value::Null;
+        assert!(matches!(
+            config_from_json(&config),
+            Err(ConfigError::Shape(_))
+        ));
     }
 
     #[test]
