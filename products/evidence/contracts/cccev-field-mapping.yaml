@@ -53,7 +53,7 @@ mapping:
     rule: Audience derived from authenticated authority context.
   Evidence.configurationRevision:
     source: evidence_extension
-    rule: sha256 digest of the complete atomic bundle bytes and layout manifest.
+    rule: sha256 digest of the configuration and artifact closure of the one requirement the assertion answers, not of the whole bundle.
   Evidence.subjects:
     source: evidence_extension
     rule: Closed role-bound, audience-scoped subject bindings; selectors are never included.

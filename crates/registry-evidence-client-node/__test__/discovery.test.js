@@ -18,12 +18,12 @@ const GOLDEN_JWKS = JSON.parse(
 const DEFINITIONS_DOCUMENT = {
   schema: 'registry.evidence-definitions/v1',
   assuranceProfile: 'local',
-  configurationRevision: `sha256:${'0'.repeat(64)}`,
   issuedBy: 'urn:example:node-test:issuer',
   providedBy: 'urn:example:node-test:provider',
   definitions: [
     {
       requirement: 'urn:example:node-test:requirement:status:v1',
+      configurationRevision: `sha256:${'0'.repeat(64)}`,
       kind: 'criterion',
       evidenceType: 'urn:example:node-test:evidence-type:status:v1',
       purpose: 'example-decision',
@@ -71,6 +71,9 @@ test('discover reads a valid definitions document from a stub deployment', async
     assert.equal(document.schema, 'registry.evidence-definitions/v1');
     assert.equal(document.definitions.length, 1);
     assert.equal(document.definitions[0].requirement, 'urn:example:node-test:requirement:status:v1');
+    // The revision a relying party pins is published per definition, so it
+    // reaches the caller from the requirement it belongs to.
+    assert.equal(document.definitions[0].configurationRevision, `sha256:${'0'.repeat(64)}`);
     assert.equal(stub.requests.length, 1);
   } finally {
     await stub.close();

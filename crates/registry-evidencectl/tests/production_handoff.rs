@@ -96,6 +96,11 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     fixture.wait_for_evidence(&mut service);
 
     let token = fixture.access_token();
+    let published_revision = published_configuration_revision(fixture.evidence_port, &token);
+    assert_ne!(
+        published_revision, revision,
+        "an assertion carries its requirement's own revision, not the bundle's"
+    );
     let nonce = URL_SAFE_NO_PAD.encode([0x42_u8; 32]);
     let (status, response) = post_evidence(fixture.evidence_port, &token, &nonce);
     if status != 200 {
@@ -126,7 +131,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 
     let payload = signed_payload(&response);
     assert_eq!(payload["assuranceProfile"], "production");
-    assert_eq!(payload["configurationRevision"], revision);
+    assert_eq!(payload["configurationRevision"], published_revision);
     assert_eq!(payload["supportedValues"][0]["providesValueFor"], CONCEPT);
     assert_eq!(payload["supportedValues"][0]["value"], true);
     let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
@@ -150,7 +155,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         "signed payload retained a source credential"
     );
 
-    fixture.write_verification_policy(&payload, &nonce, &revision);
+    fixture.write_verification_policy(&payload, &nonce, &published_revision);
     assert_success(
         Command::new(evidence)
             .arg("verify")
@@ -251,6 +256,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
     );
     let token = token.trim();
 
+    let published_revision = published_configuration_revision(fixture.evidence_port, token);
     let nonce = URL_SAFE_NO_PAD.encode([0x24_u8; 32]);
     let (status, response) = post_evidence(fixture.evidence_port, token, &nonce);
     assert_eq!(status, 200, "a real Mint token must authorize Evidence");
@@ -259,7 +265,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
         .expect("protect Mint-backed response");
     let payload = signed_payload(&response);
     assert_eq!(payload["assuranceProfile"], "production");
-    assert_eq!(payload["configurationRevision"], revision);
+    assert_eq!(payload["configurationRevision"], published_revision);
     assert_eq!(payload["supportedValues"][0]["providesValueFor"], CONCEPT);
     assert_eq!(payload["supportedValues"][0]["value"], true);
     assert!(
@@ -270,7 +276,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
         "signed payload retained the Mint access token"
     );
 
-    fixture.write_verification_policy(&payload, &nonce, &revision);
+    fixture.write_verification_policy(&payload, &nonce, &published_revision);
     assert_success(
         Command::new(evidence)
             .arg("verify")
@@ -2037,6 +2043,42 @@ fn post_evidence(port: u16, token: &str, nonce: &str) -> (u16, Vec<u8>) {
         .and_then(|value| value.parse::<u16>().ok())
         .expect("HTTP response status");
     (status, response[separator + 4..].to_vec())
+}
+
+/// The configuration revision discovery publishes for the fixture requirement.
+///
+/// It is requirement scoped, so it is not the deployment's bundle revision.
+/// Reading it from discovery keeps the assertion check independent of the
+/// signed payload it is compared against.
+fn published_configuration_revision(port: u16, token: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("Evidence connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .expect("request timeout");
+    write!(
+        stream,
+        "GET /v1/evidence-definitions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    )
+    .expect("discovery request headers");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("response bytes");
+    let separator = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP response separator");
+    let document: Value =
+        serde_json::from_slice(&response[separator + 4..]).expect("discovery document JSON");
+    let definitions = document["definitions"]
+        .as_array()
+        .expect("discovery publishes definitions");
+    let revision = definitions
+        .iter()
+        .find(|definition| definition["requirement"] == REQUIREMENT)
+        .and_then(|definition| definition["configurationRevision"].as_str())
+        .expect("the fixture requirement publishes its own configuration revision")
+        .to_owned();
+    assert!(revision.starts_with("sha256:") && revision.len() == 71);
+    revision
 }
 
 fn signed_payload(response: &[u8]) -> Value {

@@ -33,10 +33,41 @@ JWKS_MEDIA_TYPE = "application/jwk-set+json"
 DEFINITIONS_DOCUMENT = {
     "schema": "registry.evidence-definitions/v1",
     "assuranceProfile": "local",
-    "configurationRevision": "test-revision-1",
     "issuedBy": "https://issuer.example.test",
     "providedBy": "https://provider.example.test",
-    "definitions": [],
+    "definitions": [
+        {
+            "requirement": "urn:example:py-test:requirement:status:v1",
+            # Published per definition, so a relying party pins one requirement
+            # without depending on the rest of the deployment.
+            "configurationRevision": "test-revision-1",
+            "kind": "criterion",
+            "evidenceType": "urn:example:py-test:evidence-type:status:v1",
+            "purpose": "example-decision",
+            "referenceFrameworks": ["urn:example:py-test:framework:status:v1"],
+            "subjects": [
+                {
+                    "role": "subject",
+                    "cardinality": "one",
+                    "selector": {
+                        "profile": "record-lookup-v1",
+                        "valueOrigin": "request",
+                        "fields": [
+                            {
+                                "type": "string",
+                                "name": "record_reference",
+                                "minimumBytes": 1,
+                                "maximumBytes": 200,
+                            }
+                        ],
+                    },
+                }
+            ],
+            "concepts": [
+                {"id": "urn:example:py-test:concept:status-holds", "form": "boolean"}
+            ],
+        }
+    ],
 }
 
 
@@ -63,6 +94,12 @@ class DiscoveryTest(unittest.TestCase):
         self._serve_definitions()
         document = self._client().discover()
         self.assertEqual(document, DEFINITIONS_DOCUMENT)
+        # The revision a relying party pins reaches the caller from the
+        # definition it belongs to, not from the document.
+        self.assertNotIn("configurationRevision", document)
+        self.assertEqual(
+            document["definitions"][0]["configurationRevision"], "test-revision-1"
+        )
 
     def test_the_metadata_bound_governs_discovery_and_the_response_bound_does_not(self):
         """The two bounds answer different questions.

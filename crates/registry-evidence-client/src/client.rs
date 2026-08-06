@@ -1133,7 +1133,7 @@ mod tests {
     /// definitions contract permits.
     fn definitions_json(schema: &str) -> String {
         format!(
-            r#"{{"schema":"{schema}","assuranceProfile":"local","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","issuedBy":"urn:example:client:issuer","providedBy":"urn:example:client:provider","definitions":[]}}"#
+            r#"{{"schema":"{schema}","assuranceProfile":"local","issuedBy":"urn:example:client:issuer","providedBy":"urn:example:client:provider","definitions":[]}}"#
         )
     }
 

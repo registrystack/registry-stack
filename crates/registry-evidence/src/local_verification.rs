@@ -108,6 +108,12 @@ pub async fn prepare_local_verification_context_for_format(
     {
         return Err(LocalVerificationError);
     }
+    // The pinned revision covers this requirement's own closure, so it matches
+    // what the assertion will carry rather than the whole deployment.
+    let configuration_revision = bundle
+        .configuration_revision(&requirement.id)
+        .ok_or(LocalVerificationError)?
+        .to_owned();
 
     let authenticator = Authenticator::from_config(
         &bundle.config.authentication,
@@ -169,7 +175,7 @@ pub async fn prepare_local_verification_context_for_format(
             evidence_type: requirement.evidence_type.clone(),
             purpose: resolved.purpose,
             audience: resolved.audience,
-            configuration_revision: bundle.revision().to_owned(),
+            configuration_revision,
             request_nonce: request.request_nonce.clone(),
             expected_subjects,
             expected_outputs: requirement

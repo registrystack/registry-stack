@@ -25,7 +25,6 @@ pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/
 pub struct EvidenceDefinitionsDocument {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
-    pub configuration_revision: String,
     pub issued_by: String,
     pub provided_by: String,
     pub definitions: Vec<EvidenceDefinition>,
@@ -56,6 +55,10 @@ impl EvidenceDefinitionsDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinition {
     pub requirement: String,
+    /// The revision an assertion for this requirement carries. It covers this
+    /// requirement's own configuration and artifact closure, so pinning it does
+    /// not couple a relying procedure to the rest of the deployment.
+    pub configuration_revision: String,
     pub kind: DefinitionKind,
     pub evidence_type: String,
     pub purpose: String,
@@ -242,12 +245,12 @@ mod tests {
     const DOCUMENT: &str = r#"{
       "schema": "registry.evidence-definitions/v1",
       "assuranceProfile": "local",
-      "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "issuedBy": "urn:example:client:issuer",
       "providedBy": "urn:example:client:provider",
       "definitions": [
         {
           "requirement": "urn:example:client:requirement:status:v1",
+          "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           "kind": "criterion",
           "evidenceType": "urn:example:client:evidence-type:status:v1",
           "purpose": "example-decision",
@@ -343,6 +346,50 @@ mod tests {
             .definitions
             .iter()
             .any(|definition| definition.purpose == "other-decision"));
+    }
+
+    #[test]
+    fn each_definition_carries_its_own_configuration_revision() {
+        // A deployment serves several requirements from one bundle and each
+        // publishes the revision its own assertions carry. A relying procedure
+        // that pinned a document-level value would break whenever an unrelated
+        // requirement's configuration changed, so the field lives here.
+        let mut document = document();
+        let mut other_requirement = document.definitions[0].clone();
+        other_requirement.requirement = "urn:example:client:requirement:other:v1".to_owned();
+        other_requirement.configuration_revision = format!("sha256:{}", "1".repeat(64));
+        document.definitions.push(other_requirement);
+        let round_tripped: EvidenceDefinitionsDocument = serde_json::from_str(
+            &serde_json::to_string(&document).expect("the two requirement document serializes"),
+        )
+        .expect("the two requirement document parses");
+        assert_eq!(
+            round_tripped
+                .definition("urn:example:client:requirement:status:v1")
+                .expect("the first requirement is present")
+                .configuration_revision,
+            format!("sha256:{}", "0".repeat(64))
+        );
+        assert_eq!(
+            round_tripped
+                .definition("urn:example:client:requirement:other:v1")
+                .expect("the second requirement is present")
+                .configuration_revision,
+            format!("sha256:{}", "1".repeat(64))
+        );
+    }
+
+    #[test]
+    fn a_document_level_configuration_revision_is_refused() {
+        // The revision moved from the document to each definition. A deployment
+        // still publishing it at the document level would have a relying party
+        // pin a value no assertion carries, so the closed type refuses it
+        // rather than ignoring it.
+        let document_level = DOCUMENT.replace(
+            r#""assuranceProfile": "local","#,
+            r#""assuranceProfile": "local", "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000","#,
+        );
+        assert!(serde_json::from_str::<EvidenceDefinitionsDocument>(&document_level).is_err());
     }
 
     #[test]

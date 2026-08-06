@@ -217,10 +217,24 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
     .await
     .expect("curl discovery response arrives within three minutes");
     assert_eq!(definitions.definitions.len(), 4);
-    assert_eq!(
-        definitions.configuration_revision,
-        fixture.runtime.bundle().revision()
-    );
+    // Discovery publishes the revision an assertion for that one requirement
+    // will carry, so a relying party pins per requirement and the four
+    // coequal requirements do not share one deployment-wide value.
+    for definition in &definitions.definitions {
+        assert_eq!(
+            Some(definition.configuration_revision.as_str()),
+            fixture
+                .runtime
+                .bundle()
+                .configuration_revision(&definition.requirement)
+        );
+    }
+    let published_revisions: BTreeSet<&str> = definitions
+        .definitions
+        .iter()
+        .map(|definition| definition.configuration_revision.as_str())
+        .collect();
+    assert_eq!(published_revisions.len(), 4);
     let serialized_definitions =
         serde_json::to_string(&definitions).expect("discovery response serializes");
     for prohibited in [
@@ -401,10 +415,15 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     );
     let standard_definitions = standard_discovery.json::<EvidenceDefinitions>();
     assert_eq!(standard_definitions.definitions.len(), 3);
-    assert_eq!(
-        standard_definitions.configuration_revision,
-        fixture.runtime.bundle().revision()
-    );
+    for definition in &standard_definitions.definitions {
+        assert_eq!(
+            Some(definition.configuration_revision.as_str()),
+            fixture
+                .runtime
+                .bundle()
+                .configuration_revision(&definition.requirement)
+        );
+    }
     assert!(standard_definitions
         .definitions
         .iter()
@@ -1146,6 +1165,13 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
     let fixture = acceptance_runtime().await;
     let captured_revision = fixture.runtime.bundle().revision().to_owned();
     let captured_runtime_revision = fixture.runtime.runtime_revision().to_owned();
+    let adult_requirement = adult_request().requirement;
+    let captured_requirement_revision = fixture
+        .runtime
+        .bundle()
+        .configuration_revision(&adult_requirement)
+        .expect("the captured bundle configures the requirement")
+        .to_owned();
     let captured_config = fixture
         .runtime
         .bundle()
@@ -1180,6 +1206,13 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
     .expect("add an unreferenced fallback-like artifact");
 
     assert_eq!(fixture.runtime.bundle().revision(), captured_revision);
+    assert_eq!(
+        fixture
+            .runtime
+            .bundle()
+            .configuration_revision(&adult_requirement),
+        Some(captured_requirement_revision.as_str())
+    );
     assert_eq!(
         fixture.runtime.runtime_revision(),
         captured_runtime_revision
@@ -1216,7 +1249,10 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
         &verification_policy(&fixture.runtime, &request, &serialized),
     )
     .expect("captured-revision assertion verifies");
-    assert_eq!(evidence.configuration_revision, captured_revision);
+    assert_eq!(
+        evidence.configuration_revision,
+        captured_requirement_revision
+    );
     assert_eq!(
         evidence.supported_values[0].value,
         PublicValue::Boolean(true)
@@ -3124,7 +3160,11 @@ fn verification_policy_stub(
         evidence_type: requirement.evidence_type.clone(),
         purpose: request.purpose.clone(),
         audience: EVIDENCE_AUDIENCE.to_owned(),
-        configuration_revision: runtime.bundle().revision().to_owned(),
+        configuration_revision: runtime
+            .bundle()
+            .configuration_revision(&request.requirement)
+            .expect("the loaded requirement has a revision")
+            .to_owned(),
         request_nonce: request.request_nonce.clone(),
         expected_subjects: Vec::new(),
         expected_outputs: Vec::new(),
@@ -4662,7 +4702,11 @@ fn verification_policy(
     policy.evidence_type = requirement.evidence_type.clone();
     policy.purpose = request.purpose.clone();
     policy.audience = EVIDENCE_AUDIENCE.to_owned();
-    policy.configuration_revision = runtime.bundle().revision().to_owned();
+    policy.configuration_revision = runtime
+        .bundle()
+        .configuration_revision(&request.requirement)
+        .expect("the loaded requirement has a revision")
+        .to_owned();
     policy
 }
 

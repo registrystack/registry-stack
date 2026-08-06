@@ -3,13 +3,10 @@ $id: https://registrystack.org/schemas/evidence/definitions-v1.json
 title: Requester-scoped Evidence definitions Version 1
 type: object
 additionalProperties: false
-required: [schema, assuranceProfile, configurationRevision, issuedBy, providedBy, definitions]
+required: [schema, assuranceProfile, issuedBy, providedBy, definitions]
 properties:
   schema: {const: registry.evidence-definitions/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
-  configurationRevision:
-    type: string
-    pattern: '^sha256:[a-f0-9]{64}$'
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
   definitions:
@@ -23,6 +20,7 @@ $defs:
     additionalProperties: false
     required:
       - requirement
+      - configurationRevision
       - kind
       - evidenceType
       - purpose
@@ -31,6 +29,14 @@ $defs:
       - concepts
     properties:
       requirement: {type: string, format: uri, maxLength: 512}
+      configurationRevision:
+        description: >-
+          The revision an assertion for this requirement carries. It covers this
+          requirement's own configuration and artifact closure, so a relying
+          party pins one requirement without depending on the rest of the
+          deployment.
+        type: string
+        pattern: '^sha256:[a-f0-9]{64}$'
       kind: {enum: [criterion, information-requirement, constraint]}
       evidenceType: {type: string, format: uri, maxLength: 512}
       purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}

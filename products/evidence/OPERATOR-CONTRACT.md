@@ -114,8 +114,10 @@ root. Secret ownership and mode requirements remain unchanged: each referenced
 secret is a regular owner-only file accepted by the eventual service identity.
 The bundle and runtime must be non-writable to that identity. The copied
 runtime is target-specific; its revision and bound private-CA bytes are not the
-bundle revision, and signed assertions continue to carry only the bundle
-revision as `configurationRevision`.
+bundle revision, and signed assertions continue to carry only a configuration
+revision as `configurationRevision`. That value is scoped to the one requirement
+the assertion answers, not to the whole deployment, so it is neither the runtime
+revision nor the bundle revision.
 
 Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
@@ -203,14 +205,15 @@ Discovery uses four separately trusted surfaces:
 | Artifact | Purpose | What it does not do |
 |---|---|---|
 | Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
-| Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision. | It performs no provider access, does not grant authority, and is not a global catalog. |
+| Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
 | Static onboarding material | Gives an approved consumer token-acquisition instructions, human descriptions, legal context, endpoint trust, and verifier policy through the existing API catalog, developer portal, configuration repository, or bilateral process. | It is not accepted by the runtime and grants no authority. |
 | Evidence JWKS | Publishes the active and retained public verification keys. | It is not a trust anchor and contains no definition or entitlement metadata. |
 
 Each item in `definitions` is one complete invocable combination, not a
 cartesian product for the client to assemble. It contains:
 
-- exact governed bundle revision plus legal issuer and technical provider;
+- the requirement's own configuration revision plus legal issuer and technical
+  provider;
 - requirement and Evidence Type identifiers;
 - one allowed purpose;
 - output concept identifiers and value forms;
@@ -244,13 +247,15 @@ The publication workflow is:
    governed bundle revision.
 3. Publish the generic OpenAPI and static onboarding material; configure token
    issuance and verifier trust through the same governed process.
-4. Obtain a token, call `GET /v1/evidence-definitions`, and bind the returned
-   `configurationRevision` to the deployment revision expected during rollout.
+4. Obtain a token, call `GET /v1/evidence-definitions`, and bind each returned
+   `configurationRevision` to the requirement it is published under. A relying
+   party pins the requirements it consumes, not the deployment.
 5. Construct requests only from one returned complete shape. Do not combine
    subjects, profiles, purposes, or fields across items.
 6. On a relevant bundle or trust change, update onboarding material and
-   coordinate rollout. Clients observe the new revision through authenticated
-   discovery, not by probing problem responses.
+   coordinate rollout with the relying parties whose requirements changed
+   revision. Clients observe a new revision through authenticated discovery,
+   not by probing problem responses.
 
 Version one does not implement a public, cross-requester, searchable, mutable,
 or federated catalog, a registration editor, or a `describe` CLI command.

@@ -501,7 +501,11 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     policy.evidence_type = "urn:example:fixture:evidence-type:residence-region:v1".to_owned();
     policy.purpose = "fixture-routing".to_owned();
     policy.audience = AUDIENCE.to_owned();
-    policy.configuration_revision = kernel.bundle().revision().to_owned();
+    policy.configuration_revision = kernel
+        .bundle()
+        .configuration_revision(REQUIREMENT)
+        .expect("the requirement has a configuration revision")
+        .to_owned();
     let verified = verify_flattened_jws(&serialized, &jwks, &policy)
         .expect("signed Evidence verifies against the deployment JWKS");
     assert_eq!(verified.supported_values.len(), 1);

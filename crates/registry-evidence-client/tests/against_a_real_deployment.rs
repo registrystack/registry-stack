@@ -232,12 +232,15 @@ async fn discovery_publishes_shapes_this_client_parses_exactly() {
 
     assert_eq!(definitions.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
     assert_eq!(definitions.assurance_profile, AssuranceProfile::Local);
-    assert!(definitions.configuration_revision.starts_with("sha256:"));
     assert_eq!(definitions.definitions.len(), 1);
 
     let definition = definitions
         .definition(REQUIREMENT)
         .expect("the requester is entitled to the fixture requirement");
+    // The revision is published per definition, because that is the scope an
+    // assertion for one requirement carries.
+    assert!(definition.configuration_revision.starts_with("sha256:"));
+    assert_eq!(definition.configuration_revision.len(), 71);
     assert_eq!(definition.kind, DefinitionKind::Criterion);
     assert_eq!(definition.purpose, "fixture-eligibility");
     assert_eq!(definition.subjects.len(), 1);
@@ -678,7 +681,7 @@ fn spec(
         evidence_type: definition.evidence_type.clone(),
         issued_by: definitions.issued_by.clone(),
         provided_by: definitions.provided_by.clone(),
-        configuration_revision: definitions.configuration_revision.clone(),
+        configuration_revision: definition.configuration_revision.clone(),
         expected_assurance_profile: definitions.assurance_profile,
         subjects: definition
             .subjects

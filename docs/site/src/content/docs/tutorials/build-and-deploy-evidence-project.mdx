@@ -175,7 +175,8 @@ evidence --runtime "<candidate>/runtime.yaml" serve
 ```
 
 Route traffic through operator-controlled TLS only after `GET /ready` succeeds. The listener stays
-private. The bundle revision remains the deployed assertion `configurationRevision`.
+private. Each requirement's own configuration revision remains the deployed assertion
+`configurationRevision`.
 
 ## Exercise and verify the HTTP boundary
 

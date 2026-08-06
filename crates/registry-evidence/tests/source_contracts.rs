@@ -1293,7 +1293,11 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         policy.evidence_type = "urn:example:fixture:evidence-type:residence-region:v1".to_owned();
         policy.purpose = "fixture-routing".to_owned();
         policy.audience = "https://relying.invalid/residence-procedure".to_owned();
-        policy.configuration_revision = kernel.bundle().revision().to_owned();
+        policy.configuration_revision = kernel
+            .bundle()
+            .configuration_revision(requirement)
+            .expect("the requirement has a configuration revision")
+            .to_owned();
         let verified = verify_flattened_jws(&serialized, &jwks, &policy)
             .expect("signed residence Evidence verifies under the exact relying policy");
         assert_eq!(
