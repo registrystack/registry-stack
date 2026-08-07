@@ -1,0 +1,78 @@
+fixture: registry.evidence.source-shape.flat-rest/v1
+classification: compatibility-shaped-local-mock
+synthetic_only: true
+server: {base_url: 'http://127.0.0.1:18081', bind: '127.0.0.1:18081'}
+validated_source_definition:
+  transport: http-json
+  baseUrl: http://127.0.0.1:18081
+  posture: source-derived
+  authentication: {kind: static-bearer, tokenRef: secret:file/fixture-flat-rest-token}
+  request:
+    method: POST
+    path: /v1/lookup
+    selectorInputs:
+      - role: subject
+        alternatives:
+          - {profile: opaque-record-v1, fields: [record_reference]}
+          - {profile: opaque-coordinates-v1, fields: [alpha, delta]}
+    prepareScript: adapters/flat-rest-prepare.rhai
+    adapterParameters: {requestedField: fact_code, resultLimit: 2}
+    adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+    preparationLimits:
+      query: forbidden
+      jsonBody: required
+      maximumJsonDepth: 8
+      maximumCollectionItems: 8
+      maximumStringBytes: 512
+      maximumNormalizedBytes: 4096
+    projection: [/total, /result, /results]
+    redirects: deny
+    timeoutMilliseconds: 3000
+    maximumResponseBytes: 65536
+    concurrencyLimit: 4
+  responseSchema: schemas/response.schema.yaml
+  extractScript: adapters/flat-rest.rhai
+  factSchema: schemas/facts.schema.yaml
+request:
+  method: POST
+  path: /v1/lookup
+  query: {}
+  headers:
+    content-type: application/json
+    authorization: static-bearer injected from secret reference; exact value never snapshotted
+  body:
+    selector: {alpha: synthetic-alpha, delta: 42}
+    fields: [fact_code]
+    limit: 2
+  exact_body_keys: [selector, fields, limit]
+  unexpected_request: fail test
+selector_contracts:
+  identifier_only: {profile: opaque-record-v1, prepared_fields: [record_reference]}
+  compound_no_identifier: {profile: opaque-coordinates-v1, prepared_fields: [alpha, delta]}
+  preparation: The reviewed prepare/2 script emits only the selected profile's exact fields beneath body.selector.
+cardinality:
+  zero: responses/no-match.json
+  one: responses/match.json
+  multiple: responses/ambiguous.json
+  requests_after_response: 0
+  maximum_results: 2
+extraction:
+  provider_fields: [fact_code]
+  match_facts: [official_residence_code]
+  missing_fact: responses/missing-fact.json
+  error_envelope: responses/error-envelope.json
+  candidate_material_to_derivation: prohibited
+failures:
+  - {case: http-401, public: dependency_unavailable}
+  - {case: http-403, public: dependency_unavailable}
+  - {case: http-429, public: dependency_unavailable, retry_after: bounded}
+  - {case: http-500, public: dependency_unavailable}
+  - {case: timeout, public: dependency_unavailable}
+  - {case: redirect, expected: reject-without-follow}
+  - {case: invalid-json, public: dependency_unavailable}
+  - {case: wrong-media-type, public: dependency_unavailable}
+  - {case: oversized-response, public: dependency_unavailable}
+  - {case: error-envelope, public: dependency_unavailable}
+redaction_canaries:
+  committed_source_and_selector: [synthetic-alpha, SOURCE-FACT-CANARY-DO-NOT-LOG]
+  runtime_generated_secret_classes: [static-bearer]

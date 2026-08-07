@@ -65,9 +65,32 @@ It then requires these exact results:
 - the valid Zitadel role token returns `200` and exposes the synthetic dataset;
 - a structurally valid token with a changed signature returns
   `401 auth.token_signature_invalid`;
+- the metadata-scoped token is refused at the entity records route with
+  `403 auth.scope_denied`;
+- the same token, remapped to the entity's `smoke_registry:rows` read scope,
+  returns `200` at that route;
+- the record it returns is exactly the authored projection, so the source
+  column `person_id` is absent and only `id` and `display_name` appear;
 - an audience mismatch returns `401 auth.audience_mismatch`;
 - an unaccepted JOSE token type returns `401 auth.malformed_credential`; and
 - a role-object organization-key mismatch returns `403 auth.scope_denied`.
+
+## Source-read evidence
+
+The two `source-read-records` and `source-read-minimized-projection` results
+are the release's only end-to-end proof that a published Relay image reads a
+real source and discloses only what the authored entity declares. The row comes
+from the mounted `records.csv` through the `people_table` snapshot, so a pass
+covers source materialization, the read-scope gate, and field projection
+together.
+
+The projection result names the offending field when it fails and never
+republishes the record, so a failing report stays inside the same evidence
+boundary as a passing one.
+
+Scope separation is the reason the run restarts Relay between the metadata and
+row stages: a single token that carried both scopes could not show that the
+read scope is independently enforced.
 
 Zitadel, the helper, and Relay share Zitadel's network namespace. This keeps the
 HTTP issuer and discovery URL on loopback, which is the only insecure fetch

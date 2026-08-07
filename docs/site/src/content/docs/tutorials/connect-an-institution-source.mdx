@@ -1,0 +1,230 @@
+---
+title: Connect an institution source from OpenAPI
+description: Retain an institution API contract, draft one bounded Evidence Gateway source, add a governed question, and run the editable project locally.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-07"
+doc_type: how-to
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+If this is your first Evidence Gateway project, complete
+[Get your first Evidence Gateway assertion](../first-evidence-assertion/) before adapting an institution
+source. You will build one editable project from an institution's OpenAPI document and use the same
+retained contract for source drafting and local execution. You do not assemble a deployment bundle
+or copy a reference deployment.
+
+## Before you start
+
+You need an OpenAPI 3.0 or 3.1 document for an operation that performs one bounded lookup. The
+operation must let Evidence Gateway distinguish no match, one match, and several matches without paging
+through a registry.
+
+Keep credentials, real responses, and personal data outside the tracked project. Use a sanitized
+response sample only when the OpenAPI document omits a bound that a reviewer can establish.
+
+## Create the authoring project
+
+Retain the OpenAPI document and create disposable local Evidence Gateway keys:
+
+```sh
+evidencectl new institution-evidence \
+  --openapi <institution.openapi.yaml> \
+  --profile local
+cd institution-evidence
+```
+
+The project now contains the retained `source.openapi.yaml` and empty editable directories for
+`selectors`, `sources`, `adapters`, `schemas`, `questions`, and `derivations`. The command does not
+invent a source, question, fixture, or deployment policy.
+
+## Review the available source fields
+
+Inspect one operation without writing files:
+
+```sh
+evidencectl source suggest \
+  --openapi source.openapi.yaml \
+  --operation 'GET /people/{person_id}' \
+  --source-id people \
+  --select /date_of_birth
+```
+
+Use one `--select` for each leaf needed to resolve source cardinality or derive the answer. A
+selection through an array uses `*`, such as `/results/*/date_of_birth`. The assistant reports
+which string, integer, and collection bounds came from OpenAPI and which still require review.
+
+## Write the source draft
+
+Write the reviewed selection into the project. Omit `--openapi`: `--project` always reads the
+retained `source.openapi.yaml`, so a later command cannot draft against a different contract.
+
+```sh
+evidencectl source suggest \
+  --project . \
+  --operation 'GET /people/{person_id}' \
+  --source-id people \
+  --select /date_of_birth
+```
+
+The command writes new files only:
+
+```text
+sources/people.yaml
+adapters/people-prepare.rhai
+adapters/people-extract.rhai
+schemas/people-parameters.schema.yaml
+schemas/people-response.schema.yaml
+schemas/people-facts.schema.yaml
+```
+
+`sources/people.yaml` is an ordinary Version 1 source object, not an intermediate template. The
+schemas and scripts are the same artifacts the generated local bundle will contain. A repeated
+command refuses to overwrite any edited file.
+
+## Define the authorized selector
+
+Create `selectors/person-reference-v1.yaml`:
+
+```yaml
+maximumAggregateBytes: 64
+fields:
+  person_id:
+    type: string
+    minimumBytes: 1
+    maximumBytes: 64
+```
+
+Then edit `sources/people.yaml`. Replace every `review-required` marker and bind the path parameter
+to that selector profile:
+
+```yaml
+transport: http-json
+baseUrl: https://registry.example.com
+posture: field-projected
+authentication:
+  kind: basic
+  usernameRef: secret:file/registry-username
+  passwordRef: secret:file/registry-password
+request:
+  method: GET
+  pathTemplate: /people/{person_id}
+  pathBindings:
+    person_id:
+      from: selector
+      role: person
+      profile: person-reference-v1
+      field: person_id
+  fixedHeaders:
+    - name: Accept
+      value: application/json
+  selectorInputs:
+    - role: person
+      alternatives:
+        - profile: person-reference-v1
+          fields: [person_id]
+  prepareScript: adapters/people-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/people-parameters.schema.yaml
+  preparationLimits:
+    query: allowed
+    jsonBody: forbidden
+    maximumNormalizedBytes: 4096
+  projection: [/date_of_birth]
+  redirects: deny
+  timeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+  concurrencyLimit: 8
+responseSchema: schemas/people-response.schema.yaml
+extractScript: adapters/people-extract.rhai
+factSchema: schemas/people-facts.schema.yaml
+```
+
+The source owns its stable identity, authentication references, selector inputs, HTTP request,
+projection, and source artifacts. Several questions can reference `people`; they do not duplicate
+the source or its selector profile.
+
+For fixed query inputs, put reviewed values in `adapterParameters`, close them in
+`people-parameters.schema.yaml`, and render them in `people-prepare.rhai`. For selector-bound query
+inputs, read only a field declared by `selectorInputs`. The script cannot access credentials,
+caller identity, purpose, or signing keys.
+
+## Store the source credential
+
+Create owner-only files without placing either credential in a command:
+
+```sh
+install -m 600 /dev/null secrets/registry-username
+install -m 600 /dev/null secrets/registry-password
+```
+
+Open each file in your editor and enter one credential value. `secret:file/...` values are logical
+references resolved beneath the project's owner-only `secrets` directory. Evidence Gateway does not read
+credentials from the source YAML, a command argument, a request, or a log.
+
+## Finish extraction and facts
+
+Review `schemas/people-response.schema.yaml` against the institution contract. Keep the object
+closed and retain only the selected fields. Then edit `adapters/people-extract.rhai` so zero,
+one, conflicting, incomplete, and oversized results fail according to the reviewed source
+semantics. Do not select the first array member as a shortcut.
+
+Close `schemas/people-facts.schema.yaml` around only the facts the derivation receives. OpenAPI
+describes transport shape. The institution still owns the combination rule that turns repeated
+source values into one bounded fact or a bounded collection.
+
+## Add a question that uses the source
+
+Create `questions/adult-status.yaml`:
+
+```yaml
+id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  ref: people
+answers:
+  - concept: is_adult
+    type: boolean
+derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+```
+
+Create the named derivation. The function returns a map keyed by the declared concept alias:
+
+```rhai
+fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    let adult_on = add_calendar_years(born, 18);
+    #{is_adult: compare_dates(context.legal_local_date, adult_on) >= 0}
+}
+```
+
+The question governs purpose, subject, concepts, derivation, and disclosure. The source governs
+how Evidence Gateway obtains the fixed facts. This separation lets another question reuse `people`
+without copying its transport or credential policy.
+
+## Run the authored project
+
+Start the local Evidence Gateway and Registry Mint pair:
+
+```sh
+evidencectl dev --detach
+```
+
+`dev` combines the referenced Version 1 source and selector objects with every authored question,
+creates one private local generation, and runs the real `evidence check` gate before serving. A
+missing artifact, unresolved draft marker, invalid secret reference, unbounded schema, or
+inconsistent selector binding stops the generation.
+
+Continue with [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/) after the
+project's source, derivation, and synthetic acceptance cases have been independently reviewed.

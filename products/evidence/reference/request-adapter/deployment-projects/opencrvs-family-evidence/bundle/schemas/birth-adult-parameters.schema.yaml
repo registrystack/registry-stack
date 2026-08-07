@@ -1,0 +1,10 @@
+type: object
+additionalProperties: false
+required: [selectorRole, eventType, registeredStatus, resultLimit, resultOffset, dateField]
+properties:
+  selectorRole: {const: subject}
+  eventType: {const: birth}
+  registeredStatus: {const: REGISTERED}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}
+  dateField: {const: dateOfEvent}

@@ -1,0 +1,51 @@
+# Shape of the projected tracker response, checked before extraction runs.
+# The prepared request asks for page 1 of size 2, so the pager echo is a
+# constant here rather than a comparison the script has to repeat.
+type: object
+additionalProperties: false
+required: [pager, trackedEntities]
+properties:
+  pager:
+    type: object
+    additionalProperties: false
+    required: [page, pageSize, total, pageCount]
+    properties:
+      page:
+        type: integer
+        const: 1
+      pageSize:
+        type: integer
+        const: 2
+      total:
+        type: integer
+        minimum: 0
+        maximum: 2
+      pageCount:
+        type: integer
+        minimum: 0
+        maximum: 1
+  trackedEntities:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [attributes]
+      properties:
+        attributes:
+          type: array
+          minItems: 0
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [attribute, value]
+            properties:
+              attribute:
+                type: string
+                minLength: 1
+                maxLength: 64
+              value:
+                type: string
+                maxLength: 512

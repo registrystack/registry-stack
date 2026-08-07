@@ -1,0 +1,6 @@
+clientId: example-requester-staging
+principal: urn:example:principal:requester
+evidenceAudience: https://relying-party.staging.example.org
+requesterTags: [example-requester]
+keys:
+  - {kty: OKP, crv: Ed25519, alg: EdDSA, kid: example-client-staging-key, x: Sm7nQbtGEU8lau5CDY7OwA5iidN4VwXkyRByi91I3ww}

@@ -20,7 +20,6 @@ use registry_platform_config::{
     verify_config_bundle, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
     ProductAcceptanceProductV1, ProductTrustDomainV1, MAX_MANIFEST_BYTES,
 };
-use registry_platform_crypto::canonicalize_json;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -48,21 +47,16 @@ pub const DEV_SYNTHETIC_SOURCE_ORIGIN: &str = "https://10.89.0.3:8099";
 const DEV_PRIVATE_SUBNET: &str = "10.89.0.0/24";
 const DEV_SYNTHETIC_SOURCE_CA_CONTAINER_PATH: &str =
     "/run/registry/dev-public/synthetic-source-tls.crt";
-const DEV_WORKLOAD_JWKS_CONTAINER_PATH: &str = "/run/registry/dev-public/notary-workload-jwks.json";
 
 const DEV_ROOT: &str = ".registry-stack/dev";
 const RUNTIME_STATE_FILE: &str = "runtime-state.json";
-const REQUEST_CONFIG_FILE: &str = "request.curl";
-const REQUEST_BODY_FILE: &str = "request.json";
 const RECORDS_REQUEST_CONFIG_FILE: &str = "records-request.curl";
 const RECORDS_DENIED_CONFIG_FILE: &str = "records-denied.curl";
-const CALLER_TOKEN_FILE: &str = "caller-token";
 const SYNTHETIC_SOURCE_PLAN_FILE: &str = "synthetic-source-plan.json";
 const SYNTHETIC_SOURCE_PLAN_SCHEMA_V1: &str = "registry.relay.synthetic-source-plan.v1";
 const SYNTHETIC_SOURCE_PLAN_CONTAINER_PATH: &str = "/run/registry/synthetic-source-plan.json";
 const SYNTHETIC_SOURCE_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
 const MAX_RUNTIME_STATE_BYTES: u64 = 256 * 1024;
-const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const MAX_SYNTHETIC_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_COMPOSE_BYTES: u64 = 1024 * 1024;
 const MAX_RUNTIME_PLAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -72,7 +66,6 @@ const MAX_RUNTIME_PLAN_BYTES: u64 = 2 * 1024 * 1024;
 pub(crate) const MAX_LOCAL_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ID_BYTES: usize = 128;
 const DEFAULT_RELAY_PORT: u16 = 4242;
-const DEFAULT_NOTARY_PORT: u16 = 4243;
 const DEFAULT_SHUTDOWN_SECONDS: u16 = 15;
 const MAX_LOG_LINES_PER_PRODUCT: u16 = 500;
 
@@ -126,14 +119,7 @@ pub struct AuthoredDevScenario {
     pub oauth_profile: DevOAuthProfile,
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
-    pub minimized_claim_ids: Vec<String>,
-    /// Binds the request-selected claim values and disclosure semantics without
-    /// persisting those values in the generated runtime plan.
-    pub expected_claim_results_sha256: String,
     pub synthetic_source: Option<AuthoredSyntheticSourcePlan>,
-    /// The compiler-produced governed request. It is intentionally private to
-    /// the owner-only request materializer and is never serialized or logged.
-    pub request_json: Vec<u8>,
 }
 
 impl fmt::Debug for AuthoredDevScenario {
@@ -148,16 +134,10 @@ impl fmt::Debug for AuthoredDevScenario {
             .field("oauth_profile", &self.oauth_profile)
             .field("denial_scenario_id", &self.denial_scenario_id)
             .field("authorized_scenario_id", &self.authorized_scenario_id)
-            .field("minimized_claim_ids", &self.minimized_claim_ids)
-            .field(
-                "expected_claim_results_sha256",
-                &self.expected_claim_results_sha256,
-            )
             .field(
                 "synthetic_source",
                 &self.synthetic_source.as_ref().map(|_| "<redacted>"),
             )
-            .field("request_json", &"<redacted>")
             .finish()
     }
 }
@@ -311,7 +291,6 @@ pub struct AuthoredDevelopment {
     /// projection.
     pub operator_source_binding_present: bool,
     pub relay_port: Option<u16>,
-    pub notary_port: Option<u16>,
 }
 
 /// One validated project-owned snapshot exposed read-only to Relay serve
@@ -340,8 +319,6 @@ pub struct DevRuntimeArtifactInputs {
     pub relay_public_anchor: PathBuf,
     pub relay_consultation_bundle: PathBuf,
     pub relay_consultation_anchor: PathBuf,
-    pub notary_bundle: PathBuf,
-    pub notary_anchor: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -349,7 +326,6 @@ pub(crate) struct VerifiedDevReleaseProjection {
     release_id: String,
     release_tag: String,
     registry_relay_image: String,
-    registry_notary_image: String,
     postgresql_image: String,
     minimum_compose_version: String,
     relay_public_prepare: DevRuntimeActionProjection,
@@ -358,9 +334,6 @@ pub(crate) struct VerifiedDevReleaseProjection {
     relay_consultation_prepare: DevRuntimeActionProjection,
     relay_consultation_initialize: DevRuntimeActionProjection,
     relay_consultation_serve: DevRuntimeActionProjection,
-    notary_prepare: DevRuntimeActionProjection,
-    notary_initialize: DevRuntimeActionProjection,
-    notary_serve: DevRuntimeActionProjection,
     postgresql_serve: DevRuntimeActionProjection,
     postgresql_bootstrap: DevRuntimeActionProjection,
     postgresql_server_environment: Vec<String>,
@@ -368,7 +341,6 @@ pub(crate) struct VerifiedDevReleaseProjection {
     postgresql_operator_files: Vec<DevOperatorFileProjection>,
     relay_public_health_probe: Vec<String>,
     relay_consultation_health_probe: Vec<String>,
-    notary_health_probe: Vec<String>,
     postgresql_health_probe: Vec<String>,
 }
 
@@ -484,7 +456,6 @@ impl VerifiedDevReleaseProjection {
             release_id: lock.signed_payload_sha256().to_string(),
             release_tag: lock.release_tag().to_string(),
             registry_relay_image: images.relay().to_string(),
-            registry_notary_image: images.notary().to_string(),
             postgresql_image: images.postgresql_state_plane().to_string(),
             minimum_compose_version: lock.minimum_compose_version().to_string(),
             relay_public_prepare: runtime
@@ -508,15 +479,6 @@ impl VerifiedDevReleaseProjection {
                 .relay_consultation()
                 .development_serve_action()
                 .into(),
-            notary_prepare: runtime
-                .notary()
-                .development_prepare_state_store_action()
-                .into(),
-            notary_initialize: runtime
-                .notary()
-                .development_initialize_state_action()
-                .into(),
-            notary_serve: runtime.notary().development_serve_action().into(),
             postgresql_serve: runtime.postgresql_state_plane().serve().into(),
             postgresql_bootstrap: runtime.postgresql_state_plane().bootstrap().into(),
             postgresql_server_environment: runtime
@@ -537,7 +499,6 @@ impl VerifiedDevReleaseProjection {
                 .collect(),
             relay_public_health_probe: runtime.relay_public().health_probe().to_vec(),
             relay_consultation_health_probe: runtime.relay_consultation().health_probe().to_vec(),
-            notary_health_probe: runtime.notary().health_probe().to_vec(),
             postgresql_health_probe: runtime.postgresql_state_plane().health_probe().to_vec(),
         }
     }
@@ -551,7 +512,6 @@ impl VerifiedDevReleaseProjection {
         release_id: String,
         release_tag: String,
         registry_relay_image: String,
-        registry_notary_image: String,
         postgresql_image: String,
         minimum_compose_version: String,
     ) -> DevRuntimeResult<Self> {
@@ -566,16 +526,11 @@ impl VerifiedDevReleaseProjection {
             &registry_relay_image,
             "ghcr.io/registrystack/registry-relay",
         )?;
-        validate_image_ref(
-            &registry_notary_image,
-            "ghcr.io/registrystack/registry-notary",
-        )?;
         validate_image_ref(&postgresql_image, "docker.io/library/postgres")?;
         Ok(Self {
             release_id,
             release_tag,
             registry_relay_image,
-            registry_notary_image,
             postgresql_image,
             minimum_compose_version,
             relay_public_prepare: relay_development_action("relay-public", "prepare_state_store"),
@@ -590,9 +545,6 @@ impl VerifiedDevReleaseProjection {
                 "initialize_state",
             ),
             relay_consultation_serve: relay_development_action("relay-consultation", "serve"),
-            notary_prepare: notary_development_action("prepare_state_store"),
-            notary_initialize: notary_development_action("initialize_state"),
-            notary_serve: notary_development_action("serve"),
             postgresql_serve: DevRuntimeActionProjection {
                 command: vec![
                     "postgres".into(),
@@ -664,16 +616,11 @@ impl VerifiedDevReleaseProjection {
                         "REGISTRY_RELAY_RUNTIME_PASSWORD",
                         "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
                         "REGISTRY_RELAY_READER_PASSWORD",
-                        "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
-                        "REGISTRY_NOTARY_RUNTIME_PASSWORD",
-                        "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
-                        "REGISTRY_NOTARY_READER_PASSWORD",
                     ],
                 ),
             ],
             relay_public_health_probe: vec!["registry-relay".into(), "health".into()],
             relay_consultation_health_probe: vec!["registry-relay".into(), "health".into()],
-            notary_health_probe: vec!["registry-notary".into(), "health".into()],
             postgresql_health_probe: vec!["pg_isready".into()],
         })
     }
@@ -751,7 +698,7 @@ pub fn prepare_dev_runtime_plan(
 
     // Credentials are generated before the compiler sees any disposable
     // binding. The compiler receives only their nonsecret public projection
-    // and signs all three closed lanes before Compose is rendered.
+    // and signs both Relay lanes before Compose is rendered.
     let credentials = PreparedDevCredentialClosure::generate(authoring.credential_requirements())
         .map_err(|_| DevRuntimeError::invalid_credentials())?;
     let signed_root = generated_root.join("signed-lanes");
@@ -781,8 +728,6 @@ pub fn prepare_dev_runtime_plan(
         relay_public_anchor: signed.relay_public_anchor,
         relay_consultation_bundle: signed.relay_consultation_bundle,
         relay_consultation_anchor: signed.relay_consultation_anchor,
-        notary_bundle: signed.notary_bundle,
-        notary_anchor: signed.notary_anchor,
     };
 
     let paths = runtime_paths(&canonical_root, environment_id, &runtime_id);
@@ -799,10 +744,6 @@ pub fn prepare_dev_runtime_plan(
                 .development
                 .relay_port
                 .unwrap_or(DEFAULT_RELAY_PORT),
-            notary_port: authoring
-                .development
-                .notary_port
-                .unwrap_or(DEFAULT_NOTARY_PORT),
             synthetic: authoring.development.source_mode == DevSourceMode::Synthetic,
             local_snapshot: authoring.local_snapshot.as_ref(),
             operator_source_secret_env: &authoring.operator_source_secret_env,
@@ -870,7 +811,7 @@ pub fn load_bound_dev_runtime_plan(
     let plan_file = runtime_roots[0].join("runtime-plan.json");
     let bytes = read_owner_only_regular_file(&plan_file, MAX_RUNTIME_PLAN_BYTES)
         .map_err(|_| DevRuntimeError::project_binding())?;
-    let mut plan: DevRuntimePlan =
+    let plan: DevRuntimePlan =
         parse_json_strict(&bytes).map_err(|_| DevRuntimeError::project_binding())?;
     let expected_digest = sha256_uri(canonical_root.to_string_lossy().as_bytes());
     if plan.binding.environment != environment_id
@@ -882,15 +823,6 @@ pub fn load_bound_dev_runtime_plan(
     {
         return Err(DevRuntimeError::project_binding());
     }
-    let request_json =
-        read_owner_only_regular_file(&plan.paths.request_body, MAX_REQUEST_BODY_BYTES as u64)
-            .map_err(|_| DevRuntimeError::project_binding())?;
-    let _: serde_json::Value =
-        parse_json_strict(&request_json).map_err(|_| DevRuntimeError::project_binding())?;
-    if request_json.is_empty() || sha256_uri(&request_json) != plan.request_digest {
-        return Err(DevRuntimeError::project_binding());
-    }
-    plan.request_json = request_json;
     load_bound_state(&plan)?;
     Ok(plan)
 }
@@ -901,8 +833,6 @@ fn runtime_paths(root: &Path, environment_id: &str, runtime_id: &str) -> DevRunt
         state_file: runtime_root.join(RUNTIME_STATE_FILE),
         plan_file: runtime_root.join("runtime-plan.json"),
         credentials: runtime_root.join("credentials"),
-        request_config: runtime_root.join("credentials").join(REQUEST_CONFIG_FILE),
-        request_body: runtime_root.join("credentials").join(REQUEST_BODY_FILE),
         records_request_config: runtime_root
             .join("credentials")
             .join(RECORDS_REQUEST_CONFIG_FILE),
@@ -988,37 +918,7 @@ pub struct DevScenarioPlan {
     pub oauth_profile: DevOAuthProfile,
     pub denial_scenario_id: String,
     pub authorized_scenario_id: String,
-    pub minimized_claim_ids: Vec<String>,
-    /// Value-free commitment checked against the authorized smoke response.
-    pub expected_claim_results_sha256: String,
     pub synthetic_source_origin: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct DevClaimResultExpectation {
-    pub claim_id: String,
-    pub value: serde_json::Value,
-    pub satisfied: Option<bool>,
-    pub disclosure: String,
-}
-
-pub(crate) fn dev_claim_results_commitment(
-    mut results: Vec<DevClaimResultExpectation>,
-) -> Result<String, ()> {
-    results.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
-    if results.is_empty()
-        || results
-            .windows(2)
-            .any(|pair| pair[0].claim_id == pair[1].claim_id)
-    {
-        return Err(());
-    }
-    let canonical = canonicalize_json(&serde_json::json!({
-        "schema": "registryctl.dev_claim_results_commitment.v1",
-        "results": results,
-    }))
-    .map_err(|_| ())?;
-    Ok(sha256_uri(&canonical))
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -1026,7 +926,6 @@ pub(crate) fn dev_claim_results_commitment(
 pub enum DevWorkloadId {
     RelayPublic,
     RelayConsultation,
-    Notary,
     Postgresql,
     SyntheticSource,
 }
@@ -1036,7 +935,6 @@ impl DevWorkloadId {
         match self {
             Self::RelayPublic => "registry-relay-public",
             Self::RelayConsultation => "registry-relay-consultation",
-            Self::Notary => "registry-notary",
             Self::Postgresql => "registry-postgres",
             Self::SyntheticSource => "registry-synthetic-source",
         }
@@ -1129,8 +1027,6 @@ pub struct DevRuntimePaths {
     pub state_file: PathBuf,
     pub plan_file: PathBuf,
     pub credentials: PathBuf,
-    pub request_config: PathBuf,
-    pub request_body: PathBuf,
     pub records_request_config: PathBuf,
     pub records_denied_config: PathBuf,
     pub synthetic_source_plan: PathBuf,
@@ -1145,7 +1041,6 @@ pub struct DevRuntimePlan {
     pub release_tag: String,
     pub minimum_compose_version: String,
     pub compose_digest: String,
-    pub request_digest: String,
     pub records_request_digest: Option<String>,
     pub local_snapshot_digest: Option<String>,
     pub source_mode: DevSourceMode,
@@ -1154,8 +1049,6 @@ pub struct DevRuntimePlan {
     pub lifecycle: DevLifecycleBindings,
     pub paths: DevRuntimePaths,
     pub artifacts: DevRuntimeArtifactInputs,
-    #[serde(skip)]
-    request_json: Vec<u8>,
     #[serde(skip)]
     records_request: Option<AuthoredRecordsRequest>,
     #[serde(skip)]
@@ -1176,7 +1069,6 @@ impl fmt::Debug for DevRuntimePlan {
             .field("release_tag", &self.release_tag)
             .field("minimum_compose_version", &self.minimum_compose_version)
             .field("compose_digest", &self.compose_digest)
-            .field("request_digest", &self.request_digest)
             .field("records_request_digest", &self.records_request_digest)
             .field("local_snapshot_digest", &self.local_snapshot_digest)
             .field("source_mode", &self.source_mode)
@@ -1185,7 +1077,6 @@ impl fmt::Debug for DevRuntimePlan {
             .field("lifecycle", &self.lifecycle)
             .field("paths", &self.paths)
             .field("artifacts", &self.artifacts)
-            .field("request_json", &"<redacted>")
             .field(
                 "records_request",
                 &self.records_request.as_ref().map(|_| "<redacted>"),
@@ -1372,7 +1263,6 @@ impl DevRuntimePlan {
             validate_authored_local_snapshot(&canonical_root, snapshot)?;
         }
         let scenario = select_authored_scenario(&input.development, &input.scenarios)?;
-        let request_digest = sha256_uri(&scenario.request_json);
         let records_request_digest = input.records_request.as_ref().map(|request| {
             sha256_uri(
                 &[
@@ -1397,12 +1287,11 @@ impl DevRuntimePlan {
             ));
         }
         let relay_port = input.development.relay_port.unwrap_or(DEFAULT_RELAY_PORT);
-        let notary_port = input.development.notary_port.unwrap_or(DEFAULT_NOTARY_PORT);
-        if relay_port == 0 || notary_port == 0 || relay_port == notary_port {
+        if relay_port == 0 {
             return Err(DevRuntimeError::new(
                 DevFailureCategory::InvalidPlan,
-                "development loopback ports must be non-zero and distinct",
-                "author distinct development.relay_port and development.notary_port values",
+                "development Relay loopback port must be non-zero",
+                "author a non-zero development.relay_port value",
             ));
         }
 
@@ -1425,8 +1314,6 @@ impl DevRuntimePlan {
             state_file: runtime_root.join(RUNTIME_STATE_FILE),
             plan_file: runtime_root.join("runtime-plan.json"),
             credentials: runtime_root.join("credentials"),
-            request_config: runtime_root.join("credentials").join(REQUEST_CONFIG_FILE),
-            request_body: runtime_root.join("credentials").join(REQUEST_BODY_FILE),
             records_request_config: runtime_root
                 .join("credentials")
                 .join(RECORDS_REQUEST_CONFIG_FILE),
@@ -1464,8 +1351,6 @@ impl DevRuntimePlan {
             oauth_profile: scenario.oauth_profile,
             denial_scenario_id: scenario.denial_scenario_id.clone(),
             authorized_scenario_id: scenario.authorized_scenario_id.clone(),
-            minimized_claim_ids: scenario.minimized_claim_ids.clone(),
-            expected_claim_results_sha256: scenario.expected_claim_results_sha256.clone(),
             synthetic_source_origin: (input.development.source_mode == DevSourceMode::Synthetic)
                 .then(|| DEV_SYNTHETIC_SOURCE_ORIGIN.to_string()),
         };
@@ -1478,7 +1363,6 @@ impl DevRuntimePlan {
             &credential_files,
             DevWorkloadBuildOptions {
                 relay_port,
-                notary_port,
                 synthetic: input.development.source_mode == DevSourceMode::Synthetic,
                 local_snapshot: input.local_snapshot.as_ref(),
                 operator_source_secret_env: &input.operator_source_secret_env,
@@ -1492,7 +1376,6 @@ impl DevRuntimePlan {
             log_services: vec![
                 DevWorkloadId::RelayPublic,
                 DevWorkloadId::RelayConsultation,
-                DevWorkloadId::Notary,
                 DevWorkloadId::SyntheticSource,
             ]
             .into_iter()
@@ -1529,7 +1412,6 @@ impl DevRuntimePlan {
             lifecycle: &lifecycle,
             artifacts: &artifacts,
             compose_digest: &compose_digest,
-            request_digest: &request_digest,
             records_request_digest: records_request_digest.as_deref(),
             local_snapshot_digest: local_snapshot_digest.as_deref(),
             synthetic_source_plan: synthetic_source_plan.as_ref(),
@@ -1542,7 +1424,6 @@ impl DevRuntimePlan {
             release_tag: input.release.release_tag,
             minimum_compose_version: input.release.minimum_compose_version,
             compose_digest,
-            request_digest,
             records_request_digest,
             local_snapshot_digest,
             source_mode: input.development.source_mode,
@@ -1551,7 +1432,6 @@ impl DevRuntimePlan {
             lifecycle,
             paths,
             artifacts,
-            request_json: scenario.request_json.clone(),
             records_request: input.records_request,
             synthetic_source_plan,
             credentials: Some(input.credentials),
@@ -1571,13 +1451,6 @@ impl DevRuntimePlan {
             .into_iter()
             .map(|endpoint| format!("http://{endpoint}"))
             .collect()
-    }
-
-    pub fn evidence_request_command(&self) -> String {
-        format!(
-            "curl --config {}",
-            shell_quote_path(&self.paths.request_config)
-        )
     }
 
     pub fn records_request_command(&self) -> Option<String> {
@@ -1616,20 +1489,6 @@ impl DevRuntimePlan {
             refs.insert(workload.image.as_str());
         }
         refs.into_iter().collect()
-    }
-
-    fn caller_endpoint(&self) -> DevRuntimeResult<SocketAddr> {
-        self.workloads
-            .iter()
-            .find(|workload| workload.id == DevWorkloadId::Notary)
-            .and_then(|workload| workload.host_endpoint)
-            .ok_or_else(|| {
-                DevRuntimeError::new(
-                    DevFailureCategory::InvalidPlan,
-                    "development plan has no public Notary endpoint",
-                    "rebuild the development runtime plan",
-                )
-            })
     }
 
     fn relay_public_endpoint(&self) -> DevRuntimeResult<SocketAddr> {
@@ -1782,7 +1641,11 @@ fn validate_credential_projection(
     };
     if !source_matches
         || !file_shape_matches
-        || files.root != files.caller_token.parent().unwrap_or(Path::new(""))
+        || files.root
+            != files
+                .postgres_admin_password
+                .parent()
+                .unwrap_or(Path::new(""))
     {
         return Err(DevRuntimeError::invalid_credentials());
     }
@@ -1867,38 +1730,6 @@ fn select_authored_scenario<'a>(
             DevFailureCategory::InvalidPlan,
             "denial and authorized smoke scenario ids must be distinct",
             "author distinct denial and authorized smoke scenarios",
-        ));
-    }
-    if selected.request_json.is_empty() || selected.request_json.len() > MAX_REQUEST_BODY_BYTES {
-        return Err(DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "compiled local request exceeds its closed byte contract",
-            "reduce the authored development request and rebuild",
-        ));
-    }
-    let _: serde_json::Value = parse_json_strict(&selected.request_json).map_err(|_| {
-        DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "compiled local request is not strict JSON",
-            "fix the authored fixture request and rebuild",
-        )
-    })?;
-    let mut claims = BTreeSet::new();
-    for claim in &selected.minimized_claim_ids {
-        validate_id("minimized claim id", claim)?;
-        if !claims.insert(claim) {
-            return Err(DevRuntimeError::new(
-                DevFailureCategory::InvalidPlan,
-                "minimized claim ids must be unique",
-                "remove the duplicate expected claim id",
-            ));
-        }
-    }
-    if validate_sha256(&selected.expected_claim_results_sha256).is_err() {
-        return Err(DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "expected development claim result commitment is invalid",
-            "rebuild the development plan from a valid authored fixture",
         ));
     }
     Ok(selected)
@@ -2199,7 +2030,6 @@ fn build_workloads(
 ) -> DevRuntimeResult<Vec<DevWorkloadPlan>> {
     let DevWorkloadBuildOptions {
         relay_port,
-        notary_port,
         synthetic,
         local_snapshot,
         operator_source_secret_env,
@@ -2289,46 +2119,6 @@ fn build_workloads(
             hardening: None,
         },
         DevWorkloadPlan {
-            id: DevWorkloadId::Notary,
-            image: release.registry_notary_image.clone(),
-            acceptance_identity: Some(identity(
-                ProductAcceptanceLaneV1::Notary,
-                ProductAcceptanceProductV1::RegistryNotary,
-                "notary",
-            )),
-            host_endpoint: Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                notary_port,
-            )),
-            prepare_state_store: Some(product_action(
-                DevWorkloadId::Notary,
-                "prepare-state-store",
-                &release.notary_prepare,
-                artifacts,
-                paths,
-                credential_files,
-            )?),
-            initialize_state: Some(product_action(
-                DevWorkloadId::Notary,
-                "initialize-state",
-                &release.notary_initialize,
-                artifacts,
-                paths,
-                credential_files,
-            )?),
-            command: release.notary_serve.command.clone(),
-            health_probe: release.notary_health_probe.clone(),
-            environment_passthrough: Vec::new(),
-            mounts: product_action_mounts(
-                DevWorkloadId::Notary,
-                &release.notary_serve,
-                artifacts,
-                paths,
-                credential_files,
-            )?,
-            hardening: None,
-        },
-        DevWorkloadPlan {
             id: DevWorkloadId::Postgresql,
             image: release.postgresql_image.clone(),
             acceptance_identity: None,
@@ -2342,14 +2132,6 @@ fn build_workloads(
             hardening: Some(release.postgresql_hardening.clone()),
         },
     ];
-    let consultation = workloads
-        .iter_mut()
-        .find(|workload| workload.id == DevWorkloadId::RelayConsultation)
-        .ok_or_else(DevRuntimeError::image_lock)?;
-    consultation.mounts.push(read_only_mount(
-        &credential_files.workload_jwks,
-        DEV_WORKLOAD_JWKS_CONTAINER_PATH,
-    ));
     if let Some(source) = &credential_files.source {
         let consultation = workloads
             .iter_mut()
@@ -2411,7 +2193,6 @@ fn build_workloads(
 
 struct DevWorkloadBuildOptions<'a> {
     relay_port: u16,
-    notary_port: u16,
     synthetic: bool,
     local_snapshot: Option<&'a AuthoredLocalSnapshot>,
     operator_source_secret_env: &'a [String],
@@ -2434,7 +2215,6 @@ fn product_environment_file<'a>(
     let expected_environment = match workload {
         DevWorkloadId::RelayPublic => "relay-public-environment",
         DevWorkloadId::RelayConsultation => "relay-consultation-environment",
-        DevWorkloadId::Notary => "notary-environment",
         DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
             return Err(DevRuntimeError::image_lock());
         }
@@ -2461,9 +2241,6 @@ fn product_environment_file<'a>(
         (DevWorkloadId::RelayConsultation, Some("serve" | "verify_state")) => {
             Ok(&files.relay_consultation_serve)
         }
-        (DevWorkloadId::Notary, Some("prepare_state_store")) => Ok(&files.notary_prepare),
-        (DevWorkloadId::Notary, Some("initialize_state")) => Ok(&files.notary_initialize),
-        (DevWorkloadId::Notary, Some("serve" | "verify_state")) => Ok(&files.notary_serve),
         _ => Err(DevRuntimeError::image_lock()),
     }
 }
@@ -2474,8 +2251,6 @@ fn product_secret_path<'a>(
 ) -> DevRuntimeResult<&'a Path> {
     match file_id {
         "postgresql-tls-certificate" => Ok(&files.postgres_tls_certificate),
-        "notary-relay-workload-credential" => Ok(&files.workload_token),
-        "notary-signing-key" => Ok(&files.notary_signing_key),
         _ => Err(DevRuntimeError::image_lock()),
     }
 }
@@ -2491,7 +2266,6 @@ fn product_artifact_mount(
             let path = match workload {
                 DevWorkloadId::RelayPublic => &artifacts.relay_public_bundle,
                 DevWorkloadId::RelayConsultation => &artifacts.relay_consultation_bundle,
-                DevWorkloadId::Notary => &artifacts.notary_bundle,
                 DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
                     return Err(DevRuntimeError::image_lock());
                 }
@@ -2502,7 +2276,6 @@ fn product_artifact_mount(
             let path = match workload {
                 DevWorkloadId::RelayPublic => &artifacts.relay_public_anchor,
                 DevWorkloadId::RelayConsultation => &artifacts.relay_consultation_anchor,
-                DevWorkloadId::Notary => &artifacts.notary_anchor,
                 DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
                     return Err(DevRuntimeError::image_lock());
                 }
@@ -2888,7 +2661,6 @@ fn compose_service(
         }
         let container_port = match workload {
             DevWorkloadId::RelayPublic => 8080,
-            DevWorkloadId::Notary => 8081,
             DevWorkloadId::RelayConsultation
             | DevWorkloadId::Postgresql
             | DevWorkloadId::SyntheticSource => {
@@ -2936,7 +2708,6 @@ const fn private_ipv4_address(workload: DevWorkloadId) -> &'static str {
         DevWorkloadId::SyntheticSource => "10.89.0.3",
         DevWorkloadId::RelayConsultation => "10.89.0.4",
         DevWorkloadId::RelayPublic => "10.89.0.5",
-        DevWorkloadId::Notary => "10.89.0.6",
     }
 }
 
@@ -3003,15 +2774,6 @@ fn product_action(
     test,
     allow(dead_code, reason = "used by direct-module integration tests")
 )]
-fn notary_development_action(action: &str) -> DevRuntimeActionProjection {
-    test_development_action("registry-notary", "notary", action)
-}
-
-#[cfg(test)]
-#[cfg_attr(
-    test,
-    allow(dead_code, reason = "used by direct-module integration tests")
-)]
 fn test_development_action(binary: &str, lane: &str, action: &str) -> DevRuntimeActionProjection {
     let mut command = vec![binary.to_string(), "development-action".to_string()];
     if binary == "registry-relay" {
@@ -3045,19 +2807,6 @@ fn test_development_action(binary: &str, lane: &str, action: &str) -> DevRuntime
             "postgresql-tls-certificate",
             "/run/secrets/postgresql-ca.pem",
         ));
-    }
-    if action == "serve" {
-        match lane {
-            "relay-public" | "relay-consultation" => {}
-            "notary" => secret_files.extend([
-                secret(
-                    "notary-relay-workload-credential",
-                    "/run/secrets/relay-workload-token",
-                ),
-                secret("notary-signing-key", "/run/secrets/notary-signing-key.jwk"),
-            ]),
-            _ => unreachable!(),
-        }
     }
     DevRuntimeActionProjection {
         command,
@@ -3134,11 +2883,6 @@ fn validate_development_trust_material(
             &artifacts.relay_consultation_bundle,
             &artifacts.relay_consultation_anchor,
         ),
-        (
-            DevWorkloadId::Notary,
-            &artifacts.notary_bundle,
-            &artifacts.notary_anchor,
-        ),
     ];
     for (workload_id, bundle, anchor_path) in lanes {
         let expected = workloads
@@ -3200,11 +2944,9 @@ pub struct DevRuntimeStateV1 {
     pub compose_project: String,
     pub compose_file: PathBuf,
     pub compose_digest: String,
-    pub request_digest: String,
     pub generated_artifact_root: PathBuf,
     pub plan_file: PathBuf,
     pub source_mode: DevSourceMode,
-    pub request_config: PathBuf,
     pub workloads: Vec<DevWorkloadId>,
 }
 
@@ -3217,7 +2959,6 @@ impl DevRuntimeStateV1 {
             compose_project: plan.lifecycle.compose_project.clone(),
             compose_file: plan.lifecycle.compose_file.clone(),
             compose_digest: plan.compose_digest.clone(),
-            request_digest: plan.request_digest.clone(),
             generated_artifact_root: plan
                 .artifacts
                 .compose_file
@@ -3226,7 +2967,6 @@ impl DevRuntimeStateV1 {
                 .to_path_buf(),
             plan_file: plan.paths.plan_file.clone(),
             source_mode: plan.source_mode,
-            request_config: plan.paths.request_config.clone(),
             workloads: plan.lifecycle.status_services.clone(),
         }
     }
@@ -3237,10 +2977,8 @@ impl DevRuntimeStateV1 {
             || self.compose_project != plan.lifecycle.compose_project
             || self.compose_file != plan.lifecycle.compose_file
             || self.compose_digest != plan.compose_digest
-            || self.request_digest != plan.request_digest
             || self.plan_file != plan.paths.plan_file
             || self.source_mode != plan.source_mode
-            || self.request_config != plan.paths.request_config
             || self.workloads != plan.lifecycle.status_services
         {
             return Err(DevRuntimeError::project_binding());
@@ -3329,10 +3067,8 @@ pub struct DevStatusReport {
     pub workloads: Vec<DevWorkloadStatus>,
     pub source_mode: DevSourceMode,
     pub relay_api_url: String,
-    pub evidence_api_url: String,
     pub records_denied_command: Option<String>,
     pub records_request_command: Option<String>,
-    pub evidence_request_command: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3387,8 +3123,15 @@ impl DevSmokeReportV1 {
         if self.schema_version != DEV_SMOKE_REPORT_SCHEMA_V1
             || self.project != plan.binding.project
             || self.environment != plan.binding.environment
-            || self.results.len() != 2
         {
+            return Err(DevRuntimeError::smoke());
+        }
+        if plan.records_request.is_none() {
+            return (self.results.is_empty() && self.passed)
+                .then_some(())
+                .ok_or_else(DevRuntimeError::smoke);
+        }
+        if self.results.len() != 2 {
             return Err(DevRuntimeError::smoke());
         }
         let denial = self.results.iter().find(|result| {
@@ -3405,28 +3148,13 @@ impl DevSmokeReportV1 {
         let Some(authorized) = authorized else {
             return Err(DevRuntimeError::smoke());
         };
-        let expected_token_delta = match plan.scenario.oauth_profile {
-            DevOAuthProfile::None => 0,
-            DevOAuthProfile::Oauth2Bearer | DevOAuthProfile::Oauth2BearerNoExpiry => 1,
-        };
-        let counters_match = match plan.source_mode {
-            DevSourceMode::Synthetic => {
-                denial.token_counter_delta == Some(0)
-                    && denial.source_counter_delta == Some(0)
-                    && authorized.token_counter_delta == Some(expected_token_delta)
-                    && authorized.source_counter_delta == Some(1)
-            }
-            DevSourceMode::OperatorBound | DevSourceMode::LocalSnapshot => {
-                denial.token_counter_delta.is_none()
-                    && denial.source_counter_delta.is_none()
-                    && authorized.token_counter_delta.is_none()
-                    && authorized.source_counter_delta.is_none()
-            }
-        };
-        if !counters_match || !denial.minimized_claim_ids.is_empty() || !denial.passed {
-            return Err(DevRuntimeError::smoke());
-        }
-        if authorized.minimized_claim_ids != plan.scenario.minimized_claim_ids
+        if denial.token_counter_delta.is_some()
+            || denial.source_counter_delta.is_some()
+            || authorized.token_counter_delta.is_some()
+            || authorized.source_counter_delta.is_some()
+            || !denial.minimized_claim_ids.is_empty()
+            || !authorized.minimized_claim_ids.is_empty()
+            || !denial.passed
             || !authorized.passed
             || !self.passed
         {
@@ -3440,11 +3168,9 @@ impl DevSmokeReportV1 {
 pub struct DevStartupReport {
     pub endpoints: Vec<SocketAddr>,
     pub relay_api_url: String,
-    pub evidence_api_url: String,
     pub source_mode: DevSourceMode,
     pub records_denied_command: Option<String>,
     pub records_request_command: Option<String>,
-    pub evidence_request_command: String,
     pub smoke_command: String,
     pub logs_command: String,
     pub down_command: String,
@@ -3595,53 +3321,37 @@ impl DockerComposeBackend {
             .filter(|workload| workload.acceptance_identity.is_some())
     }
 
-    fn synthetic_counters(state: &DevRuntimeStateV1) -> DevRuntimeResult<SyntheticSourceCounters> {
-        let output = Self::compose_success(
-            state,
-            [
-                "exec".to_string(),
-                "-T".to_string(),
-                DevWorkloadId::SyntheticSource.compose_service().to_string(),
-                "registry-relay".to_string(),
-                "synthetic-source".to_string(),
-                "probe".to_string(),
-                "--plan".to_string(),
-                SYNTHETIC_SOURCE_PLAN_CONTAINER_PATH.to_string(),
-            ],
-        )?;
-        parse_json_strict(&output.stdout).map_err(|_| DevRuntimeError::backend_contract())
-    }
-
-    fn evaluate(
+    fn request_records(
         plan: &DevRuntimePlan,
         authorized: bool,
     ) -> DevRuntimeResult<(DevSmokeStatus, Vec<String>)> {
-        let endpoint = plan.caller_endpoint()?;
-        let url = format!("http://{endpoint}/v1/evaluations");
+        let records = plan
+            .records_request
+            .as_ref()
+            .ok_or_else(DevRuntimeError::smoke)?;
+        let endpoint = plan.relay_public_endpoint()?;
+        let url = format!(
+            "http://{endpoint}/v1/datasets/{}/entities/{}/records/{}",
+            encode_path_segment(&records.dataset_id),
+            encode_path_segment(&records.entity_id),
+            encode_path_segment(&records.record_id),
+        );
         let agent = ureq::AgentBuilder::new().build();
-        let mut request = agent.post(&url).set("Content-Type", "application/json");
+        let mut request = agent.get(&url).set("Data-Purpose", &records.purpose);
         if authorized {
-            let token = read_owner_only_regular_file(
-                &plan.paths.credentials.join(CALLER_TOKEN_FILE),
-                16 * 1024,
-            )
-            .map_err(|_| DevRuntimeError::smoke())?;
+            let token_path = plan
+                .prepared_credential_files()?
+                .relay_match_token
+                .as_ref()
+                .ok_or_else(DevRuntimeError::smoke)?;
+            let token = read_owner_only_regular_file(token_path, 16 * 1024)
+                .map_err(|_| DevRuntimeError::smoke())?;
             let token = std::str::from_utf8(&token).map_err(|_| DevRuntimeError::smoke())?;
             request = request.set("Authorization", &format!("Bearer {token}"));
         }
-        match request.send_bytes(&plan.request_json) {
+        match request.call() {
             Ok(response) if authorized && (200..300).contains(&response.status()) => {
-                let mut body = Vec::new();
-                response
-                    .into_reader()
-                    .take((MAX_REQUEST_BODY_BYTES + 1) as u64)
-                    .read_to_end(&mut body)
-                    .map_err(|_| DevRuntimeError::smoke())?;
-                if body.len() > MAX_REQUEST_BODY_BYTES {
-                    return Err(DevRuntimeError::smoke());
-                }
-                let claim_ids = validate_authorized_evaluation_response(plan, &body)?;
-                Ok((DevSmokeStatus::Authorized, claim_ids))
+                Ok((DevSmokeStatus::Authorized, Vec::new()))
             }
             Err(ureq::Error::Status(status, _)) if !authorized && matches!(status, 401 | 403) => {
                 Ok((DevSmokeStatus::Denied, Vec::new()))
@@ -3649,64 +3359,6 @@ impl DockerComposeBackend {
             _ => Err(DevRuntimeError::smoke()),
         }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DevEvaluationResponse {
-    results: Vec<registry_notary_core::ClaimResultView>,
-}
-
-pub(crate) fn validate_authorized_evaluation_response(
-    plan: &DevRuntimePlan,
-    body: &[u8],
-) -> DevRuntimeResult<Vec<String>> {
-    let response: DevEvaluationResponse =
-        parse_json_strict(body).map_err(|_| DevRuntimeError::smoke())?;
-    // The typed response intentionally represents JSON null as None, but the
-    // wire contract requires these fields to be present even when they are null.
-    let wire: serde_json::Value = parse_json_strict(body).map_err(|_| DevRuntimeError::smoke())?;
-    let wire_results = wire
-        .get("results")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(DevRuntimeError::smoke)?;
-    if wire_results.len() != response.results.len()
-        || wire_results.iter().any(|result| {
-            result.as_object().is_none_or(|object| {
-                !object.contains_key("value")
-                    || !object.contains_key("satisfied")
-                    || !object.contains_key("disclosure")
-            })
-        })
-    {
-        return Err(DevRuntimeError::smoke());
-    }
-    let mut claim_ids = response
-        .results
-        .iter()
-        .map(|result| result.claim_id.clone())
-        .collect::<Vec<_>>();
-    claim_ids.sort();
-    if claim_ids != plan.scenario.minimized_claim_ids {
-        return Err(DevRuntimeError::smoke());
-    }
-    let observed_commitment = dev_claim_results_commitment(
-        response
-            .results
-            .into_iter()
-            .map(|result| DevClaimResultExpectation {
-                claim_id: result.claim_id,
-                value: result.value.unwrap_or(serde_json::Value::Null),
-                satisfied: result.satisfied,
-                disclosure: result.disclosure,
-            })
-            .collect(),
-    )
-    .map_err(|_| DevRuntimeError::smoke())?;
-    if observed_commitment != plan.scenario.expected_claim_results_sha256 {
-        return Err(DevRuntimeError::smoke());
-    }
-    Ok(claim_ids)
 }
 
 pub(crate) fn supporting_up_operation(services: Vec<String>) -> Vec<String> {
@@ -3719,13 +3371,6 @@ pub(crate) fn supporting_up_operation(services: Vec<String>) -> Vec<String> {
     ];
     operation.extend(services);
     operation
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SyntheticSourceCounters {
-    token_requests: u64,
-    source_requests: u64,
 }
 
 #[derive(Deserialize)]
@@ -3998,77 +3643,37 @@ impl DevRuntimeBackend for DockerComposeBackend {
     fn smoke(
         &mut self,
         plan: &DevRuntimePlan,
-        state: &DevRuntimeStateV1,
+        _state: &DevRuntimeStateV1,
     ) -> DevRuntimeResult<DevSmokeReportV1> {
-        if plan.source_mode != DevSourceMode::Synthetic {
-            let (denial_status, denial_claims) = Self::evaluate(plan, false)?;
-            let (authorized_status, authorized_claims) = Self::evaluate(plan, true)?;
-            return Ok(DevSmokeReportV1 {
-                schema_version: DEV_SMOKE_REPORT_SCHEMA_V1.to_string(),
-                project: plan.binding.project.clone(),
-                environment: plan.binding.environment.clone(),
-                results: vec![
-                    DevSmokeScenarioResult {
-                        scenario_id: plan.lifecycle.smoke_denial_scenario.clone(),
-                        status: denial_status,
-                        token_counter_delta: None,
-                        source_counter_delta: None,
-                        minimized_claim_ids: denial_claims,
-                        passed: true,
-                    },
-                    DevSmokeScenarioResult {
-                        scenario_id: plan.lifecycle.smoke_authorized_scenario.clone(),
-                        status: authorized_status,
-                        token_counter_delta: None,
-                        source_counter_delta: None,
-                        minimized_claim_ids: authorized_claims,
-                        passed: true,
-                    },
-                ],
-                passed: true,
-            });
-        }
-        let before = Self::synthetic_counters(state)?;
-        let (denial_status, denial_claims) = Self::evaluate(plan, false)?;
-        let after_denial = Self::synthetic_counters(state)?;
-        let (authorized_status, authorized_claims) = Self::evaluate(plan, true)?;
-        let after_authorized = Self::synthetic_counters(state)?;
-        let delta =
-            |after: u64, before: u64| after.checked_sub(before).ok_or_else(DevRuntimeError::smoke);
-        Ok(DevSmokeReportV1 {
-            schema_version: DEV_SMOKE_REPORT_SCHEMA_V1.to_string(),
-            project: plan.binding.project.clone(),
-            environment: plan.binding.environment.clone(),
-            results: vec![
+        let results = if plan.records_request.is_some() {
+            let (denial_status, denial_claims) = Self::request_records(plan, false)?;
+            let (authorized_status, authorized_claims) = Self::request_records(plan, true)?;
+            vec![
                 DevSmokeScenarioResult {
                     scenario_id: plan.lifecycle.smoke_denial_scenario.clone(),
                     status: denial_status,
-                    token_counter_delta: Some(delta(
-                        after_denial.token_requests,
-                        before.token_requests,
-                    )?),
-                    source_counter_delta: Some(delta(
-                        after_denial.source_requests,
-                        before.source_requests,
-                    )?),
+                    token_counter_delta: None,
+                    source_counter_delta: None,
                     minimized_claim_ids: denial_claims,
                     passed: true,
                 },
                 DevSmokeScenarioResult {
                     scenario_id: plan.lifecycle.smoke_authorized_scenario.clone(),
                     status: authorized_status,
-                    token_counter_delta: Some(delta(
-                        after_authorized.token_requests,
-                        after_denial.token_requests,
-                    )?),
-                    source_counter_delta: Some(delta(
-                        after_authorized.source_requests,
-                        after_denial.source_requests,
-                    )?),
+                    token_counter_delta: None,
+                    source_counter_delta: None,
                     minimized_claim_ids: authorized_claims,
                     passed: true,
                 },
-            ],
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(DevSmokeReportV1 {
+            schema_version: DEV_SMOKE_REPORT_SCHEMA_V1.to_string(),
+            project: plan.binding.project.clone(),
+            environment: plan.binding.environment.clone(),
+            results,
             passed: true,
         })
     }
@@ -4222,10 +3827,8 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
             workloads,
             source_mode: plan.source_mode,
             relay_api_url: format!("http://{}", plan.relay_public_endpoint()?),
-            evidence_api_url: format!("http://{}", plan.caller_endpoint()?),
             records_denied_command: plan.records_denied_command(),
             records_request_command: plan.records_request_command(),
-            evidence_request_command: plan.evidence_request_command(),
         })
     }
 
@@ -4262,7 +3865,6 @@ fn same_runtime_semantics(existing: &DevRuntimePlan, candidate: &DevRuntimePlan)
         && existing.local_snapshot_digest == candidate.local_snapshot_digest
         && existing.release_tag == candidate.release_tag
         && existing.minimum_compose_version == candidate.minimum_compose_version
-        && existing.request_digest == candidate.request_digest
         && existing.source_mode == candidate.source_mode
         && existing.scenario == candidate.scenario
         && existing
@@ -4411,26 +4013,6 @@ fn materialize_runtime(plan: &DevRuntimePlan) -> DevRuntimeResult<DevRuntimeStat
             source_plan_bytes.push(b'\n');
             write_owner_only(&plan.paths.synthetic_source_plan, &source_plan_bytes)?;
         }
-        write_owner_only(&plan.paths.request_body, &plan.request_json)?;
-        let caller_token = read_owner_only_regular_file(
-            &plan.prepared_credential_files()?.caller_token,
-            16 * 1024,
-        )
-        .map_err(|_| DevRuntimeError::io())?;
-        let caller_token = std::str::from_utf8(&caller_token).map_err(|_| DevRuntimeError::io())?;
-        if caller_token.is_empty()
-            || caller_token
-                .bytes()
-                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-        {
-            return Err(DevRuntimeError::invalid_credentials());
-        }
-        let endpoint = plan.caller_endpoint()?;
-        let request_config = format!(
-            "url = \"http://{endpoint}/v1/evaluations\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {caller_token}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\nsilent\nshow-error\nfail\n",
-            curl_config_path(&plan.paths.request_body)?,
-        );
-        write_owner_only(&plan.paths.request_config, request_config.as_bytes())?;
         match (
             plan.records_request.as_ref(),
             &plan.prepared_credential_files()?.relay_match_token,
@@ -4724,15 +4306,9 @@ fn startup_report(plan: &DevRuntimePlan) -> DevStartupReport {
             plan.relay_public_endpoint()
                 .expect("validated development plan has a public Relay endpoint")
         ),
-        evidence_api_url: format!(
-            "http://{}",
-            plan.caller_endpoint()
-                .expect("validated development plan has a public Notary endpoint")
-        ),
         source_mode: plan.source_mode,
         records_denied_command: plan.records_denied_command(),
         records_request_command: plan.records_request_command(),
-        evidence_request_command: plan.evidence_request_command(),
         smoke_command: plan.smoke_command(),
         logs_command: plan.logs_command(),
         down_command: plan.down_command(),
@@ -4887,8 +4463,6 @@ fn validate_artifact_inputs(
         &artifacts.relay_public_anchor,
         &artifacts.relay_consultation_bundle,
         &artifacts.relay_consultation_anchor,
-        &artifacts.notary_bundle,
-        &artifacts.notary_anchor,
     ] {
         let canonical = fs::canonicalize(path).map_err(|_| {
             DevRuntimeError::new(
@@ -4945,7 +4519,6 @@ struct DevPlanDigestInput<'a> {
     lifecycle: &'a DevLifecycleBindings,
     artifacts: &'a DevRuntimeArtifactInputs,
     compose_digest: &'a str,
-    request_digest: &'a str,
     records_request_digest: Option<&'a str>,
     local_snapshot_digest: Option<&'a str>,
     synthetic_source_plan: Option<&'a SyntheticSourcePlanV1>,
@@ -4963,7 +4536,6 @@ fn plan_digest(input: DevPlanDigestInput<'_>) -> DevRuntimeResult<String> {
         lifecycle: &'a DevLifecycleBindings,
         artifacts: &'a DevRuntimeArtifactInputs,
         compose_digest: &'a str,
-        request_digest: &'a str,
         records_request_digest: Option<&'a str>,
         local_snapshot_digest: Option<&'a str>,
         synthetic_source_plan_digest: Option<String>,
@@ -4986,7 +4558,6 @@ fn plan_digest(input: DevPlanDigestInput<'_>) -> DevRuntimeResult<String> {
         lifecycle: input.lifecycle,
         artifacts: input.artifacts,
         compose_digest: input.compose_digest,
-        request_digest: input.request_digest,
         records_request_digest: input.records_request_digest,
         local_snapshot_digest: input.local_snapshot_digest,
         synthetic_source_plan_digest,
@@ -5212,24 +4783,6 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> DevRuntimeResult<()> {
             .map_err(|_| DevRuntimeError::io())?;
     }
     Ok(())
-}
-
-fn curl_config_path(path: &Path) -> DevRuntimeResult<String> {
-    let text = path.to_str().ok_or_else(|| {
-        DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "development request path is not UTF-8",
-            "move the project to a UTF-8 path and retry",
-        )
-    })?;
-    if text.contains(['\n', '\r', '"', '\\']) {
-        return Err(DevRuntimeError::new(
-            DevFailureCategory::InvalidPlan,
-            "development request path cannot be represented safely",
-            "move the project to a path without quotes or control characters",
-        ));
-    }
-    Ok(text.to_string())
 }
 
 fn validate_curl_literal(value: &str) -> DevRuntimeResult<()> {

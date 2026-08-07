@@ -151,6 +151,72 @@ export function stripPageTypeBanner(md) {
   return lines.slice(end).join('\n');
 }
 
+// Product sources keep their implementation-era name, while the public docs
+// use the approved display name. Rewrite prose only. Technical identifiers in
+// code spans and fences stay byte-for-byte unchanged, as do CCCEV and OOTS
+// terms in which "Evidence" is part of a standards-defined name.
+export function applyRepoDisplayName(md, repoId) {
+  if (repoId !== 'registry-evidence') return md;
+
+  const protectedTerms = [
+    'Evidence Type',
+    'Evidence Broker',
+    'Evidence Provider',
+    'Evidence Exchange',
+    'Evidence Request',
+    'Evidence Response',
+    'Evidence Vocabulary',
+  ];
+  const placeholders = new Map(
+    protectedTerms.map((term, index) => [`\u0000EVIDENCE_TERM_${index}\u0000`, term]),
+  );
+
+  let fence = null;
+  return md
+    .split('\n')
+    .map((line) => {
+      const fenceMatch = line.match(/^\s*(```+|~~~+)/);
+      if (fenceMatch) {
+        const marker = fenceMatch[1][0];
+        fence = fence === marker ? null : marker;
+        return line;
+      }
+      if (fence) return line;
+
+      let displayLine = line
+        .replace(/^### Evidence\s*$/, '### Assertion evidence')
+        .replace(/^## Discover available Evidence\s*$/, '## Discover available Evidence Gateway definitions')
+        .replace(/^## Request Evidence\s*$/, '## Request an assertion from Evidence Gateway');
+
+      const segments = displayLine.split(/(`+[^`]*`+)/g);
+      displayLine = segments
+        .map((segment, index) => {
+          if (index % 2 === 1) return segment;
+          let prose = segment;
+          const linkTargets = [];
+          prose = prose.replace(/(!?\[[^\]]*\]\()([^)]*)(\))/g, (_whole, prefix, target, suffix) => {
+            const placeholder = `\u0000EVIDENCE_LINK_TARGET_${linkTargets.length}\u0000`;
+            linkTargets.push(target);
+            return `${prefix}${placeholder}${suffix}`;
+          });
+          for (const [placeholder, term] of placeholders) {
+            prose = prose.replaceAll(term, placeholder);
+          }
+          prose = prose.replace(/\bEvidence\b(?! Gateway\b)/g, 'Evidence Gateway');
+          for (const [placeholder, term] of placeholders) {
+            prose = prose.replaceAll(placeholder, term);
+          }
+          for (const [index, target] of linkTargets.entries()) {
+            prose = prose.replaceAll(`\u0000EVIDENCE_LINK_TARGET_${index}\u0000`, target);
+          }
+          return prose;
+        })
+        .join('');
+      return displayLine;
+    })
+    .join('\n');
+}
+
 // The site route for a destination slug, as an absolute path (used for the
 // final segment / browser navigation). Trailing slash matches the site config.
 function siteRoute(destSlug) {
@@ -467,15 +533,18 @@ async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards)
 
   const outFile = resolve(docsDir, `${entry.dest}.mdx`);
   const assetsToCopy = [];
-  const body = rewriteLinks(bodyBase, {
-    repo: { ...repo, id: repoId },
-    entry,
-    destIndex,
-    sourceFileDir: dirname(sourceFile),
-    repoRoot: source.path,
-    assetsToCopy,
-    outFile,
-  });
+  const body = applyRepoDisplayName(
+    rewriteLinks(bodyBase, {
+      repo: { ...repo, id: repoId },
+      entry,
+      destIndex,
+      sourceFileDir: dirname(sourceFile),
+      repoRoot: source.path,
+      assetsToCopy,
+      outFile,
+    }),
+    repoId,
+  );
 
   const description = entry.description || deriveDescription(stripped, `${title} for ${repoId}.`);
   const standards_referenced = validateStandardsReferenced(
@@ -529,12 +598,16 @@ async function main() {
   const docsets = await loadDocsets({ dataDir });
   validateRepoDocsMetadata(manifest, knownStandards, docsets);
   const docset = getDocset(docsets, selectedDocsetId(docsets));
+  // Filter before applying docset refs: a repo whose docs are all excluded
+  // from this docset (a product newer than the docset, like registry-evidence
+  // in pre-Evidence archives) must not count as an active repo the docset is
+  // required to pin.
+  filterRepoDocsForDocset(manifest, docset);
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
     console.log(`Using archived docset ${docset.id} for product docs.`);
   }
   applyDocsetMetadataOverrides(manifest, docset);
-  filterRepoDocsForDocset(manifest, docset);
 
   // Clean and recreate the output dir so removed allowlist entries don't linger.
   await rm(outputRoot, { recursive: true, force: true });

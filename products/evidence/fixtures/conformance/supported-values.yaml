@@ -1,0 +1,115 @@
+fixture: registry.evidence.supported-values/v1
+synthetic_only: true
+forms:
+  - form: boolean
+    declaration: {form: boolean, required: true}
+    positive: [true, false]
+    boundary: [false, true]
+    negative: ['true', 0, null, {value: true}]
+  - form: controlled-code
+    declaration: {form: controlled-code, codelist: synthetic-codes, codelist_version: '1', maximum_bytes: 8}
+    positive: [C-A]
+    boundary: [C-BOUND]
+    negative: [UNKNOWN, c-a, 1, 'C-BOUNDARY-TOO-LONG']
+  - form: controlled-category
+    declaration: {form: controlled-category, category_scheme: urn:example:fixture:scheme:category, scheme_version: '1', maximum_bytes: 16}
+    positive: [category-a]
+    boundary: [category-bound]
+    negative: [category-unknown, {category: category-a}, 1]
+  - form: bounded-integer
+    declaration: {form: bounded-integer, minimum: -10, maximum: 10}
+    positive: [0, 7]
+    boundary: [-10, 10]
+    negative: [-11, 11, 1.5, '7', 9007199254740992]
+  - form: bounded-decimal
+    declaration: {form: bounded-decimal, minimum: '-10.5', maximum: '10.5', maximum_scale: 2}
+    positive:
+      - {rhai: 'decimal("0.25")', wire_json: '"0.25"'}
+      - {rhai: 'parse_decimal("7.5")', wire_json: '"7.5"'}
+    boundary:
+      - {rhai: 'decimal("-10.5")', wire_json: '"-10.5"'}
+      - {rhai: 'decimal("10.5")', wire_json: '"10.5"'}
+    negative:
+      - {rhai: '1.25', reason: Rhai floating-point value}
+      - {rhai: 'decimal("-10.51")', reason: below minimum}
+      - {rhai: 'decimal("10.51")', reason: above maximum}
+      - {rhai: 'decimal("1.234")', reason: excessive scale}
+      - {rhai: 'decimal("01.0")', reason: non-canonical leading zero and trailing zero}
+      - {rhai: 'decimal("1e2")', reason: exponent form}
+      - {rhai: 'decimal("-0.0")', reason: negative zero and trailing zero}
+      - {rhai: 'decimal("NaN")', reason: non-finite}
+      - {rhai: 'decimal("12345678901234567890123456789")', reason: precision 29 exceeds global maximum 28}
+      - {rhai: 'decimal("0.1234567891")', reason: scale 10 exceeds global maximum 9}
+  - form: date-bucket
+    declaration: {form: date-bucket, bucket_scheme: urn:example:fixture:scheme:date-bucket, scheme_version: '1'}
+    positive: [{form: date-bucket, scheme: urn:example:fixture:scheme:date-bucket, bucket: current-period}]
+    boundary: [{form: date-bucket, scheme: urn:example:fixture:scheme:date-bucket, bucket: boundary-period}]
+    negative:
+      - {form: date-bucket, scheme: urn:example:fixture:scheme:date-bucket, bucket: unknown}
+      - {form: time-bucket, scheme: urn:example:fixture:scheme:date-bucket, bucket: current-period}
+      - {form: date-bucket, bucket: current-period}
+      - '2026-08-02'
+  - form: time-bucket
+    declaration: {form: time-bucket, bucket_scheme: urn:example:fixture:scheme:time-bucket, scheme_version: '1'}
+    positive: [{form: time-bucket, scheme: urn:example:fixture:scheme:time-bucket, bucket: within-window}]
+    boundary: [{form: time-bucket, scheme: urn:example:fixture:scheme:time-bucket, bucket: at-limit}]
+    negative:
+      - {form: time-bucket, scheme: urn:example:fixture:scheme:other, bucket: within-window}
+      - {form: time-bucket, scheme: urn:example:fixture:scheme:time-bucket, bucket: unknown}
+      - 'PT24H'
+  - form: audience-scoped-entity-reference
+    declaration: {form: audience-scoped-entity-reference, maximum_bytes: 160}
+    derivation_positive: [{rhai: 'entity_reference_seed("synthetic-seed-a")', public: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}]
+    positive: [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}]
+    boundary: [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v12_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'}]
+    negative:
+      - {form: audience-scoped-entity-reference, reference: urn:example:global-person:001}
+      - {form: audience-scoped-entity-reference, reference: short}
+      - urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      - {rhai: 'synthetic-seed-a', reason: raw string cannot satisfy entity-reference concept}
+      - {rhai: 'entity_reference_seed("")', reason: empty seed}
+      - {rhai: 'entity_reference_seed("source-seed-canary")', leak_surface: logs}
+  - form: controlled-code-list
+    declaration: {form: controlled-code-list, codelist: synthetic-codes, codelist_version: '1', minimum_items: 1, maximum_items: 3, unique: true}
+    positive: [[C-A], [C-A, C-B]]
+    boundary: [[C-A, C-B, C-C]]
+    negative: [[], [C-A, C-A], [UNKNOWN], [C-A, C-B, C-C, C-D], C-A]
+  - form: entity-reference-list
+    declaration: {form: entity-reference-list, minimum_items: 1, maximum_items: 2, unique: true}
+    derivation_positive:
+      - ['entity_reference_seed("synthetic-seed-a")']
+      - ['entity_reference_seed("synthetic-seed-a")', 'entity_reference_seed("synthetic-seed-b")']
+    positive:
+      - [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}]
+    boundary:
+      - [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}, {form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'}]
+    negative:
+      - []
+      - [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}, {form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}]
+      - [{form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}, {form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'}, {form: audience-scoped-entity-reference, reference: 'urn:evidence:entity:v1_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'}]
+      - [{rhai: ['entity_reference_seed("synthetic-seed-a")', raw-seed-b], reason: mixed protected seed and raw string}]
+  - form: reviewed-structured-value
+    declaration:
+      form: reviewed-structured-value
+      schema: urn:example:fixture:schema:closed-structure:v1
+      maximum_serialized_bytes: 512
+      fields:
+        status: {form: controlled-code, codelist: synthetic-codes, codelist_version: '1'}
+        quantity: {form: bounded-integer, minimum: 0, maximum: 9}
+    positive:
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:closed-structure:v1, fields: {status: C-A, quantity: 4}}
+    boundary:
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:closed-structure:v1, fields: {status: C-B, quantity: 9}}
+    negative:
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:closed-structure:v1, fields: {status: C-A, quantity: 4, extra: leaked}}
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:other:v1, fields: {status: C-A, quantity: 4}}
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:closed-structure:v1, fields: {status: UNKNOWN, quantity: 4}}
+      - {form: reviewed-structured-value, schema: urn:example:fixture:schema:closed-structure:v1, fields: {status: C-A}}
+global_negative:
+  - undeclared-concept
+  - duplicate-concept
+  - missing-required-concept
+  - extra-value-metadata
+  - per-value-size-plus-one
+  - aggregate-result-size-plus-one
+round_trip: Every positive and boundary value must preserve its JSON type through core evidence construction, flattened JWS serialization, signature verification, and payload parsing.

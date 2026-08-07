@@ -1,0 +1,353 @@
+version: 1
+assuranceProfile: evidence-grade
+service:
+  providerId: urn:example:fixture:provider:selector-conformance
+  trustDomain: urn:example:fixture:trust-domain:selector-conformance
+issuer: {id: urn:example:fixture:issuer:selector-conformance}
+authentication:
+  kind: oidc-access-token
+  issuer: https://identity.invalid
+  audiences: [selector-conformance]
+  tokenTypes: [at+jwt]
+  algorithms: [ES256]
+  jwksUri: https://identity.invalid/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-key
+  hashKeyVersion: 1
+  failClosed: true
+subjectBinding:
+  secretRef: secret:file/binding-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 1000
+  burstPerPrincipal: 100
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 100
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
+selectorProfiles:
+  opaque-record-v1:
+    maximumAggregateBytes: 96
+    fields:
+      record_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
+  demographics-v1:
+    maximumAggregateBytes: 420
+    fields:
+      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      birth_date: {type: date}
+  demographics-with-event-v1:
+    maximumAggregateBytes: 520
+    fields:
+      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}
+      birth_date: {type: date}
+      event_reference: {type: string, minimumBytes: 1, maximumBytes: 96}
+  opaque-coordinates-v1:
+    maximumAggregateBytes: 96
+    fields:
+      alpha: {type: string, minimumBytes: 1, maximumBytes: 80}
+      delta: {type: integer, minimum: 0, maximum: 999999}
+      kappa: {type: controlled-code, codelist: codelists/opaque-codes.yaml, codelistVersion: '1', maximumBytes: 16}
+sources:
+  classification-source:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/selector-facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: opaque-record-v1, fields: [record_reference]}
+      prepareScript: adapters/classification-source-prepare.rhai
+      adapterParameters: {requestedFields: [result]}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/matched]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/classification-source.rhai
+    factSchema: schemas/facts.schema.yaml
+  context-source:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/selector-facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: demographics-v1, fields: [given_name, family_name, birth_date]}
+      prepareScript: adapters/context-source-prepare.rhai
+      adapterParameters: {requestedFields: [result]}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/matched]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/context-source.rhai
+    factSchema: schemas/facts.schema.yaml
+  grant-source:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/selector-facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: demographics-with-event-v1, fields: [given_name, family_name, birth_date, event_reference]}
+      prepareScript: adapters/grant-source-prepare.rhai
+      adapterParameters: {requestedFields: [result]}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/matched]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/grant-source.rhai
+    factSchema: schemas/facts.schema.yaml
+  relationship-source:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/selector-facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject-a
+          alternatives:
+            - {profile: opaque-record-v1, fields: [record_reference]}
+            - {profile: opaque-coordinates-v1, fields: [alpha, delta, kappa]}
+        - role: subject-b
+          alternatives:
+            - {profile: demographics-v1, fields: [given_name, family_name, birth_date]}
+            - {profile: demographics-with-event-v1, fields: [given_name, family_name, birth_date, event_reference]}
+      prepareScript: adapters/relationship-source-prepare.rhai
+      adapterParameters: {requestedFields: [result]}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 24, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/matched]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/relationship-source.rhai
+    factSchema: schemas/facts.schema.yaml
+  opaque-source:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    request:
+      method: POST
+      path: /v1/selector-facts
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: opaque-coordinates-v1, fields: [alpha, delta, kappa]}
+      prepareScript: adapters/opaque-source-prepare.rhai
+      adapterParameters: {requestedFields: [result]}
+      adapterParametersSchema: schemas/adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/matched]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/opaque-source.rhai
+    factSchema: schemas/facts.schema.yaml
+authorityProfiles:
+  reviewed-caseworker-v1:
+    kind: statutory
+    requesterTags: [selector-reviewer]
+    grants:
+      - requirement: urn:example:fixture:requirement:classification:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {role: subject, selectorProfile: opaque-record-v1, valueOrigin: request}
+      - requirement: urn:example:fixture:requirement:relationship:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {role: subject-a, selectorProfile: opaque-record-v1, valueOrigin: request}
+          - {role: subject-b, selectorProfile: demographics-v1, valueOrigin: request}
+      - requirement: urn:example:fixture:requirement:opaque:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {role: subject, selectorProfile: opaque-coordinates-v1, valueOrigin: request}
+  subject-bound-v1:
+    kind: organizational
+    requesterTags: [selector-reviewer]
+    grants:
+      - requirement: urn:example:fixture:requirement:property:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: demographics-v1
+            valueOrigin: authenticated-context
+            valueClaims:
+              given_name: identity.given_name
+              family_name: identity.family_name
+              birth_date: identity.birth_date
+  authenticated-grant-v1:
+    kind: consent
+    requesterTags: [selector-reviewer]
+    grants:
+      - requirement: urn:example:fixture:requirement:property-with-event:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: demographics-with-event-v1
+            valueOrigin: authenticated-grant
+            valueClaims:
+              given_name: grant.subject.given_name
+              family_name: grant.subject.family_name
+              birth_date: grant.subject.birth_date
+              event_reference: grant.subject.event_reference
+  alternate-caseworker-v1:
+    kind: statutory
+    requesterTags: [selector-reviewer]
+    grants:
+      - requirement: urn:example:fixture:requirement:relationship:v1
+        purpose: fixture-procedure
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {role: subject-a, selectorProfile: opaque-coordinates-v1, valueOrigin: request}
+          - {role: subject-b, selectorProfile: demographics-with-event-v1, valueOrigin: request}
+requirements:
+  - id: urn:example:fixture:requirement:classification:v1
+    kind: criterion
+    acquisition:
+      kind: single
+      source: classification-source
+    purposes: [fixture-procedure]
+    subjectRoles:
+      - {role: subject, cardinality: one, selectorProfiles: [opaque-record-v1]}
+    referenceFrameworks: [urn:example:fixture:framework:classification:v1]
+    evidenceType: urn:example:fixture:evidence-type:classification:v1
+    validitySeconds: 300
+    derivation: {script: derivations/classification.rhai, parameters: {}}
+    concepts:
+      - {id: urn:example:fixture:concept:classification, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:classification]}
+    existenceDisclosure: collapse-unresolved
+  - id: urn:example:fixture:requirement:property:v1
+    kind: information-requirement
+    acquisition:
+      kind: single
+      source: context-source
+    purposes: [fixture-procedure]
+    subjectRoles:
+      - {role: subject, cardinality: one, selectorProfiles: [demographics-v1]}
+    referenceFrameworks: [urn:example:fixture:framework:property:v1]
+    evidenceType: urn:example:fixture:evidence-type:property:v1
+    validitySeconds: 300
+    derivation: {script: derivations/property.rhai, parameters: {}}
+    concepts:
+      - {id: urn:example:fixture:concept:property, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:property]}
+    existenceDisclosure: collapse-unresolved
+  - id: urn:example:fixture:requirement:property-with-event:v1
+    kind: information-requirement
+    acquisition:
+      kind: single
+      source: grant-source
+    purposes: [fixture-procedure]
+    subjectRoles:
+      - {role: subject, cardinality: one, selectorProfiles: [demographics-with-event-v1]}
+    referenceFrameworks: [urn:example:fixture:framework:property-with-event:v1]
+    evidenceType: urn:example:fixture:evidence-type:property-with-event:v1
+    validitySeconds: 300
+    derivation: {script: derivations/property-with-event.rhai, parameters: {}}
+    concepts:
+      - {id: urn:example:fixture:concept:property-with-event, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:property-with-event]}
+    existenceDisclosure: collapse-unresolved
+  - id: urn:example:fixture:requirement:relationship:v1
+    kind: criterion
+    acquisition:
+      kind: single
+      source: relationship-source
+    purposes: [fixture-procedure]
+    subjectRoles:
+      - {role: subject-a, cardinality: one, selectorProfiles: [opaque-record-v1, opaque-coordinates-v1]}
+      - {role: subject-b, cardinality: one, selectorProfiles: [demographics-v1, demographics-with-event-v1]}
+    referenceFrameworks: [urn:example:fixture:framework:relationship:v1]
+    evidenceType: urn:example:fixture:evidence-type:relationship:v1
+    validitySeconds: 300
+    derivation: {script: derivations/relationship.rhai, parameters: {}}
+    concepts:
+      - {id: urn:example:fixture:concept:relationship, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:relationship]}
+    existenceDisclosure: collapse-unresolved
+  - id: urn:example:fixture:requirement:opaque:v1
+    kind: information-requirement
+    acquisition:
+      kind: single
+      source: opaque-source
+    purposes: [fixture-procedure]
+    subjectRoles:
+      - {role: subject, cardinality: one, selectorProfiles: [opaque-coordinates-v1]}
+    referenceFrameworks: [urn:example:fixture:framework:opaque:v1]
+    evidenceType: urn:example:fixture:evidence-type:opaque:v1
+    validitySeconds: 300
+    derivation: {script: derivations/opaque.rhai, parameters: {}}
+    concepts:
+      - {id: urn:example:fixture:concept:opaque, form: boolean, required: true, constraints: {}}
+    fixtures: fixtures/cases.yaml
+    disclosureGuard: {families: [urn:example:fixture:disclosure-family:opaque]}
+    existenceDisclosure: collapse-unresolved

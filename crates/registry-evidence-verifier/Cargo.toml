@@ -1,0 +1,30 @@
+[package]
+name = "registry-evidence-verifier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Portable verification core for signed Evidence responses."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+jsonschema.workspace = true
+p256.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-sdjwt.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+serde_norway.workspace = true
+tokio.workspace = true

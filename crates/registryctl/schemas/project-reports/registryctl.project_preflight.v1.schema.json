@@ -47,7 +47,7 @@
     },
     "product_validators": {
       "type": "array",
-      "maxItems": 2,
+      "maxItems": 1,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/product_validator"
@@ -210,7 +210,7 @@
       "additionalProperties": false,
       "properties": {
         "product": {
-          "enum": ["registry_relay", "registry_notary"]
+          "const": "registry_relay"
         },
         "capability": {
           "const": "configuration_validation"
@@ -231,12 +231,7 @@
         "source_mtls_private_key",
         "source_oauth_mtls_private_key",
         "source_jwks_mtls_private_key",
-        "entity_postgres_connection",
-        "issuance_signing_key",
-        "caller_api_key_fingerprint",
-        "oid4vci_client_signing_key",
-        "oid4vci_access_token_signing_key",
-        "oid4vci_sensitive_state_key"
+        "entity_postgres_connection"
       ]
     },
     "secret_check": {
@@ -247,7 +242,7 @@
         "consumers": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 15,
+          "maxItems": 10,
           "uniqueItems": true,
           "items": {
             "$ref": "#/$defs/secret_consumer"
@@ -272,9 +267,7 @@
         "entity_csv",
         "entity_xlsx",
         "entity_parquet",
-        "relay_state_root_certificate",
-        "notary_state_root_certificate",
-        "notary_to_relay_token"
+        "relay_state_root_certificate"
       ]
     },
     "runtime_file": {
@@ -308,11 +301,7 @@
           "if": {
             "properties": {
               "kind": {
-                "enum": [
-                  "relay_state_root_certificate",
-                  "notary_state_root_certificate",
-                  "notary_to_relay_token"
-                ]
+                "const": "relay_state_root_certificate"
               }
             }
           },

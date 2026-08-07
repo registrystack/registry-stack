@@ -1,0 +1,116 @@
+# Tutorial subset of the OpenCRVS Events API.
+# Reviewed against opencrvs/opencrvs-core commit
+# a4871cb58b3e9f038bcb3eb1dcc4924e46bb57a0 and the public Farajaland
+# integration demo on 2026-08-04. OpenCRVS does not publish this subset at a
+# stable URL. Review it against the target deployment before production use.
+openapi: 3.1.0
+info:
+  title: OpenCRVS Events API tutorial subset
+  version: "2.0.0-tutorial"
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://events.farajaland-integration.opencrvs.dev
+paths:
+  /events/search:
+    post:
+      operationId: searchEvents
+      summary: Search for civil-registration events
+      security:
+        - recordSearchClient: [recordsearch]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Matching events
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [total, results]
+                properties:
+                  total:
+                    type: integer
+                    minimum: 0
+                    maximum: 1000000
+                  results:
+                    type: array
+                    minItems: 0
+                    maxItems: 2
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: []
+                      properties:
+                        type:
+                          type: string
+                          minLength: 1
+                          maxLength: 64
+                        status:
+                          type: string
+                          minLength: 1
+                          maxLength: 64
+                        dateOfEvent:
+                          type: string
+                          format: date
+                        placeOfEvent:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        declaration:
+                          type: object
+                          additionalProperties: false
+                          required: []
+                          properties:
+                            child.nid:
+                              type: string
+                              minLength: 1
+                              maxLength: 128
+                            child.name:
+                              type: object
+                              additionalProperties: false
+                              required: [firstname, surname]
+                              properties:
+                                firstname:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 200
+                                surname:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 200
+                            child.birthLocationId:
+                              type: string
+                              minLength: 1
+                              maxLength: 128
+                            mother.nid:
+                              type: string
+                              minLength: 1
+                              maxLength: 128
+                            mother.verified:
+                              type: string
+                              enum: [authenticated]
+                            father.nid:
+                              type: string
+                              minLength: 1
+                              maxLength: 128
+                            father.verified:
+                              type: string
+                              enum: [authenticated]
+        "401":
+          description: Missing or invalid Record Search access token
+components:
+  securitySchemes:
+    recordSearchClient:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.farajaland-integration.opencrvs.dev/token
+          scopes:
+            recordsearch: Search civil-registration records

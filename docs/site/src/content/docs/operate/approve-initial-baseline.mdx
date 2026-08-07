@@ -1,19 +1,20 @@
 ---
 title: Approve the initial product baseline
-description: Create independent lane anchors, sign the first three product bundles, verify them, and assemble an approved baseline set.
+description: Create independent lane anchors, sign the first two product bundles, verify them, and assemble an approved baseline set.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-31"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this guide after `registryctl build` to turn the three unsigned product-lane inputs into one
+Use this guide after `registryctl build` to turn the two unsigned product-lane inputs into one
 `ApprovedBaselineSetV1` that a deployment operator can consume.
 
 ## When to use this
@@ -22,9 +23,18 @@ Use this procedure for the first governed approval of a project environment.
 For a later change, compare against the current approved set and follow
 [Approve a changed source](../advanced/compare-and-reapprove-source-change/).
 
-The public Relay, consultation Relay, and Notary lanes keep separate anchors, signing keys,
-signed bundles, and approval decisions.
+The public Relay and consultation Relay lanes keep separate anchors, signing keys, signed bundles,
+and approval decisions.
 The approved-set owner assembles verified lane outputs but does not sign on behalf of a lane.
+
+Evidence Gateway and Registry Mint
+are not registryctl-generated products and do not participate in this trust-anchor and
+approved-set pipeline at all: each validates its own deployment inputs directly, with
+`evidence check` and `mint check`. The current `evidencectl new` command starts an incomplete
+OpenAPI authoring workspace; it does not create Evidence Gateway deployment inputs. For a complete
+Evidence Gateway project, `evidencectl fixtures run` drives the offline fixture checks. See
+[Configure Evidence Gateway](../../configure/evidence/) and [Configure Registry Mint](../../configure/mint/)
+for those procedures.
 
 ## Before you start
 
@@ -43,13 +53,12 @@ registryctl review compare --environment local
 registryctl build --environment local
 ```
 
-An initial comparison identifies all three lanes as requiring approval.
+An initial comparison identifies both lanes as requiring approval.
 The build creates one unsigned input under each of these directories:
 
 ```text
 .registry-stack/build/local/signing-inputs/relay-public
 .registry-stack/build/local/signing-inputs/relay-consultation
-.registry-stack/build/local/signing-inputs/notary
 ```
 
 The optional local evaluation-key procedure requires OpenSSL with Ed25519 support and Python 3.
@@ -87,7 +96,7 @@ from pathlib import Path
 Path("evaluation-keys").mkdir(mode=0o700)
 PY
 
-for lane in relay-public relay-consultation notary; do
+for lane in relay-public relay-consultation; do
   openssl genpkey \
     -algorithm ED25519 \
     -outform DER \
@@ -197,33 +206,9 @@ registryctl trust bundle verify \
 
 Verification must identify the signed input as the `relay-consultation` lane under that anchor.
 
-## Approve the Notary lane
-
-The Notary trust owner repeats the procedure with the Notary key and anchor:
-
-```sh
-registryctl trust anchor create \
-  --lane notary \
-  --input .registry-stack/build/local/signing-inputs/notary \
-  --public-key evaluation-keys/notary.public.jwk \
-  --threshold 1 \
-  --output-file operator-handoff/notary-anchor.json
-registryctl trust bundle sign \
-  --lane notary \
-  --input .registry-stack/build/local/signing-inputs/notary \
-  --anchor operator-handoff/notary-anchor.json \
-  --key file:evaluation-keys/notary.private.jwk \
-  --output-dir operator-handoff/notary-bundle
-registryctl trust bundle verify \
-  --bundle-dir operator-handoff/notary-bundle \
-  --anchor operator-handoff/notary-bundle/anchor.json
-```
-
-Verification must identify the signed input as the `notary` lane under that anchor.
-
 ## Assemble the approved baseline set
 
-After all three lane owners transfer their verified outputs, the approved-set owner assembles the
+After both lane owners transfer their verified outputs, the approved-set owner assembles the
 initial set:
 
 ```sh
@@ -231,12 +216,20 @@ registryctl trust approved-set assemble \
   --environment local \
   --relay-public operator-handoff/relay-public-bundle \
   --relay-consultation operator-handoff/relay-consultation-bundle \
-  --notary operator-handoff/notary-bundle \
   --output-file operator-handoff/approved-set.v1.json
 ```
 
-Registryctl verifies the three lane bundles and writes one approved-set file.
+Registryctl verifies the two lane bundles and writes one approved-set file.
 It reports the approved-set digest and the next `registryctl deploy generate` command.
+
+The assembled document declares approved-set schema version `2.0`.
+Current registryctl refuses an approved set that declares schema version `1.0`, carries a `notary`
+lane, or binds cross-lane interface digests.
+It reports why the document is refused and names re-approval as the remedy.
+A refused set cannot be repaired by editing the file: the removed cross-lane interface digests are
+no longer verified, so honoring the old approval would keep a signed integrity claim that nothing
+enforces.
+Re-run this procedure from the current lane bundles to issue a schema version `2.0` set.
 
 ## Rotate an anchor after initial approval
 
@@ -288,7 +281,7 @@ to that lane's anchor rotation.
 `trust anchor rotate` verifies that the transition is authorized by the pinned preceding anchor;
 the repeated public-key options keep the current signer during the overlap.
 `trust bundle sign --against` advances from the pinned preceding approved set, and assembly keeps
-the unchanged public Relay and Notary lanes from that set.
+the unchanged public Relay lane from that set.
 Deployment verification does not accept the rotated anchor into an existing product state.
 For thresholds, overlap windows, and the required preview, stop, audited acceptance, exact
 verification, and startup order, follow
@@ -322,4 +315,4 @@ to supply and check operator files before one-time initialization and ordinary s
 | Anchor creation rejects the public key | The key is not a supported public JWK or does not match the selected threshold. | Export the lane owner's approved public JWK and retry into a fresh output path. |
 | Bundle signing refuses the key | The locator is missing `file:` or `op://`, or the key does not satisfy the anchor. | Use an explicit locator for the matching private key. |
 | Bundle verification fails | The bundle, lane, input, or anchor does not belong to the same approval. | Stop the handoff and return the exact input to that lane's trust owner. |
-| Approved-set assembly reports a missing lane | Initial assembly requires one verified public Relay, consultation Relay, and Notary bundle. | Supply all three verified lane directories. |
+| Approved-set assembly reports a missing lane | Initial assembly requires one verified public Relay bundle and one verified consultation Relay bundle. | Supply both verified lane directories. |

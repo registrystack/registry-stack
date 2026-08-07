@@ -23,10 +23,10 @@ The workflow:
    release image lock.
 3. Rebuilds the canonical Linux payload with fresh Cargo and target
    directories.
-4. Requires byte equality for the six Linux amd64 payloads.
-5. Rebuilds Registry Notary and Registry Relay images without cache.
-6. Compares image configuration and ordered root filesystem layers with the
-   published digest-bound images.
+4. Requires byte equality for the seven declared Linux amd64 binaries.
+5. Rebuilds the Registry Relay image without cache.
+6. Compares its image configuration and ordered root filesystem layers with
+   the published digest-bound image.
 7. Records a compact result and retains it for 30 days.
 
 The proof excludes native macOS and Linux arm64 Registryctl binaries,

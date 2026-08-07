@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-08-03"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -144,7 +144,8 @@ A source product or version label does not prove helper compatibility.
 Before traffic, restore the prior verified Relay bundle and matching worker artifact.
 After accepting a higher sequence, create a higher-sequence recovery bundle instead of deleting
 anti-rollback state.
-Keep Notary traffic blocked until the restored Relay contract matches Notary.
+Keep consultation traffic blocked until the restored Relay contract matches what its downstream
+consumer expects.
 
 If the worker is unavailable, repair the code-owned adjacent worker and process isolation.
 Do not configure an in-process fallback or grant the Script ambient network, filesystem,

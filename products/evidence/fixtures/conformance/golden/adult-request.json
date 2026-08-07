@@ -1,0 +1,18 @@
+{
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+  "requirement": "urn:example:fixture:requirement:adult-status:v1",
+  "purpose": "fixture-eligibility",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "person-demographics-v1",
+        "values": {
+          "given_name": "Amina",
+          "family_name": "Diallo",
+          "birth_date": "2000-01-01"
+        }
+      }
+    }
+  ]
+}

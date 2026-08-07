@@ -15,7 +15,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ID = "io.registrystack.registry_release_lock"
-SCHEMA_VERSION = "1.0"
+# Version 2.0: the Registry Notary retirement removed the Notary image,
+# runtime recipe, and config-schema members from the signed payload.
+SCHEMA_VERSION = "2.0"
 REPOSITORY = "registrystack/registry-stack"
 WORKFLOW = ".github/workflows/release.yml"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -176,12 +178,13 @@ def secret_projection(
     }
 
 
-def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
-    assert lane is not None
-    health_port = 8080 if product == "registry-relay" else 8081
-    prefix = ["product-action"]
-    if product == "registry-relay":
-        prefix.append(lane)
+def product_recipe(product: str, lane: str) -> dict[str, Any]:
+    if product != "registry-relay" or lane not in {
+        "relay-public",
+        "relay-consultation",
+    }:
+        raise ValueError("release lock product runtime is unsupported")
+    prefix = ["product-action", lane]
     common_mounts = [
         runtime_mount("bundle", "/run/registry/bundle", True),
         runtime_mount("anchor", "/run/registry/anchor", True),
@@ -207,17 +210,8 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         serve_secrets = [database_ca]
     else:
         preparation_secrets = [database_ca]
-        initialization_secrets = []
-        serve_secrets = [
-            database_ca,
-            secret_projection(
-                "notary-relay-workload-credential",
-                "/run/secrets/relay-workload-token",
-            ),
-            secret_projection(
-                "notary-signing-key", "/run/secrets/notary-signing-key.jwk"
-            ),
-        ]
+        initialization_secrets = [database_ca]
+        serve_secrets = [database_ca]
     def action(
         name: str,
         mounts: list[dict[str, Any]],
@@ -227,7 +221,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         environment: bool = True,
     ) -> dict[str, Any]:
         command_prefix = ["development-action"] if development else prefix
-        if development and product == "registry-relay":
+        if development:
             command_prefix.append(lane)
         return {
             "command": [*command_prefix, name],
@@ -292,7 +286,7 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
             f"/usr/local/bin/{product}",
             "healthcheck",
             "--url",
-            f"http://127.0.0.1:{health_port}/ready",
+            "http://127.0.0.1:8080/ready",
         ],
     }
 
@@ -302,10 +296,6 @@ POSTGRESQL_BOOTSTRAP_KEYS = [
     "REGISTRY_RELAY_RUNTIME_PASSWORD",
     "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
     "REGISTRY_RELAY_READER_PASSWORD",
-    "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
-    "REGISTRY_NOTARY_RUNTIME_PASSWORD",
-    "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
-    "REGISTRY_NOTARY_READER_PASSWORD",
 ]
 
 
@@ -322,10 +312,6 @@ REVOKE ALL ON TABLE public.registry_stack_bootstrap_marker FROM PUBLIC;
 \getenv relay_runtime_password REGISTRY_RELAY_RUNTIME_PASSWORD
 \getenv relay_maintenance_password REGISTRY_RELAY_MAINTENANCE_PASSWORD
 \getenv relay_reader_password REGISTRY_RELAY_READER_PASSWORD
-\getenv notary_migrator_password REGISTRY_NOTARY_MIGRATOR_PASSWORD
-\getenv notary_runtime_password REGISTRY_NOTARY_RUNTIME_PASSWORD
-\getenv notary_maintenance_password REGISTRY_NOTARY_MAINTENANCE_PASSWORD
-\getenv notary_reader_password REGISTRY_NOTARY_READER_PASSWORD
 SELECT 'CREATE ROLE registry_relay_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
 WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_relay_owner') \gexec
 SELECT format('CREATE ROLE registry_relay_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L', :'relay_migrator_password')
@@ -347,30 +333,7 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = 'registry
 ALTER DATABASE registry_relay OWNER TO registry_relay_owner;
 REVOKE ALL ON DATABASE registry_relay FROM PUBLIC;
 GRANT CONNECT ON DATABASE registry_relay TO registry_relay_migrator, registry_relay_runtime, registry_relay_maintenance, registry_relay_reader;
-SELECT 'CREATE ROLE registry_notary_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_notary_owner') \gexec
-SELECT format('CREATE ROLE registry_notary_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L', :'notary_migrator_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_notary_migrator') \gexec
-SELECT format('CREATE ROLE registry_notary_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L', :'notary_runtime_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_notary_runtime') \gexec
-SELECT format('CREATE ROLE registry_notary_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L', :'notary_maintenance_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_notary_maintenance') \gexec
-SELECT format('CREATE ROLE registry_notary_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L', :'notary_reader_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'registry_notary_reader') \gexec
-ALTER ROLE registry_notary_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-ALTER ROLE registry_notary_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD :'notary_migrator_password';
-ALTER ROLE registry_notary_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD :'notary_runtime_password';
-ALTER ROLE registry_notary_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD :'notary_maintenance_password';
-ALTER ROLE registry_notary_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD :'notary_reader_password';
-GRANT registry_notary_owner TO registry_notary_migrator WITH INHERIT FALSE, SET TRUE;
-SELECT 'CREATE DATABASE registry_notary OWNER registry_notary_owner'
-WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = 'registry_notary') \gexec
-ALTER DATABASE registry_notary OWNER TO registry_notary_owner;
-REVOKE ALL ON DATABASE registry_notary FROM PUBLIC;
-GRANT CONNECT ON DATABASE registry_notary TO registry_notary_migrator, registry_notary_runtime, registry_notary_maintenance, registry_notary_reader;
 \connect registry_relay
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-\connect registry_notary
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 SQL"""
 
@@ -468,7 +431,7 @@ def postgresql_recipe() -> dict[str, Any]:
 def operator_files() -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     product_owners = ["root:root", "65532:65532"]
-    for lane in ["relay-public", "relay-consultation", "notary"]:
+    for lane in ["relay-public", "relay-consultation"]:
         files.append(
             {
                 "id": f"{lane}-environment",
@@ -479,8 +442,6 @@ def operator_files() -> list[dict[str, Any]]:
             }
         )
     for file_id, file_format, owners in [
-        ("notary-signing-key", "json_web_key", product_owners),
-        ("notary-relay-workload-credential", "compact_jwt", product_owners),
         (
             "postgresql-tls-certificate",
             "pem_certificate",
@@ -542,13 +503,11 @@ def create_payload(args: argparse.Namespace) -> int:
     images = image_lock.get("images")
     if not isinstance(images, dict) or set(images) != {
         "registry-relay",
-        "registry-notary",
         "postgresql",
     }:
         raise ValueError("legacy image lock image roster is not closed")
 
     relay, relay_index_digest = image(images["registry-relay"], "Relay")
-    notary, notary_index_digest = image(images["registry-notary"], "Notary")
     postgresql, postgresql_index_digest = image(
         images["postgresql"], "PostgreSQL"
     )
@@ -556,11 +515,6 @@ def create_payload(args: argparse.Namespace) -> int:
         args.relay_image_index,
         "Relay",
         relay_index_digest,
-    )
-    notary_manifest_digest = read_platform_manifest_from_index(
-        args.notary_image_index,
-        "Notary",
-        notary_index_digest,
     )
     postgresql_manifest_digest = read_platform_manifest_from_index(
         args.postgresql_image_index,
@@ -608,7 +562,6 @@ def create_payload(args: argparse.Namespace) -> int:
         "registryctl_artifacts": registryctl_artifacts,
         "images": {
             "relay": locked_image(relay, relay_manifest_digest),
-            "notary": locked_image(notary, notary_manifest_digest),
             "postgresql_state_plane": locked_image(
                 postgresql, postgresql_manifest_digest
             ),
@@ -618,7 +571,6 @@ def create_payload(args: argparse.Namespace) -> int:
             "relay_consultation": product_recipe(
                 "registry-relay", "relay-consultation"
             ),
-            "notary": product_recipe("registry-notary", "notary"),
             "postgresql_state_plane": postgresql_recipe(),
             "operator_files": operator_files(),
         },
@@ -632,10 +584,6 @@ def create_payload(args: argparse.Namespace) -> int:
             "relay_config_schema": (
                 "https://id.registrystack.org/schemas/"
                 "registry-relay/registry-relay.config.schema.json"
-            ),
-            "notary_config_schema": (
-                "https://id.registrystack.org/schemas/"
-                "registry-notary/registry-notary.config.schema.json"
             ),
         },
         "embedded_starters": [
@@ -702,7 +650,6 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--asset-dir", required=True, type=Path)
     create.add_argument("--image-lock", required=True, type=Path)
     create.add_argument("--relay-image-index", required=True, type=Path)
-    create.add_argument("--notary-image-index", required=True, type=Path)
     create.add_argument("--postgresql-image-index", required=True, type=Path)
     create.add_argument("--output", required=True, type=Path)
     create.set_defaults(handler=create_payload)

@@ -45,4 +45,3 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims: { birth-record-exists: false, date-of-birth: null, sex: null, child-given-name: null, child-family-name: null, child-birth-date: null, child-place-of-birth: null, parents: null, age-band: null }

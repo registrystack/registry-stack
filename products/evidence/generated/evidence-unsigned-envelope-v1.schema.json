@@ -1,0 +1,32 @@
+{
+  "$comment": "Transport-authenticated convenience representation selected only by its exact vendor media type when the immutable bundle and the complete matched grant permit it. Once separated from its HTTPS exchange it provides no issuer-authenticity, integrity, non-repudiation, or later-verification property. The nested evidence is the same closed core object that would be JWS encoded. There is no protected, payload, or signature member, so the strict JWS verifier rejects this representation; tooling that parses it must return an explicitly unverified result.",
+  "$id": "https://registrystack.org/schemas/evidence/unsigned-envelope-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evidence": {
+      "$ref": "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json"
+    },
+    "integrityProtection": {
+      "const": "none"
+    },
+    "schema": {
+      "const": "registry.unsigned-evidence-envelope/v1"
+    },
+    "type": {
+      "const": "UnsignedEvidenceEnvelope"
+    },
+    "warning": {
+      "const": "not-cryptographically-verifiable"
+    }
+  },
+  "required": [
+    "schema",
+    "type",
+    "integrityProtection",
+    "warning",
+    "evidence"
+  ],
+  "title": "Evidence unsigned response envelope Version 1",
+  "type": "object"
+}

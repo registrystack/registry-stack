@@ -19,7 +19,26 @@ METRICS_CONTRACT = Path("release/contracts/selected-metrics.json")
 ERROR_REFERENCE = Path("docs/site/src/content/docs/reference/errors.mdx")
 OPENAPI_SPECS = {
     "registry-relay": Path("crates/registry-relay/openapi/registry-relay.openapi.json"),
-    "registry-notary": Path("products/notary/openapi/registry-notary.openapi.json"),
+}
+MAINTAINED_RELEASE_PRODUCTS = frozenset({"registry-relay"})
+HISTORICAL_RELEASE_PRODUCTS = frozenset({"registry-notary"})
+KNOWN_RELEASE_PRODUCTS = MAINTAINED_RELEASE_PRODUCTS | HISTORICAL_RELEASE_PRODUCTS
+HISTORICAL_DIAGNOSTIC_PRODUCTS = frozenset({"registry_notary"})
+# Codes a released catalog carried and a maintained product no longer emits.
+# Keyed by the exact (family, product, code) so the exemption reaches one code
+# and never the product's other codes, which stay guarded. A retirement is a
+# published-surface decision, so each one states why here rather than in a
+# commit message a reader of this file will not see.
+RETIRED_DIAGNOSTIC_CODES: dict[tuple[str, str, str], str] = {
+    (
+        "fixture_execution",
+        "registryctl_relay_offline_harness",
+        "authorization.denied",
+    ): (
+        "The offline fixture harness reached this code only through Notary's "
+        "standalone authentication, which was removed with the product. The "
+        "harness itself is maintained and its other codes still stand."
+    ),
 }
 DIAGNOSTIC_CATALOGS = {
     "authoring": (
@@ -223,6 +242,8 @@ def compare_diagnostic_contracts(
     errors: list[str] = []
     for key, old in sorted(base.items()):
         family, product, code = key
+        if product in HISTORICAL_DIAGNOSTIC_PRODUCTS or key in RETIRED_DIAGNOSTIC_CODES:
+            continue
         new = current.get(key)
         label = f"{family} {product} {code}"
         if new is None:
@@ -267,11 +288,21 @@ def parse_error_registry(text: str) -> dict[str, ErrorContract]:
         entries.setdefault(code, (meaning, set()))[1].add(product)
 
     if not entries:
-        raise ContractError("error reference contains no Registry Relay or Registry Notary codes")
-    return {
-        code: ErrorContract(meaning, frozenset(products))
-        for code, (meaning, products) in entries.items()
-    }
+        raise ContractError(
+            "error reference contains no maintained Registry Relay codes "
+            "and no historical Registry Notary codes"
+        )
+    current_entries: dict[str, ErrorContract] = {}
+    for code, (meaning, products) in entries.items():
+        maintained_products = products & MAINTAINED_RELEASE_PRODUCTS
+        if maintained_products:
+            current_entries[code] = ErrorContract(
+                meaning,
+                frozenset(maintained_products),
+            )
+    if not current_entries:
+        raise ContractError("error reference contains no maintained Registry Relay codes")
+    return current_entries
 
 
 def compare_error_contracts(
@@ -325,8 +356,8 @@ def validate_metrics_contract(data: Any, root: Path = ROOT) -> dict[tuple[str, s
         meaning = metric["meaning"]
         labels = metric["labels"]
         source = metric["source"]
-        if product not in {"registry-relay", "registry-notary"}:
-            raise ContractError(f"{label}.product is not a released product")
+        if product not in MAINTAINED_RELEASE_PRODUCTS:
+            raise ContractError(f"{label}.product is not a maintained product")
         if not isinstance(name, str) or re.fullmatch(r"[a-z_:][a-z0-9_:]*", name) is None:
             raise ContractError(f"{label}.name is not a Prometheus metric name")
         if metric_type not in {"counter", "gauge", "histogram", "summary", "untyped"}:
@@ -373,6 +404,8 @@ def compare_metrics_contracts(
     for key, old in sorted(base.items()):
         new = current.get(key)
         product, name = key
+        if product in HISTORICAL_RELEASE_PRODUCTS:
+            continue
         if new is None:
             errors.append(f"selected metric removed: {product} {name}")
             continue
@@ -574,7 +607,7 @@ def _validate_metrics_shape_only(data: Any) -> dict[tuple[str, str], dict[str, A
                 metric[field]
         except (KeyError, TypeError) as error:
             raise ContractError(f"{label} is missing a protected field") from error
-        if product not in {"registry-relay", "registry-notary"}:
+        if product not in KNOWN_RELEASE_PRODUCTS:
             raise ContractError(f"{label}.product is not a released product")
         if not isinstance(name, str) or re.fullmatch(r"[a-z_:][a-z0-9_:]*", name) is None:
             raise ContractError(f"{label}.name is not a Prometheus metric name")

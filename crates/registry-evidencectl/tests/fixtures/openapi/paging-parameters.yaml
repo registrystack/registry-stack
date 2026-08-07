@@ -1,0 +1,90 @@
+openapi: 3.0.3
+info:
+  title: Paging parameter shapes
+  version: "1.0.0"
+paths:
+  # A page index and a page size side by side. The index bounds how many pages
+  # exist, not how many items a response carries, so it must not set an array
+  # bound; the size does.
+  /records:
+    get:
+      summary: Search records
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            maximum: 10000
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            maximum: 50
+      responses:
+        "200":
+          description: A page of records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordSearchResponse'
+  # Two genuine size ceilings. The smaller one is the one a response can
+  # actually reach.
+  /events:
+    get:
+      summary: Search events
+      parameters:
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            maximum: 25
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 200
+      responses:
+        "200":
+          description: A page of events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordSearchResponse'
+  # Names that merely contain a matching word without naming a page size.
+  /reports:
+    get:
+      summary: Search reports
+      parameters:
+        - name: pageToken
+          in: query
+          schema:
+            type: string
+        - name: fileSizeCeiling
+          in: query
+          schema:
+            type: integer
+            maximum: 9000
+        - name: rateLimitBurst
+          in: query
+          schema:
+            type: integer
+            maximum: 8000
+      responses:
+        "200":
+          description: A page of reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordSearchResponse'
+components:
+  schemas:
+    RecordSearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string

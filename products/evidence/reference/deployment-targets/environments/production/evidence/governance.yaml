@@ -1,0 +1,41 @@
+version: 1
+assuranceProfile: evidence-grade
+service: {providerId: https://evidence.example.org, trustDomain: https://trust.example.org}
+issuer: {id: https://authority.example.org}
+authentication:
+  kind: oidc-access-token
+  issuer: https://mint.example.org
+  audiences: [evidence.example.org]
+  tokenTypes: [at+jwt]
+  algorithms: [ES256]
+  jwksUri: https://mint.example.org/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
+audit: {format: keyed-jsonl, hashSecretRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1, failClosed: true}
+subjectBinding: {secretRef: secret:file/evidence-subject-binding, keyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/PSmhXYjoKCBO6gCOMNHqMvnnsAC3m0aaLfXZDWJLmd4.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
+responseFormats: [signed-jws, sd-jwt-vc]
+authorityProfiles:
+  example-requester:
+    kind: statutory
+    requesterTags: [example-requester]
+    grants:
+      - requirement: urn:example:requirement:answer:v1
+        purpose: eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, sd-jwt-vc]
+        subjects: [{role: subject, selectorProfile: subject-reference-v1, valueOrigin: request}]

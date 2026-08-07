@@ -6,28 +6,14 @@ integrations:
       credential:
         token: { secret: FHIR_ACCESS_TOKEN }
         generation: 1
-issuance:
-  issuer: did:web:fhir-notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-callers:
-  coverage-service:
-    api_key_fingerprint: { secret: COVERAGE_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:coverage:read"]
 relay:
   origin: https://fhir-relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [fhir-relay-client]
-
-notary_relay:
-  base_url: http://127.0.0.1:8080
-  workload_client_id: fhir-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: fhir-consultation-client, principal_id: fhir-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: fhir-relay }
-  notary: { service: fhir-notary }

@@ -2595,14 +2595,14 @@ fn evidence_offering_list_example() -> Value {
 fn evidence_offering_example() -> Value {
     json!({
         "access": {
-            "conforms_to": "https://demo.example.gov/standards/registry-notary/evidence-v1",
-            "discovery_url": "https://notary.demo.example.gov/.well-known/registry-notary",
-            "endpoint_url": "https://notary.demo.example.gov/evidence-offerings/benefits-person/verifications",
-            "kind": "registry-notary",
+            "conforms_to": "registry.assertion-evidence/v1",
+            "discovery_url": "https://benefits-evidence.demo.example.gov/.well-known/evidence/jwks.json",
+            "endpoint_url": "https://benefits-evidence.demo.example.gov",
+            "kind": "registry-evidence",
             "ruleset": "benefits-person-v1",
         },
         "dataset_id": "benefits_casework",
-        "description": "Registry Notary verification for submitted benefits person eligibility status and role facts.",
+        "description": "Evidence assertion for submitted benefits person eligibility status and role facts.",
         "entity": "person",
         "evidence_type": {
             "id": "benefits_person_record_evidence",
@@ -3428,8 +3428,8 @@ fn evidence_offering_schema() -> Value {
                 "type": "object",
                 "required": ["kind", "ruleset"],
                 "properties": {
-                    "kind": { "type": "string", "enum": ["registry-notary"] },
-                    "conforms_to": { "type": ["string", "null"], "format": "uri" },
+                    "kind": { "type": "string", "enum": ["registry-evidence"] },
+                    "conforms_to": { "type": ["string", "null"] },
                     "endpoint_url": { "type": ["string", "null"], "format": "uri" },
                     "discovery_url": { "type": ["string", "null"], "format": "uri" },
                     "ruleset": { "type": "string" },
@@ -5128,8 +5128,8 @@ fn query_parameter(name: &str, description: &str) -> Value {
 ///   (`require_purpose_header`).
 /// - When present, the value is recorded verbatim in the audit trail.
 /// - On these ordinary entity and feature routes, purpose *values* are not
-///   compared to an allowlist; Registry Notary remains the purpose-certification
-///   layer for an offering handoff.
+///   compared to an allowlist; certifying a purpose value is left to the
+///   layer that hands off an offering, not to Registry Relay.
 /// - Native `/v1/consultations/.../execute` is a separate contract and validates
 ///   `Data-Purpose` against the selected consultation profile.
 /// - Value-level allowlists, if ever added, arrive as additive opt-in config
@@ -5147,8 +5147,8 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
                         When `require_purpose_header` is set on this entity, \
                         the header must be present; a missing value returns `400 auth.purpose_required`. \
                         On ordinary entity and feature routes, the value is recorded verbatim \
-                        in the audit trail but is not compared to a value allowlist; Registry \
-                        Notary remains the purpose-certification layer for an offering handoff. \
+                        in the audit trail but is not compared to a value allowlist; certifying \
+                        a purpose value is left to the layer that hands off an offering. \
                         Native `/v1/consultations/.../execute` is separate and validates \
                         `Data-Purpose` against the selected consultation profile contract. \
                         Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
@@ -5717,7 +5717,7 @@ mod tests {
 
         assert_eq!(
             schemas["EvidenceOffering"]["properties"]["access"]["properties"]["kind"]["enum"],
-            json!(["registry-notary"])
+            json!(["registry-evidence"])
         );
     }
 

@@ -1,0 +1,11 @@
+id: urn:gov:example:codelist:residence-regions
+version: '2026-01'
+# Several register codes map onto one disclosed region. The mapping is the
+# minimization: the disclosed code is coarser than the code the register holds,
+# and only the outputs listed here can ever leave the service.
+entries:
+  R-101: REGION-NORTH
+  R-102: REGION-NORTH
+  R-201: REGION-SOUTH
+  R-202: REGION-SOUTH
+allowed_outputs: [REGION-NORTH, REGION-SOUTH]

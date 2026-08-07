@@ -1,0 +1,151 @@
+fixture: registry.evidence.selector-matrix/v1
+synthetic_only: true
+profiles:
+  - case: identifier-only
+    profile: opaque-record-v1
+    role: subject
+    fields:
+      record_reference: {type: string, minimum_bytes: 1, maximum_bytes: 96}
+    maximum_aggregate_bytes: 96
+    value_origin: request
+    claim_binding:
+      authority_profile: reviewed-caseworker-v1
+      requirement: urn:example:fixture:requirement:classification:v1
+      purpose: fixture-procedure
+      audience: urn:example:fixture:audience:requester-a
+      exact_role_profile_origin: [subject, opaque-record-v1, request]
+      valueClaims: prohibited
+    request_values: {record_reference: synthetic-record-001}
+    negative:
+      - missing-record-reference
+      - extra-caller-field
+      - wrong-origin-context-value
+      - identifier-possession-without-entitlement
+  - case: compound-no-identifier
+    profile: demographics-v1
+    role: subject
+    fields:
+      given_name: {type: string, minimum_bytes: 1, maximum_bytes: 200}
+      family_name: {type: string, minimum_bytes: 1, maximum_bytes: 200}
+      birth_date: {type: date}
+    maximum_aggregate_bytes: 420
+    value_origin: authenticated-context
+    claim_binding:
+      authority_profile: subject-bound-v1
+      requirement: urn:example:fixture:requirement:property:v1
+      purpose: fixture-procedure
+      audience: urn:example:fixture:audience:requester-a
+      exact_role_profile_origin: [subject, demographics-v1, authenticated-context]
+      valueClaims:
+        given_name: identity.given_name
+        family_name: identity.family_name
+        birth_date: identity.birth_date
+    request_values: absent
+    context_values: {given_name: Ána María, family_name: N'Dour-Sato, birth_date: '2000-02-29'}
+    negative:
+      - caller-values-prohibited-for-context-origin
+      - missing-configured-context-claim
+      - no-principal-claim-fallback
+      - no-case-fold-or-transliteration
+  - case: added-disambiguator
+    profile: demographics-with-event-v1
+    role: subject
+    fields:
+      given_name: {type: string, minimum_bytes: 1, maximum_bytes: 200}
+      family_name: {type: string, minimum_bytes: 1, maximum_bytes: 200}
+      birth_date: {type: date}
+      event_reference: {type: string, minimum_bytes: 1, maximum_bytes: 96}
+    maximum_aggregate_bytes: 520
+    value_origin: authenticated-grant
+    claim_binding:
+      authority_profile: authenticated-grant-v1
+      requirement: urn:example:fixture:requirement:property:v1
+      purpose: fixture-procedure
+      audience: urn:example:fixture:audience:requester-a
+      exact_role_profile_origin: [subject, demographics-with-event-v1, authenticated-grant]
+      configured_grant_claims:
+        grantIdClaim: evidence_grant_id
+        grantAuthorityClaim: evidence_authority
+      verified_grant_binding:
+        grant_id: synthetic-grant-001
+        grant_authority: urn:example:fixture:authority:grant-a
+      valueClaims:
+        given_name: grant.subject.given_name
+        family_name: grant.subject.family_name
+        birth_date: grant.subject.birth_date
+        event_reference: grant.subject.event_reference
+    request_values: absent
+    verified_token_values: {given_name: Adaeze, family_name: Okafor, birth_date: '1990-07-11', event_reference: synthetic-event-001}
+    negative:
+      - caller-values-prohibited-for-grant-origin
+      - caller-added-disambiguator-rejected-from-demographics-v1
+      - authenticated-grant-id-not-bound
+      - authenticated-grant-authority-not-bound
+      - incomplete-grant-valueClaims
+      - alternative-field-set-not-inferred
+  - case: multi-role
+    profiles:
+      subject-a:
+        profile: opaque-record-v1
+        fields: {record_reference: synthetic-record-002}
+      subject-b:
+        profile: demographics-v1
+        fields: {given_name: Binta, family_name: Diallo, birth_date: '1970-06-15'}
+    value_origin: request
+    claim_binding:
+      authority_profile: reviewed-caseworker-v1
+      requirement: urn:example:fixture:requirement:relationship:v1
+      purpose: fixture-procedure
+      audience: urn:example:fixture:audience:requester-a
+      exact_role_profile_origins:
+        - [subject-a, opaque-record-v1, request]
+        - [subject-b, demographics-v1, request]
+      valueClaims: prohibited
+    negative:
+      - swapped-role-selectors
+      - unauthorized-subject-b-substitution
+      - missing-one-role
+      - duplicate-subject-role
+      - unknown-subject-role
+      - entitlement-union-across-roles
+  - case: opaque-non-domain-field-names
+    profile: opaque-coordinates-v1
+    role: subject
+    fields:
+      alpha: {type: string, minimum_bytes: 1, maximum_bytes: 80}
+      delta: {type: integer, minimum: 0, maximum: 999999}
+      kappa: {type: controlled-code, codelist: codelists/opaque-codes.yaml, codelist_version: '1', maximum_bytes: 16}
+    maximum_aggregate_bytes: 96
+    value_origin: request
+    claim_binding:
+      authority_profile: reviewed-caseworker-v1
+      requirement: urn:example:fixture:requirement:opaque:v1
+      purpose: fixture-procedure
+      audience: urn:example:fixture:audience:requester-a
+      exact_role_profile_origin: [subject, opaque-coordinates-v1, request]
+      valueClaims: prohibited
+    request_values: {alpha: synthetic-alpha, delta: 42, kappa: K-2}
+    expected_core_behavior: Identical to every other profile; names carry no domain semantics.
+    negative:
+      - unknown-opaque-field
+      - wrong-opaque-scalar-type
+      - aggregate-size-exceeded
+global_negative:
+  - empty-string
+  - invalid-date
+  - scalar-object-or-array
+  - field-byte-boundary-plus-one
+  - aggregate-byte-boundary-plus-one
+  - unauthorized-profile
+  - unauthorized-purpose
+  - unauthorized-audience
+  - missing-context-valueClaims
+  - incomplete-or-extra-valueClaims
+  - request-origin-valueClaims
+  - grant-id-or-authority-from-caller-request
+  - credential-resolution-or-source-access-before-validation
+redaction_expectation:
+  public_evidence: no selector profile or value
+  public_problem: no selector profile or value
+  logs_metrics_traces: no selector profile or value; profile ids may not be metric labels
+  audit: profile id plus at most one scoped keyed pseudonym per complete role-selector bundle

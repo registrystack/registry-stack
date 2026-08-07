@@ -59,7 +59,7 @@ test('rejects every removed command family in a current published page', async (
   });
 });
 
-test('allows removed names in draft, historical, sealed history, and the cutover page', async () => {
+test('allows removed names in draft, historical, and sealed history pages', async () => {
   await withSite(async (root) => {
     await writePage(root, 'draft.mdx', 'status: draft\ndraft: true', '`registryctl start`');
     await writePage(root, 'history.mdx', 'status: historical', '`registryctl start`');
@@ -69,12 +69,6 @@ test('allows removed names in draft, historical, sealed history, and the cutover
       'products/example/release-notes.mdx',
       'status: current',
       '`registryctl preflight`',
-    );
-    await writePage(
-      root,
-      'start/pre-1.0-cutover.mdx',
-      'status: current',
-      '`registryctl start` moves to `registryctl dev`.',
     );
     await writePage(root, 'current.mdx', 'status: current', '`registryctl dev`');
 

@@ -247,10 +247,10 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     assert_eq!(
         index.coverage_by_schema(),
         [
-            (SchemaKind::Project, 220),
-            (SchemaKind::Environment, 213),
+            (SchemaKind::Project, 191),
+            (SchemaKind::Environment, 126),
             (SchemaKind::Integration, 171),
-            (SchemaKind::Fixture, 63),
+            (SchemaKind::Fixture, 39),
             (SchemaKind::Entity, 35),
         ]
         .into_iter()
@@ -261,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 492),
-            (FieldPathKind::MapKey, 26),
-            (FieldPathKind::MapValue, 33),
-            (FieldPathKind::ArrayItem, 34),
-            (FieldPathKind::Branch, 112),
+            (FieldPathKind::Property, 393),
+            (FieldPathKind::MapKey, 22),
+            (FieldPathKind::MapValue, 28),
+            (FieldPathKind::ArrayItem, 26),
+            (FieldPathKind::Branch, 88),
         ]
         .into_iter()
         .collect(),
@@ -275,11 +275,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 445),
-            (Sensitivity::Sensitive, 69),
-            (Sensitivity::SecretReference, 14),
-            (Sensitivity::RedactedFixture, 51),
-            (Sensitivity::Structural, 117),
+            (Sensitivity::Internal, 382),
+            (Sensitivity::Sensitive, 43),
+            (Sensitivity::SecretReference, 9),
+            (Sensitivity::RedactedFixture, 29),
+            (Sensitivity::Structural, 93),
         ]
         .into_iter()
         .collect(),
@@ -287,12 +287,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        702,
+        562,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        279,
+        225,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -336,12 +336,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     }));
     assert_eq!(
         index.coverage_by_sensitivity()[&Sensitivity::SecretReference],
-        14,
+        9,
         "secret-reference values and names remain explicitly never-reportable"
     );
     assert_eq!(
         index.coverage_by_sensitivity()[&Sensitivity::RedactedFixture],
-        51,
+        29,
         "fixture request, response, input, body, and expected values remain redacted"
     );
     walk_schema(
@@ -364,12 +364,9 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     for pointer in [
         "/properties/relay/properties/origin",
         "/properties/relay/properties/jwks_url",
-        "/$defs/oid4vci/properties/authorization_server/properties/token_url",
-        "/$defs/oid4vci/properties/client/properties/id",
         "/$defs/privateCidrs/items",
-        "/$defs/oid4vci/properties/access_token/properties/signing_kid",
         "/$defs/credential/oneOf/3/properties/generation",
-        "/properties/notary_state/properties/postgresql/properties/root_certificate_path",
+        "/properties/relay_state/properties/postgresql/properties/root_certificate_path",
     ] {
         assert!(
             matches!(
@@ -470,6 +467,51 @@ fn schemas_compile_and_all_catalog_documents_pass_schema_and_runtime() {
         ],
         "the parity gate must enumerate the exact published five-schema catalog"
     );
+    let project_schema = compile_schema("project.schema.json").0;
+    assert_eq!(
+        project_schema.pointer("/$defs/consultationService/properties/kind/const"),
+        Some(&Value::String("consultation_api".to_string())),
+        "Relay consultations retain one explicit service kind"
+    );
+    assert!(
+        project_schema.pointer("/$defs/evidenceService").is_none(),
+        "standalone Evidence is not a registryctl project-authoring service"
+    );
+    let environment_schema = compile_schema("environment.schema.json").0;
+    assert_eq!(
+        environment_schema["properties"]
+            .as_object()
+            .expect("environment properties are closed")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        [
+            "deployment",
+            "development",
+            "entities",
+            "integrations",
+            "relay",
+            "relay_state",
+            "version",
+        ]
+        .into_iter()
+        .collect(),
+        "the environment schema exposes only Relay, source, entity, and development bindings"
+    );
+    assert_eq!(
+        environment_schema.pointer("/properties/deployment/required"),
+        Some(&serde_json::json!(["profile", "relay"])),
+        "the Relay-only deployment contract requires its Relay service binding"
+    );
+    for schema in &coverage.schemas {
+        let document = std::fs::read_to_string(schema_root().join(&schema.file))
+            .expect("published schema text reads");
+        assert!(
+            !document.to_ascii_lowercase().contains("notary"),
+            "{} must not publish retired Notary vocabulary",
+            schema.kind
+        );
+    }
     let compiled = coverage
         .schemas
         .iter()
@@ -759,27 +801,27 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "project",
                 PublishedStructuralInventory {
-                    nodes: 253,
-                    local_refs: 123,
-                    union_nodes: 9,
-                    union_branches: 19,
+                    nodes: 220,
+                    local_refs: 112,
+                    union_nodes: 7,
+                    union_branches: 15,
                     conditionals: 0,
-                    objects: 51,
-                    closed_objects: 36,
-                    typed_maps: 15,
+                    objects: 44,
+                    closed_objects: 31,
+                    typed_maps: 13,
                     open_maps: 0,
-                    arrays: 11,
-                    scalar_types: 30,
+                    arrays: 8,
+                    scalar_types: 24,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 9,
-                    integer_upper_bounds: 9,
-                    string_length_bounds: 10,
-                    string_patterns: 12,
-                    array_size_bounds: 9,
-                    unique_arrays: 8,
-                    object_size_bounds: 17,
-                    property_name_constraints: 14,
-                    enums: 13,
+                    integer_lower_bounds: 8,
+                    integer_upper_bounds: 8,
+                    string_length_bounds: 8,
+                    string_patterns: 11,
+                    array_size_bounds: 6,
+                    unique_arrays: 5,
+                    object_size_bounds: 15,
+                    property_name_constraints: 12,
+                    enums: 10,
                     consts: 8,
                     defaults: 0,
                     deprecations: 0,
@@ -788,29 +830,29 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "environment",
                 PublishedStructuralInventory {
-                    nodes: 239,
-                    local_refs: 92,
-                    union_nodes: 6,
-                    union_branches: 17,
-                    conditionals: 7,
-                    objects: 42,
-                    closed_objects: 38,
-                    typed_maps: 4,
+                    nodes: 148,
+                    local_refs: 54,
+                    union_nodes: 4,
+                    union_branches: 12,
+                    conditionals: 3,
+                    objects: 28,
+                    closed_objects: 25,
+                    typed_maps: 3,
                     open_maps: 0,
-                    arrays: 6,
-                    scalar_types: 46,
+                    arrays: 3,
+                    scalar_types: 35,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 19,
-                    integer_upper_bounds: 19,
-                    string_length_bounds: 17,
-                    string_patterns: 15,
-                    array_size_bounds: 6,
-                    unique_arrays: 6,
-                    object_size_bounds: 5,
-                    property_name_constraints: 4,
-                    enums: 3,
+                    integer_lower_bounds: 15,
+                    integer_upper_bounds: 15,
+                    string_length_bounds: 12,
+                    string_patterns: 12,
+                    array_size_bounds: 3,
+                    unique_arrays: 3,
+                    object_size_bounds: 3,
+                    property_name_constraints: 3,
+                    enums: 2,
                     consts: 6,
-                    defaults: 4,
+                    defaults: 0,
                     deprecations: 0,
                 },
             ),
@@ -846,26 +888,26 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "fixture",
                 PublishedStructuralInventory {
-                    nodes: 72,
-                    local_refs: 11,
-                    union_nodes: 4,
-                    union_branches: 8,
+                    nodes: 44,
+                    local_refs: 6,
+                    union_nodes: 3,
+                    union_branches: 6,
                     conditionals: 0,
-                    objects: 21,
-                    closed_objects: 11,
-                    typed_maps: 7,
-                    open_maps: 3,
-                    arrays: 4,
-                    scalar_types: 36,
-                    nullable_nodes: 4,
+                    objects: 14,
+                    closed_objects: 7,
+                    typed_maps: 5,
+                    open_maps: 2,
+                    arrays: 2,
+                    scalar_types: 21,
+                    nullable_nodes: 3,
                     integer_lower_bounds: 1,
                     integer_upper_bounds: 1,
-                    string_length_bounds: 9,
-                    string_patterns: 7,
-                    array_size_bounds: 4,
+                    string_length_bounds: 6,
+                    string_patterns: 6,
+                    array_size_bounds: 2,
                     unique_arrays: 0,
-                    object_size_bounds: 10,
-                    property_name_constraints: 4,
+                    object_size_bounds: 7,
+                    property_name_constraints: 3,
                     enums: 2,
                     consts: 1,
                     defaults: 0,

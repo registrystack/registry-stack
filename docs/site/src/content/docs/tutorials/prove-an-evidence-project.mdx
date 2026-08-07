@@ -1,0 +1,113 @@
+---
+title: Prove an Evidence Gateway project
+description: Add fixtures that describe your own requirement and run them through the Evidence Gateway evaluator before a production build.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-06"
+doc_type: how-to
+persona:
+  - assertion provider
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Start with a reviewed editable project. If you need to create one,
+[connect an institution source from OpenAPI](../connect-an-institution-source/) before adding
+fixtures. Fixtures are executable claims about your own Evidence Gateway project. They are not sample data
+for a first run and they must not be generated from an unrelated domain.
+
+Use them when your source, requirement, and derivation are ready for review. Local assurance may
+omit them while you iterate. Production and evidence-grade assurance require complete fixture
+coverage before the bundle loads.
+
+## Write cases for your requirement
+
+Place the fixture file under `bundle/fixtures/` and reference it from the requirement in
+`bundle/evidence.yaml`. Keep every value synthetic and sanitized.
+
+Cover behavior your reviewers need to approve:
+
+- one ordinary positive result;
+- one legitimate negative value, or an unresolved case when false would be misleading;
+- each important boundary in the derivation;
+- the `no_match` and `ambiguous` outcomes;
+- missing or mistyped required facts;
+- malformed and unavailable source responses;
+- output outside the governed codelist or schema;
+- privacy expectations proving source fields and selector values stay out of evidence and
+  diagnostics;
+- anti-reconstruction cases for concepts that must not be released together.
+
+The fixture format is closed. Start from the
+[fixture contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md),
+then keep only cases that express your project.
+
+## Run the project suite
+
+From any directory, run:
+
+```sh
+evidencectl fixtures run --project "<evidence-project>"
+```
+
+Evidencectl first runs `evidence check`, discovers the fixture files referenced by the captured
+bundle, and drives each one through `evidence evaluate`. It does not start HTTP, resolve a source
+credential, call the source, or write the production audit log. The served HTTP path remains a
+separate integration check.
+
+Use JSON output in CI:
+
+```sh
+evidencectl fixtures run --project "<evidence-project>" --json > fixture-report.json
+```
+
+Treat any failed case, missing reference, unknown field, or unsupported expectation as a failed
+build input. Do not convert a real failure into an ignored case.
+
+## Check the deployable inputs
+
+Run `evidence check` against the runtime file you plan to deploy:
+
+```sh
+evidence check --runtime "<evidence-project>/runtime.yaml"
+```
+
+This validates the complete captured bundle, scripts, schemas, codelists, key references, and
+runtime bindings. Source credentials are checked by readiness when the service starts, not by the
+offline fixture runner.
+
+During local authoring, keep the project writable so changes are convenient. Freeze inputs only
+for the deployable revision: make the runtime and bundle non-writable to the service identity, or
+mount them read-only, then rerun the check against those exact bytes.
+
+## Hand off the reviewed inputs
+
+Evidencectl has no generic `promote` command. Your deployment system owns approval, artifact
+transport, rollback, and environment binding. Use `evidencectl build` to create a new candidate
+from the editable project and one explicit production target.
+
+Build and hand off only when these facts are recorded together:
+
+1. The fixture suite passed against the editable inputs and the generated candidate.
+2. `evidence check` accepted the exact candidate runtime and bundle.
+3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
+   codelists, purposes, audiences, and privacy expectations.
+4. The environment supplies a governed public signing key and matching Transit binding, plus
+   independent owner-only subject-binding and audit secrets.
+5. The deployed bundle revision matches the reviewed candidate.
+6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
+
+Build a complete governed bundle for each environment. Each target owns its identities, endpoints,
+audiences, public keys, authority bindings, runtime paths, secret references, audit storage,
+listener settings, and trust files. Promote the reviewed editable source revision, then build
+staging and production candidates separately. [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+covers the target-host ceremony.
+
+## Next
+
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
+- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)

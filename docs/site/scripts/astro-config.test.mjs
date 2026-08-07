@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildNotaryRetirementRedirects } from '../src/lib/notary-retirement-redirects.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const configSource = readFileSync(resolve(here, '../astro.config.mjs'), 'utf8');
@@ -58,6 +59,23 @@ test('archived docset redirects current-only pages to protected main', () => {
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
     `https://docs.registrystack.org/dev${currentOnlyPath}`,
+  );
+});
+
+test('archived Notary redirects resolve current retirement and Evidence replacements', () => {
+  const context = resolveDocsetBuildContext(docsets, {
+    DOCS_DOCSET: 'v0.8.4',
+    DOCS_BASE: '/v/0.8.4/',
+  });
+  const redirects = buildNotaryRetirementRedirects(context.currentDocsetRedirect);
+
+  assert.equal(
+    redirects['/spec/rs-pr-notary/'],
+    'https://docs.registrystack.org/dev/decisions/notary-retirement-2026-08-03/',
+  );
+  assert.equal(
+    redirects['/products/registry-notary/source-claim-modeling-guide/'],
+    'https://docs.registrystack.org/dev/configure/evidence/',
   );
 });
 

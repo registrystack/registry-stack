@@ -1029,7 +1029,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 return "up"
             if "ps" in command:
                 return "ps"
-            self.fail(f"unexpected governed-start command: {command}")
+            raise AssertionError(f"unexpected governed-start command: {command}")
 
         self.assertEqual(
             [operation(command) for command in commands],
@@ -2419,7 +2419,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 logs=logs,
             )
 
-    def test_workflows_keep_candidate_authoring_and_released_runtime_proofs_separate(
+    def test_beta_workflows_keep_authoring_smoke_out_of_publication(
         self,
     ) -> None:
         candidate = WORKFLOW.read_text(encoding="utf-8")
@@ -2461,9 +2461,8 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
         self.assertNotIn("REGISTRYCTL_ASSET_DIR", candidate)
         self.assertNotIn("registry-release-lock.v1.json", candidate)
-        self.assertIn("if ((major >= 1)); then", release)
-        self.assertIn("first-country-release-form.py run", release)
-        self.assertIn("registry-release-lock.v1.json", release)
+        self.assertNotIn("first-country-release-form.py run", release)
+        self.assertNotIn("registry-release-lock.v1.json", release)
         self.assertIn(
             '"REGISTRYCTL_TUTORIAL_RUNTIME_MODE": "sealed"',
             SCRIPT.read_text(encoding="utf-8"),

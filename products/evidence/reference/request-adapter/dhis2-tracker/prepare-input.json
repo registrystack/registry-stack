@@ -1,0 +1,26 @@
+{
+  "selectors": {
+    "subject": {
+      "profile": "person-demographics-v1",
+      "values": {
+        "given_name": "Synthetic",
+        "family_name": "Subject",
+        "birth_date": "2000-02-29"
+      }
+    }
+  },
+  "parameters": {
+    "program": "Prg00000001",
+    "organisationUnit": "Org00000001",
+    "projection": "trackedEntity,attributes[attribute,value]",
+    "pageSize": "2",
+    "page": "1",
+    "totalPages": "true",
+    "attributes": {
+      "given_name": "Gvn00000001",
+      "family_name": "Fam00000001",
+      "birth_date": "Dob00000001"
+    },
+    "statusAttribute": "Sta00000001"
+  }
+}

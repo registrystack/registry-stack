@@ -1,15 +1,15 @@
 # Verify a Registry Stack release
 
-Current releases use a signed checksum chain. One keyless Sigstore bundle
-authenticates `SHA256SUMS`; the checksum file covers every public payload,
-including the release manifest, image lock, consolidated SPDX SBOM, and
-security-evidence archive. Tag-bound SLSA provenance covers the same payload
-subject set.
+Current Beta releases use two linked controls. The candidate workflow attests
+the exact candidate manifest and bundle. The protected-main publication
+workflow verifies those attestations before promotion, then keyless-signs one
+`SHA256SUMS` file covering every public payload, including the release
+manifest, image lock, consolidated SPDX SBOM, and security-evidence archive.
 
 ## Install tools
 
-The commands require GitHub CLI, Cosign, `slsa-verifier`, `jq`, `crane`, and
-GNU `sha256sum`. Pin and record the tool versions used for an audit.
+The commands require GitHub CLI, Cosign, `jq`, `crane`, and GNU `sha256sum`.
+Pin and record the tool versions used for an audit.
 
 ## Download one release
 
@@ -41,7 +41,8 @@ gh release view "${tag}" \
 
 ## Authenticate the checksum chain
 
-Verify the one Sigstore bundle before trusting a checksum:
+Verify the one Sigstore bundle before trusting a checksum. Current publication
+runs from protected `main`, so that branch is part of the signer identity:
 
 ```sh
 checksum_bundle="registry-stack-${tag}-SHA256SUMS.sigstore.json"
@@ -49,7 +50,7 @@ checksum_bundle="registry-stack-${tag}-SHA256SUMS.sigstore.json"
 cosign verify-blob SHA256SUMS \
   --bundle "${checksum_bundle}" \
   --certificate-identity \
-    "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/${tag}" \
+    "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main" \
   --certificate-oidc-issuer \
     https://token.actions.githubusercontent.com
 ```
@@ -60,8 +61,7 @@ Then verify every covered payload:
 sha256sum --check --strict SHA256SUMS
 ```
 
-`SHA256SUMS` intentionally excludes itself, its Sigstore bundle, and the
-separately signed provenance envelope.
+`SHA256SUMS` intentionally excludes itself and its Sigstore bundle.
 
 ## Verify release identity and image bindings
 
@@ -90,16 +90,17 @@ identity and immutable digest references:
 image_lock="registryctl-${tag}-image-lock.json"
 
 jq -e --arg tag "${tag}" '
-  .schema_version == "registryctl.release_image_lock.v1" and
+  .schema_version == "registryctl.release_image_lock.v3" and
   .release_tag == $tag and
   .platform == "linux/amd64" and
+  ((.images | keys) == ["postgresql", "registry-relay"]) and
   (.images["registry-relay"] |
     test("^ghcr\\.io/registrystack/registry-relay@sha256:[0-9a-f]{64}$")) and
-  (.images["registry-notary"] |
-    test("^ghcr\\.io/registrystack/registry-notary@sha256:[0-9a-f]{64}$"))
+  (.images["postgresql"] |
+    test("^docker\\.io/library/postgres@sha256:[0-9a-f]{64}$"))
 ' "${image_lock}"
 
-for name in registry-notary registry-relay; do
+for name in registry-relay postgresql; do
   ref="$(jq -er --arg name "${name}" '.images[$name]' "${image_lock}")"
   expected="${ref##*@}"
   test "$(crane digest "${ref}")" = "${expected}"
@@ -138,35 +139,25 @@ tar -tzf "${evidence}"
 ```
 
 The archive contains image-specific SPDX and Syft reports, Grype reports, and
-the advisory verdict used for candidate acceptance. Their archive hash is
+the advisory verdict used for candidate acceptance. Its archive hash is
 covered by the authenticated checksum chain.
 
-## Verify provenance subject coverage
+## Provenance boundary
 
-Verify each checksum-covered payload against the tag-bound provenance:
+The candidate manifest records the candidate workflow revision, run, attempt,
+source, scans, advisory verdict, and image promotion binding. GitHub artifact
+attestations authenticate the candidate manifest and bundle before promotion.
+The signed checksum chain authenticates the exact public release inventory.
 
-```sh
-provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
-
-while read -r expected name; do
-  slsa-verifier verify-artifact "${name}" \
-    --provenance-path "${provenance}" \
-    --source-uri github.com/registrystack/registry-stack \
-    --source-tag "${tag}"
-done < SHA256SUMS
-```
-
-The provenance authenticates the tag-bound payload subjects. The signed
-checksum chain authenticates their exact public inventory. The release
-manifest records the private candidate workflow revision, run, attempt,
-source, scans, advisory verdict, and image promotion binding.
+Ordinary Beta releases do not publish a second generic
+`release-provenance.intoto.jsonl` asset. Do not treat its absence as missing
+release evidence.
 
 ## Legacy releases
 
-Historical assets remain immutable. Releases created before the compact
-checksum-chain cutover may use per-file `.sig` and `.pem` pairs, release
-capsules, candidate receipts, separate digest files, multiple SPDX files, or
-no provenance asset.
+Historical assets remain immutable. Earlier releases may use per-file `.sig`
+and `.pem` pairs, release capsules, candidate receipts, separate digest files,
+multiple SPDX files, generic SLSA provenance, or no provenance asset.
 
 Use the verification document committed at the historical tag:
 

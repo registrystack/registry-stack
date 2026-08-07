@@ -24,7 +24,7 @@ criteria:
     evidence_urls:
       - https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md
       - https://github.com/registrystack/registry-stack/releases/tag/v0.13.0
-    explanation: Current release assets carry keyless cosign signatures and certificates, with public verification commands and tag-bound SLSA provenance.
+    explanation: Current Beta release assets use a keyless signed SHA256SUMS closure, and GitHub attestations authenticate the candidate manifest and bundle.
   - id: version_tags_signed
     level: silver
     status: Unmet

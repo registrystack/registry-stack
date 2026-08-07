@@ -1,0 +1,48 @@
+fixture: registry.evidence.sd-jwt-vc-cases/v1
+profile: ../../contracts/sd-jwt-vc-profile.yaml
+standards_profile: RFC 9901 and SD-JWT VC draft 18
+media_type: application/dc+sd-jwt
+protected_header:
+  exact_json: '{"alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo","typ":"dc+sd-jwt"}'
+  base64url_padding: prohibited
+  cty_member: prohibited
+serialization:
+  structure: issuer-signed JWT, then every root-value and configured structured-field disclosure, then a trailing tilde
+  key_binding_jwt: never appended by the issuer; the trailing tilde marks its absence
+  claim_set: closed to the issuer-owned claims and the profile's always-disclosed claims; any other member fails verification
+disclosures:
+  unprojected_value: exactly one root disclosure named by providesValueFor and carrying the identical public value from signed JWS
+  projected_structured_value: one nested disclosure for each direct field, under the configured public claim; nested field values remain atomic
+  encoding: base64url without padding of the exact JSON array of salt, claim name, and claim value
+  digest: base64url without padding of the SHA-256 of the encoded disclosure ASCII bytes
+  digest_algorithm: sha-256
+  digest_order: _sd is sorted lexicographically and carries no repeated digest
+  salt: fresh per disclosure from a cryptographically secure random source
+cases:
+  - {id: adult-boolean, request: golden/adult-request.json, payload: golden/adult-evidence.json}
+  - {id: residence-controlled-code, request: golden/residence-request.json, payload: golden/residence-evidence.json}
+  - {id: licence-boolean-and-category, request: golden/licence-request.json, payload: golden/licence-evidence.json}
+  - {id: relationship-role-bound-boolean, request: golden/relationship-request.json, payload: golden/relationship-evidence.json}
+issuance_procedure:
+  key_source: the one active signing key already used for the flattened JWS; no second key, algorithm, or key ceremony
+  payload: the projection of the exact constructed evidence payload; no value is re-derived, re-canonicalized, or reserialized during mapping
+  verification: resolve the key identifier in the harness-pinned public key set and verify the issuer-signed JWT before parsing any claim or disclosure
+negative:
+  - mutate one disclosure value
+  - add an undeclared disclosure
+  - remove one signed digest
+  - mutate one payload byte
+  - mutate one protected-header byte
+  - unknown kid
+  - revoked kid, even when the key remains in a cached JWKS
+  - a claim outside the published claim set
+  - the format is not enabled by the immutable bundle
+  - the format is not permitted by the complete matched grant
+  - holder key carrying a private member
+  - holder key that is not exact public EC P-256, or whose optional algorithm is not ES256
+  - signing-provider failure
+  - the serialization is offered to the flattened JWS verifier
+expected_failure: >-
+  no credential release; safe service_unavailable where failure is runtime; no
+  fallback to any other response format; format denial does not reveal whether
+  the bundle or the grant withheld it

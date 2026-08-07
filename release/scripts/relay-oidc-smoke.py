@@ -44,10 +44,20 @@ REQUIRED_CHECKS = (
     "missing-credential",
     "valid-zitadel-role-mapping",
     "tampered-signature",
+    "source-read-scope-denied",
+    "source-read-records",
+    "source-read-minimized-projection",
     "audience-mismatch",
     "token-type-denied",
     "organization-role-scope-denied",
 )
+METADATA_SCOPE = "smoke_registry:metadata"
+READ_SCOPE = "smoke_registry:rows"
+SOURCE_READ_PATH = "/v1/datasets/smoke_registry/entities/person/records"
+# The entity projects `person_id` to `id` and republishes `display_name`. A
+# response carrying any other key means the released image disclosed more of
+# the source row than the authored entity declares.
+SOURCE_READ_RECORD = {"id": "person-001", "display_name": "Registry Smoke Person"}
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -140,7 +150,8 @@ def validate_assets() -> dict[str, Any]:
         "mode: oidc",
         "discovery_url: http://localhost:8080/.well-known/openid-configuration",
         "scope_claim: $scope_claim",
-        '"registry-smoke-reader": "smoke_registry:metadata"',
+        '"registry-smoke-reader": $mapped_scope',
+        f"read_scope: {READ_SCOPE}",
         "$audience",
         "$required_org",
         "$allowed_client",
@@ -405,9 +416,11 @@ def render_relay_config(
     audience: str | None = None,
     required_org: str | None = None,
     allowed_token_type: str | None = None,
+    mapped_scope: str | None = None,
 ) -> str:
     params = {
         "base_url": json.dumps(f"http://127.0.0.1:{host_port}"),
+        "mapped_scope": json.dumps(mapped_scope or METADATA_SCOPE),
         "audience": json.dumps(audience or require_string(token_profile, "audience")),
         "required_org": json.dumps(
             required_org or require_string(token_profile, "required_org")
@@ -422,6 +435,27 @@ def render_relay_config(
     if "$" in rendered:
         raise SmokeError("Relay configuration template left unresolved placeholders")
     return rendered
+
+
+def source_read_result(body: dict[str, Any]) -> tuple[str, str]:
+    """Judge a records response against the entity's declared projection.
+
+    Returns ``(result, detail)``. The detail names the first departure from the
+    declared projection using field names only, so a failing report says what
+    the response carried without republishing the row itself.
+    """
+    data = body.get("data")
+    if not isinstance(data, list) or len(data) != 1:
+        return "fail", "records response did not carry exactly one record"
+    record = data[0]
+    if not isinstance(record, dict):
+        return "fail", "records response entry is not an object"
+    undeclared = sorted(set(record) - set(SOURCE_READ_RECORD))
+    if undeclared:
+        return "fail", f"record carries undeclared field {undeclared[0]}"
+    if record != SOURCE_READ_RECORD:
+        return "fail", "record does not match the synthetic fixture row"
+    return "pass", "record matches the declared entity projection"
 
 
 def tamper_signature(token: str) -> str:
@@ -811,6 +845,50 @@ def execute_live(args: argparse.Namespace) -> Path:
             status=401,
             code="auth.token_signature_invalid",
         )
+
+        stage = "source-read-scope-check"
+        records_endpoint = f"{base_url}{SOURCE_READ_PATH}"
+        expected_response(
+            report["checks"],
+            "source-read-scope-denied",
+            http_json(records_endpoint, token, guard),
+            status=403,
+            code="auth.scope_denied",
+        )
+
+        stage = "source-read-check"
+        read_grant = render_relay_config(
+            token_profile,
+            host_port=host_port,
+            mapped_scope=READ_SCOPE,
+        )
+        report["configuration_digests"]["source_read"] = start_relay(
+            config_path,
+            read_grant,
+            base_url=base_url,
+            env=env,
+            project=project,
+            guard=guard,
+        )
+        records_body = expected_response(
+            report["checks"],
+            "source-read-records",
+            http_json(records_endpoint, token, guard),
+            status=200,
+        )
+        projection_result, projection_detail = source_read_result(records_body)
+        report["checks"].append(
+            {
+                "id": "source-read-minimized-projection",
+                "expected_status": None,
+                "actual_status": None,
+                "expected_code": "declared entity projection",
+                "actual_code": projection_detail,
+                "result": projection_result,
+            }
+        )
+        if projection_result != "pass":
+            raise CheckFailure(projection_detail)
 
         stage = "audience-mismatch-check"
         wrong_audience = render_relay_config(

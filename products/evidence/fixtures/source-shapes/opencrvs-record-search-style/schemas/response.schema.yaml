@@ -1,0 +1,23 @@
+# Shape of the projected event-search response, checked before extraction runs.
+# dateOfEvent is optional because projection drops a leaf the record did not
+# carry, which is the case this shape proves an adapter must handle.
+type: object
+additionalProperties: false
+required: [total, results]
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000000
+  results:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        dateOfEvent:
+          type: string
+          format: date

@@ -14,13 +14,13 @@ from pathlib import Path
 
 expected = {
   ".gitignore": "84a80d00398b512ef755f17c1764c15b491058265d06d2cea71af37641324b83",
-  "environments/local.yaml": "0ae0ce73cd6a775e188aaa0caed37cccce378c392aa021544872b16d6f0047a6",
-  "integrations/person-record/fixtures/active.yaml": "4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
+  "environments/local.yaml": "3af49441f405f725b25c9b1075c408fcd4b768b2b0bbd70a59b04c878ae8df45",
+  "integrations/person-record/fixtures/active.yaml": "df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7",
   "integrations/person-record/fixtures/ambiguous.yaml": "6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
-  "integrations/person-record/fixtures/no-match.yaml": "f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
+  "integrations/person-record/fixtures/no-match.yaml": "415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "0c3bb602db4d2ec2fdf7d0224a30ee814d6345e36625f5e6ffdb2c09f7bef951"
+  "registry-stack.yaml": "73e73a00632488badd087c1a2c6830f961ba9533763a7127bed13984809a1386"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"jsonplaceholder-todo-live-overlay-v1.sh", "jsonplaceholder-todo-live-overlay-v1.sh.sha256"}
@@ -77,33 +77,17 @@ integrations:
     source:
       origin: https://public-json-source.invalid
 
-issuance:
-  issuer: did:web:notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-
-callers:
-  evidence-client:
-    api_key_fingerprint: { secret: EVIDENCE_CLIENT_TOKEN_HASH }
-    scopes: ["evidence:todo:read"]
-
 relay:
   origin: https://relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [fictional-relay-client]
-
-notary_relay:
-  base_url: http://registry-relay-consultation:8080
-  workload_client_id: fictional-registry-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: fictional-consultation-client, principal_id: fictional-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: fictional-registry-relay }
-  notary: { service: fictional-registry-notary }
 REGISTRYCTL_ENVIRONMENTS_LOCAL_YAML_EOF
 
 mkdir -p 'environments'
@@ -120,33 +104,17 @@ integrations:
     source:
       origin: https://jsonplaceholder.typicode.com
 
-issuance:
-  issuer: did:web:notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-
-callers:
-  evidence-client:
-    api_key_fingerprint: { secret: EVIDENCE_CLIENT_TOKEN_HASH }
-    scopes: ["evidence:todo:read"]
-
 relay:
   origin: https://relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [fictional-relay-client]
-
-notary_relay:
-  base_url: http://registry-relay-consultation:8080
-  workload_client_id: fictional-registry-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: fictional-consultation-client, principal_id: fictional-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: fictional-registry-relay }
-  notary: { service: fictional-registry-notary }
 REGISTRYCTL_ENVIRONMENTS_PUBLIC_DEMO_MISSING_YAML_EOF
 
 mkdir -p 'environments'
@@ -163,33 +131,17 @@ integrations:
     source:
       origin: https://jsonplaceholder.typicode.com
 
-issuance:
-  issuer: did:web:notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-
-callers:
-  evidence-client:
-    api_key_fingerprint: { secret: EVIDENCE_CLIENT_TOKEN_HASH }
-    scopes: ["evidence:todo:read"]
-
 relay:
   origin: https://relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [fictional-relay-client]
-
-notary_relay:
-  base_url: http://registry-relay-consultation:8080
-  workload_client_id: fictional-registry-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: fictional-consultation-client, principal_id: fictional-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: fictional-registry-relay }
-  notary: { service: fictional-registry-notary }
 REGISTRYCTL_ENVIRONMENTS_PUBLIC_DEMO_YAML_EOF
 
 mkdir -p 'integrations/public-todo/fixtures'
@@ -209,14 +161,6 @@ mkdir -p 'integrations/public-todo/fixtures'
 cat >'integrations/public-todo/fixtures/completed.yaml' <<'REGISTRYCTL_INTEGRATIONS_PUBLIC_TODO_FIXTURES_COMPLETED_YAML_EOF'
 name: completed-todo
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: public_todo_id, value: "4" }]
-  claims: [todo-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-source-connection-demonstration
 input: { todo_id: "4" }
 interactions:
   - expect:
@@ -232,21 +176,12 @@ interactions:
 expect:
   outcome: match
   outputs: { completed: true }
-  claims: { todo-record-exists: true, todo-completed: true }
 REGISTRYCTL_INTEGRATIONS_PUBLIC_TODO_FIXTURES_COMPLETED_YAML_EOF
 
 mkdir -p 'integrations/public-todo/fixtures'
 cat >'integrations/public-todo/fixtures/no-match.yaml' <<'REGISTRYCTL_INTEGRATIONS_PUBLIC_TODO_FIXTURES_NO_MATCH_YAML_EOF'
 name: no-todo
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers: [{ scheme: public_todo_id, value: "999999" }]
-  claims: [todo-record-exists]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: public-source-connection-demonstration
 input: { todo_id: "999999" }
 interactions:
   - expect:
@@ -256,7 +191,6 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims: { todo-record-exists: false, todo-completed: null }
 REGISTRYCTL_INTEGRATIONS_PUBLIC_TODO_FIXTURES_NO_MATCH_YAML_EOF
 
 mkdir -p 'integrations/public-todo'
@@ -310,31 +244,16 @@ integrations:
 
 services:
   todo-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: public-source-connection-demonstration
     legal_basis: public-service-delivery
     consent: not_required
-    access:
-      scopes: ["evidence:todo:read"]
     consultations:
       todo:
         integration: public-todo
         input:
           todo_id: request.target.identifiers.public_todo_id
-    claims:
-      todo-record-exists:
-        cel: todo.matched
-        disclosure: predicate
-      todo-completed:
-        output: todo.completed
-        disclosure: value
-    credential_profiles:
-      todo-status:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/public-todo-status/v1
-        validity: 10m
-        claims: [todo-record-exists, todo-completed]
 REGISTRYCTL_REGISTRY_STACK_YAML_EOF
 
 printf '%s\n' 'Applied the optional no-credential public JSON source demonstration overlay.'

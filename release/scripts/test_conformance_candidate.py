@@ -52,38 +52,42 @@ class ConformanceCandidateTest(TestCase):
     ) -> tuple[dict[str, object], dict[str, object], Path, str, Path]:
         candidate = self.root / candidate_name
         candidate.mkdir()
-        images = {
-            "registry-relay": self.relay,
-            "registry-notary": self.notary,
-        }
-        if schema_version == image_lock.SCHEMA_V2:
+        tag = "v0.17.0" if schema_version == image_lock.SCHEMA_V3 else self.tag
+        version = tag.removeprefix("v")
+        images = {"registry-relay": self.relay}
+        if schema_version != image_lock.SCHEMA_V3:
+            images["registry-notary"] = self.notary
+        if schema_version in {image_lock.SCHEMA_V2, image_lock.SCHEMA_V3}:
             images["postgresql"] = self.postgresql
         lock = {
             "schema_version": schema_version,
-            "release_tag": self.tag,
+            "release_tag": tag,
             "manifest_source_ref": "4" * 40,
             "tag_target": "1" * 40,
             "platform": image_lock.PLATFORM,
             "images": images,
         }
-        lock_name = f"registryctl-{self.tag}-image-lock.json"
+        lock_name = f"registryctl-{tag}-image-lock.json"
         lock_path = candidate / lock_name
         self.write_json(lock_path, lock)
         lock_sha256 = hashlib.sha256(lock_path.read_bytes()).hexdigest()
-        capsule_path = candidate / f"registry-stack-{self.tag}-release-capsule.json"
+        capsule_path = candidate / f"registry-stack-{tag}-release-capsule.json"
         capsule_images = [
             {
                 "name": "registry-relay",
                 "role": "released-product-image",
                 "digest_ref": self.relay,
             },
-            {
-                "name": "registry-notary",
-                "role": "released-product-image",
-                "digest_ref": self.notary,
-            },
         ]
-        if schema_version == image_lock.SCHEMA_V2:
+        if schema_version != image_lock.SCHEMA_V3:
+            capsule_images.append(
+                {
+                    "name": "registry-notary",
+                    "role": "released-product-image",
+                    "digest_ref": self.notary,
+                }
+            )
+        if schema_version in {image_lock.SCHEMA_V2, image_lock.SCHEMA_V3}:
             capsule_images.append(
                 {
                     "name": "postgresql",
@@ -94,11 +98,11 @@ class ConformanceCandidateTest(TestCase):
         self.write_json(
             capsule_path,
             {
-                "release_tag": self.tag,
-                "version": self.version,
+                "release_tag": tag,
+                "version": version,
                 "repository": self.module.CAPSULE_REPOSITORY,
                 "source": {
-                    "source_tag": self.tag,
+                    "source_tag": tag,
                     "source_ref": lock["manifest_source_ref"],
                     "source_commit": lock["tag_target"],
                     "lineage": {
@@ -122,7 +126,7 @@ class ConformanceCandidateTest(TestCase):
             f"{lock_sha256}  {lock_name}\n", encoding="utf-8"
         )
         return (
-            {"version": self.version},
+            {"version": version},
             lock,
             lock_path,
             lock_sha256,
@@ -156,6 +160,62 @@ class ConformanceCandidateTest(TestCase):
         capsule_sha256 = self.verify_fixture(stack, lock, lock_path, lock_sha256)
 
         self.assertRegex(capsule_sha256, r"^[0-9a-f]{64}$")
+
+    def test_v3_capsule_binds_relay_and_postgresql_without_notary(self) -> None:
+        stack, lock, lock_path, lock_sha256, _capsule_path = self.make_binding_fixture(
+            schema_version=image_lock.SCHEMA_V3
+        )
+
+        capsule_sha256 = self.verify_fixture(stack, lock, lock_path, lock_sha256)
+
+        self.assertRegex(capsule_sha256, r"^[0-9a-f]{64}$")
+        self.assertEqual({"registry-relay", "postgresql"}, set(lock["images"]))
+
+    def test_v3_candidate_loader_returns_relay_without_notary(self) -> None:
+        manifest_path = self.root / "release/manifests/registry-stack-beta-27.yaml"
+        manifest_path.parent.mkdir(parents=True)
+        image_lock_path = self.root / "registryctl-v0.17.0-image-lock.json"
+        manifest = {
+            "stack": {
+                "release": "beta-27",
+                "version": "0.17.0",
+                "source_repo": "registrystack/registry-stack",
+                "source_ref": "4" * 40,
+                "source_tag": "v0.17.0",
+                "status": "released",
+            },
+            "artifacts": {"registry-relay": "0.17.0"},
+        }
+        lock = {
+            "schema_version": image_lock.SCHEMA_V3,
+            "release_tag": "v0.17.0",
+            "manifest_source_ref": "4" * 40,
+            "tag_target": "1" * 40,
+            "platform": image_lock.PLATFORM,
+            "images": {
+                "registry-relay": self.relay,
+                "postgresql": self.postgresql,
+            },
+        }
+
+        with (
+            mock.patch.object(self.module, "REPO_ROOT", self.root),
+            mock.patch.object(self.module, "verify_git_binding"),
+            mock.patch.object(
+                self.module,
+                "verify_release_asset_binding",
+                return_value="5" * 64,
+            ),
+        ):
+            candidate = self.module._load_candidate_snapshot(
+                manifest_path,
+                image_lock_path,
+                json.dumps(manifest).encode(),
+                json.dumps(lock).encode(),
+            )
+
+        self.assertEqual(self.relay, candidate["relay_image"])
+        self.assertNotIn("notary_image", candidate)
 
     def test_v2_capsule_rejects_missing_drifted_extra_or_wrong_role_image(self) -> None:
         mutations = (

@@ -1,0 +1,26 @@
+{
+  "expectedAssuranceProfile": "local",
+  "issuedBy": "urn:example:issuer",
+  "providedBy": "urn:example:provider",
+  "requirement": "urn:example:requirement:v1",
+  "evidenceType": "urn:example:evidence-type:v1",
+  "purpose": "example-purpose",
+  "audience": "urn:example:audience",
+  "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "requestNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "expectedSubjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ],
+  "expectedOutputs": [
+    {
+      "concept": "urn:example:concept:status-holds",
+      "form": "boolean"
+    }
+  ],
+  "revokedKeyIds": [],
+  "maximumAssertionLifetimeSeconds": 2592000,
+  "clockSkewSeconds": 30
+}

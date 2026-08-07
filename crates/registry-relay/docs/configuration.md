@@ -812,9 +812,9 @@ at most two closed objects. Each object releases only `type`, `name`, and an
 optional nullable `identifier`; the reviewed Rhai adapter constructs those
 fields rather than returning the source parent record.
 
-Notary must pin the same recursive output contract. Changing a field,
-requirement, type, item limit, or byte limit changes the contract hash and
-requires a coordinated Relay and Notary generation.
+The calling workload must pin the same recursive output contract. Changing a
+field, requirement, type, item limit, or byte limit changes the contract hash
+and requires a coordinated regeneration on both sides.
 
 Each private destination binding defaults to
 `dns_family: dual_stack_strict`: Relay requires definitive A and AAAA lookup
@@ -1071,6 +1071,10 @@ For generic sync search, `identifiers` maps DCI `idtype-value` query types to en
 `query_key` is read from `message.disabled_criteria.query` in the SP DCI request envelope. It may be represented as a literal dotted JSON key (`"member.member_identifier"`) or as nested objects (`{"member": {"member_identifier": ...}}`). `query_field` must be an allowed entity filter because the adapter delegates reads to the normal entity query engine.
 
 For `/dci/{registry}/registry/sync/disabled`, the caller needs the entity `evidence_verification_scope`. Generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer. If a registry entry uses `response_mapping_path`, the binary must also be built with `--features standards-cel-mapping`; otherwise config validation fails with `spdci.config.mapping_feature_disabled`.
+
+A `response_schema_path` schema must be self-contained. Internal `#/` references resolve normally. An external `$ref` naming an `http(s)://` or `file://` target is never resolved, because the schema compiler carries no remote or file resolver: no request is made and no referenced file is read, at config validation or while serving a response. Such a schema still passes config validation, and the unresolved reference then fails every record, so generic search, details, and support answer `500 internal.unhandled` for any non-empty result. Inline the referenced definitions instead. `spdci.config.schema_compile_failed` reports a schema the compiler rejects outright, such as an unknown `type` name, a keyword holding the wrong JSON type, or a `pattern` that is not a valid regular expression.
+
+The compiler carries JSON Schema drafts 4, 6, 7, and 2020-12, and compiles each schema under the draft its `$schema` names. A schema with no `$schema`, or one naming a draft the compiler does not carry such as 2019-09, compiles under draft 7 with no diagnostic. The declared draft decides whether `format` is asserted: drafts 4, 6, and 7 reject a value that does not match its declared `format`, while 2020-12 treats `format` as an annotation and accepts the value, so a schema declaring 2020-12 needs an explicit `pattern` or `enum` wherever it relies on `format` to constrain a value. The 2020-12 keywords `prefixItems`, `dependentRequired`, and `dependentSchemas` are enforced whatever draft a schema declares.
 
 ## API keys
 
@@ -1674,26 +1678,27 @@ Only CRS84 is accepted. `wkt` and `wkb` parse as reserved geometry kinds but are
 
 ### Evidence verification
 
-Evidence offerings expose Registry Notary discovery metadata:
+Evidence offerings expose discovery metadata for the service that answers them:
 
 ```http
 GET /metadata/evidence-offerings
 GET /metadata/evidence-offerings/{offering_id}
 ```
 
-Relay's evidence-offering routes do not verify claims or evidence.
-`registry-notary` is the verifier for those offerings. The portable metadata
-manifest declares public offerings with `access.kind: registry-notary`,
-`endpoint_url`, `discovery_url`, and `ruleset` so clients can discover the
-Notary service that owns verification. This handoff is independent of Relay's
-native, profile-bound source consultation API.
+Relay's evidence-offering routes do not answer evidence requests. The portable
+metadata manifest declares public offerings with
+`access.kind: registry-evidence`, `endpoint_url`, `discovery_url`, and `ruleset`
+so clients can discover the Evidence deployment that owns the assertion. Runtime
+binding accepts only that access kind, so a Relay deployment cannot advertise an
+offering it cannot hand off. This handoff is independent of Relay's native,
+profile-bound source consultation API.
 
 ```yaml
 access:
   evidence_verification_scope: social_registry:evidence_verification
 ```
 
-`evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local verification endpoint.
+`evidence_verification_scope` remains a scope label for standards adapters and integrations that need to distinguish evidence-oriented access from row reads. It does not enable a Relay-local assertion endpoint.
 
 ## Aggregates
 
@@ -1772,7 +1777,7 @@ aggregates:
 
 Relay no longer accepts `provenance` or entity `publicschema` config. Remove those blocks, Relay signer environment variables, and probes for `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, and `/contexts/{vocab}/{version}` before upgrading.
 
-Use Registry Notary for credential issuance and verification. Relay metadata can advertise Notary evidence offerings with `access.kind: registry-notary`; see [provenance.md](provenance.md) for the migration note.
+Use Registry Evidence when a workflow needs a signed answer. Relay metadata can advertise Evidence offerings with `access.kind: registry-evidence`; see [provenance.md](provenance.md) for the migration note.
 
 ## Production checklist
 

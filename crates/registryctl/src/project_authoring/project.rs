@@ -705,35 +705,6 @@ fn semantic_digests(
     entities: &BTreeMap<String, LoadedEntityDefinition>,
     environment: Option<&EnvironmentDocument>,
 ) -> Result<SemanticDigests> {
-    let claims = project
-        .services
-        .iter()
-        .map(|(id, service)| {
-            let service_claims = service
-                .claims
-                .iter()
-                .map(|(claim_id, claim)| {
-                    Ok((
-                        claim_id,
-                        json!({
-                            "evidence": inferred_claim_evidence(service, claim)?,
-                            "output": claim.output,
-                            "cel": claim.cel,
-                            "value": claim.value,
-                        }),
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            Ok((
-                id,
-                json!({
-                    "subject_type": service.effective_subject_type(),
-                    "variables": service.variables,
-                    "claims": service_claims,
-                }),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
     let policy = project
         .services
         .iter()
@@ -744,8 +715,7 @@ fn semantic_digests(
                     "purpose": service.purpose,
                     "legal_basis": service.legal_basis,
                     "consent": service.consent,
-                    "access": service.access,
-                    "credential_profiles": service.credential_profiles,
+                    "variables": service.variables,
                 }),
             )
         })
@@ -825,13 +795,6 @@ fn semantic_digests(
         .iter()
         .map(|(service, declaration)| (service, &declaration.consultations))
         .collect::<BTreeMap<_, _>>();
-    let callers = environment.map(|environment| {
-        environment
-            .callers
-            .iter()
-            .map(|(id, caller)| (id, &caller.scopes))
-            .collect::<BTreeMap<_, _>>()
-    });
     let operator = environment.map(|environment| {
         let integrations = environment
             .integrations
@@ -845,41 +808,24 @@ fn semantic_digests(
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let caller_credentials = environment
-            .callers
-            .iter()
-            .map(|(id, caller)| (id, &caller.api_key_fingerprint))
-            .collect::<BTreeMap<_, _>>();
         let mut operator = json!({
             "integrations": integrations,
             "entities": environment.entities,
-            "caller_credentials": caller_credentials,
-            "issuance": environment.issuance,
             "relay": environment.relay,
-            "notary_relay": environment.notary_relay,
-            "notary_state": environment.notary_state,
-            "oid4vci_registrar_clients": environment.oid4vci.as_ref()
-                .map(|binding| &binding.registrar_clients),
             "deployment": environment.deployment,
         });
         if let Some(relay_state) = &environment.relay_state {
             operator["relay_state"] = json!(relay_state);
         }
-        if let Some(notary_cel) = &environment.notary_cel {
-            operator["notary_cel"] = json!(notary_cel);
-        }
         operator
     });
     Ok(SemanticDigests {
-        claim: digest_json(&json!({ "services": claims }))?,
         integration: digest_json(&json!({
             "integrations": integration,
             "service_consultations": service_consultations,
             "entities": entity_model,
         }))?,
-        service_policy: digest_json(
-            &json!({ "services": policy, "records": records_policy, "callers": callers }),
-        )?,
+        service_policy: digest_json(&json!({ "services": policy, "records": records_policy }))?,
         operator_security: digest_json(&json!({ "operator": operator }))?,
     })
 }
@@ -889,7 +835,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:537dde0f120d9874e74cae1d899d7e4d86ad013a5d1b918021a73e1045f951b1";
+    "sha256:481a290b37b5c3db64dd5947a1e07e7a1293f3beb0c63dc0e1486ccca6f96620";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -958,11 +904,6 @@ fn project_promotion_projection(
     let trust_state = json!({
         "integrations": integration_trust,
         "relay": environment.relay,
-        "oid4vci_authorization_server": environment.oid4vci.as_ref().map(|binding| json!({
-            "issuer": binding.authorization_server.issuer,
-        })),
-        "oid4vci_registrar_clients": environment.oid4vci.as_ref()
-            .map(|binding| &binding.registrar_clients),
     });
     let trust_members = environment
         .integrations
@@ -996,27 +937,6 @@ fn project_promotion_projection(
                 .flat_map(|relay| relay.allowed_clients.iter())
                 .map(|client| json!(["relay_client", client])),
         )
-        .chain(
-            environment
-                .oid4vci
-                .iter()
-                .flat_map(|binding| binding.registrar_clients.iter())
-                .map(|client| json!(["oid4vci_registrar_client", client])),
-        )
-        .collect::<Vec<_>>();
-
-    let caller_state = environment.callers.iter().collect::<BTreeMap<_, _>>();
-    let caller_members = environment
-        .callers
-        .iter()
-        .flat_map(|(id, caller)| {
-            std::iter::once(json!(["caller", id])).chain(
-                caller
-                    .scopes
-                    .iter()
-                    .map(move |scope| json!(["caller_scope", id, scope])),
-            )
-        })
         .collect::<Vec<_>>();
 
     let operational_integrations = environment
@@ -1037,16 +957,8 @@ fn project_promotion_projection(
         "integrations": operational_integrations,
         "entities": environment.entities,
         "relay_state": environment.relay_state,
-        "notary_state": environment.notary_state,
-        "notary_cel": environment.notary_cel,
-        "issuance": environment.issuance,
-        "notary_relay": environment.notary_relay,
-        "oid4vci": environment.oid4vci,
         "deployment_profile": environment.deployment.profile,
         "deployment_relay_service": environment.deployment.relay.as_ref().map(|binding| &binding.service),
-        "deployment_notary_service": environment.deployment.notary.as_ref().map(|binding| &binding.service),
-        "oid4vci_subject": environment.oid4vci.as_ref().map(|binding| &binding.subject),
-        "oid4vci_tx_code": environment.oid4vci.as_ref().map(|binding| &binding.tx_code),
     });
 
     let purpose_state = loaded
@@ -1065,7 +977,6 @@ fn project_promotion_projection(
                 json!({
                     "legal_basis": service.legal_basis,
                     "consent": service.consent,
-                    "access": service.access,
                     "variables": service.variables,
                     "records": {
                         "entity": service.entity,
@@ -1086,77 +997,8 @@ fn project_promotion_projection(
         .project
         .services
         .iter()
-        .flat_map(|(id, service)| {
-            let consent = (service.consent == ConsentDeclaration::NotRequired)
-                .then(|| json!(["consent_not_required", id]));
-            service
-                .access
-                .scopes
-                .iter()
-                .map(|scope| json!(["service_scope", id, scope]))
-                .chain(consent)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    let claim_state = loaded
-        .project
-        .services
-        .iter()
-        .map(|(service_id, service)| {
-            let claims = service
-                .claims
-                .iter()
-                .map(|(claim_id, claim)| {
-                    (
-                        claim_id,
-                        json!({
-                            "output": claim.output,
-                            "cel": claim.cel,
-                            "value": claim.value,
-                        }),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>();
-            (
-                service_id,
-                json!({
-                    "claims": claims,
-                    "credential_profiles": service.credential_profiles,
-                }),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let claim_members = loaded
-        .project
-        .services
-        .iter()
-        .flat_map(|(service_id, service)| {
-            service
-                .claims
-                .keys()
-                .map(|claim_id| json!(["claim", service_id, claim_id]))
-                .chain(
-                    service
-                        .credential_profiles
-                        .keys()
-                        .map(|profile| json!(["credential_profile", service_id, profile])),
-                )
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    let disclosure_state = disclosure_review_profiles(&loaded.project);
-    let disclosure_members = disclosure_state
-        .iter()
-        .flat_map(|(service_id, claims)| {
-            claims.iter().flat_map(move |(claim_id, profile)| {
-                profile
-                    .allowed
-                    .iter()
-                    .map(move |mode| json!(["disclosure", service_id, claim_id, mode]))
-            })
-        })
+        .filter(|(_, service)| service.consent == ConsentDeclaration::NotRequired)
+        .map(|(id, _)| json!(["consent_not_required", id]))
         .collect::<Vec<_>>();
 
     let product_state = json!({ "products": products });
@@ -1305,12 +1147,6 @@ fn project_promotion_projection(
             trust_members,
         ),
         (
-            PromotionChangeKind::Caller,
-            PromotionFieldClassification::Sensitive,
-            json!(caller_state),
-            caller_members,
-        ),
-        (
             PromotionChangeKind::Operational,
             PromotionFieldClassification::Internal,
             operational_state,
@@ -1327,18 +1163,6 @@ fn project_promotion_projection(
             PromotionFieldClassification::Internal,
             json!(service_policy_state),
             service_policy_members,
-        ),
-        (
-            PromotionChangeKind::Claim,
-            PromotionFieldClassification::Internal,
-            json!(claim_state),
-            claim_members,
-        ),
-        (
-            PromotionChangeKind::Disclosure,
-            PromotionFieldClassification::Internal,
-            json!(disclosure_state),
-            disclosure_members,
         ),
         (
             PromotionChangeKind::ProductEnablement,
@@ -1419,9 +1243,6 @@ fn project_promotion_products(environment: &EnvironmentDocument) -> Vec<Promotio
     let mut products = Vec::new();
     if environment.deployment.relay.is_some() {
         products.push(PromotionProjectedProduct::Relay);
-    }
-    if environment.deployment.notary.is_some() {
-        products.push(PromotionProjectedProduct::Notary);
     }
     products
 }
@@ -1573,9 +1394,7 @@ fn promotion_kind_for_field_path(path: &knowledge::FieldPath) -> Option<Promotio
                 || pointer.contains("/$defs/mtls")
                 || pointer.contains("/$defs/privateCidrs")
                 || pointer.contains("/$defs/origin");
-            if pointer.contains("/callers") {
-                Some(Kind::Caller)
-            } else if integration_field
+            if integration_field
                 && (pointer.contains("/$defs/credential")
                     || pointer.contains("credential")
                     || pointer.contains("private_key"))
@@ -1593,13 +1412,10 @@ fn promotion_kind_for_field_path(path: &knowledge::FieldPath) -> Option<Promotio
                 || pointer.contains("/mtls")
                 || pointer.contains("audience")
                 || pointer.contains("allowed_clients")
-                || pointer.contains("registrar_clients")
                 || pointer.contains("/issuer")
             {
                 Some(Kind::Trust)
-            } else if pointer.ends_with("/properties/relay")
-                || pointer.ends_with("/properties/notary")
-            {
+            } else if pointer.ends_with("/properties/relay") {
                 Some(Kind::ProductEnablement)
             } else if integration_field {
                 Some(Kind::CapabilityEnablement)
@@ -1610,10 +1426,6 @@ fn promotion_kind_for_field_path(path: &knowledge::FieldPath) -> Option<Promotio
         SchemaKind::Project => {
             if pointer.contains("/purpose") {
                 Some(Kind::Purpose)
-            } else if pointer.contains("/disclosure") {
-                Some(Kind::Disclosure)
-            } else if pointer.contains("/claims") || pointer.contains("/credential_profiles") {
-                Some(Kind::Claim)
             } else if pointer.contains("/integrations")
                 || pointer.contains("/entities")
                 || pointer.contains("/consultations")
@@ -1674,24 +1486,19 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
             bail!("entity {alias} must reference entities/{alias}.yaml");
         }
     }
-    let mut project_claim_ids = BTreeSet::new();
     let mut published_entities = BTreeSet::new();
     let mut project_attribute_release_profiles = BTreeSet::new();
     for (service_id, service) in &project.services {
         validate_stable_id(service_id, "service id")?;
         match service.kind {
             ServiceKind::RecordsApi => {
-                if service.subject_type.is_some()
-                    || service.version != 0
+                if service.version != 0
                     || !service.purpose.is_empty()
                     || !service.legal_basis.is_empty()
-                    || !service.access.scopes.is_empty()
                     || !service.variables.is_empty()
                     || !service.consultations.is_empty()
-                    || !service.claims.is_empty()
-                    || !service.credential_profiles.is_empty()
                 {
-                    bail!("records_api service cannot declare evidence-service fields");
+                    bail!("records_api service cannot declare consultation_api fields");
                 }
                 let entity = service
                     .entity
@@ -1723,7 +1530,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
                 continue;
             }
-            ServiceKind::Evidence => {
+            ServiceKind::ConsultationApi => {
                 if service.entity.is_some()
                     || service.title.is_some()
                     || service.description.is_some()
@@ -1734,7 +1541,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                     || !service.conforms_to.is_empty()
                     || service.api.is_some()
                 {
-                    bail!("evidence services cannot declare records_api fields");
+                    bail!("consultation_api services cannot declare records_api fields");
                 }
             }
         }
@@ -1746,12 +1553,11 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
         if service.consent == ConsentDeclaration::Required {
             bail!("consent: required is unavailable until sealed consent verification lands");
         }
-        validate_scopes(&service.access.scopes)?;
         if service.consultations.len() > 16 {
             bail!("service consultations must contain no more than 16 entries");
         }
-        if service.claims.is_empty() || service.claims.len() > MAX_CLAIMS {
-            bail!("evidence service claims must contain between one and 64 entries");
+        if service.consultations.is_empty() {
+            bail!("consultation_api service must declare at least one consultation");
         }
         for (name, consultation) in &service.consultations {
             validate_stable_id(name, "consultation name")?;
@@ -1775,83 +1581,8 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 bail!("v1 request variables must be exact declared full-date mappings");
             }
         }
-        for (claim_id, claim) in &service.claims {
-            validate_stable_id(claim_id, "claim id")?;
-            if !project_claim_ids.insert(claim_id) {
-                bail!("Notary claim ids must be unique across project services");
-            }
-            if claim.output.is_some() == claim.cel.is_some() {
-                bail!("each claim must declare exactly one of output or cel");
-            }
-            match inferred_claim_evidence(service, claim)? {
-                ClaimEvidence::RegistryBacked => {
-                    if service.consultations.is_empty() {
-                        bail!("registry-backed claims require a Relay consultation");
-                    }
-                }
-            }
-            if let Some(value) = &claim.value {
-                if value.value_type == OutputType::String {
-                    let Some(max_bytes) = value.max_bytes else {
-                        bail!("string claim value contracts require max_bytes");
-                    };
-                    if !(1..=registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1)
-                        .contains(&max_bytes)
-                    {
-                        bail!(
-                            "string claim value max_bytes must be between 1 and {}",
-                            registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1
-                        );
-                    }
-                }
-                if value.value_type != OutputType::String && value.max_bytes.is_some() {
-                    bail!("only string claim value contracts may declare max_bytes");
-                }
-            }
-            validate_disclosure(&claim.disclosure)?;
-        }
-        for (credential_id, credential) in &service.credential_profiles {
-            if credential.claims.is_empty() {
-                bail!("credential claim allow-list must not be empty");
-            }
-            for claim_id in &credential.claims {
-                let claim = service
-                    .claims
-                    .get(claim_id)
-                    .ok_or_else(|| anyhow!("credential references an unknown claim"))?;
-                inferred_claim_evidence(service, claim).with_context(|| {
-                    format!(
-                        "credential profile {service_id}.{credential_id} requires claim {claim_id} to reference a declared Relay consultation"
-                    )
-                })?;
-            }
-        }
     }
     Ok(())
-}
-
-fn inferred_claim_evidence(
-    service: &ServiceDeclaration,
-    claim: &ClaimDeclaration,
-) -> Result<ClaimEvidence> {
-    if claim.output.is_some() {
-        return Ok(ClaimEvidence::RegistryBacked);
-    }
-    let roots = claim
-        .cel
-        .as_deref()
-        .map(cel_member_roots)
-        .transpose()?
-        .unwrap_or_default();
-    if service
-        .consultations
-        .keys()
-        .any(|name| roots.contains(name.as_str()))
-    {
-        Ok(ClaimEvidence::RegistryBacked)
-    } else {
-        bail!("every claim must derive from one declared Relay consultation")
-    }
 }
 
 fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
@@ -2498,16 +2229,16 @@ fn validate_service_integration_links(
     for (service_id, service) in project
         .services
         .iter()
-        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
+        .filter(|(_, service)| service.kind == ServiceKind::ConsultationApi)
     {
         for (consultation_name, consultation) in &service.consultations {
             let integration = &integrations[&consultation.integration].document;
             if integration.outputs.len()
-                > registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+                > MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
             {
                 bail!(
                     "service {service_id} consultation {consultation_name} integration outputs must contain no more than {} entries",
-                    registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+                    MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
                 );
             }
             if consultation.input.keys().ne(integration.input.keys()) {
@@ -2517,36 +2248,6 @@ fn validate_service_integration_links(
                 != consultation.input.len()
             {
                 bail!("consultation target mappings must be injective");
-            }
-        }
-        for (claim_id, claim) in &service.claims {
-            let Some(expression) = claim.cel.as_deref() else {
-                continue;
-            };
-            if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-                continue;
-            }
-            let references = cel_references(expression)
-                .with_context(|| format!("invalid CEL for service {service_id} claim {claim_id}"))?;
-            if references.uses_index {
-                bail!(
-                    "service {service_id} claim {claim_id} registry-backed CEL cannot use index access"
-                );
-            }
-            for (consultation_name, consultation) in &service.consultations {
-                let Some(members) = references.first_level_members.get(consultation_name) else {
-                    continue;
-                };
-                let integration = &integrations[&consultation.integration].document;
-                for member in members {
-                    if integration.outputs.get(member).is_some_and(|output| {
-                        matches!(output.output_type, OutputType::Object | OutputType::Array)
-                    }) {
-                        bail!(
-                            "service {service_id} claim {claim_id} CEL cannot reference structured consultation output {consultation_name}.{member}"
-                        );
-                    }
-                }
             }
         }
     }
@@ -2931,24 +2632,12 @@ fn validate_environment(
     entities: &BTreeMap<String, LoadedEntityDefinition>,
     environment: &EnvironmentDocument,
 ) -> Result<()> {
-    let (requires_relay, requires_notary) = project_product_topology(project);
-    let requires_issuance = project_issues_credentials(project);
-    let requires_notary_relay = project_requires_notary_relay(project);
+    let requires_relay = project_requires_relay(project);
+    let requires_relay_consultation = project_requires_consultation_relay(project);
     if environment.deployment.relay.is_some() != requires_relay
         || environment.relay.is_some() != requires_relay
     {
         bail!("environment Relay bindings must exactly match the project topology");
-    }
-    if environment.deployment.notary.is_some() != requires_notary {
-        bail!("environment Notary bindings must exactly match the project topology");
-    }
-    if environment.issuance.is_some() != requires_issuance {
-        bail!("environment issuance binding is required exactly when credential profiles exist");
-    }
-    if environment.notary_relay.is_some() != requires_notary_relay {
-        bail!(
-            "the Notary-to-Relay connection is required exactly when Relay and Notary are both deployed"
-        );
     }
     let remote_integrations = integrations
         .values()
@@ -3011,28 +2700,6 @@ fn validate_environment(
     {
         bail!("environment contains an unknown project entity");
     }
-    if requires_notary && environment.callers.is_empty() && environment.oid4vci.is_none() {
-        bail!("a Notary environment must bind at least one authenticated caller");
-    }
-    if !requires_notary && !environment.callers.is_empty() {
-        bail!("a Relay-only environment cannot declare Notary callers");
-    }
-    if environment.callers.len() > 64 {
-        bail!("environment callers exceed the supported bound");
-    }
-    for (caller_id, caller) in &environment.callers {
-        validate_stable_id(caller_id, "caller id")?;
-        validate_secret_reference(&caller.api_key_fingerprint)?;
-        validate_scopes(&caller.scopes)?;
-    }
-    if let Some(issuance) = &environment.issuance {
-        validate_secret_reference(&issuance.signing_key)?;
-        validate_token(&issuance.issuer, "issuance issuer", 2048)?;
-        validate_token(&issuance.signing_kid, "issuance signing_kid", 2048)?;
-        if issuance.generation == 0 {
-            bail!("issuance generation must be positive");
-        }
-    }
     if let Some(relay) = &environment.relay {
         let local = matches!(environment.deployment.profile, DeploymentProfile::Local);
         validate_https_or_local_loopback_origin(&relay.origin, "Relay origin", local)?;
@@ -3048,27 +2715,33 @@ fn validate_environment(
                 bail!("Relay allowed_clients must not contain duplicates");
             }
         }
+        match (&relay.consultation, requires_relay_consultation) {
+            (Some(consultation), true) => {
+                validate_token(&consultation.client_id, "Relay consultation client id", 256)?;
+                validate_token(
+                    &consultation.principal_id,
+                    "Relay consultation principal id",
+                    256,
+                )?;
+                if allowed_clients.contains(&consultation.client_id) {
+                    bail!("Relay consultation client_id must be separate from relay.allowed_clients");
+                }
+            }
+            (None, true) => {
+                bail!("a consultation_api service requires relay.consultation")
+            }
+            (Some(_), false) => {
+                bail!("relay.consultation is valid only with a consultation_api service")
+            }
+            (None, false) => {}
+        }
         if relay.allowed_clients.is_empty() && relay.local_api_keys.is_none() {
-            bail!(
-                "a public Relay requires at least one admitted OIDC client; the Notary workload client belongs only in notary_relay"
-            );
+            bail!("a Relay requires at least one admitted OIDC client");
         }
         validate_https_or_local_loopback_resource(&relay.jwks_url, "Relay OIDC JWKS URL", local)?;
     }
-    if let Some(connection) = &environment.notary_relay {
-        validate_internal_https_or_loopback_origin(
-            &connection.base_url,
-            "Notary-to-Relay base URL",
-        )?;
-        validate_token(
-            &connection.workload_client_id,
-            "Notary-to-Relay workload client id",
-            256,
-        )?;
-        validate_absolute_runtime_path(&connection.token_file, "Relay workload token file")?;
-    }
     if let Some(state) = &environment.relay_state {
-        if !requires_notary_relay {
+        if !requires_relay_consultation {
             bail!("relay_state is valid only when Relay consultations are enabled");
         }
         validate_absolute_runtime_path(
@@ -3076,31 +2749,8 @@ fn validate_environment(
             "Relay PostgreSQL root_certificate_path",
         )?;
     }
-    if let Some(state) = &environment.notary_state {
-        if !requires_notary {
-            bail!("notary_state is valid only when the project deploys a Notary");
-        }
-        validate_absolute_runtime_path(
-            &state.postgresql.root_certificate_path,
-            "Notary PostgreSQL root_certificate_path",
-        )?;
-    }
-    if let Some(cel) = &environment.notary_cel {
-        if !requires_notary {
-            bail!("notary_cel is valid only when the project deploys a Notary");
-        }
-        if !(32 * 1024 * 1024..=1024 * 1024 * 1024).contains(&cel.worker_memory_bytes) {
-            bail!("notary_cel.worker_memory_bytes must be between 33554432 and 1073741824");
-        }
-    }
-    if let Some(oid4vci) = &environment.oid4vci {
-        validate_oid4vci_binding(project, environment, oid4vci)?;
-    }
     if let Some(relay) = &environment.deployment.relay {
         validate_stable_id(&relay.service, "Relay service id")?;
-    }
-    if let Some(notary) = &environment.deployment.notary {
-        validate_stable_id(&notary.service, "Notary service id")?;
     }
     for loaded in integrations.values() {
         if let CapabilityDeclaration::Script { script } = &loaded.document.capability {
@@ -3114,330 +2764,19 @@ fn validate_environment(
     Ok(())
 }
 
-fn validate_oid4vci_binding(
-    project: &RegistryProject,
-    environment: &EnvironmentDocument,
-    binding: &Oid4vciBinding,
-) -> Result<()> {
-    if environment.notary_state.is_none() {
-        bail!("OID4VCI requires a Notary PostgreSQL state binding");
-    }
-    let local = matches!(environment.deployment.profile, DeploymentProfile::Local);
-    validate_https_or_local_loopback_origin(
-        &binding.public_base_url,
-        "OID4VCI public base URL",
-        local,
-    )?;
-    validate_https_or_local_loopback_origin(
-        &binding.authorization_server.issuer,
-        "OID4VCI authorization server issuer",
-        local,
-    )?;
-    for (field, value) in [
-        (
-            "OID4VCI authorization server JWKS URL",
-            binding.authorization_server.jwks_url.as_str(),
-        ),
-        (
-            "OID4VCI authorization server userinfo URL",
-            binding.authorization_server.userinfo_url.as_str(),
-        ),
-        (
-            "OID4VCI authorization server authorize URL",
-            binding.authorization_server.authorize_url.as_str(),
-        ),
-        (
-            "OID4VCI authorization server token URL",
-            binding.authorization_server.token_url.as_str(),
-        ),
-        ("OID4VCI redirect URI", binding.redirect_uri.as_str()),
-    ] {
-        validate_https_or_local_loopback_resource(value, field, local)?;
-    }
-    for (field, value) in [
-        (
-            "OID4VCI authorization server JWKS URL",
-            binding.authorization_server.jwks_url.as_str(),
-        ),
-        (
-            "OID4VCI authorization server userinfo URL",
-            binding.authorization_server.userinfo_url.as_str(),
-        ),
-        (
-            "OID4VCI authorization server token URL",
-            binding.authorization_server.token_url.as_str(),
-        ),
-    ] {
-        validate_resource_origin(value, &binding.authorization_server.issuer, field)?;
-    }
-    let public_base_url = binding.public_base_url.trim_end_matches('/');
-    if binding.redirect_uri != format!("{public_base_url}/oid4vci/offer/callback") {
-        bail!("OID4VCI redirect URI must be the public Notary offer callback");
-    }
-
-    if binding.allowed_wallet_origins.is_empty() || binding.allowed_wallet_origins.len() > 16 {
-        bail!("OID4VCI allowed_wallet_origins must contain between one and 16 exact origins");
-    }
-    let mut wallet_origins = BTreeSet::new();
-    for origin in &binding.allowed_wallet_origins {
-        validate_https_origin(origin, "OID4VCI wallet origin")?;
-        if !wallet_origins.insert(origin) {
-            bail!("OID4VCI allowed_wallet_origins must not contain duplicates");
-        }
-    }
-
-    validate_stable_id(&binding.credential.service, "OID4VCI credential service")?;
-    validate_stable_id(&binding.credential.profile, "OID4VCI credential profile")?;
-    let service = project
-        .services
-        .get(&binding.credential.service)
-        .ok_or_else(|| anyhow!("OID4VCI references an unknown project service"))?;
-    if service.kind != ServiceKind::Evidence {
-        bail!("OID4VCI credential service must be an evidence service");
-    }
-    if service.access.scopes.len() != 1 {
-        bail!("OID4VCI credential service must declare exactly one access scope");
-    }
-    let credential = service
-        .credential_profiles
-        .get(&binding.credential.profile)
-        .ok_or_else(|| anyhow!("OID4VCI references an unknown credential profile"))?;
-    if credential.claims.len() != 1 {
-        bail!("OID4VCI v1 credential profiles must select exactly one claim");
-    }
-    let claim = service
-        .claims
-        .get(&credential.claims[0])
-        .ok_or_else(|| anyhow!("OID4VCI credential profile claim is absent"))?;
-    if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-        bail!("OID4VCI credential profiles require registry-backed claim evidence");
-    }
-    if let Some(representative) = &binding.representative_issuance {
-        if !binding.registrar_clients.is_empty() {
-            bail!(
-                "OID4VCI representative_issuance cannot be combined with registrar_clients in Registryctl's single-credential binding"
-            );
-        }
-        validate_stable_id(
-            &representative.relationship,
-            "OID4VCI representative relationship",
-        )?;
-        validate_stable_id(
-            &representative.proof_claim,
-            "OID4VCI representative proof claim",
-        )?;
-        validate_token(
-            &representative.target_id_type,
-            "OID4VCI representative target id type",
-            256,
-        )?;
-        if representative.max_proof_age_seconds == 0
-            || representative.max_proof_age_seconds > 600
-        {
-            bail!("OID4VCI representative max_proof_age_seconds must be between one and 600");
-        }
-        let credential_claim = &credential.claims[0];
-        if let Some((shared_profile, _)) =
-            service
-                .credential_profiles
-                .iter()
-                .find(|(profile_id, profile)| {
-                    *profile_id != &binding.credential.profile
-                        && profile
-                            .claims
-                            .iter()
-                            .any(|claim_id| claim_id == credential_claim)
-                })
-        {
-            bail!(
-                "OID4VCI representative credential claim '{}' must be exclusive to credential profile '{}'; credential profile '{}' also selects it",
-                credential_claim,
-                binding.credential.profile,
-                shared_profile
-            );
-        }
-        let proof = service
-            .claims
-            .get(&representative.proof_claim)
-            .ok_or_else(|| {
-                anyhow!(
-                    "OID4VCI representative_issuance.proof_claim '{}' is not a claim in credential service '{}'",
-                    representative.proof_claim,
-                    binding.credential.service
-                )
-            })?;
-        if representative.proof_claim == credential.claims[0] {
-            bail!(
-                "OID4VCI representative_issuance.proof_claim must differ from the credential claim"
-            );
-        }
-        if inferred_claim_evidence(service, proof)? != ClaimEvidence::RegistryBacked {
-            bail!("OID4VCI representative_issuance.proof_claim must be registry-backed");
-        }
-        let consultation_name = claim_consultation_name(service, proof)?;
-        let consultation = &service.consultations[consultation_name];
-        let requester_mapping = format!(
-            "request.requester.identifiers.{}",
-            binding.subject.id_type
-        );
-        let target_mapping = format!(
-            "request.target.identifiers.{}",
-            representative.target_id_type
-        );
-        if !consultation
-            .input
-            .values()
-            .any(|mapping| mapping == &requester_mapping)
-        {
-            bail!(
-                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must bind the authenticated representative with input mapping '{}'",
-                representative.proof_claim,
-                consultation_name,
-                requester_mapping
-            );
-        }
-        if !consultation
-            .input
-            .values()
-            .any(|mapping| mapping == &target_mapping)
-        {
-            bail!(
-                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must bind the represented subject with input mapping '{}'",
-                representative.proof_claim,
-                consultation_name,
-                target_mapping
-            );
-        }
-        if consultation.input.len() != 2
-            || consultation
-                .input
-                .values()
-                .any(|mapping| mapping != &requester_mapping && mapping != &target_mapping)
-        {
-            bail!(
-                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must map exactly the authenticated representative and represented subject identifiers; the target-selection ceremony cannot supply additional inputs",
-                representative.proof_claim,
-                consultation_name
-            );
-        }
-    }
-    if normalize_credential_format(&credential.format) != "application/dc+sd-jwt" {
-        bail!("OID4VCI credential profile format must be dc+sd-jwt");
-    }
-    let validity_seconds = parse_validity_seconds(&credential.validity)?;
-    if validity_seconds == 0 || validity_seconds > 600 {
-        bail!("OID4VCI credential validity must be between one and 600 seconds");
-    }
-    validate_https_or_local_loopback_resource(
-        &credential.credential_type,
-        "OID4VCI credential type",
-        local,
-    )?;
-    validate_resource_origin(
-        &credential.credential_type,
-        &binding.public_base_url,
-        "OID4VCI credential type",
-    )?;
-    let credential_path = url::Url::parse(&credential.credential_type)
-        .context("OID4VCI credential type is invalid")?
-        .path()
-        .to_string();
-    if !credential_path.starts_with("/credentials/") {
-        bail!("OID4VCI credential type path must start with /credentials/");
-    }
-
-    validate_token(&binding.client.id, "OID4VCI client id", 256)?;
-    if binding.registrar_clients.len() > 64 {
-        bail!("OID4VCI registrar_clients exceeds the supported bound");
-    }
-    let mut registrar_clients = BTreeSet::new();
-    for client in &binding.registrar_clients {
-        validate_token(client, "OID4VCI registrar client id", 256)?;
-        if client == &binding.client.id {
-            bail!("OID4VCI registrar_clients must not contain the citizen client id");
-        }
-        if !registrar_clients.insert(client) {
-            bail!("OID4VCI registrar_clients must not contain duplicates");
-        }
-    }
-    validate_secret_reference(&binding.client.signing_key)?;
-    validate_token(
-        &binding.client.signing_kid,
-        "OID4VCI client signing_kid",
-        2048,
-    )?;
-    validate_secret_reference(&binding.access_token.signing_key)?;
-    validate_token(
-        &binding.access_token.signing_kid,
-        "OID4VCI access-token signing_kid",
-        2048,
-    )?;
-    validate_secret_reference(&binding.sensitive_state_key)?;
-    validate_token(
-        &binding.subject.token_claim,
-        "OID4VCI subject token claim",
-        256,
-    )?;
-    validate_token(&binding.subject.id_type, "OID4VCI subject id type", 256)?;
-
-    let issuance = environment
-        .issuance
-        .as_ref()
-        .ok_or_else(|| anyhow!("OID4VCI requires an issuance binding"))?;
-    let secret_names = [
-        issuance.signing_key.secret.as_str(),
-        binding.client.signing_key.secret.as_str(),
-        binding.access_token.signing_key.secret.as_str(),
-    ];
-    if secret_names.into_iter().collect::<BTreeSet<_>>().len() != secret_names.len() {
-        bail!("OID4VCI issuer, client, and access-token signing keys must be distinct");
-    }
-    let signing_kids = [
-        issuance.signing_kid.as_str(),
-        binding.client.signing_kid.as_str(),
-        binding.access_token.signing_kid.as_str(),
-    ];
-    if signing_kids.into_iter().collect::<BTreeSet<_>>().len() != signing_kids.len() {
-        bail!("OID4VCI issuer, client, and access-token signing kids must be distinct");
-    }
-    Ok(())
-}
-
-fn validate_resource_origin(resource: &str, origin: &str, field: &str) -> Result<()> {
-    let resource = url::Url::parse(resource).with_context(|| format!("{field} is invalid"))?;
-    let origin = url::Url::parse(origin).with_context(|| format!("{field} origin is invalid"))?;
-    if resource.scheme() != origin.scheme()
-        || resource.host() != origin.host()
-        || resource.port_or_known_default() != origin.port_or_known_default()
-    {
-        bail!("{field} must use its bound origin");
-    }
-    Ok(())
-}
-
-fn project_product_topology(project: &RegistryProject) -> (bool, bool) {
-    let requires_notary = project
-        .services
-        .values()
-        .any(|service| service.kind == ServiceKind::Evidence);
-    let requires_relay = !project.integrations.is_empty()
+fn project_requires_relay(project: &RegistryProject) -> bool {
+    !project.integrations.is_empty()
         || !project.entities.is_empty()
         || project.services.values().any(|service| {
             service.kind == ServiceKind::RecordsApi || !service.consultations.is_empty()
-        });
-    (requires_relay, requires_notary)
+        })
 }
 
-fn project_issues_credentials(project: &RegistryProject) -> bool {
+fn project_requires_consultation_relay(project: &RegistryProject) -> bool {
     project
         .services
         .values()
-        .any(|service| !service.credential_profiles.is_empty())
-}
-
-fn project_requires_notary_relay(project: &RegistryProject) -> bool {
-    let (requires_relay, requires_notary) = project_product_topology(project);
-    requires_relay && requires_notary
+        .any(|service| service.kind == ServiceKind::ConsultationApi)
 }
 
 fn is_script_runtime_released(capability: ReleasedScriptRuntime) -> bool {

@@ -55,10 +55,10 @@ Every pull request should make the review path clear:
   check was skipped and why.
 - Include tests for major functionality and bug fixes. If a test cannot be
   added, explain why in the pull request.
-- Treat changes to authentication, authorization, credential issuance, signing,
-  audit integrity, release provenance, deployment defaults, or data minimization
-  as security-sensitive. These changes need explicit maintainer review notes,
-  even when the maintainer is also the author.
+- Treat changes to authentication, authorization, assertion evaluation or
+  signing, audit integrity, release provenance, deployment defaults, or data
+  minimization as security-sensitive. These changes need explicit maintainer
+  review notes, even when the maintainer is also the author.
 
 ## Dependency Changes
 
@@ -129,7 +129,6 @@ cargo check --locked --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo deny check
-(cd products/notary && just openapi-check)
 (cd crates/registry-relay && just openapi-contract)
 ```
 
@@ -144,8 +143,7 @@ These checks require Python 3.11 or later.
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-python3 -m unittest release/scripts/test_openid_conformance_runner.py
-release/scripts/registry-release validate release/manifests/registry-stack-beta-17.yaml
+release/scripts/registry-release validate release/manifests/registry-stack-beta-27.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -164,14 +162,14 @@ If you cannot run a relevant check, say which command was skipped and why.
 
 ## Repeatable Builds And Generated Outputs
 
-Release builds and generated repository outputs MUST be repeatable from the
-same source commit and lockfiles with exactly the same bit-for-bit result.
-Release binaries are built from the verified release tag, the pinned Rust
-builder image, and locked Cargo dependencies in `.github/workflows/release.yml`.
-The workflow records SHA256 manifests for binary outputs, image input binaries,
-image evidence, and release capsules, then reconciles published release assets
-against the generated files. Public repeatable-build evidence for release
-binaries is recorded in [`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
+Release candidates are built once from an exact protected-main commit, a pinned
+Rust builder image, and locked Cargo dependencies in
+`.github/workflows/release-candidate.yml`. The candidate records SHA256 hashes,
+OCI digests, SBOMs, and scan evidence before publication promotes the exact
+bytes. Independent repeatability exercises are scheduled assurance work, not a
+duplicate build in every ordinary Beta transaction. Public repeatable-build
+evidence is recorded in
+[`release/REPEATABLE-BUILDS.md`](release/REPEATABLE-BUILDS.md).
 
 Generated documentation data and checked-in generated snapshots must be produced
 by the documented generator commands, such as `npm run generate` under
@@ -183,6 +181,7 @@ same source can reproduce it exactly.
 
 ## Security Reports
 
-Do not open public issues or pull requests for suspected credential disclosure,
-auth bypass, audit redaction failure, source connector data leakage, signing key
-handling bugs, or other vulnerabilities. Follow [SECURITY.md](SECURITY.md).
+Do not open public issues or pull requests for suspected minimum-disclosure
+failure, auth bypass, audit redaction failure, source connector data leakage,
+signing key handling bugs, or other vulnerabilities. Follow
+[SECURITY.md](SECURITY.md).

@@ -1,0 +1,44 @@
+# Shape of the projected tracker response, checked by Rust before extract/2
+# runs. The prepared request asks for page 1 of size 2, so the pager echo is a
+# constant here rather than a comparison the script repeats.
+type: object
+additionalProperties: false
+required: [pager, trackedEntities]
+properties:
+  pager:
+    type: object
+    additionalProperties: false
+    required: [page, pageSize, total, pageCount]
+    properties:
+      page: {type: integer, const: 1}
+      pageSize: {type: integer, const: 2}
+      total: {type: integer, minimum: 0, maximum: 1000000}
+      pageCount: {type: integer, minimum: 0, maximum: 1000000}
+  trackedEntities:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      # No projected leaf can be required of every record. Projection drops a
+      # leaf the record did not carry, and an ambiguous page is decided from
+      # the pager before any record is read, so a record on that page need not
+      # be complete. What a single matched record must carry stays with the
+      # script. attributes is not listed either: projection rejects a record
+      # missing an intermediate its children hang from, so saying so here would
+      # only repeat the projection.
+      required: []
+      properties:
+        trackedEntity: {type: string, minLength: 1, maxLength: 64}
+        attributes:
+          type: array
+          minItems: 0
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [attribute, value]
+            properties:
+              attribute: {type: string, minLength: 1, maxLength: 64}
+              value: {type: string, maxLength: 512}

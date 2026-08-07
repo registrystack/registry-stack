@@ -33,21 +33,18 @@ WORKLOAD_SERVICES = frozenset(
         "registry-postgres",
         "registry-relay-public",
         "registry-relay-consultation",
-        "registry-notary",
     }
 )
 STAGER_SERVICES = frozenset(
     {
         "registry-postgresql-stage-secrets",
         "registry-relay-consultation-stage-secrets",
-        "registry-notary-stage-secrets",
     }
 )
 ACTION_STAGER_SERVICES = frozenset(
     {
         "registry-postgresql-actions-stage-secrets",
         "registry-relay-consultation-actions-stage-secrets",
-        "registry-notary-actions-stage-secrets",
     }
 )
 ORDINARY_SERVICES = WORKLOAD_SERVICES | STAGER_SERVICES
@@ -56,19 +53,14 @@ INITIALIZATION_SERVICES = frozenset(
         "registry-postgres-bootstrap",
         "registry-relay-public-prepare-state",
         "registry-relay-consultation-prepare-state",
-        "registry-notary-prepare-state",
         "registry-relay-public-initialize",
         "registry-relay-consultation-initialize",
-        "registry-notary-initialize",
         "registry-relay-public-preview-state",
         "registry-relay-consultation-preview-state",
-        "registry-notary-preview-state",
         "registry-relay-public-accept-state",
         "registry-relay-consultation-accept-state",
-        "registry-notary-accept-state",
         "registry-relay-public-verify-state",
         "registry-relay-consultation-verify-state",
-        "registry-notary-verify-state",
     }
 )
 
@@ -76,14 +68,11 @@ OPERATOR_ENVIRONMENT_FILES = frozenset(
     {
         "relay-public-environment",
         "relay-consultation-environment",
-        "notary-environment",
         "postgresql-bootstrap-environment",
     }
 )
 OPERATOR_SECRET_FILES = frozenset(
     {
-        "notary-relay-workload-credential",
-        "notary-signing-key",
         "postgresql-admin-password",
         "postgresql-tls-certificate",
         "postgresql-tls-private-key",
@@ -94,7 +83,6 @@ EXPECTED_OPERATOR_FILES = OPERATOR_ENVIRONMENT_FILES | OPERATOR_SECRET_FILES
 LANE_ENVIRONMENTS = {
     "registry-relay-public": "relay-public-environment",
     "registry-relay-consultation": "relay-consultation-environment",
-    "registry-notary": "notary-environment",
 }
 ORDINARY_COMMANDS = {
     "registry-postgres": ["postgres"],
@@ -104,7 +92,6 @@ ORDINARY_COMMANDS = {
         "relay-consultation",
         "serve",
     ],
-    "registry-notary": ["product-action", "serve"],
 }
 POSTGRESQL_ORDINARY_ENTRYPOINT = [
     "/bin/bash",
@@ -138,11 +125,6 @@ ORDINARY_DEPENDENCIES = {
         "registry-postgres": "service_healthy",
         "registry-relay-consultation-stage-secrets": ("service_completed_successfully"),
     },
-    "registry-notary": {
-        "registry-postgres": "service_healthy",
-        "registry-relay-consultation": "service_healthy",
-        "registry-notary-stage-secrets": "service_completed_successfully",
-    },
 }
 INITIALIZATION_COMMANDS = {
     "registry-postgres-bootstrap": ["postgresql-action", "bootstrap"],
@@ -156,10 +138,6 @@ INITIALIZATION_COMMANDS = {
         "relay-consultation",
         "prepare_state_store",
     ],
-    "registry-notary-prepare-state": [
-        "product-action",
-        "prepare_state_store",
-    ],
     "registry-relay-public-initialize": [
         "product-action",
         "relay-public",
@@ -170,7 +148,6 @@ INITIALIZATION_COMMANDS = {
         "relay-consultation",
         "initialize_state",
     ],
-    "registry-notary-initialize": ["product-action", "initialize_state"],
     "registry-relay-public-preview-state": [
         "product-action",
         "relay-public",
@@ -181,7 +158,6 @@ INITIALIZATION_COMMANDS = {
         "relay-consultation",
         "preview_state",
     ],
-    "registry-notary-preview-state": ["product-action", "preview_state"],
     "registry-relay-public-accept-state": [
         "product-action",
         "relay-public",
@@ -192,7 +168,6 @@ INITIALIZATION_COMMANDS = {
         "relay-consultation",
         "accept_state",
     ],
-    "registry-notary-accept-state": ["product-action", "accept_state"],
     "registry-relay-public-verify-state": [
         "product-action",
         "relay-public",
@@ -203,7 +178,6 @@ INITIALIZATION_COMMANDS = {
         "relay-consultation",
         "verify_state",
     ],
-    "registry-notary-verify-state": ["product-action", "verify_state"],
 }
 INITIALIZATION_METADATA = {
     "registry-relay-public-prepare-state": (
@@ -216,11 +190,6 @@ INITIALIZATION_METADATA = {
         "relay-consultation",
         "prepare",
     ),
-    "registry-notary-prepare-state": (
-        "registry-notary",
-        "notary",
-        "prepare",
-    ),
     "registry-relay-public-initialize": (
         "registry-relay-public",
         "relay-public",
@@ -229,11 +198,6 @@ INITIALIZATION_METADATA = {
     "registry-relay-consultation-initialize": (
         "registry-relay-consultation",
         "relay-consultation",
-        "initialize",
-    ),
-    "registry-notary-initialize": (
-        "registry-notary",
-        "notary",
         "initialize",
     ),
     "registry-relay-public-preview-state": (
@@ -246,11 +210,6 @@ INITIALIZATION_METADATA = {
         "relay-consultation",
         "preview",
     ),
-    "registry-notary-preview-state": (
-        "registry-notary",
-        "notary",
-        "preview",
-    ),
     "registry-relay-public-accept-state": (
         "registry-relay-public",
         "relay-public",
@@ -261,11 +220,6 @@ INITIALIZATION_METADATA = {
         "relay-consultation",
         "accept",
     ),
-    "registry-notary-accept-state": (
-        "registry-notary",
-        "notary",
-        "accept",
-    ),
     "registry-relay-public-verify-state": (
         "registry-relay-public",
         "relay-public",
@@ -274,11 +228,6 @@ INITIALIZATION_METADATA = {
     "registry-relay-consultation-verify-state": (
         "registry-relay-consultation",
         "relay-consultation",
-        "verify",
-    ),
-    "registry-notary-verify-state": (
-        "registry-notary",
-        "notary",
         "verify",
     ),
 }
@@ -297,20 +246,12 @@ INITIALIZATION_DEPENDENCIES = {
             "service_completed_successfully"
         ),
     },
-    "registry-notary-prepare-state": {
-        "registry-postgres": "service_healthy",
-        "registry-notary-actions-stage-secrets": "service_completed_successfully",
-    },
-    "registry-notary-initialize": {},
     "registry-relay-public-preview-state": {},
     "registry-relay-public-accept-state": {},
     "registry-relay-consultation-preview-state": {},
     "registry-relay-consultation-accept-state": {},
-    "registry-notary-preview-state": {},
-    "registry-notary-accept-state": {},
     "registry-relay-public-verify-state": {},
     "registry-relay-consultation-verify-state": {},
-    "registry-notary-verify-state": {},
 }
 
 STAGER_COMMAND = ["umask 077\nexit 0\n"]
@@ -332,16 +273,6 @@ STAGER_SPECS = {
             ),
         },
         "secrets": {
-            "registry-postgresql-tls-certificate",
-        },
-    },
-    "registry-notary-stage-secrets": {
-        "outputs": {
-            "notary-serve": "registry-operator-files-notary-serve",
-        },
-        "secrets": {
-            "registry-notary-relay-workload-credential",
-            "registry-notary-signing-key",
             "registry-postgresql-tls-certificate",
         },
     },
@@ -368,12 +299,6 @@ ACTION_STAGER_SPECS = {
         },
         "secrets": {"registry-postgresql-tls-certificate"},
     },
-    "registry-notary-actions-stage-secrets": {
-        "outputs": {
-            "notary-prepare": "registry-operator-files-notary-prepare",
-        },
-        "secrets": {"registry-postgresql-tls-certificate"},
-    },
 }
 
 ORDINARY_STAGER_RUNTIME_ACTIONS = {
@@ -382,9 +307,6 @@ ORDINARY_STAGER_RUNTIME_ACTIONS = {
     ],
     "registry-relay-consultation-stage-secrets": [
         ("relay-consultation-serve", "relay_consultation", "serve"),
-    ],
-    "registry-notary-stage-secrets": [
-        ("notary-serve", "notary", "serve"),
     ],
 }
 
@@ -404,9 +326,6 @@ ACTION_STAGER_RUNTIME_ACTIONS = {
             "initialize_state",
         ),
     ],
-    "registry-notary-actions-stage-secrets": [
-        ("notary-prepare", "notary", "prepare_state_store"),
-    ],
 }
 
 DURABLE_VOLUMES = frozenset(
@@ -416,8 +335,6 @@ DURABLE_VOLUMES = frozenset(
         "registry-relay-public-audit",
         "registry-relay-consultation-state",
         "registry-relay-consultation-audit",
-        "registry-notary-state",
-        "registry-notary-audit",
     }
 )
 ORDINARY_STAGED_SECRET_VOLUMES = frozenset(
@@ -487,37 +404,6 @@ EXPECTED_PLAN_WORKLOADS = {
         "restart_action": "restart",
         "reactivation_action": "verify_state",
     },
-    "notary": {
-        "kind": "product",
-        "product_lane": "notary",
-        "action": "serve",
-        "immutable_inputs": ["notary-bundle", "notary-anchor"],
-        "mount_roles": [
-            "bundle",
-            "anchor",
-            "anti-rollback-state",
-            "secret",
-            "audit",
-        ],
-        "secret_consumers": [
-            "notary-relay-workload-credential",
-            "notary-signing-key",
-        ],
-        "state_roles": ["notary-anti-rollback", "notary-audit"],
-        "endpoint_classes": [
-            "public-application",
-            "administration",
-            "posture",
-        ],
-        "network_relationships": ["runtime"],
-        "dependencies": [
-            "relay-consultation",
-            "postgresql-state-plane",
-        ],
-        "health_semantics": "notary-health",
-        "restart_action": "restart",
-        "reactivation_action": "verify_state",
-    },
     "postgresql-state-plane": {
         "kind": "supporting",
         "recipe": "postgresql_state_plane",
@@ -551,11 +437,6 @@ EXPECTED_INITIALIZATION_ACTIONS = [
         "action": "prepare_state_store",
     },
     {
-        "id": "prepare-notary-state",
-        "workload": "notary",
-        "action": "prepare_state_store",
-    },
-    {
         "id": "initialize-relay-public",
         "workload": "relay-public",
         "action": "initialize_state",
@@ -563,11 +444,6 @@ EXPECTED_INITIALIZATION_ACTIONS = [
     {
         "id": "initialize-relay-consultation",
         "workload": "relay-consultation",
-        "action": "initialize_state",
-    },
-    {
-        "id": "initialize-notary",
-        "workload": "notary",
         "action": "initialize_state",
     },
     {
@@ -581,11 +457,6 @@ EXPECTED_INITIALIZATION_ACTIONS = [
         "action": "preview_state",
     },
     {
-        "id": "preview-notary-state",
-        "workload": "notary",
-        "action": "preview_state",
-    },
-    {
         "id": "accept-relay-public-state",
         "workload": "relay-public",
         "action": "accept_state",
@@ -593,11 +464,6 @@ EXPECTED_INITIALIZATION_ACTIONS = [
     {
         "id": "accept-relay-consultation-state",
         "workload": "relay-consultation",
-        "action": "accept_state",
-    },
-    {
-        "id": "accept-notary-state",
-        "workload": "notary",
         "action": "accept_state",
     },
     {
@@ -610,18 +476,12 @@ EXPECTED_INITIALIZATION_ACTIONS = [
         "workload": "relay-consultation",
         "action": "verify_state",
     },
-    {
-        "id": "verify-notary-state",
-        "workload": "notary",
-        "action": "verify_state",
-    },
 ]
 EXPECTED_RECOVERY_GROUPS = [
     {
         "id": "consultation-state",
         "members": [
             "relay-consultation",
-            "notary",
             "postgresql-state-plane",
         ],
     },
@@ -634,10 +494,6 @@ EXPECTED_EXPOSURES = [
     },
     {
         "endpoint_class": "private-application",
-        "exposure": "private-network-only",
-    },
-    {
-        "endpoint_class": "administration",
         "exposure": "private-network-only",
     },
     {
@@ -685,7 +541,6 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
         products = {
             "registry-relay-public": runtime["relay_public"],
             "registry-relay-consultation": runtime["relay_consultation"],
-            "registry-notary": runtime["notary"],
         }
         postgresql = runtime["postgresql_state_plane"]
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
@@ -707,9 +562,6 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
                 "prepare_state_store"
             ]["command"]
         ),
-        "registry-notary-prepare-state": (
-            products["registry-notary"]["prepare_state_store"]["command"]
-        ),
         "registry-relay-public-initialize": (
             products["registry-relay-public"]["initialize_state"]["command"]
         ),
@@ -718,17 +570,11 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
                 "initialize_state"
             ]["command"]
         ),
-        "registry-notary-initialize": (
-            products["registry-notary"]["initialize_state"]["command"]
-        ),
         "registry-relay-public-preview-state": (
             products["registry-relay-public"]["preview_state"]["command"]
         ),
         "registry-relay-consultation-preview-state": (
             products["registry-relay-consultation"]["preview_state"]["command"]
-        ),
-        "registry-notary-preview-state": (
-            products["registry-notary"]["preview_state"]["command"]
         ),
         "registry-relay-public-accept-state": (
             products["registry-relay-public"]["accept_state"]["command"]
@@ -736,17 +582,11 @@ def runtime_contract_from_payload(path: Path) -> dict[str, Any]:
         "registry-relay-consultation-accept-state": (
             products["registry-relay-consultation"]["accept_state"]["command"]
         ),
-        "registry-notary-accept-state": (
-            products["registry-notary"]["accept_state"]["command"]
-        ),
         "registry-relay-public-verify-state": (
             products["registry-relay-public"]["verify_state"]["command"]
         ),
         "registry-relay-consultation-verify-state": (
             products["registry-relay-consultation"]["verify_state"]["command"]
-        ),
-        "registry-notary-verify-state": (
-            products["registry-notary"]["verify_state"]["command"]
         ),
     }
     health_probes = {
@@ -1226,18 +1066,17 @@ def validate_plan(path: Path) -> dict[str, str]:
         not isinstance(plan, dict)
         or set(plan) != expected_root_fields
         or plan.get("schema_id") != "io.registrystack.deployment_plan"
-        or plan.get("schema_version") != "1.0"
+        or plan.get("schema_version") != "2.0"
         or plan.get("single_instance") is not True
     ):
         raise ContractError("deployment plan probe has the wrong closed schema")
     workloads = plan.get("workloads")
-    if not isinstance(workloads, list) or len(workloads) != 4:
-        raise ContractError("deployment plan must contain exactly four workloads")
+    if not isinstance(workloads, list) or len(workloads) != 3:
+        raise ContractError("deployment plan must contain exactly three workloads")
     images: dict[str, str] = {}
     services = {
         "relay-public": "registry-relay-public",
         "relay-consultation": "registry-relay-consultation",
-        "notary": "registry-notary",
         "postgresql-state-plane": "registry-postgres",
     }
     observed_ids = set()
@@ -1293,7 +1132,7 @@ def assert_ordinary_model(
     services = _services(model)
     if set(services) != ORDINARY_SERVICES:
         raise ContractError(
-            "ordinary model must contain four workloads and three secret stagers"
+            "ordinary model must contain three workloads and two secret stagers"
         )
     if INITIALIZATION_SERVICES.intersection(services):
         raise ContractError("ordinary model exposes initialization services")
@@ -1322,7 +1161,6 @@ def assert_ordinary_model(
     for name in (
         "registry-relay-public",
         "registry-relay-consultation",
-        "registry-notary",
     ):
         _assert_product_hardening(
             name,
@@ -1364,7 +1202,6 @@ def assert_ordinary_model(
     for name, lane in (
         ("registry-relay-public", "relay-public"),
         ("registry-relay-consultation", "relay-consultation"),
-        ("registry-notary", "notary"),
     ):
         _assert_product_mounts(
             name,
@@ -1381,15 +1218,6 @@ def assert_ordinary_model(
                 "protocol": "tcp",
                 "published": "4242",
                 "target": 8080,
-            }
-        ],
-        "registry-notary": [
-            {
-                "host_ip": "127.0.0.1",
-                "mode": "ingress",
-                "protocol": "tcp",
-                "published": "4255",
-                "target": 8081,
             }
         ],
     }
@@ -1497,7 +1325,7 @@ def assert_initialization_model(
         requires_postgresql = (
             lane == "relay-consultation"
             and action in {"prepare", "initialize"}
-        ) or (lane == "notary" and action == "prepare")
+        )
         expected_environment_files = (
             [package_root / "operator/secrets" / environment]
             if action in {"prepare", "initialize", "accept"}

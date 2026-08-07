@@ -1,0 +1,24 @@
+{
+  "selectors": {
+    "child": {
+      "profile": "opencrvs-tracking-id-v1",
+      "values": {"tracking_id": "EVT-SYNTHETIC-001"}
+    }
+  },
+  "parameters": {
+    "eventType": "birth",
+    "registeredStatus": "REGISTERED",
+    "resultLimit": 2,
+    "resultOffset": 0,
+    "parentReferenceFields": [
+      "mother.personReference",
+      "father.personReference"
+    ],
+    "minimumParentReferences": 1,
+    "maximumParentReferences": 2,
+    "parentReferenceNamespace": "urn:gov:example:opencrvs:person",
+    "relationshipSetContract": "urn:gov:example:opencrvs:registered-parent-set:v1",
+    "relationshipSetComplete": true,
+    "absentConfiguredFieldMeansNoRegisteredParent": true
+  }
+}

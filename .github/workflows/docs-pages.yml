@@ -115,7 +115,7 @@ jobs:
             --certificate-oidc-issuer \
               "https://token.actions.githubusercontent.com" \
             --certificate-identity \
-              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${RELEASED_TAG}"
+              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
@@ -123,6 +123,12 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Registryctl authoring-reference build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: docs-authoring-reference
+          save-if: true
 
       - name: Install docs dependencies
         working-directory: docs/site
@@ -166,6 +172,9 @@ jobs:
       - name: Verify current machine-readable documentation
         working-directory: docs/site
         run: npm run check:llms:built
+        env:
+          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/dev
+          DOCS_PUBLIC_BASE: /dev/
 
       - name: Verify assembled documentation tree
         working-directory: docs/site
@@ -226,6 +235,11 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+        with:
+          # State the action's maximum explicitly. A deployment that remains
+          # queued for ten minutes is a provider-side failure and is retried
+          # by relaunching this authenticated workflow.
+          timeout: 600000
 
       - name: Smoke live canonical deployment
         working-directory: docs/site

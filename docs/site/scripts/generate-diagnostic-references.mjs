@@ -30,7 +30,6 @@ export const diagnosticCatalogs = {
     schemaVersion: 'registryctl.operator_error_reference.v1',
     families: new Set([
       'bundle_verification',
-      'notary_activation',
       'operator_preflight',
       'relay_activation',
       'relay_process_startup',
@@ -61,7 +60,6 @@ const entryFields = new Set([
   'evidence_limitation',
 ]);
 const ownerByProduct = new Map([
-  ['registry_notary', 'registry_notary'],
   ['registry_platform_ops', 'registry_platform_ops'],
   ['registry_relay', 'registry_relay'],
   ['registryctl', 'registryctl'],
@@ -71,14 +69,12 @@ const familyCatalog = new Map([
   ['authoring_validation', 'authoring'],
   ['fixture_execution', 'fixture'],
   ['bundle_verification', 'operator'],
-  ['notary_activation', 'operator'],
   ['operator_preflight', 'operator'],
   ['relay_activation', 'operator'],
   ['relay_process_startup', 'operator'],
 ]);
 const productOwnedDocsSlugFamilies = new Set([
   'bundle_verification',
-  'notary_activation',
   'relay_activation',
   'relay_process_startup',
 ]);

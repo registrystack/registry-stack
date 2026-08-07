@@ -22,7 +22,7 @@ const schemaSources = sourceManifest.schema_sources;
 const fieldKnowledgeSource = sourceManifest.field_knowledge;
 const humanIntentSource = sourceManifest.human_intent;
 const runtimeIntentSources = sourceManifest.runtime_intent;
-const runtimeSchemas = new Set(['relay', 'notary']);
+const runtimeSchemas = new Set(sourceManifest.runtime_schemas);
 const pathKinds = ['root', 'property', 'map_key', 'map_value', 'array_item', 'branch'];
 
 function parseJson(text, label) {
@@ -68,7 +68,7 @@ function assertSourceContract(source, label) {
     throw new Error(`${label} must prohibit country-workspace and runtime-configuration reads`);
   }
   if (JSON.stringify(source.schemas) !== JSON.stringify(schemaOrder)) {
-    throw new Error(`${label} must cover the exact seven configuration domains in order`);
+    throw new Error(`${label} must cover the exact configuration domains in order`);
   }
   if (
     JSON.stringify(source.schema_sources) !== JSON.stringify(schemaSources) ||
@@ -104,7 +104,7 @@ function assertCoverageShape(coverage, label) {
   assertInteger(coverage.path_count, `${label}.coverage.path_count`);
   assertInteger(coverage.reference_count, `${label}.coverage.reference_count`);
   if (coverage.schema_count !== schemaOrder.length) {
-    throw new Error(`${label} must cover all seven configuration schemas`);
+    throw new Error(`${label} must cover every configuration schema`);
   }
   const schemaTotal = schemaOrder.reduce((total, schema) => {
     assertInteger(coverage.by_schema?.[schema], `${label}.coverage.by_schema.${schema}`);

@@ -4,10 +4,10 @@ description: "The enforced security model of Registry Stack, the responsibilitie
 status: current
 owner: registry-docs
 source_repos:
+  - registry-stack
   - registry-relay
-  - registry-notary
   - registry-platform
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -35,8 +35,8 @@ evidence](openssf-evidence/).
 | Only the public half of a signing key is ever published | Built in |
 | Person-level access is written to an audit log | Built in (fail-closed is yours to switch on) |
 | Three disclosure modes, with `redacted` revealing neither value nor answer | Built in |
-| Selective-disclosure credentials, with `did:jwk` holder binding by default per profile | Built in |
-| Federation limited to peers you configure | Built in |
+| Selective-disclosure SD-JWT VC serialization of an assertion | Built in (a second encoding, not a credential lifecycle) |
+| Token issuers authenticate their clients by asymmetric client assertion | Built in |
 | Hardened HTTP headers and outbound-traffic limits | Recommended, confirm your build applies them |
 | Key custody, retention, isolation, TLS, rate limiting | Your deployment's job |
 | Compliance with any external standard it cites | Not claimed |
@@ -54,7 +54,7 @@ authenticate, authorize, serve, audit.
   before any source is read, and a caller's reach is never widened at request time
   (REQ-SEC-G-005, REQ-SEC-G-006).
 - Serve: the service returns the configured surface: a protected read, a claim result, a
-  selected value, a signed credential, or a denial. Every claim is answered in one of three
+  selected value, a signed assertion, or a denial. Every claim is answered in one of three
   disclosure modes: `value` hands back the computed value, `predicate` returns only a yes/no, and
   `redacted` returns neither the value nor the yes/no; the claim's policy fixes which modes are
   allowed. [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
@@ -65,29 +65,34 @@ authenticate, authorize, serve, audit.
   audit fail-closed, so a request whose audit record cannot be written does not succeed
   (REQ-SEC-G-009).
 
-Every route that returns a record, evaluates a claim, or issues from a stored evaluation requires
-authentication.
-Operational probes, public verification keys, discovery metadata, docs or OpenAPI when configured,
-OID4VCI bootstrap routes, and credential-status reads may be public because they do not return
-record or claim results on their own.
-Issuers sign with asymmetric keys and publish only the public half, so any verifier can check an
-issued credential without holding a credential of its own (REQ-SEC-G-007).
+Every route that returns person-level records or an evidence assertion requires authentication.
+Operational probes, public verification keys, issuer metadata, and docs or OpenAPI when configured
+may be public because they carry no person-level data.
+Evidence Gateway exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata
+document; both its assertion route and its evidence-definition discovery route require a verified
+access token (REQ-SEC-G-006).
+Issuers sign with asymmetric keys and publish only the public half, so any verifier can check a
+signed artifact without holding a credential of its own (REQ-SEC-G-007).
 
-When Notary issues a credential it is an SD-JWT VC: the signed body carries hashes of each
-disclosable field rather than the values, so the holder reveals only what they choose.
-Holder binding, which cryptographically ties a credential to a key the holder controls, is
-enabled by default with `did:jwk`; an operator can set `holder_binding.mode: none` only for an
-explicit bearer-style credential profile, and `registry-notary doctor` warns on that choice.
-The registry-backed OID4VCI issuance path requires EdDSA `did:jwk` holder proof
-of possession. Subject access authorizes the Relay-backed evaluation; it does
-not supply evidence.
-See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
-lifecycle.
+Evidence Gateway can serialize the same signed assertion as an SD-JWT VC, where the signed body carries
+hashes of each disclosable field rather than the values.
+That is a second encoding of one response, not a credential lifecycle: there is no issuance
+session, holder-binding ceremony, status list, revocation, or presentation verification.
+A request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence Gateway issues no
+key-binding JWT, requires none, and verifies none, so `cnf` is an unverified caller-supplied
+convenience for whatever presentation layer the operator runs elsewhere.
+The subject identifier stays an audience-scoped pseudonym, so the same person requested for a
+different audience yields a different identifier.
 
-Delegated evaluation, where one Notary asks a trusted peer to evaluate a claim, is admitted only
-from statically configured peers. The peer's identity, signature, freshness, and purpose are
-verified before any Relay consultation or claim evaluation
-(REQ-SEC-G-010).
+Where a deployment has no identity provider, Registry Mint issues the access tokens Evidence Gateway
+verifies. Mint authenticates each registered client with an asymmetric client assertion, checked
+only against the keys registered for the client the assertion names, and reads the minted token's
+authority from its own server-side client registry rather than from the assertion. Its token
+endpoint does not distinguish an unknown client, a bad signature, a replayed assertion identifier,
+and an expired assertion, so it cannot be used to probe the client registry (REQ-SEC-G-016).
+
+Delegated evaluation, where one service asks a trusted peer to evaluate a claim, does not exist in
+this stack: no service holds such a surface, and REQ-SEC-G-010 is retired.
 
 ## What's recommended, not enforced
 
@@ -107,7 +112,7 @@ Two behaviors are recommended rather than required, so confirm them rather than 
 
 A deployment states the assurance level it claims; the software then enforces gates that match the
 claim.
-Both runtime services accept a `deployment` block with a profile of `local`, `hosted_lab`,
+Registry Relay accepts a `deployment` block with a profile of `local`, `hosted_lab`,
 `production`, or `evidence_grade`.
 Each profile binds a findings catalog at escalating severities: a `production` deployment with no
 durable audit sink refuses to start, and an `evidence_grade` deployment refuses to start from an
@@ -117,8 +122,9 @@ expiry), and the declared profile are reported by the restricted operations post
 the deployment's actual state is inspectable rather than asserted. The default tier omits waiver
 metadata.
 The gate catalogs are documented in the
-[Registry Relay configuration reference](../products/registry-relay/configuration/) and the
-[Registry Notary operator configuration reference](../products/registry-notary/operator-config-reference/).
+[Registry Relay configuration reference](../products/registry-relay/configuration/).
+Evidence Gateway states its own operator obligations in its operator contract rather than through this
+posture block.
 
 ## What stays with the operator
 
@@ -131,12 +137,12 @@ primitives; the operator provisions, configures, and operates them.
 Record those responsibilities in the
 [operator handoff checklist](../operate/) before activation.
 
-## Evidence for reviewers
+## Evidence Gateway for reviewers
 
 Public, checkable evidence, from most to least formal:
 
 - [RS-SEC-G](../spec/rs-sec-g/) is the normative security model; [RS-PR-RELAY](../spec/rs-pr-relay/)
-  and [RS-PR-NOTARY](../spec/rs-pr-notary/) carry its wire-level form per service.
+  and [RS-PR-EVIDENCE](../spec/rs-pr-evidence/) carry its wire-level form per service.
 - [OpenSSF and release trust](openssf-evidence/) records which release-integrity checks are
   verifiable today (signatures, provenance, Scorecard) and which are still incomplete.
 - The [security support window](support-window/) states which release lines receive fixes.

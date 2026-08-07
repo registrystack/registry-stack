@@ -6,8 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-27"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -28,10 +27,9 @@ deployment package that an operator can verify before activation.
 | Verify | `registryctl deploy verify` | Deployment operator |
 | Run | Printed `docker compose` command | Deployment operator |
 
-Each Relay lane and the Notary lane has its own bundle, anchor, identity, and
-anti-rollback state.
-The approved set proves that the three inputs belong to one compatible project
-and environment.
+Each Relay lane has its own bundle, anchor, identity, and anti-rollback state.
+The approved set proves that both inputs belong to one compatible project and
+environment.
 It does not activate a product.
 
 Bare `registryctl deploy` prints help and performs no action.
@@ -43,7 +41,7 @@ initialize product state, or start Docker Compose.
 Before generation, record:
 
 - The exact approved baseline set and signed release lock (`RegistryReleaseLockV1`)
-- The public Relay, consultation Relay, and Notary owners
+- The public Relay and consultation Relay owners
 - The external secret files and their consumers
 - The governed anchor sources and retained immutable copies
 - The public endpoints and edge network
@@ -59,8 +57,6 @@ platform-neutral deployment plan when the managed profile does not fit.
 - [Run generated Compose behind a reverse proxy](single-node-compose-behind-proxy/)
 - [Approve the initial product baseline](approve-initial-baseline/)
 - [Approve a changed source](advanced/compare-and-reapprove-source-change/)
-- [Review Registry Notary deployment hardening](../products/registry-notary/deployment-hardening-runbook/)
-- [Review Registry Notary PostgreSQL operations](../products/registry-notary/postgresql-state-operations/)
 
 ## Next
 

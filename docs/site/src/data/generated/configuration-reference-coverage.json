@@ -16,8 +16,7 @@
       "integration",
       "fixture",
       "entity",
-      "relay",
-      "notary"
+      "relay"
     ],
     "schema_sources": [
       "project.schema.json",
@@ -25,92 +24,51 @@
       "integration.schema.json",
       "fixture.schema.json",
       "entity.schema.json",
-      "registry-relay.config.schema.json",
-      "registry-notary.config.schema.json"
+      "registry-relay.config.schema.json"
     ],
     "field_knowledge": "schemas/project-authoring/parity-coverage.json#field_knowledge",
     "human_intent": "schemas/project-authoring/documentation-intent.json",
     "runtime_intent": [
-      "crates/registry-relay/config/documentation-intent.json",
-      "crates/registry-notary-core/config/documentation-intent.json"
+      "crates/registry-relay/config/documentation-intent.json"
     ],
     "reads_country_workspaces": false,
     "reads_runtime_configuration": false
   },
   "coverage": {
-    "schema_count": 7,
-    "path_count": 1829,
-    "reference_count": 506,
+    "schema_count": 6,
+    "path_count": 1155,
+    "reference_count": 363,
     "by_schema": {
-      "project": 220,
-      "environment": 213,
+      "project": 191,
+      "environment": 126,
       "integration": 171,
-      "fixture": 63,
+      "fixture": 39,
       "entity": 35,
-      "relay": 593,
-      "notary": 534
+      "relay": 593
     },
     "by_path_kind": {
-      "root": 7,
-      "property": 1458,
-      "map_key": 26,
-      "map_value": 48,
-      "array_item": 178,
-      "branch": 112
+      "root": 6,
+      "property": 903,
+      "map_key": 22,
+      "map_value": 34,
+      "array_item": 102,
+      "branch": 88
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1179,
-      "sensitive": 408,
-      "secret_reference": 44,
-      "redacted_fixture": 51,
-      "structural": 131
+      "internal": 878,
+      "sensitive": 106,
+      "secret_reference": 26,
+      "redacted_fixture": 29,
+      "structural": 100
     },
     "by_intent_source": {
-      "schema_description": 530,
-      "reviewed_override": 266,
-      "structural_taxonomy": 131,
-      "reviewed_profile": 902
+      "schema_description": 405,
+      "reviewed_override": 232,
+      "structural_taxonomy": 104,
+      "reviewed_profile": 414
     },
     "by_intent_profile": {
-      "notary_audit_internal": 4,
-      "notary_audit_secret_reference": 1,
-      "notary_audit_sensitive": 2,
-      "notary_auth_internal": 13,
-      "notary_auth_oidc_scope_map_open_map": 1,
-      "notary_auth_secret_reference": 4,
-      "notary_auth_sensitive": 95,
-      "notary_cel_internal": 14,
-      "notary_config_trust_internal": 1,
-      "notary_config_trust_sensitive": 4,
-      "notary_credential_status_sensitive": 4,
-      "notary_deployment_internal": 13,
-      "notary_deployment_sensitive": 1,
-      "notary_evidence_claims_evidence_mode_consultations_inputs_open_map": 1,
-      "notary_evidence_claims_evidence_mode_consultations_open_map": 1,
-      "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
-      "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
-      "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 93,
-      "notary_evidence_secret_reference": 5,
-      "notary_evidence_sensitive": 41,
-      "notary_evidence_signing_keys_open_map": 1,
-      "notary_evidence_variables_open_map": 1,
-      "notary_federation_internal": 43,
-      "notary_federation_secret_reference": 1,
-      "notary_federation_sensitive": 5,
-      "notary_instance_internal": 5,
-      "notary_instance_sensitive": 1,
-      "notary_oid4vci_credential_configurations_open_map": 1,
-      "notary_oid4vci_internal": 33,
-      "notary_oid4vci_sensitive": 51,
-      "notary_root_structural": 1,
-      "notary_server_internal": 13,
-      "notary_server_sensitive": 2,
-      "notary_state_internal": 6,
-      "notary_state_secret_reference": 2,
-      "notary_state_sensitive": 1,
-      "notary_subject_access_sensitive": 66,
       "relay_audit_internal": 9,
       "relay_audit_secret_reference": 1,
       "relay_audit_sensitive": 1,
@@ -148,10 +106,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1829,
-  "reviewed_intent_assignment_covered_count": 1829,
-  "distinct_reviewed_intent_count": 629,
-  "distinct_reviewed_intents_reused_count": 86,
-  "reviewed_intent_assignments_using_reused_intent_count": 1286,
+  "reviewed_intent_assignment_required_count": 1155,
+  "reviewed_intent_assignment_covered_count": 1155,
+  "distinct_reviewed_intent_count": 490,
+  "distinct_reviewed_intents_reused_count": 62,
+  "reviewed_intent_assignments_using_reused_intent_count": 727,
   "missing_intent": []
 }

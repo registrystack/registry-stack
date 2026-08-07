@@ -1,0 +1,104 @@
+fixture: registry.evidence.acceptance.legal-parent-relationship/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+provider_contract:
+  classification: synthetic-governed-authoritative-legal-parent-register
+  governance_attestation: urn:example:fixture:governance:legal-parent-register:v1
+  legal_meaning: For this synthetic acceptance definition, the configured source's complete parent-reference set is legally authoritative for the declared legal-parent concept.
+  lookup: One bounded child-only lookup must resolve exactly one returned child record.
+  child_binding: The returned child reference must exactly equal the authorized child selector.
+  candidate_authority: The candidate opaque reference is supplied independently by the authenticated grant and is never sent to the source.
+  decision: Exact membership in the complete governed parent-reference set is true; exact non-membership is false.
+  false_preconditions: A signed false requires a unique child, exact child binding, the governed reference namespace and contract, and relationship_set_complete true.
+  prohibited: Names, dates, fuzzy matching, candidate search, partial parent sets, and absence inferred from no-match cannot decide legal parentage.
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  subjects:
+    - {role: child, profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+    - {role: candidate-parent, profile: person-reference-v1}
+  selectors:
+    child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+    candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-parent-reference-001}}
+  derivationSelectorInputs:
+    child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+    candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-parent-reference-001}}
+  verified_token_claims:
+    evidence_grant_id: synthetic-parentage-grant-001
+    evidence_authority: statutory-caseworker-v1
+    grant:
+      candidate_parent: {person_reference: synthetic-parent-reference-001}
+  expectedRequestParts:
+    query: []
+    body:
+      lookup: {record_reference: synthetic-child-record-001}
+      fields: [returned_child_reference, parent_references, reference_namespace, relationship_set_contract, relationship_set_complete]
+      limit: 2
+  expectedTransport:
+    path: /v1/child-relationships
+    fixedHeaders: [{name: Accept, value: application/json}]
+cases:
+  - id: positive
+    source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001, synthetic-parent-reference-002], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-false-is-success
+    verified_token_claims:
+      evidence_grant_id: synthetic-parentage-grant-001
+      evidence_authority: statutory-caseworker-v1
+      grant:
+        candidate_parent: {person_reference: synthetic-non-parent-reference-003}
+    derivationSelectorInputs:
+      child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+      candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-non-parent-reference-003}}
+    source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001, synthetic-parent-reference-002], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-correct-role-order
+    source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+    expected_subject_roles: [child, candidate-parent]
+  - id: negative-swapped-roles
+    subjects:
+      - {role: candidate-parent, profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+      - {role: child, profile: person-reference-v1}
+    expected: pre-source-selector-rejection
+  - id: negative-caller-candidate-substitution
+    subjects:
+      - {role: child, profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
+      - {role: candidate-parent, profile: person-reference-v1, values: {person_reference: synthetic-substitute-reference}}
+    expected: pre-source-selector-rejection
+  - {id: missing-fact, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: missing-record, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: no-match, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-child-unresolved, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-candidate-unresolved-or-typo, verified_token_claims: {evidence_grant_id: synthetic-parentage-grant-001, evidence_authority: statutory-caseworker-v1, grant: {candidate_parent: {person_reference: synthetic-non-parent-reference-003}}}, derivationSelectorInputs: {child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}, candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-non-parent-reference-003}}}, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: negative-raw-record-search-zero-not-false, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-role-resolution-ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-returned-child-mismatch, source: {total: 1, records: [{returned_child_reference: synthetic-other-child-record, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_public_problem: evidence_not_available, derivation_runs: true, signed_success: false}
+  - {id: negative-incomplete-parent-set, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: false}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: negative-relationship-status-type, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: synthetic-parent-reference-001, reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: negative-status-on-none, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: negative-status-on-ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-unknown-pair-resolution, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:other-namespace, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: negative-unknown-relationship-status, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:other-parent-set:v1, relationship_set_complete: true}]}, expected_public_problem: dependency_unavailable, derivation_runs: false, signed_success: false}
+  - {id: negative-extra-source-field, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true, related_subject_name: PrivacyCanary}]}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}
+  - id: negative-extra-family-fact
+    injected_derivation:
+      - {concept_id: urn:example:fixture:concept:legal-parent-relationship-confirmed, value: true}
+      - {concept_id: urn:example:fixture:concept:related-subject-name, value: PrivacyCanary}
+    expected: output-gate-rejection
+  - {id: anti-reconstruction, companion_bundle: relationship-graph, expected: bundle-rejection}
+privacy_expectation:
+  evidence_contains: [child, candidate-parent, urn:example:fixture:concept:legal-parent-relationship-confirmed]
+  evidence_excludes: [record_reference, person_reference, parent_references, returned_child_reference, family-graph]
+  diagnostics_exclude: [synthetic-child-record-001, synthetic-other-child-record, synthetic-parentage-grant-001, synthetic-parent-reference-001, synthetic-parent-reference-002, synthetic-non-parent-reference-003, synthetic-substitute-reference, PrivacyCanary]
+  subject_bindings: two independent audience-scoped opaque bindings

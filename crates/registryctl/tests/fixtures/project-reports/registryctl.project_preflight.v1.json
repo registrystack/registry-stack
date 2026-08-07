@@ -75,11 +75,6 @@
       "product": "registry_relay",
       "capability": "configuration_validation",
       "state": "locally_available"
-    },
-    {
-      "product": "registry_notary",
-      "capability": "configuration_validation",
-      "state": "locally_available"
     }
   ],
   "secret_checks": [
@@ -114,11 +109,11 @@
       "state": "available"
     },
     {
-      "kind": "notary_to_relay_token",
+      "kind": "relay_state_root_certificate",
       "addresses": [
         {
           "file": "environments/production.yaml",
-          "pointer": "/notary_relay/token_file"
+          "pointer": "/relay_state/postgresql/root_certificate_path"
         }
       ],
       "generation": "not_declared",

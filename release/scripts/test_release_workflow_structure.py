@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import tempfile
 import unittest
@@ -12,9 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-LATEST_RELEASE_HELPER = (
-    ROOT / "release" / "scripts" / "verify_latest_published_release.py"
-)
+LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
 
 
 def workflow(name: str) -> tuple[str, dict]:
@@ -22,46 +21,274 @@ def workflow(name: str) -> tuple[str, dict]:
     return text, yaml.safe_load(text)
 
 
-def verify_latest_release_fixture(
-    metadata: object,
-    expected_tag: str,
-) -> subprocess.CompletedProcess:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "latest-release.json"
-        path.write_text(json.dumps(metadata), encoding="utf-8")
+def step_run(document: dict, job: str, name: str) -> str:
+    return next(
+        step["run"]
+        for step in document["jobs"][job]["steps"]
+        if step.get("name") == name
+    )
+
+
+def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        metadata_path = Path(temporary_directory) / "release.json"
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
         return subprocess.run(
             [
                 "python3",
                 str(LATEST_RELEASE_HELPER),
                 "--metadata",
-                str(path),
+                str(metadata_path),
                 "--expected-tag",
                 expected_tag,
             ],
-            check=False,
             capture_output=True,
             text=True,
+            check=False,
         )
+
+
+class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
+    def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual(
+            list(document["jobs"]),
+            ["validate", "build", "clients", "assemble", "publish"],
+        )
+        self.assertEqual(
+            document["jobs"]["validate"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["clients"]["permissions"],
+            {"contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["assemble"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["publish"]["permissions"],
+            {"actions": "read", "contents": "write"},
+        )
+        self.assertEqual(text.count("contents: write"), 1)
+        publish_uses = {
+            step.get("uses", "") for step in document["jobs"]["publish"]["steps"]
+        }
+        self.assertFalse(
+            any(action.startswith("actions/checkout@") for action in publish_uses)
+        )
+
+    def test_binds_a_unique_dev_tag_to_successful_protected_main(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        validation = step_run(
+            document,
+            "validate",
+            "Validate manual source and successful CI",
+        )
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', validation)
+        self.assertIn(
+            '"$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}"',
+            validation,
+        )
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}", validation)
+        self.assertIn('.event == "push"', validation)
+        self.assertIn(
+            'tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"',
+            validation,
+        )
+        self.assertIn("Cannot prove development tag ${tag} is absent", validation)
+        for job_name in ("build", "assemble"):
+            checkout = next(
+                step
+                for step in document["jobs"][job_name]["steps"]
+                if step.get("uses", "").startswith("actions/checkout@")
+            )
+            self.assertEqual(
+                checkout["with"]["ref"],
+                "${{ needs.validate.outputs.source_sha }}",
+            )
+            self.assertFalse(checkout["with"]["persist-credentials"])
+
+    def test_builds_and_smokes_the_released_toolset_shape(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        matrix = document["jobs"]["build"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["target"], entry["asset"]) for entry in matrix},
+            {
+                ("x86_64-unknown-linux-gnu", "linux-amd64"),
+                ("aarch64-unknown-linux-gnu", "linux-arm64"),
+                ("aarch64-apple-darwin", "macos-arm64"),
+            },
+        )
+        build = step_run(
+            document,
+            "build",
+            "Build native Evidence development binaries",
+        )
+        for package in ("registry-evidence", "registry-evidencectl", "registry-mint"):
+            self.assertIn(f"-p {package}", build)
+        self.assertIn("cargo build --release --locked", build)
+        self.assertIn("for binary in evidence evidencectl mint", build)
+
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble development assets and checksums",
+        )
+        smoke = step_run(
+            document,
+            "assemble",
+            "Smoke the development installer before publication",
+        )
+        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn("registry.evidence-development-build/v1", assemble)
+        self.assertIn("sha256sum --", assemble)
+        self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
+        self.assertIn("bash development-assets/evidencectl-install.sh", smoke)
+
+    def test_builds_and_smokes_the_relying_party_client_packages(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        clients = document["jobs"]["clients"]
+        matrix = clients["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {
+                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                for entry in matrix
+            },
+            {
+                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
+                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
+                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+            },
+        )
+        self.assertEqual(clients["env"]["RUSTUP_TOOLCHAIN"], "1.95.0")
+
+        wheel = step_run(document, "clients", "Build the Python client wheel")
+        # The published wheel name has to be predictable from the source, since
+        # the roster below names it exactly: hence a stated Linux platform tag
+        # instead of maturin's symbol-derived manylinux audit, and exactly one
+        # wheel per platform rather than one per interpreter version.
+        self.assertIn("--compatibility linux", wheel)
+        self.assertIn("expected exactly one wheel", wheel)
+        node = step_run(document, "clients", "Build the Node client package")
+        self.assertIn(
+            "package/evidence-client.${{ matrix.napi_platform }}.node",
+            node,
+        )
+
+        # Both smokes load a prebuilt native artifact and exercise it offline.
+        # Neither may carry a credential, and each addresses a reserved host
+        # that cannot resolve, so a request would fail rather than leave.
+        for name in ("Smoke the Python client wheel", "Smoke the Node client package"):
+            smoke = step_run(document, "clients", name)
+            self.assertIn("placeholder-not-a-credential", smoke)
+            self.assertIn("https://evidence.invalid", smoke)
+            self.assertIn("P-256", smoke)
+            self.assertIn("ES256", smoke)
+            self.assertNotIn("Ed25519", smoke)
+            self.assertNotIn("EdDSA", smoke)
+
+        python_smoke = step_run(document, "clients", "Smoke the Python client wheel")
+        self.assertIn('JWKS, [], "placeholder-not-a-credential"', python_smoke)
+        self.assertIn('"response_format": "signed-jws"', python_smoke)
+        node_smoke = step_run(document, "clients", "Smoke the Node client package")
+        self.assertIn("revokedKeyIds: []", node_smoke)
+        self.assertIn("responseFormat: 'signed-jws'", node_smoke)
+
+        roster = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        self.assertIn('echo "evidence-client-node-${tag}-${platform}.tgz"', roster)
+        self.assertIn(
+            'echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"',
+            roster,
+        )
+        self.assertIn(
+            "for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64",
+            roster,
+        )
+
+    def test_publishes_one_unique_prerelease_and_prints_its_curl_command(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        verify = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        publish = step_run(
+            document,
+            "publish",
+            "Publish unique development prerelease",
+        )
+        self.assertIn("diff -u", verify)
+        self.assertIn("sha256sum --check --strict SHA256SUMS", verify)
+        self.assertIn("gh release create", publish)
+        self.assertIn('--target "${source_sha}"', publish)
+        self.assertIn("--prerelease", publish)
+        self.assertIn("--latest=false", publish)
+        self.assertIn(
+            'download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"',
+            publish,
+        )
+        self.assertIn('install_url="${download_url}/evidencectl-install.sh"', publish)
+        for forbidden in (
+            "gh release upload",
+            "gh release delete",
+            "--clobber",
+            "git push",
+            "git update-ref",
+        ):
+            self.assertNotIn(forbidden, text)
 
 
 class CandidateWorkflowStructureTest(unittest.TestCase):
-    def test_has_five_logical_jobs_and_validation_is_first(self) -> None:
-        text, document = workflow("release-candidate.yml")
+    def test_current_release_pipeline_has_no_retired_notary_surface(self) -> None:
+        paths = (
+            WORKFLOWS / "release-candidate.yml",
+            WORKFLOWS / "release.yml",
+            WORKFLOWS / "release-canary.yml",
+            ROOT / "release/scripts/build-release-binaries.sh",
+            ROOT / "release/scripts/build-release-image.sh",
+        )
+        for path in paths:
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertNotIn(
+                    "registry-notary",
+                    path.read_text(encoding="utf-8").lower(),
+                )
+        self.assertFalse((ROOT / "release/docker/Dockerfile.registry-notary").exists())
+
+        repeatability = (WORKFLOWS / "release-repeatability.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('.images | keys[] | select(startswith("registry-"))', repeatability)
+        self.assertNotIn("for name in registry-notary registry-relay", repeatability)
+
+        module_path = ROOT / "release/scripts/release_candidate.py"
+        spec = importlib.util.spec_from_file_location("release_candidate", module_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual({"registry-relay"}, module.CURRENT_IMAGE_NAMES)
+        self.assertFalse(
+            any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
+        )
+
+    def test_keeps_one_candidate_pipeline_with_narrow_permissions(self) -> None:
+        _, document = workflow("release-candidate.yml")
         self.assertEqual(
             list(document["jobs"]),
-            [
-                "validate",
-                "build-canonical",
-                "build-platforms",
-                "assemble",
-                "attest",
-            ],
+            ["validate", "build-canonical", "build-platforms", "assemble", "attest"],
         )
-        self.assertNotIn("needs", document["jobs"]["validate"])
-        self.assertIn("timeout-minutes: 5", text)
-
-    def test_build_jobs_have_no_publication_or_oidc_permission(self) -> None:
-        _, document = workflow("release-candidate.yml")
         for job in ("build-canonical", "build-platforms"):
             permissions = document["jobs"][job]["permissions"]
             self.assertNotEqual(permissions.get("packages"), "write")
@@ -71,140 +298,89 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(document["jobs"]["attest"]["permissions"]["id-token"], "write")
 
-    def test_only_internal_pre_oidc_reverification_accepts_current_run(self) -> None:
+    def test_validates_exact_main_source_ci_and_unused_destinations(self) -> None:
         text, document = workflow("release-candidate.yml")
-        reverify = next(
-            step
-            for step in document["jobs"]["attest"]["steps"]
-            if step.get("name") == "Reverify all bytes before requesting OIDC"
+        validation = step_run(
+            document,
+            "validate",
+            "Validate request, source, CI, and destinations",
         )
-
-        self.assertEqual(text.count("--allow-current-run-in-progress"), 1)
-        self.assertIn("--allow-current-run-in-progress", reverify["run"])
-        self.assertNotIn(
-            "--allow-current-run-in-progress",
-            workflow("release.yml")[0],
-        )
-
-    def test_canonical_build_timeout_covers_uncached_follow_on_work(self) -> None:
-        _, document = workflow("release-candidate.yml")
-        self.assertGreaterEqual(
-            document["jobs"]["build-canonical"]["timeout-minutes"], 90
-        )
-
-    def test_uses_one_compact_candidate_and_no_removed_ceremony(self) -> None:
-        text, _ = workflow("release-candidate.yml")
-        self.assertIn("release-candidate-manifest.json", text)
-        self.assertIn("seal-candidate", text)
-        self.assertIn("verify-candidate", text)
-        self.assertNotIn("proof_level", text)
-        self.assertNotIn("measurement_bootstrap", text)
-        self.assertNotIn("storage-budget", text)
-        self.assertNotIn("release-candidate-receipt", text)
-        self.assertNotIn("release capsule", text.lower())
-
-    def test_candidate_source_is_the_exact_canaried_workflow_revision(self) -> None:
-        text, document = workflow("release-candidate.yml")
-        validation = next(
-            step["run"]
-            for step in document["jobs"]["validate"]["steps"]
-            if step.get("name")
-            == "Validate request, source, CI, canary, and destinations"
-        )
-        self.assertIn(
-            '[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]',
-            validation,
-        )
-        self.assertIn(
-            "source_sha must equal the canaried workflow revision",
-            validation,
-        )
+        self.assertIn('[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]', validation)
+        self.assertIn("refs/remotes/origin/main", validation)
+        self.assertIn("actions/workflows/ci.yml/runs", validation)
+        self.assertIn("git ls-remote --exit-code --tags", validation)
+        self.assertIn("require-image-tag-absent", validation)
+        self.assertNotIn("select-canary", validation)
+        self.assertNotIn("canary", validation.lower())
         self.assertIn(
             '--source-sha "${{ needs.validate.outputs.source_sha }}"',
             text,
         )
-        self.assertIn("release_candidate.py select-canary", validation)
-        self.assertNotIn("| {\n", validation)
 
-    def test_candidate_images_are_private_and_layouts_are_built_without_token(self) -> None:
+    def test_builds_once_scans_exact_images_and_attests_the_candidate(self) -> None:
         text, _ = workflow("release-candidate.yml")
-        build = text.split("  build-canonical:", 1)[1].split(
-            "  build-platforms:", 1
-        )[0]
-        assemble = text.split("  assemble:", 1)[1].split("  attest:", 1)[0]
-        self.assertIn("RELEASE_IMAGE_OCI_LAYOUT", build)
-        self.assertNotIn("docker/login-action", build)
-        self.assertIn("Verify local image layouts before package credentials", assemble)
-        self.assertIn("--jq .visibility", text)
-        self.assertIn(")\" = private", text)
+        self.assertIn("Build canonical Linux payload once", text)
+        self.assertIn("Build private candidate image layouts once", text)
+        self.assertIn("Verify and scan exact candidate images", text)
+        self.assertIn("release-candidate-manifest.json", text)
+        self.assertIn("Seal compact candidate manifest and bundle", text)
+        self.assertIn("Reverify all bytes before requesting OIDC", text)
+        self.assertIn("Attest manifest and bundle after re-verification", text)
 
-    def test_candidate_oras_publisher_is_directly_checksum_pinned(self) -> None:
-        text, document = workflow("release-candidate.yml")
-        assemble = document["jobs"]["assemble"]
-        install = next(
-            step
-            for step in assemble["steps"]
-            if step.get("name") == "Install pinned candidate inspection tools"
-        )
-
-        self.assertNotIn("oras-project/setup-oras", text)
-        self.assertEqual(document["env"]["ORAS_VERSION"], "v1.3.2")
-        self.assertEqual(
-            document["env"]["ORAS_LINUX_AMD64_SHA256"],
-            "9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf",
-        )
-        self.assertIn(
-            "https://github.com/oras-project/oras/releases/download/"
-            "${STEP_ORAS_VERSION}/oras_${oras_version}_linux_amd64.tar.gz",
-            install["run"],
-        )
-        self.assertIn(
-            'echo "${STEP_ORAS_SHA256}  ${RUNNER_TEMP}/tools/oras.tar.gz" \\\n'
-            "  | sha256sum --check --strict",
-            install["run"],
-        )
-
-        verify = text.index(
-            "Verify local image layouts before package credentials are used"
-        )
-        publish = text.index("oras cp --from-oci-layout")
-        scan = text.index("Verify and scan exact candidate images")
-        self.assertLess(verify, publish)
-        self.assertLess(publish, scan)
-
-    def test_tag_lookup_accepts_only_git_explicit_absence_status(self) -> None:
+    def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
-        validation = next(
-            step["run"]
-            for step in document["jobs"]["validate"]["steps"]
-            if step.get("name")
-            == "Validate request, source, CI, canary, and destinations"
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
         )
-        self.assertIn("git ls-remote --exit-code --tags", validation)
-        self.assertIn("tag_lookup_status=$?", validation)
-        self.assertIn('[[ "${tag_lookup_status}" -ne 2 ]]', validation)
-        self.assertIn("cannot prove tag ${tag} is absent", validation)
-
-    def test_forces_the_v1_runtime_contract_before_the_candidate_is_sealed(
-        self,
-    ) -> None:
-        text, _ = workflow("release-candidate.yml")
-        rehearsal = text.index(
-            "Rehearse forced 1.x release-lock runtime contract"
-        )
-        seal = text.index("Seal compact candidate manifest and bundle")
-        self.assertLess(rehearsal, seal)
+        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn('version="${{ needs.validate.outputs.tag }}"', assemble)
         self.assertIn(
-            "release/scripts/check-runtime-contract-parity.sh",
-            text[rehearsal:seal],
+            'cp "candidate/bundle-root/${evidencectl_installer}" \\\n'
+            "  candidate/bundle-root/evidencectl-install.sh",
+            assemble,
         )
+        self.assertIn(
+            "chmod 0755 candidate/bundle-root/evidencectl-install.sh",
+            assemble,
+        )
+
+    def test_reuses_cache_with_seven_day_validity_and_storage_margin(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        cache = next(
+            step
+            for step in document["jobs"]["build-canonical"]["steps"]
+            if step.get("name") == "Restore reusable Cargo cache"
+        )
+        self.assertIn("registry-stack-release-${{ runner.os }}-", cache["with"]["restore-keys"])
+        self.assertIn('created_at} + 7 days', text)
+        final_upload = next(
+            step
+            for step in document["jobs"]["assemble"]["steps"]
+            if step.get("name") == "Upload one candidate manifest and bundle"
+        )
+        self.assertEqual(final_upload["with"]["retention-days"], 8)
+        self.assertNotIn("Rehearse forced 1.x release-lock runtime contract", text)
+
+    def test_only_pre_oidc_reverification_accepts_the_current_run(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        reverify = step_run(
+            document,
+            "attest",
+            "Reverify all bytes before requesting OIDC",
+        )
+        self.assertEqual(text.count("--allow-current-run-in-progress"), 1)
+        self.assertIn("--allow-current-run-in-progress", reverify)
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
-    def test_has_final_runtime_gate_before_provenance_and_publication(
-        self,
-    ) -> None:
-        _, document = workflow("release.yml")
+    def test_is_a_manual_main_workflow_with_six_recoverable_jobs(self) -> None:
+        text, document = workflow("release.yml")
+        self.assertIn("workflow_dispatch:", text.split("permissions:", 1)[0])
+        self.assertNotIn("push:", text.split("permissions:", 1)[0])
+        self.assertIn("${{ inputs.tag }}", text)
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', text)
         self.assertEqual(
             list(document["jobs"]),
             [
@@ -212,15 +388,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "stage-draft",
                 "promote-images",
                 "finalize-assets",
-                "release-provenance",
                 "publish",
                 "dispatch-docs",
             ],
-        )
-        self.assertIn("uses", document["jobs"]["release-provenance"])
-        self.assertEqual(
-            document["jobs"]["publish"]["permissions"],
-            {"actions": "read", "contents": "write"},
         )
         self.assertEqual(
             document["jobs"]["promote-images"]["permissions"],
@@ -231,383 +401,205 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             {"actions": "write"},
         )
 
-    def test_draft_is_reconciled_before_image_or_release_publication(self) -> None:
-        text, _ = workflow("release.yml")
-        reconcile = text.index(
-            "Reconcile exact staged draft before first public image write"
-        )
-        image_copy = text.index('crane copy "${candidate_ref}" "${final_ref}"')
-        runtime = text.index("Generate signed 1.x lock and run the clean released runtime")
-        publish = text.index("Publish immutable release")
-        self.assertLess(reconcile, image_copy)
-        self.assertLess(image_copy, runtime)
-        self.assertLess(runtime, publish)
-        self.assertIn(
-            "their exact identities do not exist before tagging",
-            workflow("release-candidate.yml")[0],
-        )
-
-    def test_uses_compact_tag_binding_and_delays_oidc(self) -> None:
+    def test_binds_an_annotated_tag_to_exact_candidate_and_main_revisions(self) -> None:
         text, document = workflow("release.yml")
+        identity = next(
+            step
+            for step in document["jobs"]["verify"]["steps"]
+            if step.get("name") == "Resolve exact tag identity"
+        )
+        self.assertEqual(identity["env"]["RELEASE_TAG"], "${{ inputs.tag }}")
+        self.assertNotIn("${{ inputs.tag }}", identity["run"])
+        self.assertIn('"${tag%%.*}" != v0', identity["run"])
+        self.assertIn('git cat-file -t "refs/tags/${tag}"', text)
+        self.assertIn("git merge-base --is-ancestor", text)
+        self.assertIn("promotion_revision", text)
         self.assertIn("verify-tag-binding", text)
         self.assertIn("--trusted-run-metadata promotion/trusted-run.json", text)
-        self.assertNotIn("--manifest-sha256 \"${{", text)
-        self.assertNotEqual(
-            document["jobs"]["verify"]["permissions"].get("id-token"), "write"
-        )
-        self.assertNotIn("id-token", document["jobs"]["stage-draft"]["permissions"])
-        self.assertEqual(
-            document["jobs"]["finalize-assets"]["permissions"]["id-token"], "write"
-        )
-        provenance = document["jobs"]["release-provenance"]["uses"]
-        self.assertRegex(provenance, r"@[0-9a-f]{40}$")
+        self.assertNotIn("select-canary", text)
 
-    def test_exact_nonpublic_draft_can_be_safely_reconciled(self) -> None:
-        text, _ = workflow("release.yml")
-        staging = text.split("  stage-draft:", 1)[1].split(
-            "  promote-images:", 1
-        )[0]
-        self.assertIn(
-            "Verify public images are absent and any draft is bound",
-            text,
+    def test_checks_out_the_protected_workflow_before_running_repo_scripts(self) -> None:
+        _, document = workflow("release.yml")
+        for job_name, job in document["jobs"].items():
+            script_indexes = [
+                index
+                for index, step in enumerate(job.get("steps", []))
+                if "release/scripts/" in step.get("run", "")
+            ]
+            if not script_indexes:
+                continue
+            checkout_indexes = [
+                index
+                for index, step in enumerate(job["steps"])
+                if step.get("uses", "").startswith("actions/checkout@")
+            ]
+            self.assertTrue(checkout_indexes, job_name)
+            self.assertLess(min(checkout_indexes), min(script_indexes), job_name)
+
+    def test_reconciles_only_absent_or_exact_public_image_tags(self) -> None:
+        _, document = workflow("release.yml")
+        promotion = step_run(
+            document,
+            "promote-images",
+            "Reconcile exact image digests",
         )
-        self.assertIn(
-            "Reconcile bound draft and upload exact staged inventory",
-            text,
-        )
+        self.assertIn("reconcile-image-tag", promotion)
+        self.assertIn('--expected-digest "${digest}"', promotion)
+        self.assertIn('if [[ "${state}" == absent ]]', promotion)
+        self.assertIn('crane copy "${candidate_ref}" "${final_ref}"', promotion)
+        self.assertIn('test "$(crane digest "${final_ref}")" = "${digest}"', promotion)
+        self.assertNotIn("require-image-tag-absent", promotion)
+
+    def test_preserves_exact_draft_binding_without_overwriting_assets(self) -> None:
+        text, document = workflow("release.yml")
+        self.assertIn("Reconcile bound draft and upload exact staged inventory", text)
+        self.assertIn("registry-stack-release-candidate-v2 manifest_sha256:", text)
         self.assertIn(".draft == true", text)
-        self.assertNotIn("gh api --method DELETE", staging)
-        self.assertGreaterEqual(
-            text.count(
-                "registry-stack-release-candidate-v2 manifest_sha256:"
-            ),
-            3,
-        )
-        self.assertIn(".name == $title", text)
-        self.assertIn("contains($marker)", text)
-        self.assertIn('gh release view "${tag}"', text)
-        self.assertNotIn("/releases/tags/", text)
-        self.assertIn(
-            'repos/${GITHUB_REPOSITORY}/releases/${release_id}',
-            text,
-        )
-
-    def test_public_image_promotion_is_fail_closed_and_burns_the_version(
-        self,
-    ) -> None:
-        candidate, _ = workflow("release-candidate.yml")
-        release, document = workflow("release.yml")
-        combined = candidate + release
-        self.assertEqual(
-            combined.count("release_workflow_guard.py http-status"),
-            1,
-        )
-        self.assertNotIn("awk '/^HTTP", combined)
-        self.assertNotIn("sed -E 's#^ghcr", combined)
-        self.assertNotIn("image-tag-state", combined)
-        self.assertNotIn("--expected-digest", combined)
-        self.assertEqual(combined.count("gh api --paginate --slurp"), 3)
-        self.assertEqual(combined.count("require-image-tag-absent"), 3)
-        promotion = next(
-            step["run"]
-            for step in document["jobs"]["promote-images"]["steps"]
-            if step.get("name") == "Burn version on first exact digest promotion"
-        )
-        self.assertIn("public-image-destination", promotion)
-        self.assertIn("require-image-tag-absent", promotion)
-        absence = promotion.index("require-image-tag-absent")
-        copy = promotion.index('crane copy "${candidate_ref}" "${final_ref}"')
-        self.assertLess(absence, copy)
-        self.assertNotIn("--expected-digest", promotion)
-        self.assertNotIn("state=", promotion)
-        self.assertIn("irreversible version burn", promotion)
-        self.assertIn(
-            'test "$(crane digest "${final_ref}")" = "${digest}"',
-            promotion,
-        )
-        verify = next(
-            step["run"]
-            for step in document["jobs"]["verify"]["steps"]
-            if step.get("name")
-            == "Verify public images are absent and any draft is bound"
-        )
-        self.assertIn(
-            "require-image-tag-absent",
-            verify,
-        )
-        self.assertNotIn("--expected-digest", verify)
-
-        stage = next(
-            step["run"]
-            for step in document["jobs"]["stage-draft"]["steps"]
-            if step.get("name")
-            == "Reconcile bound draft and upload exact staged inventory"
-        )
-        self.assertIn("2>\"${release_view_error}\"", stage)
-        self.assertIn("elif grep -Fxq 'release not found'", stage)
-        self.assertIn('cat "${release_view_error}" >&2', stage)
-
-    def test_every_final_release_mutation_requires_the_exact_bound_draft(
-        self,
-    ) -> None:
-        _, document = workflow("release.yml")
-        finalize_steps = document["jobs"]["finalize-assets"]["steps"]
-        cleanup = next(
-            step["run"]
-            for step in finalize_steps
-            if step.get("name")
-            == "Clean retryable final additions and reverify exact staged assets"
-        )
-        cleanup_loop = cleanup.index(
-            "while IFS= read -r name; do"
-        )
-        cleanup_guard = cleanup.index("require_bound_draft", cleanup_loop)
-        cleanup_delete = cleanup.index("gh api --method DELETE", cleanup_guard)
-        self.assertLess(cleanup_guard, cleanup_delete)
-        self.assertIn(".draft == true", cleanup)
-
-        final_upload = next(
-            step["run"]
-            for step in finalize_steps
-            if step.get("name")
-            == "Sign and upload the complete pre-provenance asset closure"
-        )
-        upload_guard = final_upload.index(
-            "contract/final-upload-release.json"
-        )
-        upload = final_upload.index(
-            'gh release upload "${tag}" "${additions[@]}"'
-        )
-        self.assertLess(upload_guard, upload)
-        self.assertIn(".draft == true", final_upload[upload_guard:upload])
-
-        provenance = document["jobs"]["release-provenance"]
-        self.assertEqual(provenance["permissions"]["contents"], "write")
-        self.assertFalse(provenance["with"]["upload-assets"])
-        self.assertNotIn("upload-tag-name", provenance["with"])
-
-        publish_steps = document["jobs"]["publish"]["steps"]
-        self.assertTrue(
-            any(
-                step.get("name")
-                == "Download exact tag-bound release provenance"
-                for step in publish_steps
-            )
-        )
-        provenance_upload = next(
+        self.assertIn(".prerelease == false", text)
+        self.assertNotIn("--prerelease", text)
+        self.assertNotIn("--clobber", text)
+        tagged_checkout = next(
             step
-            for step in publish_steps
-            if step.get("name")
-            == "Upload provenance to the exact bound draft"
+            for step in document["jobs"]["stage-draft"]["steps"]
+            if step.get("name") == "Checkout exact tagged product source"
         )
         self.assertEqual(
-            provenance_upload["if"],
-            "steps.release_state.outputs.release_state == 'draft'",
+            tagged_checkout["with"]["ref"],
+            "${{ needs.verify.outputs.source_sha }}",
         )
-        provenance_upload = provenance_upload["run"]
-        guard_invocations = [
-            index
-            for index, line in enumerate(provenance_upload.splitlines())
-            if line.strip() == "require_bound_draft"
-        ]
-        self.assertEqual(len(guard_invocations), 2)
-        provenance_delete = provenance_upload.index("gh api --method DELETE")
-        provenance_write = provenance_upload.index(
-            'gh release upload "${tag}" "provenance/${provenance}"'
+        stage = step_run(
+            document,
+            "stage-draft",
+            "Reconcile bound draft and upload exact staged inventory",
         )
-        first_guard = provenance_upload.index(
-            "\nrequire_bound_draft\n"
-        )
-        second_guard = provenance_upload.index(
-            "\nrequire_bound_draft\n",
-            first_guard + 1,
-        )
-        self.assertLess(first_guard, provenance_delete)
-        self.assertLess(provenance_delete, second_guard)
-        self.assertLess(second_guard, provenance_write)
-        self.assertIn(".draft == true", provenance_upload)
-
-        signed_recheck = next(
-            step["run"]
-            for step in publish_steps
-            if step.get("name")
-            == "Recheck complete signed release and exact public images"
-        )
-        self.assertIn('$release_state == "draft"', signed_recheck)
-        self.assertIn('$release_state == "published"', signed_recheck)
-        self.assertIn(".draft == true", signed_recheck)
-        self.assertIn(".draft == false", signed_recheck)
-        self.assertIn("needs.verify.outputs.docs_sha256", signed_recheck)
-        self.assertNotIn('(.draft | type) == "boolean"', signed_recheck)
-
-        publication = next(
-            step["run"]
-            for step in publish_steps
-            if step.get("name") == "Publish immutable release"
-        )
-        state = publication.index("publish-state.json")
-        draft = publication.index(".draft == true", state)
-        patch = publication.index("gh api --method PATCH", draft)
-        self.assertLess(state, draft)
-        self.assertLess(draft, patch)
         self.assertIn(
-            'if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then',
-            publication,
+            'cp "product-source/release/notes/${tag}.md"',
+            stage,
         )
-        self.assertIn('$release_state == "published"', publication)
-        self.assertNotIn('(.draft | type) == "boolean"', publication)
 
-    def test_published_retry_is_exact_and_read_only(self) -> None:
+    def test_recovers_only_the_closed_final_asset_roster(self) -> None:
         _, document = workflow("release.yml")
-        publish_steps = document["jobs"]["publish"]["steps"]
-        classification_index, classification = next(
-            (index, step)
-            for index, step in enumerate(publish_steps)
-            if step.get("name")
-            == "Classify exact bound draft or published release"
+        stage = step_run(
+            document,
+            "stage-draft",
+            "Reconcile bound draft and upload exact staged inventory",
         )
-        provenance_index = next(
-            index
-            for index, step in enumerate(publish_steps)
-            if step.get("name")
-            == "Upload provenance to the exact bound draft"
+        promote = step_run(
+            document,
+            "promote-images",
+            "Reconcile exact staged draft before first public image write",
         )
-        self.assertLess(classification_index, provenance_index)
-        self.assertEqual(classification["id"], "release_state")
-        classifier = classification["run"]
-        self.assertIn('["draft", (.id | tostring)]', classifier)
-        self.assertIn('["published", (.id | tostring)]', classifier)
-        self.assertIn(".published_at == null", classifier)
-        self.assertIn('.published_at | type == "string"', classifier)
-        self.assertIn(".name == $title", classifier)
-        self.assertIn("contains($marker)", classifier)
+        finalize = step_run(
+            document,
+            "finalize-assets",
+            "Clean retryable final additions and reverify exact staged assets",
+        )
+        retryable_names = (
+            '"registryctl-${tag}-image-lock.json"',
+            "SHA256SUMS",
+            '"registry-stack-${tag}-SHA256SUMS.sigstore.json"',
+        )
+        retryable_roster = stage[
+            stage.index("printf '%s\\n'") : stage.index(
+                "> contract/retryable-final-assets"
+            )
+        ]
+        roster_lines = {
+            line.strip().removesuffix("\\").strip()
+            for line in retryable_roster.splitlines()[1:]
+            if line.strip() and not line.lstrip().startswith("}")
+        }
+        self.assertEqual(roster_lines, set(retryable_names))
+        for name in retryable_names:
+            self.assertNotIn(name, finalize)
+        self.assertLess(
+            stage.index('"${RUNNER_TEMP}/staged-draft.json" >/dev/null'),
+            stage.index("> contract/retryable-final-assets"),
+        )
+        self.assertIn("cat contract/expected-staged-assets", stage)
+        self.assertIn("cat contract/retryable-final-assets", stage)
+        self.assertIn("contract/allowed-staged-assets", stage)
+        self.assertIn("[[ -s contract/unexpected-staged-assets ]]", stage)
+        self.assertLess(
+            promote.index("contract/draft-release.json >/dev/null"),
+            promote.index("comm -23"),
+        )
+        self.assertIn("contract/observed-assets", promote)
+        self.assertIn("contract/retryable-final-assets", promote)
+        self.assertIn("diff -u contract/expected-assets contract/actual-assets", promote)
+        self.assertLess(
+            finalize.index("require_bound_draft\n"),
+            finalize.index("cat contract/retryable-final-assets"),
+        )
+        self.assertLess(
+            finalize.index("require_bound_draft\n"),
+            finalize.index("gh api --method DELETE"),
+        )
 
-        publication = next(
-            step["run"]
-            for step in publish_steps
-            if step.get("name")
-            == "Publish immutable release"
+    def test_rechecks_candidate_immediately_before_public_image_access(self) -> None:
+        text, document = workflow("release.yml")
+        expiry = text.index(
+            "Recheck candidate expiry immediately before registry login"
         )
-        state_validation, remainder = publication.split(
-            'if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then',
-            1,
+        login = text.index("Log in for exact candidate promotion", expiry)
+        copy = text.index('crane copy "${candidate_ref}" "${final_ref}"', login)
+        self.assertLess(expiry, login)
+        self.assertLess(login, copy)
+        expiry_run = step_run(
+            document,
+            "promote-images",
+            "Recheck candidate expiry immediately before registry login",
         )
-        draft_branch, final_validation = remainder.split(
-            "\nfi\n",
-            1,
-        )
-        self.assertIn('$release_state == "draft"', state_validation)
-        self.assertIn('$release_state == "published"', state_validation)
-        self.assertIn(".draft == false", state_validation)
-        self.assertIn("contains($marker)", state_validation)
-        self.assertIn("gh api --method PATCH", draft_branch)
-        self.assertNotIn("gh release upload", draft_branch)
-        self.assertNotIn("gh api --method DELETE", draft_branch)
-        self.assertNotIn('crane copy "${candidate_ref}" "${final_ref}"', draft_branch)
-        self.assertIn("published-release.json", final_validation)
-        for mutation in (
-            "gh release upload",
-            "gh api --method DELETE",
-            "gh api --method PATCH",
-            'crane copy "${candidate_ref}" "${final_ref}"',
-        ):
-            with self.subTest(mutation=mutation):
-                self.assertNotIn(mutation, state_validation)
-                self.assertNotIn(mutation, final_validation)
+        self.assertIn(".validity.expires_at", expiry_run)
+        self.assertNotIn("verify-candidate", expiry_run)
 
-        for step in publish_steps:
-            if step.get("name") == "Publish immutable release":
-                continue
-            if step.get("if") == (
-                "steps.release_state.outputs.release_state == 'draft'"
-            ):
-                continue
-            run = step.get("run", "")
-            for mutation in (
-                "gh release upload",
-                "gh api --method DELETE",
-                "gh api --method PATCH",
-                'crane copy "${candidate_ref}" "${final_ref}"',
-            ):
-                with self.subTest(step=step.get("name"), mutation=mutation):
-                    self.assertNotIn(mutation, run)
-
-    def test_canary_selection_uses_the_complete_shared_schema(self) -> None:
-        candidate, _ = workflow("release-candidate.yml")
-        release, _ = workflow("release.yml")
-        combined = candidate + release
-        self.assertEqual(combined.count("release_candidate.py select-canary"), 2)
-        for field in ("id", "run_attempt", "event"):
-            self.assertIn(f'"{field}": value.get("{field}")', (
-                ROOT / "release/scripts/release_candidate.py"
-            ).read_text(encoding="utf-8"))
-
-    def test_publishes_one_signature_bundle_and_dispatches_exact_docs(self) -> None:
+    def test_signs_one_checksum_closure_without_beta_only_ceremony(self) -> None:
         text, _ = workflow("release.yml")
         self.assertIn("SHA256SUMS.sigstore.json", text)
         self.assertIn("cosign sign-blob --yes", text)
-        self.assertIn("first-country-release-form.tar.gz", text)
-        self.assertIn("registry-release-lock.v1.json", text)
+        self.assertIn(
+            ".github/workflows/release.yml@refs/heads/main",
+            text,
+        )
+        self.assertNotIn("release-provenance", text)
+        self.assertNotIn("slsa-framework/slsa-github-generator", text)
+        self.assertNotIn("Generate signed 1.x lock", text)
+        self.assertNotIn("registry-release-lock.v1.json", text)
+
+    def test_publishes_exact_assets_then_dispatches_exact_docs(self) -> None:
+        text, _ = workflow("release.yml")
+        self.assertIn("Recheck complete signed release and exact public images", text)
+        self.assertIn("Publish immutable release", text)
+        self.assertIn("-F draft=false", text)
+        self.assertIn("-F prerelease=false", text)
         self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', text)
         self.assertIn('docs_sha256=${{ needs.verify.outputs.docs_sha256 }}', text)
-        self.assertNotIn(".sig\"", text)
-        self.assertNotIn(".pem", text)
-        self.assertNotIn("release-capsule", text)
-        self.assertNotIn("release-telemetry", text)
-        self.assertNotIn("extended-proof", text)
-
-    def test_rechecks_expiry_before_registry_login(self) -> None:
-        text, _ = workflow("release.yml")
-        expiry = text.index("Reverify candidate expiry immediately before registry login")
-        login = text.index("Log in for exact candidate promotion")
-        copy = text.index('crane copy "${candidate_ref}" "${final_ref}"')
-        self.assertLess(expiry, login)
-        self.assertLess(login, copy)
-
-    def test_candidate_tag_and_final_lock_use_one_exact_source_revision(self) -> None:
-        text, _ = workflow("release.yml")
-        candidate, _ = workflow("release-candidate.yml")
-        self.assertIn(
-            '--source-sha "${{ needs.verify.outputs.workflow_revision }}"',
-            text,
+        self.assertLess(
+            text.index("Publish immutable release"),
+            text.index("Dispatch authenticated docs promotion"),
         )
-        self.assertIn(
-            'test "${workflow_revision}" = "${{ steps.identity.outputs.source_sha }}"',
-            text,
-        )
-        self.assertIn(
-            '--manifest-source-ref "${{ needs.verify.outputs.workflow_revision }}"',
-            text,
-        )
-        self.assertIn(
-            '--tag-target "${{ needs.verify.outputs.source_sha }}"',
-            text,
-        )
-        self.assertIn(
-            '--manifest-source-ref "${{ needs.validate.outputs.source_sha }}"',
-            candidate,
-        )
-        self.assertIn(
-            '--tag-target "${{ needs.validate.outputs.source_sha }}"',
-            candidate,
-        )
-
-    def test_major_gate_never_adds_an_unsigned_installer_bypass(self) -> None:
-        release, _ = workflow("release.yml")
-        candidate, _ = workflow("release-candidate.yml")
-        self.assertIn("if ((major >= 1)); then", release)
-        self.assertIn("if ((major >= 1)); then", candidate)
-        self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", release)
-        self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
-    def test_docs_deploy_rechecks_latest_release_at_last_boundary(self) -> None:
+    def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
+        operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
+        self.assertIn("public, non-prerelease GitHub Release", operations)
+        self.assertNotIn("marked as a prerelease", operations)
+        self.assertIn(".isPrerelease == false", verify)
+        self.assertNotIn(".isPrerelease == true", verify)
+
+    def test_docs_deploy_rechecks_latest_published_release(self) -> None:
         text, document = workflow("docs-pages.yml")
-        endpoint = 'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"'
+        latest_endpoint = 'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"'
         helper = "release/scripts/verify_latest_published_release.py"
-        self.assertEqual(text.count(endpoint), 2)
+        self.assertEqual(text.count(latest_endpoint), 2)
         self.assertEqual(text.count(f"python3 {helper}"), 2)
+        self.assertIn(".prerelease==false", text)
+        self.assertIn(
+            ".github/workflows/release.yml@refs/heads/main",
+            text,
+        )
         deploy_steps = document["jobs"]["deploy"]["steps"]
         recheck = next(
             index
@@ -621,6 +613,37 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Deploy to GitHub Pages"
         )
         self.assertEqual(recheck + 1, deployment)
+        self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
+
+        build_steps = document["jobs"]["build"]["steps"]
+        cache = next(
+            step
+            for step in build_steps
+            if step.get("name") == "Cache Registryctl authoring-reference build"
+        )
+        self.assertEqual(
+            cache["uses"],
+            "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+        )
+        self.assertEqual(cache["with"]["shared-key"], "docs-authoring-reference")
+        self.assertTrue(cache["with"]["save-if"])
+
+        _, ci = workflow("ci.yml")
+        docs_steps = ci["jobs"]["docs"]["steps"]
+        ci_cache = next(
+            step
+            for step in docs_steps
+            if step.get("name") == "Cache Registryctl authoring-reference build"
+        )
+        self.assertEqual(ci_cache["uses"], cache["uses"])
+        self.assertEqual(
+            ci_cache["with"]["shared-key"],
+            cache["with"]["shared-key"],
+        )
+        self.assertEqual(
+            ci_cache["with"]["save-if"],
+            "${{ github.ref == 'refs/heads/main' }}",
+        )
 
     def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,
@@ -645,56 +668,15 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 result = verify_latest_release_fixture(invalid, "v1.4.0")
                 self.assertNotEqual(result.returncode, 0)
 
-    def test_canary_has_no_public_write_permission(self) -> None:
+    def test_canary_is_async_and_has_no_public_write_permission(self) -> None:
         text, document = workflow("release-canary.yml")
-        self.assertIn("schedule:", text.split("permissions:", 1)[0])
-        self.assertIn("workflow_dispatch:", text.split("permissions:", 1)[0])
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("schedule:", trigger)
+        self.assertIn("workflow_dispatch:", trigger)
         for job in document["jobs"].values():
             permissions = job.get("permissions", {})
             self.assertNotEqual(permissions.get("contents"), "write")
             self.assertNotEqual(permissions.get("packages"), "write")
-        self.assertIn("verify-canary", text)
-        self.assertIn("macOS release-tool contract", text)
-        self.assertIn('name: "registry-notary"', text)
-        self.assertIn('name: "registry-relay"', text)
-        self.assertIn("security/registry-notary.grype.json", text)
-        self.assertIn("security/registry-relay.grype.json", text)
-        self.assertIn("trusted-candidate-run.json", text)
-        self.assertIn("trusted-canary-run.json", text)
-        self.assertIn('event: "repository_dispatch"', text)
-        self.assertIn('path: ".github/workflows/release-candidate.yml"', text)
-        trusted_candidate = text.split(
-            "> canary/trusted-candidate-run.json", 1
-        )[0].rsplit("jq -n", 1)[1]
-        self.assertIn('status: "completed"', trusted_candidate)
-        self.assertIn('conclusion: "success"', trusted_candidate)
-
-    def test_canary_seals_complete_security_evidence(self) -> None:
-        _, document = workflow("release-canary.yml")
-        exercise = next(
-            step["run"]
-            for step in document["jobs"]["control-plane"]["steps"]
-            if step.get("name")
-            == "Exercise dispatch, candidate, advisory, draft, and docs contracts"
-        )
-        for required_member_pattern in (
-            "images/postgresql.digest",
-            "image-sbom/${name}.spdx.json",
-            "image-sbom/postgresql.spdx.json",
-            "syft/${name}.syft.json",
-            "grype/${name}.grype.json",
-            "grype/grype-db-status.json",
-            "advisory-verdict.json",
-        ):
-            self.assertIn(required_member_pattern, exercise)
-        for image in ("registry-notary", "registry-relay", "postgresql"):
-            self.assertIn(f"write_image_reports {image}", exercise)
-        self.assertIn("registry-stack-${tag}-security-evidence.tar.gz", exercise)
-        self.assertIn('kind: "security-evidence"', exercise)
-        self.assertLess(
-            exercise.index("registry-stack-${tag}-security-evidence.tar.gz"),
-            exercise.index("release_candidate.py seal-candidate"),
-        )
 
     def test_scorecard_is_schedule_or_manual_only(self) -> None:
         text, _ = workflow("scorecard.yml")
@@ -703,53 +685,6 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", trigger)
         self.assertNotIn("push:", trigger)
         self.assertNotIn("pull_request:", trigger)
-        self.assertNotIn("branch_protection_rule:", trigger)
-
-    def test_capsule_backfill_has_no_active_workflow(self) -> None:
-        self.assertFalse((WORKFLOWS / "release-capsule-backfill.yml").exists())
-
-    def test_v2_helper_flags_used_by_workflow_are_supported(self) -> None:
-        helper = ROOT / "release" / "scripts" / "release_candidate.py"
-        for command, required in (
-            (
-                "verify-candidate",
-                (
-                    "--manifest",
-                    "--bundle",
-                    "--bundle-root",
-                    "--promotion",
-                    "--allow-current-run-in-progress",
-                ),
-            ),
-            (
-                "verify-tag-binding",
-                (
-                    "--message",
-                    "--manifest",
-                    "--bundle",
-                    "--bundle-root",
-                    "--trusted-run-metadata",
-                ),
-            ),
-            ("verify-canary", ("--metadata", "--workflow-revision")),
-            (
-                "select-canary",
-                ("--metadata", "--workflow-revision", "--output"),
-            ),
-        ):
-            result = subprocess.run(
-                ["python3", str(helper), command, "--help"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            for flag in required:
-                self.assertIn(flag, result.stdout)
-            if command == "verify-tag-binding":
-                self.assertNotIn(
-                    "--allow-current-run-in-progress",
-                    result.stdout,
-                )
 
 
 if __name__ == "__main__":

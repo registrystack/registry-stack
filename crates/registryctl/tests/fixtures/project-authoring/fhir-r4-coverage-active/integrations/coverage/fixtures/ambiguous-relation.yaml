@@ -32,4 +32,4 @@ interactions:
         entry:
           - { search: { mode: match }, resource: { resourceType: Coverage, status: active } }
           - { search: { mode: match }, resource: { resourceType: Coverage, status: cancelled } }
-expect: { outcome: ambiguous, outputs: {}, claims: {} }
+expect: { outcome: ambiguous, outputs: {} }

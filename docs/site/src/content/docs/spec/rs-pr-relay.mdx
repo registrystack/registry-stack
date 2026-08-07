@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-08-04"
 doc_type: specification
 doc_id: RS-PR-RELAY
 category: normative
@@ -32,9 +32,9 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Registry Relay exposes: the configuration-driven service model that fixes a gateway's surface, how a caller authenticates and is scoped per dataset, how governed Evidence Gateway PDP enforcement applies to configured read routes, the consultation and aggregate routes that read configured sources, the scope-filtered metadata publication, the evidence-offering descriptors, the credential-issuance boundary with Registry Notary, and the audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Relay API reference](../../reference/apis/registry-relay/) describes narratively.
+This document defines the HTTP protocol contract that Registry Relay exposes: the configuration-driven service model that fixes a gateway's surface, how a caller authenticates and is scoped per dataset, how governed Relay PDP enforcement applies to configured read routes, the consultation and aggregate routes that read configured sources, the scope-filtered metadata publication, the evidence-offering descriptors, the boundary that keeps credential issuance out of Relay, and the audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Relay API reference](../../reference/apis/registry-relay/) describes narratively.
 
-It refines the Registry Relay component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-003, REQ-ARC-G-004, REQ-ARC-G-006, and REQ-ARC-G-007) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form. It is the Relay counterpart to [RS-PR-NOTARY](../rs-pr-notary/), which specifies Registry Notary.
+It refines the Registry Relay component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-003, REQ-ARC-G-004, REQ-ARC-G-006, and REQ-ARC-G-007) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2. Defined terms are used per [RS-TERMS](../rs-terms/).
 
@@ -43,13 +43,14 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial protocol contract, distilled from the Registry Relay API reference, the publishing-pipeline explanation, the boundary map, and the generated OpenAPI document. |
-| 0.1.1 | 2026-06-20 | draft | Document governed Evidence Gateway PDP enforcement, aggregate authorization ordering, metadata filtering boundaries, and PDP audit provenance. |
+| 0.1.1 | 2026-06-20 | draft | Document governed Relay PDP enforcement, aggregate authorization ordering, metadata filtering boundaries, and PDP audit provenance. |
 | 0.1.2 | 2026-06-21 | draft | Clarified aggregate disclosure limits and privacy-budget boundaries. |
 | 0.2.0 | 2026-07-07 | draft | Corrected REQ-PR-RELAY-020's trust-context header names to the actual wire names, and clarified that the signed response credential surfaces of Section 8 are gated by runtime configuration (the `provenance` key), not a Cargo feature, distinguishing them from the genuinely feature-gated OGC and SP DCI adapters. |
 | 0.2.1 | 2026-07-07 | draft | Documented additional request-context headers alongside REQ-PR-RELAY-020, noting they are not currently wired to any Relay policy decision. |
 | 0.2.2 | 2026-07-09 | draft | Clarified that `x-registry-source-observed-at-unix-seconds` is scope guarded trust context, leaving four additional request-context headers outside Relay policy decisions. |
 | 0.3.0 | 2026-07-09 | draft | Removed Relay-local signed response credential requirements and made Registry Notary the only credential issuance surface. |
 | 0.3.1 | 2026-07-10 | draft | Scope-gated the remaining client-supplied trust-context headers, documented the policy-authoring boundary, and replaced exact trust values in audit records with keyed field-bound handles. |
+| 0.3.2 | 2026-08-04 | draft | Recorded that Registry Notary is retired: Sections 7 and 8 no longer name it as the destination of an evidence offering or as the credential issuer, and REQ-PR-RELAY-012 now states the `registry-notary` access kind that the runtime binding still requires. No Relay behavior changed. |
 
 ## 1. Scope and references
 
@@ -57,11 +58,11 @@ This specification covers Registry Relay's externally observable protocol behavi
 
 - The configuration-driven service model and its fail-closed startup.
 - Authentication and per-dataset scope enforcement, including the purpose header.
-- Governed Evidence Gateway PDP enforcement for configured read routes.
+- Governed Relay PDP enforcement for configured read routes.
 - The consultation data routes (entities, records, relationships, schemas) and the aggregate routes.
 - Scope-filtered metadata publication at `/metadata/*`.
-- Evidence-offering descriptors and their boundary with Registry Notary.
-- The credential-issuance boundary between Relay and Notary.
+- Evidence-offering descriptors and the boundary they draw around Relay.
+- The boundary that keeps credential issuance out of Relay.
 - The audit obligation, the error format, and the feature-gated surfaces.
 
 This specification does not define:
@@ -107,7 +108,7 @@ REQ-PR-RELAY-006: Access MUST be scope-checked per dataset: a caller MUST hold t
 
 REQ-PR-RELAY-007: Where an entity or aggregate source sets `api.require_purpose_header: true`, a request that omits the `Data-Purpose` header MUST be rejected with `400 auth.purpose_required`. Where the header is present, it MUST be recorded in the request's audit record.
 
-Governed Evidence Gateway policy enforcement is an additional runtime decision, not a replacement for authentication or dataset scopes. Relay uses the supported PDP profile when runtime configuration selects a governed ecosystem binding or declares a governed policy for an entity or aggregate source. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, purpose, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, redaction, requested fact and disclosure, source binding, route identity, and checked scope. Unsupported ODRL terms or invalid policy identity fail closed.
+Governed Relay PDP policy enforcement is an additional runtime decision, not a replacement for authentication or dataset scopes. Relay uses the supported PDP profile when runtime configuration selects a governed ecosystem binding or declares a governed policy for an entity or aggregate source. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, purpose, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, redaction, requested fact and disclosure, source binding, route identity, and checked scope. Unsupported ODRL terms or invalid policy identity fail closed.
 
 REQ-PR-RELAY-019: A governed Relay read MUST receive a PDP permit before returning entity-backed data or aggregate data. If the PDP denies the request, Relay MUST fail closed and return a stable `pdp.*` problem code rather than falling back to an ungoverned read. The stable denial codes include `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, `pdp.evidence_stale`, `pdp.legal_basis_required`, `pdp.consent_required`, `pdp.jurisdiction_not_permitted`, `pdp.unsupported_policy_term`, `pdp.policy_id_required`, and `pdp.policy_hash_invalid`.
 
@@ -145,20 +146,21 @@ REQ-PR-RELAY-011: Registry Relay MUST NOT define or version the metadata manifes
 
 REQ-PR-RELAY-023: Metadata publication MUST remain an authorization-filtered publication surface. Relay MUST NOT treat publication of scoped ODRL, catalog, schema, or evidence-offering metadata as a PDP permit for a later data read, and MUST NOT treat a data-read PDP permit as authorization to publish metadata outside the caller's metadata scopes.
 
-## 7. Evidence offerings
+## 7. Evidence Gateway offerings
 
-Registry Relay publishes evidence-offering metadata describing where a caller reaches a Registry Notary for verification. Relay routes the caller to Notary; it does not perform the verification.
+Registry Relay publishes evidence-offering metadata describing where a caller reaches a separate evidence service. Relay routes the caller there; it does not perform the evaluation or the verification.
 
-REQ-PR-RELAY-012: Registry Relay MAY publish evidence-offering metadata at `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`, naming the Registry Notary endpoint, the claim ids, and the supported disclosure modes and formats for an offering. Registry Relay MUST NOT perform claim evaluation or issue credentials itself. This is the protocol-level form of REQ-ARC-G-007.
+REQ-PR-RELAY-012: Registry Relay MAY publish evidence-offering metadata at `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`, naming the external endpoint, the offered claim ids, and the supported disclosure modes and formats for an offering. Registry Relay MUST NOT evaluate an offering or issue credentials itself. This is the protocol-level form of REQ-ARC-G-007.
+
+Relay's evidence-offering surface still carries a retired product's vocabulary: runtime binding validation accepts an offering only when `access.kind` is `registry-notary`, and it rejects the configuration otherwise. An operator therefore cannot publish an offering that points at an Evidence Gateway deployment without that access kind being widened first. Treat this section as describing published surface with no maintained destination behind it.
 
 ## 8. Credential issuance boundary
 
-Registry Relay does not issue credentials, host issuer DID documents, or manage issuer signing keys.
-Registry Notary owns credential issuance and verification.
+Registry Relay does not issue credentials, host issuer DID documents, or manage issuer signing keys. Signing belongs to a separate evidence service; the product that used to own it is retired, and Evidence Gateway now signs its own assertions under its own contract.
 
 REQ-PR-RELAY-013: Registry Relay MUST NOT issue response credentials, MUST NOT accept the legacy `provenance` configuration key, and MUST NOT accept entity-level `publicschema` credential mapping configuration. It MUST NOT serve the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
 
-REQ-PR-RELAY-014: A Relay entity or aggregate response MUST remain an ordinary negotiated data response. A caller request for `application/vc+jwt` MUST NOT cause Relay to sign the response. If a workflow needs a signed credential, the workflow MUST use Registry Notary or another configured evidence service reached through evidence-offering metadata.
+REQ-PR-RELAY-014: A Relay entity or aggregate response MUST remain an ordinary negotiated data response. A caller request for `application/vc+jwt` MUST NOT cause Relay to sign the response. If a workflow needs a signed response, the workflow MUST use a configured evidence service reached outside Relay.
 
 ## 9. Audit and error behavior
 
@@ -182,7 +184,7 @@ These constraints are stated so a reader does not infer a capability from the ro
 
 - No source mutation, no streaming: Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
 - Feature-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature (REQ-PR-RELAY-017).
-- No claim evaluation: Relay describes evidence offerings but never evaluates a claim or issues a credential; that is Registry Notary's role (REQ-PR-RELAY-012).
+- No claim evaluation: Relay describes evidence offerings but never evaluates one or issues a credential. The product that formerly played that role is retired, and Relay's binding validation still requires its access kind (REQ-PR-RELAY-012).
 - Manifest format not owned here: The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
 - PDP enforcement boundary: Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
 - Aggregate disclosure boundary: Aggregate routes return configured statistical observations and may be protected by scopes and PDP policy, but they do not provide a built-in longitudinal privacy budget or cumulative differencing protection (REQ-PR-RELAY-009).
@@ -194,18 +196,18 @@ A Registry Relay deployment conforms to this specification when it:
 - exposes no source-registry mutation route and never widens a caller's reach at request time (REQ-PR-RELAY-001, REQ-PR-RELAY-002);
 - fails closed at startup on manifest or binding errors, and keeps storage internals out of the public surface (REQ-PR-RELAY-003, REQ-PR-RELAY-004);
 - runs a single auth mode, scope-checks per dataset, leaves probes unauthenticated, and enforces the purpose header where configured (REQ-PR-RELAY-005, REQ-PR-RELAY-006, REQ-PR-RELAY-007);
-- enforces the supported Evidence Gateway PDP profile for governed reads, filters trust metadata by principal scope, preserves aggregate authorization ordering, and audits PDP provenance (REQ-PR-RELAY-019, REQ-PR-RELAY-020, REQ-PR-RELAY-021, REQ-PR-RELAY-022);
+- enforces the supported Relay PDP profile for governed reads, filters trust metadata by principal scope, preserves aggregate authorization ordering, and audits PDP provenance (REQ-PR-RELAY-019, REQ-PR-RELAY-020, REQ-PR-RELAY-021, REQ-PR-RELAY-022);
 - serves only the bound entities, fields, and relationships as read-only routes (REQ-PR-RELAY-008);
 - returns aggregate observations computed from configured measures, in both native and SDMX-JSON serializations (REQ-PR-RELAY-009);
 - scope-filters the metadata it serves, does not own the manifest format, and keeps metadata publication separate from runtime PDP authorization (REQ-PR-RELAY-010, REQ-PR-RELAY-011, REQ-PR-RELAY-023);
 - describes evidence offerings without performing verification (REQ-PR-RELAY-012);
-- keeps credential issuance out of Relay and points signed-credential workflows to Registry Notary or configured evidence services (REQ-PR-RELAY-013, REQ-PR-RELAY-014);
+- keeps credential issuance out of Relay and points signed-response workflows to a configured evidence service (REQ-PR-RELAY-013, REQ-PR-RELAY-014);
 - audits every data and metadata read, and reports errors as problem+json (REQ-PR-RELAY-015, REQ-PR-RELAY-016);
 - mounts Cargo-feature-gated, configuration-gated, and admin surfaces only as built and configured (REQ-PR-RELAY-017, REQ-PR-RELAY-018).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 
-## Evidence
+## Evidence Gateway
 
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
@@ -217,7 +219,7 @@ This specification is `verified`: every requirement describes shipped behavior a
 
 ## Next
 
-- [RS-PR-NOTARY](../rs-pr-notary/) specifies Registry Notary, the verification counterpart that Relay's evidence offerings point to.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) specifies Evidence Gateway, the separate runtime that returns signed, minimum-disclosure assertions.
 - [RS-ARC-G](../rs-arc-g/) places Registry Relay in the registry stack architecture.
 - [RS-TERMS](../rs-terms/) defines the consultation, metadata, and credential vocabulary used here.
 - [Registry Relay API reference](../../reference/apis/registry-relay/) is the route-level reference and the link to the generated OpenAPI document.

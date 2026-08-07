@@ -1,0 +1,31 @@
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file:
+    root: /run/secrets/registry-evidence
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+# The registry API this project reads is presented over ordinary public TLS,
+# so no private trust profile is declared and the source names none. A
+# deployment whose registry API sits behind an internal CA adds a profile here
+# and names it on the source, the way the other reference projects do.
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}

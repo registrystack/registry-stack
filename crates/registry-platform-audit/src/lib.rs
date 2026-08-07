@@ -2,6 +2,13 @@
 //! Tamper-evident audit envelopes, async sinks, and redaction helpers.
 
 pub mod pseudonym_keyring;
+#[cfg(unix)]
+mod segmented_jsonl;
+#[cfg(unix)]
+pub use segmented_jsonl::{
+    segmented_audit_paths, verify_segmented_audit_chain, visit_stopped_segmented_audit_chain,
+    DurableSegmentedAuditLog, DurableSegmentedJsonlSink, SegmentedAuditSummary,
+};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -86,7 +93,17 @@ impl AuditEnvelope {
         Self::new_with_hasher(record, prev_hash, &AuditChainHasher::unkeyed_dev_only())
     }
 
-    fn new_with_hasher(
+    /// Build the next envelope in a chain without writing it anywhere.
+    ///
+    /// [`ChainState::append`] is the usual way to extend a chain and should be
+    /// preferred. This exists for a sink that has to own the chain head itself,
+    /// because it advances the head and claims a place in a pending batch under
+    /// one lock so that a durable write can cover many records at once. Callers
+    /// taking that route are responsible for the ordering [`ChainState`] would
+    /// otherwise guarantee: `prev_hash` must be the previous record's
+    /// `record_hash`, and `hasher` must be the same hasher for the chain's
+    /// whole life.
+    pub fn new_with_hasher(
         record: Value,
         prev_hash: Option<[u8; 32]>,
         hasher: &AuditChainHasher,
@@ -215,6 +232,23 @@ pub struct AuditChainProfile {
 }
 
 impl AuditChainProfile {
+    /// Production profile backed by caller-owned master secret bytes.
+    ///
+    /// The bytes are used exactly as supplied, without trimming or decoding,
+    /// and are zeroized after the chain sub-key is derived. The resulting key
+    /// is identical to the chain key derived by [`AuditProfile::production_from_secret_bytes`]
+    /// for the same master bytes.
+    pub fn production_from_secret_bytes(
+        master_secret: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, AuditError> {
+        Ok(Self {
+            hasher: AuditChainHasher::Keyed(derive_subkey_from_secret_bytes(
+                &master_secret,
+                CHAIN_KEY_DERIVATION_INFO,
+            )?),
+        })
+    }
+
     /// Production profile backed by the HMAC secret in `env_var_name`.
     ///
     /// The chain key is an HKDF-derived sub-key of the master env secret so it is
@@ -229,11 +263,6 @@ impl AuditChainProfile {
 
     /// Registry Relay production audit-chain profile.
     pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
-    /// Registry Notary production audit-chain profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Self::production_from_env(env_var_name)
     }
 
@@ -267,6 +296,29 @@ pub struct AuditProfile {
 }
 
 impl AuditProfile {
+    /// Production profile backed by caller-owned master secret bytes.
+    ///
+    /// The bytes are used exactly as supplied, without trimming or decoding,
+    /// and are zeroized after independent chain-integrity and identifier-hash
+    /// sub-keys are derived. This is the byte-backed counterpart to
+    /// [`Self::production_from_env`] for file and external secret providers.
+    pub fn production_from_secret_bytes(
+        master_secret: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, AuditError> {
+        let chain_hasher = AuditChainHasher::Keyed(derive_subkey_from_secret_bytes(
+            &master_secret,
+            CHAIN_KEY_DERIVATION_INFO,
+        )?);
+        let key_hasher = AuditKeyHasher::Keyed(derive_subkey_from_secret_bytes(
+            &master_secret,
+            IDENTIFIER_KEY_DERIVATION_INFO,
+        )?);
+        Ok(Self {
+            chain_hasher,
+            key_hasher,
+        })
+    }
+
     /// Production profile backed by the HMAC secret in `env_var_name`.
     ///
     /// The chain key and identifier key are independent HKDF-derived sub-keys of
@@ -283,11 +335,6 @@ impl AuditProfile {
 
     /// Registry Relay production audit profile.
     pub fn registry_relay_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Self::production_from_env(env_var_name)
-    }
-
-    /// Registry Notary production audit profile.
-    pub fn registry_notary_from_env(env_var_name: &str) -> Result<Self, AuditError> {
         Self::production_from_env(env_var_name)
     }
 
@@ -1001,6 +1048,9 @@ pub enum AuditError {
         expected: OptionalHashHex,
         found: OptionalHashHex,
     },
+    /// A non-destructive segmented chain has a gap inside its retained range.
+    #[error("audit sealed segment {sequence} is archived or missing")]
+    SegmentMissing { sequence: u64 },
 }
 
 /// Display helper for an optional 32-byte hash rendered as lowercase hex (or
@@ -2412,16 +2462,31 @@ fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSe
             name: env_var_name.to_string(),
         });
     }
-    // `value` (a `Zeroizing<String>`) owns and scrubs the master secret across
-    // every return path; borrow its bytes for the length check and HKDF rather
-    // than allocating a separate copy of the secret.
-    if value.len() < MIN_AUDIT_SECRET_BYTES {
-        return Err(AuditError::WeakSecret {
+    derive_subkey_from_secret_bytes(value.as_bytes(), info).map_err(|error| match error {
+        AuditError::WeakSecret { min_bytes, .. } => AuditError::WeakSecret {
             name: env_var_name.to_string(),
+            min_bytes,
+        },
+        error => error,
+    })
+}
+
+/// Derive one domain-separated sub-key from exact caller-owned master bytes.
+///
+/// The public byte-backed profile constructors retain the `Zeroizing` owner
+/// while this helper borrows the bytes, so both success and failure scrub the
+/// master after all requested sub-keys have been derived.
+fn derive_subkey_from_secret_bytes(
+    master_secret: &[u8],
+    info: &[u8],
+) -> Result<AuditHashSecret, AuditError> {
+    if master_secret.len() < MIN_AUDIT_SECRET_BYTES {
+        return Err(AuditError::WeakSecret {
+            name: "explicit master secret".to_string(),
             min_bytes: MIN_AUDIT_SECRET_BYTES,
         });
     }
-    let derived = hkdf_expand_sha256(value.as_bytes(), info);
+    let derived = hkdf_expand_sha256(master_secret, info);
     Ok(AuditHashSecret::from_bytes(derived))
 }
 
@@ -3860,7 +3925,7 @@ mod tests {
     async fn audit_profile_uses_one_secret_for_chain_and_identifier_hashing() {
         let name = "REGISTRY_PLATFORM_AUDIT_PROFILE_TEST_SECRET";
         env::set_var(name, "0123456789abcdef0123456789abcdef");
-        let profile = AuditProfile::registry_notary_from_env(name).expect("profile");
+        let profile = AuditProfile::production_from_env(name).expect("profile");
         env::remove_var(name);
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
@@ -4114,6 +4179,54 @@ mod tests {
         // Known-answer vector pins the HKDF-Expand-only construction.
         let expected = hkdf_expand_sha256(master.as_bytes(), CHAIN_KEY_DERIVATION_INFO);
         assert_eq!(chain_a.as_bytes(), expected.as_slice());
+    }
+
+    #[test]
+    fn byte_backed_profiles_match_known_answers_and_each_other() {
+        let master = (0_u8..32).collect::<Vec<_>>();
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master.clone()))
+            .expect("byte-backed profile");
+        let chain_profile =
+            AuditChainProfile::production_from_secret_bytes(Zeroizing::new(master.clone()))
+                .expect("byte-backed chain profile");
+
+        let AuditChainHasher::Keyed(profile_chain_key) = profile.chain_hasher() else {
+            panic!("production audit profile must use a keyed chain hasher");
+        };
+        let AuditChainHasher::Keyed(chain_profile_key) = chain_profile.hasher() else {
+            panic!("production chain profile must use a keyed chain hasher");
+        };
+        let AuditKeyHasher::Keyed(identifier_key) = profile.key_hasher() else {
+            panic!("production audit profile must use a keyed identifier hasher");
+        };
+
+        assert_eq!(
+            hex_lower(profile_chain_key.as_bytes()),
+            "63fb2303093a2e3f8bec0c7b65feb8de3f876b92fdb89329100a185e0cece047"
+        );
+        assert_eq!(
+            hex_lower(identifier_key.as_bytes()),
+            "5aacb786d1d4271f42d5568b3d5a2eb5814446ef0b44067b0d4210b8a60bffdc"
+        );
+        assert_eq!(profile_chain_key.as_bytes(), chain_profile_key.as_bytes());
+        assert_ne!(profile_chain_key.as_bytes(), identifier_key.as_bytes());
+        assert_ne!(profile_chain_key.as_bytes(), master.as_slice());
+        assert_ne!(identifier_key.as_bytes(), master.as_slice());
+    }
+
+    #[test]
+    fn byte_backed_profiles_reject_weak_master_secrets_without_echo() {
+        let marker = b"short-secret-canary".to_vec();
+        for error in [
+            AuditProfile::production_from_secret_bytes(Zeroizing::new(marker.clone()))
+                .expect_err("weak profile master must fail"),
+            AuditChainProfile::production_from_secret_bytes(Zeroizing::new(marker.clone()))
+                .expect_err("weak chain master must fail"),
+        ] {
+            assert!(matches!(error, AuditError::WeakSecret { .. }));
+            assert!(!format!("{error:?}").contains("short-secret-canary"));
+            assert!(!error.to_string().contains("short-secret-canary"));
+        }
     }
 
     #[tokio::test]

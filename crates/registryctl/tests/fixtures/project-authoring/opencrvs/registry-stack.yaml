@@ -1,19 +1,18 @@
 version: 1
 starter:
   id: opencrvs-dci
-  release: 0.16.2
-  content_digest: sha256:3af9af1e8bcb10154f50488ce1de25a896516d9894520cbb70cb66ac63424121
+  release: 0.17.0
+  content_digest: sha256:02b37ce4f3c0c647c543f4b0c1b9fe2fbc70c99aacd1cd1ebf6cd037ab1dd1ea
 registry: { id: fictional-civil-registry }
 integrations:
   birth-record: { file: integrations/birth-record/integration.yaml }
 services:
   birth-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: birth-record-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access: { scopes: ["evidence:birth:read"] }
     variables:
       as_of_date:
         from: request.variables.as_of_date
@@ -23,31 +22,3 @@ services:
         integration: birth-record
         input:
           uin: request.target.identifiers.UIN
-    claims:
-      birth-record-exists: { cel: "birth.matched", disclosure: predicate }
-      date-of-birth: { output: birth.date_of_birth, disclosure: value }
-      sex: { output: birth.sex, disclosure: value }
-      child-given-name: { output: birth.child_given_name, disclosure: value }
-      child-family-name: { output: birth.child_family_name, disclosure: value }
-      child-birth-date: { output: birth.date_of_birth, disclosure: value }
-      child-place-of-birth: { output: birth.place_of_birth, disclosure: value }
-      parents: { output: birth.parents, disclosure: value }
-      age-band:
-        cel: >-
-          birth.matched && birth.date_of_birth != null
-            ? (date.age_on(birth.date_of_birth, as_of_date) < 5
-                ? "0-4"
-                : (date.age_on(birth.date_of_birth, as_of_date) < 18 ? "5-17" : "18+"))
-            : null
-        disclosure: value
-    credential_profiles:
-      birth-summary:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/birth-summary/v1
-        validity: 10m
-        claims: [birth-record-exists, date-of-birth, sex, age-band]
-      birth-attributes:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/birth-attributes/v1
-        validity: 10m
-        claims: [child-given-name, child-family-name, child-birth-date, child-place-of-birth, parents]

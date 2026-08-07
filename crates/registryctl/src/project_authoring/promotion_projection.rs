@@ -24,18 +24,12 @@ pub(crate) enum PromotionFieldPath {
     IntegrationCredentials,
     #[serde(rename = "/integrations/*/trust")]
     IntegrationTrust,
-    #[serde(rename = "/notary/callers/*")]
-    NotaryCaller,
     #[serde(rename = "/operations")]
     OperationalSettings,
     #[serde(rename = "/purposes/*")]
     Purpose,
     #[serde(rename = "/service_policy")]
     ServicePolicy,
-    #[serde(rename = "/notary/claims/*")]
-    Claim,
-    #[serde(rename = "/notary/disclosures/*")]
-    Disclosure,
     #[serde(rename = "/products/*")]
     ProductEnablement,
     #[serde(rename = "/integrations/*/capabilities/*")]
@@ -57,28 +51,22 @@ pub(crate) enum PromotionChangeKind {
     Origin,
     CredentialBinding,
     Trust,
-    Caller,
     Operational,
     Purpose,
     ServicePolicy,
-    Claim,
-    Disclosure,
     ProductEnablement,
     CapabilityEnablement,
     IntegrationCeiling,
 }
 
 impl PromotionChangeKind {
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Origin,
         Self::CredentialBinding,
         Self::Trust,
-        Self::Caller,
         Self::Operational,
         Self::Purpose,
         Self::ServicePolicy,
-        Self::Claim,
-        Self::Disclosure,
         Self::ProductEnablement,
         Self::CapabilityEnablement,
         Self::IntegrationCeiling,
@@ -97,10 +85,6 @@ impl PromotionChangeKind {
             Self::Trust => (
                 PromotionDocument::Environment,
                 PromotionFieldPath::IntegrationTrust,
-            ),
-            Self::Caller => (
-                PromotionDocument::Environment,
-                PromotionFieldPath::NotaryCaller,
             ),
             Self::Operational => (
                 PromotionDocument::Environment,
@@ -123,8 +107,6 @@ impl PromotionChangeKind {
                 PromotionDocument::Project,
                 PromotionFieldPath::ServicePolicy,
             ),
-            Self::Claim => (PromotionDocument::Project, PromotionFieldPath::Claim),
-            Self::Disclosure => (PromotionDocument::Project, PromotionFieldPath::Disclosure),
         };
         PromotionFieldAddress { document, path }
     }
@@ -135,7 +117,6 @@ impl PromotionChangeKind {
             Self::Origin
                 | Self::CredentialBinding
                 | Self::Trust
-                | Self::Caller
                 | Self::Operational
                 | Self::ProductEnablement
                 | Self::CapabilityEnablement
@@ -149,12 +130,10 @@ impl PromotionChangeKind {
     pub(crate) const fn expected_classification(self) -> PromotionFieldClassification {
         match self {
             Self::CredentialBinding => PromotionFieldClassification::SecretReference,
-            Self::Origin | Self::Trust | Self::Caller => PromotionFieldClassification::Sensitive,
-            Self::Operational
-            | Self::Purpose
-            | Self::ServicePolicy
-            | Self::Claim
-            | Self::Disclosure => PromotionFieldClassification::Internal,
+            Self::Origin | Self::Trust => PromotionFieldClassification::Sensitive,
+            Self::Operational | Self::Purpose | Self::ServicePolicy => {
+                PromotionFieldClassification::Internal
+            }
             Self::ProductEnablement | Self::CapabilityEnablement | Self::IntegrationCeiling => {
                 PromotionFieldClassification::Structural
             }
@@ -189,7 +168,6 @@ pub(crate) enum ProjectPromotionProjectionSchemaVersion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PromotionProjectedProduct {
     Relay,
-    Notary,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -321,7 +299,7 @@ mod tests {
         assert_eq!(revision, PROMOTION_FIELD_KNOWLEDGE_REVISION);
 
         let index = knowledge::published_field_knowledge_index().expect("knowledge indexes");
-        assert_eq!(index.by_path().len(), 702);
+        assert_eq!(index.by_path().len(), 562);
         let mapped = index
             .by_path()
             .keys()

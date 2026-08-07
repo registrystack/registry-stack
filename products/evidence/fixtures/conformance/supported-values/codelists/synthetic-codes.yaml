@@ -1,0 +1,3 @@
+id: urn:example:fixture:codelist:synthetic-codes
+version: '1'
+codes: [C-A, C-B, C-C, C-BOUND]

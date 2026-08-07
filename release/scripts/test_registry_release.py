@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import stat
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -85,45 +86,6 @@ def load_registry_release():
 
 
 class RegistryReleaseTest(TestCase):
-    def test_recent_canary_lookup_uses_the_workflow_filename(self) -> None:
-        registry_release = load_registry_release()
-        revision = "b" * 40
-        response = {
-            "workflow_runs": [
-                {
-                    "id": 456,
-                    "run_attempt": 1,
-                    "event": "workflow_dispatch",
-                    "head_sha": revision,
-                    "path": ".github/workflows/release-canary.yml",
-                    "conclusion": "success",
-                    "updated_at": datetime.now(timezone.utc).strftime(
-                        "%Y-%m-%dT%H:%M:%SZ"
-                    ),
-                }
-            ]
-        }
-        with mock.patch.object(
-            registry_release,
-            "run_checked",
-            return_value=json.dumps(response),
-        ) as run_checked:
-            selected = registry_release.recent_canary_for_revision(
-                repository="registrystack/registry-stack",
-                workflow_revision=revision,
-            )
-
-        self.assertEqual(456, selected["id"])
-        endpoint = run_checked.call_args.args[0][2]
-        self.assertIn(
-            "actions/workflows/release-canary.yml/runs",
-            endpoint,
-        )
-        self.assertNotIn(
-            "actions/workflows/.github/workflows/release-canary.yml/runs",
-            endpoint,
-        )
-
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -352,6 +314,10 @@ class RegistryReleaseTest(TestCase):
             image_lock.SCHEMA_V2,
             image_lock.schema_for_release_version("0.14.0"),
         )
+        self.assertEqual(
+            image_lock.SCHEMA_V3,
+            image_lock.schema_for_release_version("0.17.0"),
+        )
 
     def test_registryctl_image_lock_validates_v1_and_reviewed_v2_images(
         self,
@@ -378,6 +344,15 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(
             v2_images,
             image_lock.validate_images(image_lock.SCHEMA_V2, v2_images),
+        )
+
+        v3_images = {
+            "registry-relay": product_images["registry-relay"],
+            "postgresql": image_lock.reviewed_postgresql_image_ref(),
+        }
+        self.assertEqual(
+            v3_images,
+            image_lock.validate_images(image_lock.SCHEMA_V3, v3_images),
         )
 
         without_postgresql = dict(v2_images)
@@ -487,7 +462,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-policy",
                 "rust-quality",
                 "rust-tests",
-                "notary-contracts",
+                "evidence-contracts",
                 "relay-contracts",
             },
             set(rust_result["needs"]),
@@ -536,6 +511,66 @@ class RegistryReleaseTest(TestCase):
             )
             self.assertTrue(
                 any("not pinned by immutable digest" in failure for failure in failures)
+            )
+
+    def test_debian13_contract_covers_the_adopter_image(self) -> None:
+        # The adopter image builds two binaries from one file, so it has no
+        # single `AS runtime` stage and no HEALTHCHECK (distroless has no shell
+        # and neither binary has a healthcheck subcommand). It is still bound to
+        # the same Debian 13 boundary and the same digest pins, so it is checked
+        # here rather than left uncovered for not fitting the release shape.
+        module = load_debian13_image_check()
+        adopter = Path("docker/Dockerfile")
+        self.assertIn(adopter, module.ADOPTER_DOCKERFILES)
+        self.assertIn(adopter, module.MAINTAINED_TEXT_PATHS)
+        self.assertEqual(
+            [],
+            [
+                failure
+                for failure in module.check_repository(ROOT)
+                if str(adopter) in failure
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in module.MAINTAINED_TEXT_PATHS:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+            adopter_path = root / adopter
+            text = adopter_path.read_text(encoding="utf-8")
+            # Unpin the final runtime base and give one runtime stage a shell
+            # command: both are exactly what the boundary exists to catch.
+            text = text.replace(
+                module.DISTROLESS_RUNTIME,
+                "gcr.io/distroless/cc-debian13:nonroot",
+            )
+            text = text.replace(
+                'ENTRYPOINT ["/usr/local/bin/mint"]',
+                'RUN ["/bin/sh", "-c", "true"]\nENTRYPOINT ["/usr/local/bin/mint"]',
+                1,
+            )
+            adopter_path.write_text(text, encoding="utf-8")
+
+            failures = module.check_repository(root)
+            self.assertTrue(
+                any(
+                    str(adopter) in failure and "not pinned by immutable digest" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    str(adopter) in failure and "/bin/sh" in failure
+                    for failure in failures
+                ),
+                failures,
             )
 
     def test_debian13_contract_binds_builder_to_candidate_workflow(self) -> None:
@@ -602,12 +637,13 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("automated test suite", text)
         self.assertIn("change proposal or pull request", text)
 
-    def test_contributing_documents_repeatable_build_policy(self) -> None:
+    def test_contributing_documents_proportional_repeatability_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
         self.assertIn("Repeatable Builds And Generated Outputs", text)
-        self.assertIn("exactly the same bit-for-bit result", text)
-        self.assertIn(".github/workflows/release.yml", text)
+        self.assertIn("built once from an exact protected-main commit", text)
+        self.assertIn(".github/workflows/release-candidate.yml", text)
+        self.assertIn("not a\nduplicate build in every ordinary Beta", text)
 
     def test_registryctl_quick_installer_uses_the_stable_docs_url(self) -> None:
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
@@ -626,7 +662,6 @@ class RegistryReleaseTest(TestCase):
             encoding="utf-8"
         )
         release_dockerfiles = [
-            "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
         ]
 
@@ -1391,40 +1426,23 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
-    def test_notary_packaging_includes_dedicated_cel_worker(self) -> None:
+    def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
-        worker = "registry-notary-cel-worker"
-
-        product_dockerfile = (ROOT / "products/notary/Dockerfile").read_text(
+        image_recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn(worker, product_dockerfile)
-
-        self.assertIn(
-            f'"dist/bin/{worker}-${{RELEASE_TAG}}-linux-amd64"',
-            binary_recipe,
+        self.assertNotIn("registry-notary", binary_recipe)
+        self.assertNotIn("registry-notary", image_recipe)
+        self.assertFalse(
+            (ROOT / "release/docker/Dockerfile.registry-notary").exists()
         )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
-        self.assertIn(
-            f"--bin {worker}",
-            binary_recipe,
-        )
-        release_dockerfile = (
-            ROOT / "release/docker/Dockerfile.registry-notary"
-        ).read_text(encoding="utf-8")
-        self.assertIn(
-            f"install -m 0755 /workspace/image-bin/{worker} "
-            f"/workspace/runtime-root/usr/local/bin/{worker}",
-            release_dockerfile,
-        )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
     def test_release_product_images_preown_managed_audit_and_state_directories(
         self,
     ) -> None:
-        for product in ("relay", "notary"):
+        for product in ("relay",):
             dockerfile = (
                 ROOT / f"release/docker/Dockerfile.registry-{product}"
             ).read_text(encoding="utf-8")
@@ -1778,250 +1796,6 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("does not match immutable lock", publish_script)
         self.assertIn("--require-registry-docs-archive", publish_script)
         self.assertIn("--require-registryctl-installer", publish_script)
-
-    def legacy_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
-        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
-            encoding="utf-8"
-        )
-        receipt_step = workflow[
-            workflow.index(
-                "      - name: Create closed candidate receipt"
-            ) : workflow.index(
-                "      - name: Create compact candidate telemetry evidence"
-            )
-        ]
-
-        self.assertIn('/actions/runs/${GITHUB_RUN_ID}"', receipt_step)
-        self.assertIn('.status == "in_progress"', receipt_step)
-        self.assertIn(".conclusion == null", receipt_step)
-        self.assertNotIn('.conclusion == "success"', receipt_step)
-
-    def legacy_candidate_promotion_has_closed_no_rebuild_publish_gates(self) -> None:
-        path = ROOT / ".github/workflows/release.yml"
-        text = path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(text)
-        verification = workflow["jobs"]["verify-candidate"]
-        publish_images = workflow["jobs"]["publish-images"]
-        reconcile = workflow["jobs"]["reconcile"]
-        extended = workflow["jobs"]["extended-proof"]
-        verification_script = "\n".join(
-            step.get("run", "")
-            for step in verification["steps"]
-            if isinstance(step, dict)
-        )
-        source_verification = next(
-            step["run"]
-            for step in workflow["jobs"]["verify"]["steps"]
-            if step.get("name") == "Validate tag source without rebuilding"
-        )
-        publish_script = "\n".join(
-            step.get("run", "")
-            for step in publish_images["steps"]
-            if isinstance(step, dict)
-        )
-        reconcile_script = "\n".join(
-            step.get("run", "") for step in reconcile["steps"] if isinstance(step, dict)
-        )
-
-        self.assertNotIn("write", verification["permissions"].values())
-        self.assertIn("--release-id", verification_script)
-        self.assertIn(
-            "mapfile -t records < <(jq -c '.artifacts[]' \"${receipt}\")",
-            verification_script,
-        )
-        self.assertNotIn("${#records[@]}", verification_script)
-        self.assertIn(
-            'if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then\n'
-            '  test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
-            '    "${{ steps.release.outputs.tag_target }}"',
-            source_verification,
-        )
-        self.assertEqual("read", publish_images["permissions"]["contents"])
-        self.assertEqual("write", publish_images["permissions"]["packages"])
-        self.assertNotIn("id-token", publish_images["permissions"])
-        self.assertIn("releases/tags/${tag}", publish_script)
-        self.assertIn("packages/container/${name}/versions", publish_script)
-        self.assertIn(r"awk '/^HTTP\//", publish_script)
-        self.assertNotIn(r"awk '/^HTTP\\//", publish_script)
-        self.assertLess(
-            publish_script.index("release_status"),
-            publish_script.index('crane copy "${staging}" "${public}"'),
-        )
-        self.assertNotRegex(
-            text,
-            r"(?m)^\s+release/scripts/build-release-(?:binaries|image)\.sh\b",
-        )
-        self.assertIn("release-provenance", reconcile["needs"])
-        self.assertIn("slsa-verifier verify-artifact", reconcile_script)
-        self.assertIn("verify-slsa-subjects", reconcile_script)
-        self.assertIn("reconcile", extended["needs"])
-        self.assertNotRegex(text, r"(?m)^\s*git (?:push|tag|update-ref)\b")
-
-    def legacy_release_workflow_removes_for_each_ref_record_separators(self) -> None:
-        workflow = yaml.safe_load(
-            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        )
-        scripts = [
-            step["run"]
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", [])
-            if "git for-each-ref --format='%(contents)'" in step.get("run", "")
-        ]
-
-        self.assertEqual(2, len(scripts))
-        for script in scripts:
-            self.assertIn('message.endswith("\\n")', script)
-            self.assertIn("message[:-1]", script)
-
-    def legacy_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
-        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
-            encoding="utf-8"
-        )
-        candidate_workflow = yaml.safe_load(candidate)
-        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("Generate release file SBOMs", workflow)
-        self.assertIn("dist/binary-sbom", workflow)
-        self.assertIn("dist/image-binary-sbom", candidate)
-        self.assertIn("image-input-${asset}.spdx.json", candidate)
-        self.assertIn("bind-spdx-file-subject", workflow)
-        self.assertIn("bind-spdx-file-subject", candidate)
-        self.assertIn("render-registryctl-image-lock", workflow)
-        self.assertIn("verify-registryctl-image-lock-release-version", workflow)
-        self.assertIn(
-            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
-            workflow,
-        )
-        self.assertIn(
-            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
-            candidate,
-        )
-        self.assertIn(
-            '"${payload}/dist/images/postgresql.digest"',
-            workflow,
-        )
-        self.assertIn(
-            'crane digest "${candidate_postgresql}"',
-            workflow,
-        )
-        self.assertIn("verify-registryctl-binary-version", candidate)
-        self.assertLess(
-            candidate.index("Verify built registryctl binary version"),
-            candidate.index("Upload exact Build A artifact"),
-        )
-        self.assertLess(
-            candidate.index("Verify native registryctl binary version"),
-            candidate.index("Upload exact platform artifact"),
-        )
-        self.assertIn("--require-registryctl-image-lock", workflow)
-        self.assertIn("--require-registryctl-installer", workflow)
-        self.assertIn(
-            "registryctl-${{ needs.verify.outputs.tag }}-image-lock.json", workflow
-        )
-        self.assertIn(
-            'installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"',
-            candidate,
-        )
-        self.assertIn(
-            'cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"',
-            candidate,
-        )
-        self.assertIn("Run exact first-country release-form journey before sealing", candidate)
-        self.assertIn("first-country-release-form.py run", candidate)
-        self.assertIn("first-country-release-form.py verify", candidate)
-        self.assertIn("first-country-release-form.py verify", workflow)
-        self.assertIn("verify-cli-platforms:", candidate)
-        self.assertIn("runner: macos-14", candidate)
-        self.assertIn("runner: ubuntu-24.04-arm", candidate)
-        self.assertIn(
-            "verify-cli-platforms",
-            candidate_workflow["jobs"]["attest-candidate"]["needs"],
-        )
-        self.assertLess(
-            candidate.index("render-registryctl-image-lock"),
-            candidate.index("Run exact first-country release-form journey before sealing"),
-        )
-        self.assertLess(
-            candidate.index("Run exact first-country release-form journey before sealing"),
-            candidate.index("Upload exact candidate payload"),
-        )
-        self.assertLess(
-            workflow.index("first-country-release-form.py verify"),
-            workflow.index("Build fail-closed prewrite promotion state"),
-        )
-        self.assertLess(
-            workflow.index("Stage exact candidate release files"),
-            workflow.index("Render tag-bound image lock and checksums"),
-        )
-        self.assertLess(
-            workflow.index("Render tag-bound image lock and checksums"),
-            workflow.index("Generate release file SBOMs"),
-        )
-        self.assertIn("Generate digest-bound binary SBOMs", backfill)
-        self.assertIn("dist/staged/binary-sbom", backfill)
-        self.assertIn("--binary-sbom-dir", backfill)
-
-    def legacy_capsule_backfill_resolves_manifest_for_requested_tag(self) -> None:
-        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('version="${TAG#v}"', backfill)
-        self.assertIn("if (( major > 0 || minor >= 9 )); then", backfill)
-        self.assertIn("--require-registryctl-image-lock", backfill)
-        self.assertIn(
-            'glob.glob("release-source/release/manifests/registry-stack-*.yaml")',
-            backfill,
-        )
-        self.assertIn("expected exactly one release manifest for {version}", backfill)
-        self.assertEqual(2, backfill.count('"${RELEASE_MANIFEST}"'))
-        self.assertNotIn(
-            "release-source/release/manifests/registry-stack-beta-6.yaml", backfill
-        )
-
-    def legacy_capsule_backfill_privileged_job_uses_protected_tooling(
-        self,
-    ) -> None:
-        workflow_path = ROOT / ".github/workflows/release-capsule-backfill.yml"
-        backfill = workflow_path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(backfill)
-        steps = workflow["jobs"]["backfill"]["steps"]
-        triggers = workflow.get("on", workflow.get(True))
-
-        self.assertEqual(
-            {
-                "repository_dispatch": {
-                    "types": ["release-capsule-backfill"],
-                }
-            },
-            triggers,
-        )
-        self.assertNotIn("workflow_dispatch:", backfill)
-        self.assertNotIn("${{ inputs.", backfill)
-        self.assertIn("github.event.client_payload.tag", backfill)
-
-        generator_checkout = next(
-            step
-            for step in steps
-            if step.get("name") == "Checkout protected capsule tooling"
-        )
-        self.assertEqual(
-            "${{ github.sha }}",
-            generator_checkout["with"]["ref"],
-        )
-        self.assertFalse(generator_checkout["with"]["persist-credentials"])
-
-        release_checkout = next(
-            step for step in steps if step.get("name") == "Checkout release source"
-        )
-        self.assertEqual(
-            "${{ github.event.client_payload.tag }}",
-            release_checkout["with"]["ref"],
-        )
-        self.assertFalse(release_checkout["with"]["persist-credentials"])
 
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
@@ -2509,6 +2283,70 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
 
+    def test_validate_accepts_declared_evidence_toolset_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+            )
+            result = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_accepts_post_notary_v0_17_artifact_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+                include_retired_notary=False,
+            )
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["artifacts"]["registry-notary"] = "0.17.0"
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("unexpected registry-notary", rejected.stderr)
+
+    def test_beta_27_manifest_is_the_notary_free_current_inventory(self) -> None:
+        manifest = ROOT / "release/manifests/registry-stack-beta-27.yaml"
+        result = run_tool("validate", str(manifest))
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("beta-27", data["stack"]["release"])
+        self.assertEqual("0.17.0", data["stack"]["version"])
+        self.assertNotIn("registry-notary", data["artifacts"])
+        self.assertNotIn("registry-notary-cel-worker", data["artifacts"])
+        self.assertLessEqual(
+            {"registry-relay", "evidence", "evidencectl", "mint"},
+            set(data["artifacts"]),
+        )
+
+    def test_validate_still_rejects_unknown_artifacts_beside_the_evidence_toolset(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.17.0",
+                include_evidence_toolset=True,
+            )
+            contents = manifest.read_text(encoding="utf-8")
+            contents = contents.replace(
+                "evidencectl-installer:", "registry-lab: '0.17.0'\n  evidencectl-installer:"
+            )
+            manifest.write_text(contents, encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("unexpected registry-lab", rejected.stderr)
+
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2550,6 +2388,69 @@ class RegistryReleaseTest(TestCase):
             },
             document,
         )
+
+    def test_render_post_notary_v3_image_lock_without_notary_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(
+                root,
+                version="0.17.0",
+                include_evidence_toolset=True,
+                include_retired_notary=False,
+            )
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"].pop("source_ref")
+            data["stack"].pop("status")
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            relay_digest = root / "registry-relay.digest"
+            relay_ref = f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}"
+            relay_digest.write_text(f"{relay_ref}\n", encoding="utf-8")
+            output = root / "registryctl-v0.17.0-image-lock.json"
+
+            rendered = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--postgresql-ref-file",
+                str(ROOT / "release/registryctl-postgresql-image.ref"),
+                "--tag-target",
+                "b" * 40,
+                "--source-sha",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+            notary_digest = root / "registry-notary.digest"
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            rejected = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--postgresql-ref-file",
+                str(ROOT / "release/registryctl-postgresql-image.ref"),
+                "--tag-target",
+                "b" * 40,
+                "--source-sha",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+
+        self.assertEqual(0, rendered.returncode, rendered.stderr)
+        self.assertEqual("registryctl.release_image_lock.v3", document["schema_version"])
+        self.assertEqual({"postgresql", "registry-relay"}, set(document["images"]))
+        self.assertEqual(relay_ref, document["images"]["registry-relay"])
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("does not accept --notary-digest", rejected.stderr)
 
     def test_active_manifest_validates_and_renders_image_lock_from_explicit_source(
         self,
@@ -2745,7 +2646,7 @@ class RegistryReleaseTest(TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("v2 requires --postgresql-ref-file", result.stderr)
+        self.assertIn("v2 or later requires --postgresql-ref-file", result.stderr)
 
     def test_render_registryctl_image_lock_rejects_pre_0_9_release(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3910,6 +3811,89 @@ class RegistryReleaseTest(TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing release asset registry-relay.digest", result.stderr)
 
+    def test_stage_capsule_backfill_assets_excludes_retired_notary_from_v0_17(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for include_retired_assets in (False, True):
+            with (
+                self.subTest(include_retired_assets=include_retired_assets),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                asset_dir = write_release_asset_fixture(
+                    root,
+                    tag="v0.17.0",
+                    include_image_lock=True,
+                )
+                if not include_retired_assets:
+                    for retired_name in (
+                        "registry-notary-v0.17.0-linux-amd64",
+                        "registry-notary-cel-worker-v0.17.0-linux-amd64",
+                        "registry-notary.digest",
+                    ):
+                        (asset_dir / retired_name).unlink()
+                binary_dir = root / "staged-bin"
+                image_dir = root / "staged-images"
+
+                with redirect_stdout(io.StringIO()):
+                    result = registry_release.stage_capsule_backfill_assets(
+                        asset_dir,
+                        "v0.17.0",
+                        binary_dir,
+                        image_dir,
+                    )
+
+                self.assertEqual(0, result)
+                self.assertTrue(
+                    (
+                        binary_dir / "registry-relay-rhai-worker-v0.17.0-linux-amd64"
+                    ).is_file()
+                )
+                self.assertTrue((image_dir / "registry-relay.digest").is_file())
+                self.assertFalse(
+                    (binary_dir / "registry-notary-v0.17.0-linux-amd64").exists()
+                )
+                self.assertFalse(
+                    (
+                        binary_dir / "registry-notary-cel-worker-v0.17.0-linux-amd64"
+                    ).exists()
+                )
+                self.assertFalse((image_dir / "registry-notary.digest").exists())
+
+    def test_stage_capsule_backfill_assets_keeps_beta_26_notary_requirements(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for missing_name in (
+            "registry-notary-v0.16.3-linux-amd64",
+            "registry-notary-cel-worker-v0.16.3-linux-amd64",
+            "registry-notary.digest",
+        ):
+            with (
+                self.subTest(missing_name=missing_name),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                asset_dir = write_release_asset_fixture(
+                    root,
+                    tag="v0.16.3",
+                    include_image_lock=True,
+                )
+                (asset_dir / missing_name).unlink()
+
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    result = registry_release.stage_capsule_backfill_assets(
+                        asset_dir,
+                        "v0.16.3",
+                        root / "staged-bin",
+                        root / "staged-images",
+                    )
+
+                self.assertEqual(1, result)
+                self.assertIn(f"missing release asset {missing_name}", error.getvalue())
+
     def test_bind_spdx_subject_adds_digest_bound_described_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4049,6 +4033,8 @@ def write_manifest(
     version: str = "0.8.0",
     include_registryctl_image_lock: bool | None = None,
     include_registryctl_installer: bool | None = None,
+    include_evidence_toolset: bool = False,
+    include_retired_notary: bool | None = None,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
@@ -4079,6 +4065,16 @@ def write_manifest(
         include_registryctl_installer = version_tuple >= (0, 14, 0)
     if include_registryctl_installer:
         artifacts["registryctl-installer"] = version
+    if include_evidence_toolset:
+        artifacts["evidence"] = version
+        artifacts["evidencectl"] = version
+        artifacts["mint"] = version
+        artifacts["evidencectl-installer"] = version
+    if include_retired_notary is None:
+        include_retired_notary = version_tuple < (0, 17, 0)
+    if not include_retired_notary:
+        artifacts.pop("registry-notary", None)
+        artifacts.pop("registry-notary-cel-worker", None)
     manifest = {
         "stack": {
             "release": "beta-6",

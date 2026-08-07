@@ -1,14 +1,15 @@
 ---
 title: Integration patterns
-description: How Registry Stack wires in behind exchange layers, workflow engines, wallets, and domain registry platforms, and the standards each surface speaks.
+description: How Registry Stack wires in behind exchange layers, workflow engines, and domain registry platforms, and the standards each surface speaks.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-manifest
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-06-20"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -21,8 +22,6 @@ standards_referenced:
   - odrl
   - openapi
   - sd-jwt-vc
-  - oid4vci
-  - w3c-did
   - sp-dci
   - ogc-api-records
   - ogc-api-features
@@ -36,6 +35,13 @@ Registry Stack adds, and the conditions under which a Registry Stack surface bel
 For how the registry family relates to the wider ecosystem, see the
 [ecosystem page](https://registrystack.org/ecosystem/).
 
+Two runtime surfaces can appear in an integration path. Registry Relay publishes protected, scoped,
+read-only APIs over sources an institution already holds. Evidence Gateway answers one predefined
+requirement about one set of subjects with a signed assertion carrying the answer rather than the
+record. Registry Mint is a supporting service that issues the short-lived access tokens either
+surface verifies when a deployment has no identity provider.
+The patterns below describe Relay and Evidence Gateway.
+
 ## Country evidence mesh
 
 At country scale, the same pattern can sit next to several domain platforms.
@@ -43,65 +49,68 @@ Clinical health systems can expose bounded outputs through a reviewed FHIR integ
 public-health program systems such as DHIS2 can use Relay's product-neutral, reviewed Rhai script
 capability, and social protection, agriculture, education, and civil registration systems can keep
 their own authoritative stores.
-A Registry Stack project can deploy Relay only, Notary without configured
-claims, or both products. Relay-only projects expose governed source
-capabilities. In a combined project, Relay keeps source credentials and returns only
-reviewed typed consultation outputs for Notary to turn into configured claims. Consuming systems
-such as a social-protection management information system do not become raw-record readers.
+Each authority keeps custody of its own data. Relay keeps source credentials and returns only
+reviewed typed outputs, and Evidence Gateway returns only the values a reviewed requirement declares.
+Consuming systems such as a social-protection management information system do not become
+raw-record readers.
 
-The supported local first run starts from the public HTTP template.
-The project declares the public Relay, consultation Relay, and Notary path
-before Registryctl creates a disposable development environment.
+<figure>
+  <img src="../../images/registry-country-evidence-mesh.svg"
+       alt="Country evidence mesh: authorities each keep custody of their own data and expose
+            bounded outputs. Clinical health uses a reviewed FHIR integration, public health
+            (DHIS2) uses a reviewed Rhai script, and civil registration, social protection,
+            agriculture, and education keep their own authoritative stores. Two bounded surfaces
+            sit over them: Registry Relay keeps source credentials and returns only reviewed typed
+            outputs, and Evidence Gateway returns only the values a reviewed requirement declares. A
+            social-protection management information system and other consumers receive the
+            answers these surfaces return, and do not become raw-record readers." />
+</figure>
+
 Snapshot remains an authored integration capability, not a public template or
 separate runtime architecture.
 
-{/* Evidence: crates/registryctl/tests/project_authoring.rs,
-    project_authoring_schemas_reject_incoherent_product_topologies and
-    relay_only_and_notary_only_projects_emit_only_selected_products; and
-    crates/registryctl/tests/dev_runtime_core.rs. */}
+{/* TODO[evidence]: registryctl cannot express an Evidence Gateway deployment at all, so this page cannot
+    yet describe a selectable topology. An authored service is only consultation_api or records_api
+    (enum ServiceKind in crates/registryctl/src/project_authoring/model.rs), a kind: evidence
+    service is rejected as an unknown variant (test retired_evidence_service_kind_is_rejected in
+    the same file), and the environment deployment block is closed around profile and relay with no
+    evidence key (crates/registryctl/schemas/project-authoring/environment.schema.json). Every
+    compiled project is therefore relay-only. Restore a topology paragraph here once registryctl
+    gains an Evidence Gateway deployment path. */}
 
-{/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
-<figure>
-  <img src="../../images/registry-country-evidence-mesh.svg"
-       alt="Country evidence mesh: civil registration, clinical health over FHIR API,
-            public health through DHIS2 via a reviewed Rhai script, social protection, agriculture,
-            and education systems keep their source data. Registry Stack projects can deploy Relay
-            only, an empty Notary control plane, or both. Relay returns governed typed outputs,
-            combined projects turn consultation outputs into minimized claims and credentials, and the social protection MIS
-            owns the eligibility decision and reads the registry it owns directly." />
-</figure>
-
-## Evidence-to-action boundary
+## Evidence Gateway to action boundary
 
 Every combined integration follows the same ownership boundary. Registry Relay owns
-source-specific acquisition, source-access policy, and typed normalization. Registry Notary owns
-atomic evidence claims plus evidence authorization and disclosure policy. The evidence consumer
-determines how the evidence is used, and the decision owner remains accountable for requirements,
-decisions, workflow, and action.
+source-specific acquisition, source-access policy, and typed normalization. Evidence Gateway owns the
+predefined requirement, evidence authorization, and the declared disclosure that requirement
+carries. The evidence consumer determines how the evidence is used, and the decision owner remains
+accountable for requirements, decisions, workflow, and action.
 
-The maintained DHIS2 health-evidence conformance workspace makes that boundary
-visible.
+The maintained DHIS2 health-evidence reference project makes that boundary visible.
 DHIS2 remains the system of record.
 Relay uses its product-neutral script capability to perform bounded, same-origin acquisition and
-normalize the existing health outputs plus `bcg_birth_dose_recorded`,
-`opv_birth_dose_recorded`, and `measles_dose_recorded`. Notary exposes those facts as reusable
-evidence claims. In this example, a public-health programme is both the evidence consumer and the
-decision owner. It can compute `outreach-required` or `follow-up-priority` without moving either
-decision into Relay or Notary.
+normalize the existing health outputs.
+Evidence Gateway exposes bounded facts as reusable requirements: that project reads two Tracker programmes
+for two independent requirements, adult status and professional licence status, and a caller
+authorized for one learns nothing about the other.
+In this example, a public-health programme is both the evidence consumer and the decision owner.
+It can compute an outreach or follow-up priority without moving either decision into Relay or
+Evidence Gateway.
 
-The reviewed contract keeps `true`, `false`, `null`, no-match, ambiguity, and source failure
-distinct. Missing evidence is not a negative fact. Offline synthetic fixtures are the deterministic
-acceptance path.
+The reviewed contract keeps a positive fact, its negative, an absent value, no match, ambiguity,
+and source failure distinct. Missing evidence is not a negative fact. Offline synthetic fixtures
+are the deterministic acceptance path.
 Registryctl does not provide a live-test mode or external deployed-system
 compatibility runner.
 An operator can exercise a deployed API with a standard HTTP client and
 owner-maintained credentials as separate interoperability evidence.
 
-Registry Notary may attest a decision that DHIS2 or another authoritative source already made only
-when the claim identifier and its review documentation identify it as a source-owned decision.
-This exception does not make Notary a general-purpose eligibility or workflow engine.
+Evidence Gateway has no general policy engine and no eligibility or workflow engine. A requirement whose
+answer restates a decision an authoritative source already made must say so in its review
+documentation, and Evidence Gateway does not recompute that decision.
 
-{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/. */}
+{/* Evidence: products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/
+    and products/evidence/contracts/README.md. */}
 
 ## Domain registry platforms
 
@@ -112,7 +121,7 @@ management information), [OpenIMIS](https://openimis.org/) (health insurance inf
 These platforms own storage, business rules, correction workflows, user interfaces, and a runtime
 API for their domain.
 Registry Stack adds standardized metadata description, scoped read-only routes over source data,
-configured evidence responses, and hash-chained audit records.
+minimum-disclosure evidence responses, and audit records.
 The [connect your data guide](../../configure/) starts from the supported public sample and points
 to the configuration reference for advanced source patterns.
 
@@ -121,7 +130,7 @@ creating two source definitions.
 A local materialization can back Relay's records API, including configured filters, projection,
 cursor pagination, relationships, aggregates, and enabled standards adapters.
 `snapshot` consultations can use that same immutable published materialization for exact
-evidence lookup.
+lookup.
 The logical entity definition stays in the project workspace; provider paths, worksheets, tables,
 and physical columns stay in the private environment binding.
 
@@ -132,11 +141,11 @@ and physical columns stay in the private environment binding.
 Wire Registry Stack in alongside a domain platform when:
 
 - The platform does not yet publish standards-shaped catalog, service, schema, policy, or evidence-offering metadata.
-- Callers need evidence-shaped responses (predicate, redacted, selected value) rather than full
+- Callers need an answer in a declared form (a boolean, a reviewed code, a bucket) rather than full
   records.
 - A read path is needed for callers that must not be granted direct database access.
 
-## Exact subjects and batch envelopes
+## Exact subjects, one question at a time
 
 A Relay consultation selects one subject with one to eight required typed selector components.
 The components form one fixed exact conjunction, not a general search or a subject batch.
@@ -144,24 +153,21 @@ Each component is bounded and canonicalized under the compiled consultation cont
 Up to sixteen total inputs may also include bounded parameters that are not selector components.
 Relay reports no match, one match, or ambiguity instead of choosing between duplicate records.
 
-Registry Notary keeps batch evaluation as a separate outer API.
-For registry-backed claims, a batch requires an `Idempotency-Key`, validates the complete batch
-before the first Relay call, and fans items out as independently authorized single-subject
-consultations under bounded concurrency.
-Claims within one item may reuse an identical consultation result, but duplicate subjects in
-different item positions remain separate children with separate identities.
-Replay of the same caller-scoped outer request returns the stored result without repeating a
-completed child consultation.
-
-This split preserves ordered batch results without granting Relay a multi-subject request or an
-upstream bulk operation.
+Evidence Gateway keeps the same discipline and adds no batch envelope over it.
+One request names one requirement and carries one selector per declared subject role, at most eight
+roles. Its closed acquisition is either one fixed source request or one fixed search followed, only
+after a unique schema-valid match, by one fixed fetch. The latter has a hard two-request ceiling and
+does not allow response-led routing or general multi-source fulfillment.
+Version 1 has no batch API, so a caller that needs several answers
+issues several independently authorized requests.
+A lookup resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never surfaces or
+chooses between candidates.
 
 {/* Evidence: crates/registry-relay/src/api/consultation.rs,
-    execute_body_requires_the_exact_active_contract_hash; and
-    crates/registry-notary-server/src/runtime/tests/evaluation.rs,
-    registry_batch_requires_outer_key_before_relay_or_source_work,
-    registry_batch_preflights_every_item_before_first_relay_call, and
-    registry_batch_coalesces_within_items_never_across_duplicates_and_replays_outer_key. */}
+    execute_body_requires_the_exact_active_contract_hash;
+    products/evidence/contracts/request.schema.yaml,
+    products/evidence/contracts/source-contract.yaml, and
+    products/evidence/contracts/README.md. */}
 
 ## Closed source adaptation
 
@@ -202,6 +208,24 @@ URL outside Registry Stack's control.
     crates/registry-relay/src/consultation/executor.rs, and
     crates/registry-relay/src/consultation/response.rs. */}
 
+## Evidence Gateway with a fixed authoritative source
+
+Use this pattern when an institution wants a minimum-disclosure answer over data in an
+authoritative system. Evidence Gateway calls that system through its own fixed HTTP source
+contract. The reviewed bundle fixes the origin, path authority, method, authentication,
+projection, schemas, and bounded scripts. The caller cannot select or redirect the source.
+
+The caller's access token and the source credential serve different boundaries:
+
+- The caller holds a short-lived access token for Evidence Gateway, from the deployment's identity
+  provider or from Registry Mint when there is none. See the
+  [Registry Mint reference](../../reference/mint/).
+- Evidence Gateway holds its own compiled credential for the authoritative source. The caller never
+  sees it and cannot influence which credential is resolved.
+
+Registry Relay is not part of this request path. If the institution also operates Relay, it is a
+separate protected-read product with its own sources, callers, authorization, and audit trail.
+
 ## Workflow engines
 
 Examples: [Camunda](https://camunda.com/), [Flowable](https://www.flowable.com/), and other
@@ -214,9 +238,10 @@ source tables, raw SQL, or full records.
 
 Wire Registry Stack in alongside a workflow engine when:
 
-- A workflow step needs an authoritative evidence fact (status, predicate, selected value) as an
+- A workflow step needs an authoritative fact (a status, a boolean, a reviewed code) as an
   input to the workflow engine's own decision.
-- A workflow step needs an evidence artifact or credential rather than an internal service result.
+- A workflow step needs a signed, independently verifiable assertion rather than an internal
+  service result.
 - Generated workflow connectors must not depend on source schema details.
 
 ## Exchange layers
@@ -237,21 +262,7 @@ Wire Registry Stack in behind an exchange layer when:
 
 - The exchange layer handles network trust but the registry endpoint still needs route-level
   scopes, field projection, and source-specific access controls.
-- An exchange-forwarded request needs a configured evidence response rather than a copied record.
-
-## Wallets
-
-Examples: SD-JWT VC wallets, OID4VCI-compatible wallets.
-
-Wallets own key management, credential storage, holder consent, and presentation to relying
-parties.
-Registry Stack adds the server-side issuance path: claim evaluation against registry data, plus
-the metadata describing what a registry-backed issuer offers.
-
-Wire Registry Stack in alongside a wallet when:
-
-- A registry-backed issuer needs to produce SD-JWT VC credentials or an OID4VCI issuance flow.
-- An evidence offering needs to be discoverable before integration begins.
+- An exchange-forwarded request needs a minimized evidence response rather than a copied record.
 
 ## Public-service platforms
 
@@ -277,7 +288,16 @@ authoritative list of claim levels and per-project evidence.
 | --- | --- |
 | Static catalog and service discovery (Registry Manifest) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, ODRL, SKOS-shaped codelists |
 | Scoped runtime metadata and protected data routes (Registry Relay) | OpenAPI, DCAT, BRegDCAT-AP, SHACL, JSON Schema, ODRL, OGC API Records, OGC API Features, OGC API EDR, SP-DCI, GovStack Digital Registries |
-| Evidence and credentials (Registry Notary) | OpenAPI, CCCEV, SD-JWT VC, OID4VCI, W3C DID |
+| Minimum-disclosure assertions (Evidence Gateway) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
+
+{/* TODO[evidence]: the standards register in src/data/standards.yaml has no registry-evidence
+    entries, so the Evidence Gateway row above is not backed by a per-project claim level there. This is
+    blocked, not merely pending: every evidence_docs URL in that file is pinned to commit
+    d45761a0, which is reachable from origin/main, and neither crates/registry-evidence nor
+    crates/registry-mint exists at any commit on pushed main (git cat-file -e
+    origin/main:crates/registry-evidence fails). Repo policy forbids citing an unpushed session
+    commit in a durable artifact, so the Evidence Gateway entries can only be pinned once this work
+    reaches main. */}
 
 ## Next
 

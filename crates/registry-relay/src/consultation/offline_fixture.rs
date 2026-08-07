@@ -27,8 +27,8 @@ use zeroize::Zeroizing;
 
 use crate::rhai_worker::{
     HostFailure, OutputSchema as RhaiOutputSchema, ScriptFailure, SourceCall, SourceHost,
-    SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits, WorkerOutcome, WorkerOutput,
-    WorkerProcess, WorkerRequest,
+    SourceResponse, TypedValue as RhaiTypedValue, WorkerError, WorkerLimits, WorkerOutcome,
+    WorkerOutput, WorkerProcess, WorkerRequest,
 };
 use crate::source_backend::decode_snapshot_rows;
 use crate::source_plan::{
@@ -1192,11 +1192,7 @@ fn execute_rhai(
         source_bytes: 0,
         terminal_error: None,
     };
-    let hard_deadline = tokio::time::Instant::now()
-        .checked_add(Duration::from_millis(u64::from(
-            plan.limits().operation().timeout_ms,
-        )))
-        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let hard_deadline = offline_hard_deadline(plan.limits().operation().timeout_ms)?;
     let output = run_rhai_worker(&request, &mut host, worker_program, hard_deadline);
     if let Some(error) = host.terminal_error {
         return Err(error);
@@ -1319,6 +1315,38 @@ fn build_rhai_request(
     Ok(request)
 }
 
+/// The wall-clock bound for one offline scripted consultation.
+///
+/// The authored operation deadline bounds a source call. Offline there is no
+/// source, so without the grace the same budget also has to cover starting the
+/// worker process and compiling the script before the fixture's first call is
+/// made. Process start in a debug build on a loaded machine is slow enough to
+/// spend an authored deadline on its own, which is why
+/// `WorkerProcess::evaluate` already adds the same grace to the deadline it
+/// builds for itself. The child still enforces its own script limits, so this
+/// widens no script budget.
+fn offline_hard_deadline(timeout_ms: u32) -> Result<tokio::time::Instant, OfflineFixtureError> {
+    tokio::time::Instant::now()
+        .checked_add(
+            Duration::from_millis(u64::from(timeout_ms))
+                .saturating_add(crate::rhai_worker::WORKER_STARTUP_GRACE),
+        )
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)
+}
+
+/// Classify a worker failure that reached the fixture runner without the host
+/// having recorded a terminal error of its own.
+///
+/// A timeout is the harness running out of wall clock, not the compiled plan
+/// being violated. Reporting it as a plan violation sends an author looking for
+/// a defect in a fixture that is correct.
+fn offline_worker_error(error: WorkerError) -> OfflineFixtureError {
+    match error {
+        WorkerError::TimedOut => OfflineFixtureError::SourceDeadlineExceeded,
+        _ => OfflineFixtureError::ExecutionContractViolation,
+    }
+}
+
 fn run_rhai_worker(
     request: &WorkerRequest,
     host: &mut OfflineRhaiHost<'_>,
@@ -1335,7 +1363,7 @@ fn run_rhai_worker(
         .build()
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
         .block_on(worker.evaluate_with_host(request, host, hard_deadline))
-        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
+        .map_err(offline_worker_error)
 }
 
 fn rhai_output(value: RhaiTypedValue) -> Result<ProjectedJsonScalar, OfflineFixtureError> {
@@ -2957,6 +2985,30 @@ mod tests {
         );
         assert_eq!(host.interactions.interactions.len(), 1);
         assert!(host.terminal_error.is_none());
+    }
+
+    #[test]
+    fn the_offline_deadline_leaves_the_authored_budget_for_the_source() {
+        let authored = Duration::from_millis(8_000);
+        let granted = offline_hard_deadline(8_000)
+            .expect("offline hard deadline is representable")
+            .saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            granted > authored,
+            "process start must not be charged to the authored source deadline"
+        );
+    }
+
+    #[test]
+    fn an_offline_worker_timeout_is_not_reported_as_a_plan_violation() {
+        assert_eq!(
+            offline_worker_error(WorkerError::TimedOut),
+            OfflineFixtureError::SourceDeadlineExceeded
+        );
+        assert_eq!(
+            offline_worker_error(WorkerError::ContractViolation),
+            OfflineFixtureError::ExecutionContractViolation
+        );
     }
 
     #[test]

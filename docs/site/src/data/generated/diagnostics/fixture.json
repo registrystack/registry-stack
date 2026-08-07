@@ -3,24 +3,6 @@
   "entries": [
     {
       "family": "fixture_execution",
-      "code": "authorization.denied",
-      "owner": "registryctl",
-      "product": "registryctl_relay_offline_harness",
-      "phase": "offline_execution",
-      "safe_meaning": "Authorization denied fixture execution before source access.",
-      "rule": "authorization_before_source",
-      "safe_remediation": "Align the fixture identity and authorization expectation with the compiled policy.",
-      "field_address_pattern": null,
-      "evidence_scope": "offline synthetic fixture execution",
-      "secret_sensitive_value_policy": "no_runtime_values",
-      "docs_anchor": "/reference/diagnostics/fixture/#registryctl_relay_offline_harness--authorization.denied",
-      "lifecycle": "unreleased",
-      "introduced_in": null,
-      "stability": "pre1_stable_code",
-      "evidence_limitation": "Offline synthetic evidence does not prove live source compatibility."
-    },
-    {
-      "family": "fixture_execution",
       "code": "failure.subject_mismatch",
       "owner": "registryctl",
       "product": "registryctl_relay_offline_harness",

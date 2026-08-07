@@ -59,10 +59,10 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
   development.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
   configured timeout, including DNS validation.
-- Use the named profiles for standard Relay and Notary flows so related ID token
-  and UserInfo JWT `typ` checks stay aligned. Allowed access-token algorithms
-  and token types remain explicit inputs; keep `allowed_algorithms` as narrow as
-  the provider allows.
+- Use the named profiles for standard Relay flows so related ID token and
+  UserInfo JWT `typ` checks stay aligned. Allowed access-token algorithms and
+  token types remain explicit inputs; keep `allowed_algorithms` as narrow as the
+  provider allows.
 - `kid` values are capped generously and unknown `kid` entries are evicted from
   the negative cache to keep issuer compatibility without unbounded memory use.
   Negative `kid` entries are retried after the forced-refresh cooldown so real

@@ -1,0 +1,41 @@
+[package]
+name = "registry-evidence-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Relying-party client for requesting and verifying signed Evidence responses."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+getrandom.workspace = true
+registry-evidence-verifier.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The synchronization primitives the cached token provider needs. Holding a
+# credential across an await rules out a blocking lock, and reqwest already
+# brings this runtime into any build that reaches the network.
+tokio.workspace = true
+ulid.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+p256.workspace = true
+registry-evidence.workspace = true
+registry-mint.workspace = true
+registry-platform-sdjwt.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true

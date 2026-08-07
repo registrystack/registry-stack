@@ -31,12 +31,6 @@ macro_rules! fixture_diagnostic {
 /// order.
 pub(crate) const FIXTURE_DIAGNOSTIC_DEFINITIONS: &[FixtureDiagnosticDefinition] = &[
     fixture_diagnostic!(
-        AuthorizationDenied,
-        "Authorization denied fixture execution before source access.",
-        "authorization_before_source",
-        "Align the fixture identity and authorization expectation with the compiled policy."
-    ),
-    fixture_diagnostic!(
         FailureSubjectMismatch,
         "The source observation did not preserve the requested subject binding.",
         "subject_binding",
@@ -136,21 +130,20 @@ pub(crate) const fn fixture_diagnostic_definition(
     code: FixtureSafeCode,
 ) -> &'static FixtureDiagnosticDefinition {
     match code {
-        FixtureSafeCode::AuthorizationDenied => &FIXTURE_DIAGNOSTIC_DEFINITIONS[0],
-        FixtureSafeCode::FailureSubjectMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[1],
-        FixtureSafeCode::FixtureExecutionContractInvalid => &FIXTURE_DIAGNOSTIC_DEFINITIONS[2],
-        FixtureSafeCode::FixtureProfileNotFound => &FIXTURE_DIAGNOSTIC_DEFINITIONS[3],
-        FixtureSafeCode::FixtureRequestMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[4],
-        FixtureSafeCode::FixtureSourceOperationUnknown => &FIXTURE_DIAGNOSTIC_DEFINITIONS[5],
-        FixtureSafeCode::InputPatternMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[6],
-        FixtureSafeCode::RedactedUnclassifiedError => &FIXTURE_DIAGNOSTIC_DEFINITIONS[7],
-        FixtureSafeCode::SourceCallBudgetExceeded => &FIXTURE_DIAGNOSTIC_DEFINITIONS[8],
-        FixtureSafeCode::SourceCardinalityViolation => &FIXTURE_DIAGNOSTIC_DEFINITIONS[9],
-        FixtureSafeCode::SourceDeadlineExceeded => &FIXTURE_DIAGNOSTIC_DEFINITIONS[10],
-        FixtureSafeCode::SourceResponseMalformed => &FIXTURE_DIAGNOSTIC_DEFINITIONS[11],
-        FixtureSafeCode::SourceResponseTooLarge => &FIXTURE_DIAGNOSTIC_DEFINITIONS[12],
-        FixtureSafeCode::SourceStatusRejected => &FIXTURE_DIAGNOSTIC_DEFINITIONS[13],
-        FixtureSafeCode::SourceUnavailable => &FIXTURE_DIAGNOSTIC_DEFINITIONS[14],
-        FixtureSafeCode::SourceUnavailableLegacy => &FIXTURE_DIAGNOSTIC_DEFINITIONS[15],
+        FixtureSafeCode::FailureSubjectMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[0],
+        FixtureSafeCode::FixtureExecutionContractInvalid => &FIXTURE_DIAGNOSTIC_DEFINITIONS[1],
+        FixtureSafeCode::FixtureProfileNotFound => &FIXTURE_DIAGNOSTIC_DEFINITIONS[2],
+        FixtureSafeCode::FixtureRequestMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[3],
+        FixtureSafeCode::FixtureSourceOperationUnknown => &FIXTURE_DIAGNOSTIC_DEFINITIONS[4],
+        FixtureSafeCode::InputPatternMismatch => &FIXTURE_DIAGNOSTIC_DEFINITIONS[5],
+        FixtureSafeCode::RedactedUnclassifiedError => &FIXTURE_DIAGNOSTIC_DEFINITIONS[6],
+        FixtureSafeCode::SourceCallBudgetExceeded => &FIXTURE_DIAGNOSTIC_DEFINITIONS[7],
+        FixtureSafeCode::SourceCardinalityViolation => &FIXTURE_DIAGNOSTIC_DEFINITIONS[8],
+        FixtureSafeCode::SourceDeadlineExceeded => &FIXTURE_DIAGNOSTIC_DEFINITIONS[9],
+        FixtureSafeCode::SourceResponseMalformed => &FIXTURE_DIAGNOSTIC_DEFINITIONS[10],
+        FixtureSafeCode::SourceResponseTooLarge => &FIXTURE_DIAGNOSTIC_DEFINITIONS[11],
+        FixtureSafeCode::SourceStatusRejected => &FIXTURE_DIAGNOSTIC_DEFINITIONS[12],
+        FixtureSafeCode::SourceUnavailable => &FIXTURE_DIAGNOSTIC_DEFINITIONS[13],
+        FixtureSafeCode::SourceUnavailableLegacy => &FIXTURE_DIAGNOSTIC_DEFINITIONS[14],
     }
 }

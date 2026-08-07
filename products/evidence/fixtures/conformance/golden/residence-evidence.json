@@ -1,0 +1,29 @@
+{
+  "schema": "registry.assertion-evidence/v1",
+  "assuranceProfile": "evidence-grade",
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+  "id": "urn:example:fixture:evidence:residence-001",
+  "type": "Evidence",
+  "supportsRequirement": "urn:example:fixture:requirement:residence-region:v1",
+  "isConformantTo": "urn:example:fixture:evidence-type:residence-region:v1",
+  "issuedBy": "urn:example:fixture:issuer:authority",
+  "providedBy": "urn:example:fixture:provider:evidence",
+  "issuedAt": "2026-08-02T00:00:00Z",
+  "observedAt": "2026-08-02T00:00:00Z",
+  "validUntil": "2026-08-03T00:00:00Z",
+  "purpose": "fixture-routing",
+  "audience": "urn:example:fixture:audience:requester-a",
+  "configurationRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "subjects": [
+    {
+      "role": "subject",
+      "binding": "urn:evidence:subject:v1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    }
+  ],
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:fixture:concept:residence-region",
+      "value": "REGION-NORTH"
+    }
+  ]
+}

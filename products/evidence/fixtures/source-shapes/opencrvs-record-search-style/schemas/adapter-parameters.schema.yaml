@@ -1,0 +1,8 @@
+type: object
+additionalProperties: false
+required: [eventType, registeredStatus, resultLimit, resultOffset]
+properties:
+  eventType: {const: birth}
+  registeredStatus: {const: REGISTERED}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}

@@ -91,7 +91,6 @@ fn rhai_diagnostic_source(
 type FixtureExecutionObservations = (
     Vec<FixtureReport>,
     Vec<GeneratedFixtureObservation>,
-    Vec<AuthoredRequestBindingObservation>,
     Option<FixtureSafeCode>,
 );
 
@@ -106,7 +105,7 @@ fn execute_all_fixtures_with_coverage_observations(
     let call_budget_actual =
         platform_call_budget_result(loaded, compiled, execution_context.worker_program())?;
     if loaded.integrations.is_empty() {
-        return Ok((Vec::new(), Vec::new(), Vec::new(), call_budget_actual));
+        return Ok((Vec::new(), Vec::new(), call_budget_actual));
     }
     if let Some(selected) = integration_filter {
         if !loaded.integrations.contains_key(selected) {
@@ -146,8 +145,10 @@ fn execute_all_fixtures_with_coverage_observations(
                     .any(|fixture| fixture.name == selected)
             });
         if !selected_exists {
-            let selected_id = integration_filter
-                .map_or_else(|| selected.to_string(), |integration| format!("{integration}.{selected}"));
+            let selected_id = integration_filter.map_or_else(
+                || selected.to_string(),
+                |integration| format!("{integration}.{selected}"),
+            );
             bail!(
                 "selected fixture {selected_id} does not exist; available fixture ids: {}",
                 available.join(", ")
@@ -171,7 +172,6 @@ fn execute_all_fixtures_with_coverage_observations(
     )?;
     let mut reports = Vec::new();
     let mut generated_observations = Vec::new();
-    let mut request_observations = Vec::new();
     for (alias, integration) in &loaded.integrations {
         if integration_filter.is_some_and(|selected| selected != alias) {
             continue;
@@ -179,35 +179,6 @@ fn execute_all_fixtures_with_coverage_observations(
         for (fixture_path, fixture) in &integration.fixtures {
             if fixture_filter.is_some_and(|selected| selected != fixture.name) {
                 continue;
-            }
-            if let Some(request) = fixture.request.as_ref() {
-                if validate_governed_fixture_request(loaded, request).is_err() {
-                    request_observations.push(AuthoredRequestBindingObservation {
-                        integration: alias.clone(),
-                        source_fixture_id: fixture.name.clone(),
-                        pass_state: FixturePassState::Failed,
-                        consultations: Vec::new(),
-                        actual_safe_code: Some(FixtureSafeCode::RedactedUnclassifiedError),
-                        actual_relay_consultations: Some(0),
-                    });
-                    reports.push(FixtureReport {
-                        integration: alias.clone(),
-                        fixture: fixture.name.clone(),
-                        inputs: fixture.input.keys().cloned().collect(),
-                        calls: Vec::new(),
-                        outputs: Vec::new(),
-                        claims: Vec::new(),
-                        outcome: None,
-                        expected_error: fixture.expect.error.clone(),
-                        source_access: Some(false),
-                        passed: false,
-                        failure: Some(
-                            "request_to_consultation_binding_invalid: relay_consultations=0"
-                                .to_owned(),
-                        ),
-                    });
-                    continue;
-                }
             }
             let mut actual_calls = Vec::new();
             let relay = execute_fixture(
@@ -218,39 +189,7 @@ fn execute_all_fixtures_with_coverage_observations(
                 &mut actual_calls,
                 trace,
             );
-            let (result, evaluated_claims) = match relay {
-                Ok((outputs, outcome))
-                    if matches!(outcome, "match" | "no_match")
-                        && !integration_has_product_claims(loaded, alias) =>
-                {
-                    (Ok((outputs, outcome)), Some(BTreeMap::new()))
-                }
-                Ok((outputs, outcome)) if matches!(outcome, "match" | "no_match") => {
-                    match evaluate_product_claims(
-                        loaded,
-                        compiled,
-                        alias,
-                        fixture,
-                        Some((&outputs, outcome)),
-                        registry_notary_server::standalone::OfflineAuthentication::Valid,
-                        false,
-                        execution_context.worker_program(),
-                    )
-                    .with_context(|| {
-                        format!(
-                            "failed to evaluate product claims for fixture {}.{}",
-                            alias, fixture.name
-                        )
-                    })?
-                    .result
-                    {
-                        Ok(claims) => (Ok((outputs, outcome)), Some(claims)),
-                        Err(error) => (Err(error), None),
-                    }
-                }
-                Ok(result) => (Ok(result), None),
-                Err(error) => (Err(error), None),
-            };
+            let result = relay;
             let passed = match (&result, &fixture.expect.error) {
                 (Ok((outputs, _)), None) => {
                     let outcome_matches =
@@ -259,15 +198,7 @@ fn execute_all_fixtures_with_coverage_observations(
                                 .as_ref()
                                 .is_ok_and(|(_, outcome)| *outcome == expected)
                         });
-                    let claims_match = if result
-                        .as_ref()
-                        .is_ok_and(|(_, outcome)| *outcome == "ambiguous")
-                    {
-                        fixture.expect.claims.is_empty()
-                    } else {
-                        evaluated_claims.as_ref() == Some(&fixture.expect.claims)
-                    };
-                    outputs == &fixture.expect.outputs && claims_match && outcome_matches
+                    outputs == &fixture.expect.outputs && outcome_matches
                 }
                 (Err(code), Some(expected)) => code == expected,
                 _ => false,
@@ -287,16 +218,6 @@ fn execute_all_fixtures_with_coverage_observations(
                     format!(
                         "outcome_mismatch: expected={}, actual={outcome}",
                         fixture.expect.outcome.as_deref().unwrap_or("unspecified")
-                    )
-                }
-                (Ok(_), None) if evaluated_claims.as_ref() != Some(&fixture.expect.claims) => {
-                    format!(
-                        "claims_mismatch: claims={}",
-                        mismatched_optional_map_keys(
-                            evaluated_claims.as_ref(),
-                            &fixture.expect.claims,
-                        )
-                        .join("|")
                     )
                 }
                 (Err(actual), Some(expected)) if actual != expected => {
@@ -333,10 +254,6 @@ fn execute_all_fixtures_with_coverage_observations(
                 inputs: fixture.input.keys().cloned().collect(),
                 calls: actual_calls,
                 outputs,
-                claims: evaluated_claims
-                    .as_ref()
-                    .map(|claims| claims.keys().cloned().collect())
-                    .unwrap_or_default(),
                 outcome: result
                     .as_ref()
                     .ok()
@@ -349,87 +266,6 @@ fn execute_all_fixtures_with_coverage_observations(
                 passed,
                 failure,
             });
-            if let Some(request) = fixture.request.as_ref() {
-                let binding =
-                    result
-                        .as_ref()
-                        .map_err(|code| code.clone())
-                        .and_then(|(outputs, outcome)| {
-                            evaluate_authored_governed_request(
-                                loaded,
-                                compiled,
-                                fixture,
-                                request,
-                                outputs,
-                                outcome,
-                                execution_context.worker_program(),
-                            )
-                            .map_err(|_| "request.binding_evaluation_failed".to_owned())
-                        });
-                let (pass_state, consultations, actual_safe_code, actual_relay_consultations) =
-                    match binding {
-                        Ok(evaluation)
-                            if evaluation.result.is_ok() && evaluation.relay_calls > 0 =>
-                        {
-                            (
-                                FixturePassState::Passed,
-                                evaluation.consultations,
-                                None,
-                                Some(u32::try_from(evaluation.relay_calls).unwrap_or(u32::MAX)),
-                            )
-                        }
-                        Ok(evaluation) => (
-                            FixturePassState::Failed,
-                            Vec::new(),
-                            evaluation
-                                .result
-                                .as_ref()
-                                .err()
-                                .map(|code| FixtureSafeCode::from_runtime_code(code)),
-                            Some(u32::try_from(evaluation.relay_calls).unwrap_or(u32::MAX)),
-                        ),
-                        Err(_) => (
-                            FixturePassState::Failed,
-                            Vec::new(),
-                            Some(FixtureSafeCode::RedactedUnclassifiedError),
-                            Some(0),
-                        ),
-                    };
-                request_observations.push(AuthoredRequestBindingObservation {
-                    integration: alias.clone(),
-                    source_fixture_id: fixture.name.clone(),
-                    pass_state,
-                    consultations,
-                    actual_safe_code,
-                    actual_relay_consultations,
-                });
-                reports.push(FixtureReport {
-                    integration: alias.clone(),
-                    fixture: format!("{}::derived/request_to_consultation_binding", fixture.name),
-                    inputs: fixture.input.keys().cloned().collect(),
-                    calls: if actual_relay_consultations.unwrap_or_default() > 0 {
-                        vec!["notary-relay-consultation".to_owned()]
-                    } else {
-                        Vec::new()
-                    },
-                    outputs: Vec::new(),
-                    claims: request
-                        .claims
-                        .iter()
-                        .map(|claim| claim.id.clone())
-                        .collect(),
-                    outcome: None,
-                    expected_error: None,
-                    source_access: Some(actual_relay_consultations.unwrap_or_default() > 0),
-                    passed: pass_state == FixturePassState::Passed,
-                    failure: (pass_state != FixturePassState::Passed).then(|| {
-                        format!(
-                            "request_to_consultation_binding_failed: relay_consultations={}",
-                            actual_relay_consultations.unwrap_or_default()
-                        )
-                    }),
-                });
-            }
             reports.extend(derived_fixture_reports(
                 loaded,
                 compiled,
@@ -442,12 +278,7 @@ fn execute_all_fixtures_with_coverage_observations(
             )?);
         }
     }
-    Ok((
-        reports,
-        generated_observations,
-        request_observations,
-        call_budget_actual,
-    ))
+    Ok((reports, generated_observations, call_budget_actual))
 }
 
 // The execution seam keeps each authority and observation channel explicit.
@@ -460,7 +291,7 @@ fn derived_fixture_reports(
     fixture: &FixtureDocument,
     trace: bool,
     generated_observations: &mut Vec<GeneratedFixtureObservation>,
-    worker_program: &Path,
+    _worker_program: &Path,
 ) -> Result<Vec<FixtureReport>> {
     use registry_relay::offline_fixture::OfflineSourceResponse;
 
@@ -610,7 +441,6 @@ fn derived_fixture_reports(
                 } else {
                     FixturePassState::Failed
                 },
-                actual_source_calls: Some(u32::try_from(calls.len()).unwrap_or(u32::MAX)),
             });
             FixtureReport {
                 integration: integration_alias.to_owned(),
@@ -622,7 +452,6 @@ fn derived_fixture_reports(
                 inputs: fixture.input.keys().cloned().collect(),
                 calls,
                 outputs: Vec::new(),
-                claims: Vec::new(),
                 outcome: None,
                 expected_error: Some(expected.to_owned()),
                 source_access: Some(error_implies_source_access(expected)),
@@ -636,55 +465,6 @@ fn derived_fixture_reports(
             }
         })
         .collect::<Vec<_>>();
-
-    if integration_has_product_claims(loaded, integration_alias) {
-        let authorization = evaluate_product_claims(
-            loaded,
-            compiled,
-            integration_alias,
-            fixture,
-            None,
-            registry_notary_server::standalone::OfflineAuthentication::WrongCredential,
-            true,
-            worker_program,
-        )?;
-        let authorization_error = authorization.result.err();
-        let authorization_passed = authorization_error.as_deref() == Some("authorization.denied");
-        let actual_source_calls = u32::try_from(authorization.relay_calls).unwrap_or(u32::MAX);
-        let passed = authorization_passed && actual_source_calls == 0;
-        generated_observations.push(GeneratedFixtureObservation {
-            integration: integration_alias.to_owned(),
-            source_fixture_id: fixture.name.clone(),
-            recipe_id: GeneratorRecipeId::AuthorizationBeforeSource,
-            actual_safe_code: authorization_error
-                .as_deref()
-                .map(FixtureSafeCode::from_runtime_code),
-            pass_state: if passed {
-                FixturePassState::Passed
-            } else {
-                FixturePassState::Failed
-            },
-            actual_source_calls: Some(actual_source_calls),
-        });
-        reports.push(FixtureReport {
-            integration: integration_alias.to_owned(),
-            fixture: format!("{}::derived/authorization_before_source", fixture.name),
-            inputs: fixture.input.keys().cloned().collect(),
-            calls: Vec::new(),
-            outputs: Vec::new(),
-            claims: Vec::new(),
-            outcome: None,
-            expected_error: Some("authorization.denied".to_owned()),
-            source_access: Some(actual_source_calls != 0),
-            passed,
-            failure: (!passed).then(|| {
-                format!(
-                    "derived_authorization_mismatch: expected=authorization.denied, actual={}, source_calls={actual_source_calls}",
-                    authorization_error.as_deref().unwrap_or("success"),
-                )
-            }),
-        });
-    }
 
     let mut minimized = base;
     // Ignoring unselected upstream members is a declarative HTTP projection
@@ -736,44 +516,18 @@ fn derived_fixture_reports(
                                 "ambiguous"
                             }
                         };
-                        let evaluated_claims = if matches!(outcome, "match" | "no_match")
-                            && integration_has_product_claims(loaded, integration_alias)
-                        {
-                            evaluate_product_claims(
-                                loaded,
-                                compiled,
-                                integration_alias,
-                                fixture,
-                                Some((&observation.outputs, outcome)),
-                                registry_notary_server::standalone::OfflineAuthentication::Valid,
-                                false,
-                                worker_program,
-                            )?
-                            .result
-                            .map(Some)
-                        } else if matches!(outcome, "match" | "no_match") {
-                            Ok(Some(BTreeMap::new()))
-                        } else {
-                            Ok(None)
-                        };
-                        evaluated_claims
-                            .map(|claims| (observation.outputs, outcome.to_owned(), claims))
+                        Ok((observation.outputs, outcome.to_owned()))
                     }
                     Err(error) => Err(error),
                 };
                 let passed = match (&evaluated, fixture.expect.error.as_deref()) {
-                    (Ok((outputs, outcome, claims)), None) => {
+                    (Ok((outputs, outcome)), None) => {
                         let outcome_matches = fixture
                             .expect
                             .outcome
                             .as_deref()
                             .is_none_or(|expected| expected == outcome);
-                        let claims_match = if outcome == "ambiguous" {
-                            fixture.expect.claims.is_empty()
-                        } else {
-                            claims.as_ref() == Some(&fixture.expect.claims)
-                        };
-                        outputs == &fixture.expect.outputs && outcome_matches && claims_match
+                        outputs == &fixture.expect.outputs && outcome_matches
                     }
                     (Err(actual), Some(expected)) => actual == expected,
                     _ => false,
@@ -785,26 +539,15 @@ fn derived_fixture_reports(
                 let outputs = evaluated
                     .as_ref()
                     .ok()
-                    .map(|(outputs, _, _)| outputs.keys().cloned().collect())
+                    .map(|(outputs, _)| outputs.keys().cloned().collect())
                     .unwrap_or_default();
-                let claims = evaluated
-                    .as_ref()
-                    .ok()
-                    .and_then(|(_, _, claims)| claims.as_ref())
-                    .map(|claims| claims.keys().cloned().collect())
-                    .unwrap_or_default();
-                let outcome = evaluated
-                    .as_ref()
-                    .ok()
-                    .map(|(_, outcome, _)| outcome.clone());
-                let actual_source_calls = u32::try_from(trace_calls.len()).unwrap_or(u32::MAX);
+                let outcome = evaluated.as_ref().ok().map(|(_, outcome)| outcome.clone());
                 reports.push(FixtureReport {
                     integration: integration_alias.to_owned(),
                     fixture: format!("{}::derived/output_minimization", fixture.name),
                     inputs: fixture.input.keys().cloned().collect(),
                     calls: trace_calls,
                     outputs,
-                    claims,
                     outcome,
                     expected_error: fixture.expect.error.clone(),
                     source_access: evaluated
@@ -826,58 +569,11 @@ fn derived_fixture_reports(
                     } else {
                         FixturePassState::Failed
                     },
-                    actual_source_calls: Some(actual_source_calls),
                 });
             }
         }
     }
     Ok(reports)
-}
-
-fn integration_has_product_claims(loaded: &LoadedRegistryProject, integration_alias: &str) -> bool {
-    loaded.project.services.values().any(|service| {
-        service.kind == ServiceKind::Evidence
-            && service.claims.values().any(|claim| {
-                claim_consultation_name(service, claim).is_ok_and(|consultation| {
-                    service.consultations[consultation].integration == integration_alias
-                })
-            })
-    })
-}
-
-fn fixture_subject_type(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
-) -> Result<EvidenceSubjectType> {
-    let mut subject_types = BTreeSet::new();
-    for service in loaded
-        .project
-        .services
-        .values()
-        .filter(|service| service.kind == ServiceKind::Evidence)
-    {
-        let selects_integration =
-            service
-                .claims
-                .values()
-                .try_fold(false, |selected, claim| -> Result<bool> {
-                    if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-                        return Ok(selected);
-                    }
-                    let consultation = claim_consultation_name(service, claim)?;
-                    Ok(selected
-                        || service.consultations[consultation].integration == integration_alias)
-                })?;
-        if selects_integration {
-            subject_types.insert(service.effective_subject_type());
-        }
-    }
-    if subject_types.len() != 1 {
-        bail!("offline fixture cannot combine evidence services with different subject types");
-    }
-    subject_types
-        .pop_first()
-        .ok_or_else(|| anyhow!("offline fixture selected no evidence service"))
 }
 
 fn contains_generated_fixture_matcher(value: &Value) -> bool {
@@ -900,7 +596,6 @@ fn generated_recipe_fixture_suffix(recipe: GeneratorRecipeId) -> &'static str {
         GeneratorRecipeId::ByteCeiling => "byte_ceiling",
         GeneratorRecipeId::Timeout => "timeout",
         GeneratorRecipeId::ProtocolVerification => "protocol_verification",
-        GeneratorRecipeId::AuthorizationBeforeSource => "authorization_before_source",
         GeneratorRecipeId::OutputMinimization => "output_minimization",
     }
 }
@@ -910,19 +605,17 @@ fn generated_recipe_fixture_suffix(recipe: GeneratorRecipeId) -> &'static str {
 ///
 /// Every integration is an isolated target with the same ordered requirement
 /// matrix. The regular command has no baseline-to-candidate comparison, so the
-/// four affected-fixture requirements remain honestly `not_evaluated`.
+/// three affected-fixture requirements remain honestly `not_evaluated`.
 fn generate_fixture_coverage_report(
     loaded: &LoadedRegistryProject,
     fixture_reports: &[FixtureReport],
     generated_observations: &[GeneratedFixtureObservation],
-    request_observations: &[AuthoredRequestBindingObservation],
     call_budget_actual: Option<FixtureSafeCode>,
 ) -> Result<ProjectFixtureCoverageReportV1> {
     generate_fixture_coverage_report_with_comparison(
         loaded,
         fixture_reports,
         generated_observations,
-        request_observations,
         call_budget_actual,
         None,
     )
@@ -932,7 +625,6 @@ fn generate_fixture_coverage_report_with_comparison(
     loaded: &LoadedRegistryProject,
     fixture_reports: &[FixtureReport],
     generated_observations: &[GeneratedFixtureObservation],
-    request_observations: &[AuthoredRequestBindingObservation],
     call_budget_actual: Option<FixtureSafeCode>,
     comparison_input: Option<&FixtureCoverageComparisonInput>,
 ) -> Result<ProjectFixtureCoverageReportV1> {
@@ -976,18 +668,6 @@ fn generate_fixture_coverage_report_with_comparison(
             bail!("fixture coverage received a duplicate generated observation");
         }
     }
-    let mut request_observation_index =
-        BTreeMap::<(&str, &str), &AuthoredRequestBindingObservation>::new();
-    for observation in request_observations {
-        let key = (
-            observation.integration.as_str(),
-            observation.source_fixture_id.as_str(),
-        );
-        if request_observation_index.insert(key, observation).is_some() {
-            bail!("fixture coverage received a duplicate governed request observation");
-        }
-    }
-
     let platform_case = call_budget_actual
         .map(build_platform_call_budget_case)
         .transpose()?;
@@ -1030,45 +710,12 @@ fn generate_fixture_coverage_report_with_comparison(
                     .map_err(|_| anyhow!("fixture interaction count exceeds the report range"))?,
                 input_ids: fixture.input.keys().cloned().collect(),
                 output_ids: fixture.expect.outputs.keys().cloned().collect(),
-                claim_ids: fixture.expect.claims.keys().cloned().collect(),
                 exercised_status_mappings: fixture_exercised_status_mappings_for_fixture(
                     &integration.document,
                     fixture,
                 ),
                 classification: FixtureCoverageClassification::Synthetic,
                 pass_state,
-                request_to_consultation_binding: match (
-                    fixture.request.is_some(),
-                    request_observation_index
-                        .get(&(integration_alias.as_str(), fixture.name.as_str()))
-                        .copied(),
-                ) {
-                    (false, None) => FixtureRequestBindingCoverage {
-                        state: FixtureRequestBindingState::NotAuthored,
-                        consultations: Vec::new(),
-                        actual_relay_consultations: None,
-                        safe_error_code: None,
-                    },
-                    (false, Some(_)) => {
-                        bail!("fixture coverage observed a governed request that was not authored")
-                    }
-                    (true, None) => FixtureRequestBindingCoverage {
-                        state: FixtureRequestBindingState::NotExecuted,
-                        consultations: Vec::new(),
-                        actual_relay_consultations: None,
-                        safe_error_code: None,
-                    },
-                    (true, Some(observation)) => FixtureRequestBindingCoverage {
-                        state: if observation.pass_state == FixturePassState::Passed {
-                            FixtureRequestBindingState::Passed
-                        } else {
-                            FixtureRequestBindingState::Failed
-                        },
-                        consultations: observation.consultations.clone(),
-                        actual_relay_consultations: observation.actual_relay_consultations,
-                        safe_error_code: observation.actual_safe_code,
-                    },
-                },
             });
 
             for recipe_id in GeneratorRecipeId::ALL {
@@ -1095,18 +742,6 @@ fn generate_fixture_coverage_report_with_comparison(
                 } else {
                     observation.map_or(FixturePassState::NotExecuted, |value| value.pass_state)
                 };
-                let source_access_assertion = (recipe_id
-                    == GeneratorRecipeId::AuthorizationBeforeSource
-                    && matches!(applicability, GeneratedRecipeApplicability::Applicable {}))
-                .then(|| {
-                    let actual_source_calls =
-                        observation.and_then(|value| value.actual_source_calls);
-                    SourceAccessAssertion {
-                        expected_source_calls: SourceCallExpectation::Zero,
-                        actual_source_calls,
-                        passed: actual_source_calls == Some(0),
-                    }
-                });
                 let actual_safe_code = if recipe_id == GeneratorRecipeId::OutputMinimization {
                     None
                 } else {
@@ -1120,7 +755,6 @@ fn generate_fixture_coverage_report_with_comparison(
                     recipe_id.expected_safe_code(),
                     actual_safe_code,
                     pass_state,
-                    &source_access_assertion,
                 ))
                 .map_err(|error| anyhow!(error))?;
                 let evidence = fixture_coverage_evidence(
@@ -1145,7 +779,6 @@ fn generate_fixture_coverage_report_with_comparison(
                     expected_safe_code: recipe_id.expected_safe_code(),
                     actual_safe_code,
                     pass_state,
-                    source_access_assertion,
                 });
             }
         }
@@ -1163,7 +796,7 @@ fn generate_fixture_coverage_report_with_comparison(
         } else {
             Vec::new()
         };
-        let declared = fixture_target_declared_dimensions(loaded, integration_alias, integration);
+        let declared = fixture_target_declared_dimensions(integration);
         let exercised = fixture_target_exercised_dimensions(
             integration,
             &fixture_inventory,
@@ -1174,7 +807,7 @@ fn generate_fixture_coverage_report_with_comparison(
             integration: integration_alias.clone(),
             capability: fixture_coverage_capability(&integration.document.capability),
         };
-        let contract = fixture_coverage_target_contract(loaded, integration_alias, integration)?;
+        let contract = fixture_coverage_target_contract(integration)?;
         let compiled_contract = target_compiled_contract_evidence(&identity, &contract, &declared)
             .map_err(|error| anyhow!(error))?;
         let mut target = FixtureCoverageTarget {
@@ -1274,8 +907,6 @@ fn fixture_coverage_capability(capability: &CapabilityDeclaration) -> FixtureCap
 }
 
 fn fixture_coverage_target_contract(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
     integration: &LoadedIntegration,
 ) -> Result<FixtureCoverageTargetContract> {
     let source_operation_count = match &integration.document.capability {
@@ -1300,40 +931,7 @@ fn fixture_coverage_target_contract(
     Ok(FixtureCoverageTargetContract {
         source_operation_count,
         reviewed_not_applicable,
-        registry_backed_consultations: fixture_target_registry_backed_consultations(
-            loaded,
-            integration_alias,
-        )?,
     })
-}
-
-fn fixture_target_registry_backed_consultations(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
-) -> Result<Vec<FixtureConsultationIdentity>> {
-    let mut identities = BTreeSet::new();
-    for (service_id, service) in &loaded.project.services {
-        if service.kind != ServiceKind::Evidence {
-            continue;
-        }
-        for claim in service.claims.values() {
-            if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-                continue;
-            }
-            let consultation_id = claim_consultation_name(service, claim)?;
-            let consultation = service
-                .consultations
-                .get(consultation_id)
-                .ok_or_else(|| anyhow!("registry-backed claim consultation is absent"))?;
-            if consultation.integration == integration_alias {
-                identities.insert(FixtureConsultationIdentity {
-                    service_id: service_id.clone(),
-                    consultation_id: consultation_id.to_owned(),
-                });
-            }
-        }
-    }
-    Ok(identities.into_iter().collect())
 }
 
 fn distinguishable_request_pair(
@@ -1451,14 +1049,6 @@ fn generated_recipe_applicability(
                 invariant: CoverageInvariant::MutationRequiresFinalJsonObjectResponse,
             }
         }
-        GeneratorRecipeId::AuthorizationBeforeSource
-            if !integration_has_product_claims(loaded, integration_alias) =>
-        {
-            GeneratedRecipeApplicability::NotApplicable {
-                reason: GeneratedNotApplicableReason::IntegrationHasNoProductClaims,
-                invariant: CoverageInvariant::AuthorizationCheckRequiresProductClaimEvaluation,
-            }
-        }
         GeneratorRecipeId::OutputMinimization
             if !matches!(
                 loaded.integrations[integration_alias].document.capability,
@@ -1487,17 +1077,11 @@ fn generated_recipe_applicability(
 }
 
 fn fixture_target_declared_dimensions(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
     integration: &LoadedIntegration,
 ) -> FixtureCoverageDimensions {
-    let (claim_ids, disclosure_modes) =
-        fixture_target_claims_and_disclosures(loaded, integration_alias);
     FixtureCoverageDimensions {
         input_ids: integration.document.input.keys().cloned().collect(),
         output_ids: integration.document.outputs.keys().cloned().collect(),
-        claim_ids,
-        disclosure_modes,
         status_mappings: fixture_status_mappings(&integration.document),
         protocol_helpers: fixture_protocol_helpers(&integration.document),
         limits: fixture_declared_limits(&integration.document),
@@ -1524,12 +1108,6 @@ fn fixture_target_exercised_dimensions(
     let output_ids = passed
         .iter()
         .flat_map(|fixture| fixture.output_ids.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let claim_ids = passed
-        .iter()
-        .flat_map(|fixture| fixture.claim_ids.iter().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -1560,55 +1138,11 @@ fn fixture_target_exercised_dimensions(
     FixtureCoverageDimensions {
         input_ids,
         output_ids,
-        claim_ids,
-        // Claim evaluation does not exercise disclosure selection.
-        disclosure_modes: Vec::new(),
         status_mappings: fixture_exercised_status_mappings(integration, inventory),
         protocol_helpers,
         limits: limits.into_iter().collect(),
         // Semantic outcomes are not implementation branch identifiers.
         script_branch_ids: Vec::new(),
-    }
-}
-
-fn fixture_target_claims_and_disclosures(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
-) -> (Vec<String>, Vec<FixtureDisclosureMode>) {
-    let mut claim_ids = BTreeSet::new();
-    let mut modes = BTreeSet::new();
-    for service in loaded.project.services.values() {
-        if service.kind != ServiceKind::Evidence {
-            continue;
-        }
-        for (claim_id, claim) in &service.claims {
-            let belongs_to_target = claim_consultation_name(service, claim)
-                .ok()
-                .and_then(|consultation| service.consultations.get(consultation))
-                .is_some_and(|consultation| consultation.integration == integration_alias);
-            if !belongs_to_target {
-                continue;
-            }
-            claim_ids.insert(claim_id.clone());
-            match &claim.disclosure {
-                DisclosureDeclaration::Mode(mode) => {
-                    modes.insert(fixture_disclosure_mode(*mode));
-                }
-                DisclosureDeclaration::Policy { default, allowed } => {
-                    modes.insert(fixture_disclosure_mode(*default));
-                    modes.extend(allowed.iter().copied().map(fixture_disclosure_mode));
-                }
-            }
-        }
-    }
-    (claim_ids.into_iter().collect(), modes.into_iter().collect())
-}
-
-fn fixture_disclosure_mode(mode: DisclosureMode) -> FixtureDisclosureMode {
-    match mode {
-        DisclosureMode::Value => FixtureDisclosureMode::Value,
-        DisclosureMode::Predicate => FixtureDisclosureMode::Predicate,
-        DisclosureMode::Redacted => FixtureDisclosureMode::Redacted,
     }
 }
 
@@ -1758,7 +1292,6 @@ fn fixture_has_semantic_null(fixture: &FixtureDocument) -> bool {
         .input
         .values()
         .chain(fixture.expect.outputs.values())
-        .chain(fixture.expect.claims.values())
         .any(Value::is_null)
 }
 
@@ -1778,13 +1311,7 @@ fn generated_recipe_complete(
         .collect::<Vec<_>>();
     let mut evidence = applicable
         .iter()
-        .filter(|case| {
-            case.pass_state == FixturePassState::Passed
-                && case
-                    .source_access_assertion
-                    .as_ref()
-                    .is_none_or(|assertion| assertion.passed)
-        })
+        .filter(|case| case.pass_state == FixturePassState::Passed)
         .map(|case| case.evidence.clone())
         .collect::<Vec<_>>();
     evidence.sort();
@@ -1823,508 +1350,8 @@ fn mismatched_map_keys<T: PartialEq>(
         .collect()
 }
 
-fn mismatched_optional_map_keys<T: PartialEq>(
-    actual: Option<&BTreeMap<String, T>>,
-    expected: &BTreeMap<String, T>,
-) -> Vec<String> {
-    actual.map_or_else(
-        || expected.keys().cloned().collect(),
-        |actual| mismatched_map_keys(actual, expected),
-    )
-}
-
 fn error_implies_source_access(code: &str) -> bool {
     code.starts_with("source.") || code == "failure.subject_mismatch"
-}
-
-struct ProductClaimsFixtureEvaluation {
-    result: std::result::Result<BTreeMap<String, Value>, String>,
-    relay_calls: u64,
-    consultations: Vec<FixtureConsultationIdentity>,
-}
-
-/// Execute the independently authored governed request through the production
-/// Notary request planner. The fixture input remains a separate oracle for the
-/// exact Relay consultation key, so this path cannot derive a passing request
-/// from the consultation mapping it is intended to verify.
-fn evaluate_authored_governed_request(
-    loaded: &LoadedRegistryProject,
-    compiled: &CompiledProject,
-    fixture: &FixtureDocument,
-    request: &GovernedFixtureRequest,
-    outputs: &BTreeMap<String, Value>,
-    outcome: &str,
-    worker_program: &Path,
-) -> Result<ProductClaimsFixtureEvaluation> {
-    use registry_notary_server::standalone::{
-        OfflineAuthentication, OfflineNotaryHarness, OfflineNotaryRequest,
-        OfflineRelayConsultation, OfflineRelayOutcome,
-    };
-
-    let expected_consultations = governed_request_consultation_identities(loaded, request)?;
-    let relay_outcome = match outcome {
-        "match" => OfflineRelayOutcome::Match,
-        "no_match" => OfflineRelayOutcome::NoMatch,
-        "ambiguous" => OfflineRelayOutcome::Ambiguous,
-        _ => bail!("offline Relay returned an unknown product outcome"),
-    };
-    let relay_inputs = fixture
-        .input
-        .iter()
-        .map(|(name, value)| {
-            let value = match value {
-                Value::Null => "null".to_owned(),
-                Value::Bool(value) => value.to_string(),
-                Value::Number(value) => value.to_string(),
-                Value::String(value) => value.clone(),
-                Value::Array(_) | Value::Object(_) => {
-                    bail!("fixture input is not a bounded scalar")
-                }
-            };
-            Ok((name.clone(), value))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let relay_evidence = compiled
-        .fixture_profiles
-        .iter()
-        .map(|profile| {
-            let is_selected =
-                loaded.project.services[&profile.service_id].purpose == request.purpose;
-            OfflineRelayConsultation::decoded_inputs(
-                profile.id.clone(),
-                profile.contract_hash.clone(),
-                loaded.project.services[&profile.service_id].purpose.clone(),
-                relay_inputs.clone(),
-                if is_selected {
-                    relay_outcome
-                } else {
-                    OfflineRelayOutcome::NoMatch
-                },
-                if is_selected && relay_outcome == OfflineRelayOutcome::Match {
-                    outputs.clone()
-                } else {
-                    BTreeMap::new()
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    if relay_evidence.is_empty() {
-        bail!("offline governed request has no exact Relay consultation profile");
-    }
-    let notary_config = compiled
-        .notary_private
-        .get(Path::new("config/notary.yaml"))
-        .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
-    let notary_config: StandaloneRegistryNotaryConfig = serde_norway::from_slice(notary_config)
-        .context("generated Notary config did not parse for offline governed request")?;
-    let harness = OfflineNotaryHarness::compile(
-        notary_config,
-        relay_evidence,
-        project_cel_worker_config(worker_program),
-    )
-    .context("production Notary offline harness did not compile")?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to build the offline governed request runtime")?;
-    let evidence = runtime.block_on(
-        harness.evaluate(
-            OfflineNotaryRequest::new(OfflineAuthentication::Valid, request.to_evaluate_request())
-                .with_header_purpose(request.purpose.as_str()),
-        ),
-    );
-    let relay_calls = evidence.relay_calls();
-    if let Some(error) = evidence.error_class() {
-        return Ok(ProductClaimsFixtureEvaluation {
-            result: Err(error.as_str().to_owned()),
-            relay_calls,
-            consultations: Vec::new(),
-        });
-    }
-    let verified = (|| -> Result<_> {
-        if relay_calls != evidence.consultation_count() as u64 {
-            bail!("offline Notary did not reuse each governed consultation exactly once");
-        }
-        let consultations =
-            runtime_consultation_identities(compiled, evidence.relay_profile_ids())?;
-        if evidence.consultation_count() != consultations.len() {
-            bail!("offline Notary selected a different governed consultation cardinality");
-        }
-        if consultations != expected_consultations {
-            bail!("offline Notary selected a different governed consultation set");
-        }
-        let mut claims = BTreeMap::new();
-        for claim in evidence.claims() {
-            if claims
-                .insert(claim.claim_id().to_owned(), Value::Null)
-                .is_some()
-            {
-                bail!("offline governed request returned a duplicate claim id");
-            }
-        }
-        let requested = request
-            .claims
-            .iter()
-            .map(|claim| claim.id.as_str())
-            .collect::<BTreeSet<_>>();
-        if claims.keys().map(String::as_str).collect::<BTreeSet<_>>() != requested {
-            bail!("offline governed request did not return the exact selected claim set");
-        }
-        Ok((claims, consultations))
-    })();
-    Ok(match verified {
-        Ok((claims, consultations)) => ProductClaimsFixtureEvaluation {
-            result: Ok(claims),
-            relay_calls,
-            consultations,
-        },
-        Err(_) => ProductClaimsFixtureEvaluation {
-            result: Err("request.binding_evaluation_failed".to_owned()),
-            relay_calls,
-            consultations: Vec::new(),
-        },
-    })
-}
-
-fn runtime_consultation_identities(
-    compiled: &CompiledProject,
-    relay_profile_ids: &[String],
-) -> Result<Vec<FixtureConsultationIdentity>> {
-    let mut identities = BTreeSet::new();
-    for profile_id in relay_profile_ids {
-        let profile = compiled
-            .fixture_profiles
-            .iter()
-            .find(|profile| profile.id == *profile_id)
-            .ok_or_else(|| anyhow!("offline Notary selected an unknown Relay profile"))?;
-        if !identities.insert(FixtureConsultationIdentity {
-            service_id: profile.service_id.clone(),
-            consultation_id: profile.consultation_id.clone(),
-        }) {
-            bail!("offline Notary selected a duplicate governed consultation");
-        }
-    }
-    Ok(identities.into_iter().collect())
-}
-
-fn governed_request_consultation_identities(
-    loaded: &LoadedRegistryProject,
-    request: &GovernedFixtureRequest,
-) -> Result<Vec<FixtureConsultationIdentity>> {
-    let mut identities = BTreeSet::new();
-    for requested_claim in &request.claims {
-        let (service_id, service) = loaded
-            .project
-            .services
-            .iter()
-            .find(|(_, service)| {
-                service.kind == ServiceKind::Evidence
-                    && service.purpose == request.purpose
-                    && service.claims.contains_key(&requested_claim.id)
-            })
-            .ok_or_else(|| anyhow!("governed request claim has no selected evidence service"))?;
-        let claim = service
-            .claims
-            .get(&requested_claim.id)
-            .ok_or_else(|| anyhow!("selected governed request claim is absent"))?;
-        if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-            bail!("governed request claim is not registry-backed");
-        }
-        let consultation_id = claim_consultation_name(service, claim)?;
-        identities.insert(FixtureConsultationIdentity {
-            service_id: service_id.clone(),
-            consultation_id: consultation_id.to_owned(),
-        });
-    }
-    if identities.is_empty() {
-        bail!("governed request selected no registry-backed consultation");
-    }
-    Ok(identities.into_iter().collect())
-}
-
-// Authentication and pre-source denial are independent security inputs and
-// remain explicit at this offline product boundary.
-#[allow(clippy::too_many_arguments)]
-fn evaluate_product_claims(
-    loaded: &LoadedRegistryProject,
-    compiled: &CompiledProject,
-    integration_alias: &str,
-    fixture: &FixtureDocument,
-    relay_result: Option<(&BTreeMap<String, Value>, &str)>,
-    authentication: registry_notary_server::standalone::OfflineAuthentication,
-    require_pre_source_denial: bool,
-    worker_program: &Path,
-) -> Result<ProductClaimsFixtureEvaluation> {
-    use registry_notary_core::{
-        ClaimRef, EvaluateRequest, EvidenceEntity, EvidenceIdentifier, RequestVariables,
-        FORMAT_CLAIM_RESULT_JSON,
-    };
-    use registry_notary_server::standalone::{
-        OfflineNotaryHarness, OfflineNotaryRequest, OfflineRelayConsultation, OfflineRelayOutcome,
-    };
-
-    let empty_outputs = BTreeMap::new();
-    let subject_type = fixture_subject_type(loaded, integration_alias)?;
-    let (outputs, outcome) = relay_result.unwrap_or((&empty_outputs, "no_match"));
-    let relay_outcome = match outcome {
-        "match" => OfflineRelayOutcome::Match,
-        "no_match" => OfflineRelayOutcome::NoMatch,
-        "ambiguous" => OfflineRelayOutcome::Ambiguous,
-        _ => bail!("offline Relay returned an unknown product outcome"),
-    };
-    let relay_inputs = fixture
-        .input
-        .iter()
-        .map(|(name, value)| {
-            let value = match value {
-                Value::Null => "null".to_owned(),
-                Value::Bool(value) => value.to_string(),
-                Value::Number(value) => value.to_string(),
-                Value::String(value) => value.clone(),
-                Value::Array(_) | Value::Object(_) => {
-                    bail!("fixture input is not a bounded scalar")
-                }
-            };
-            Ok((name.clone(), value))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let relay_evidence = compiled
-        .fixture_profiles
-        .iter()
-        .map(|profile| {
-            let purpose = &loaded.project.services[&profile.service_id].purpose;
-            let is_fixture_integration = profile.integration_alias == integration_alias;
-            OfflineRelayConsultation::decoded_inputs(
-                profile.id.clone(),
-                profile.contract_hash.clone(),
-                purpose.clone(),
-                relay_inputs.clone(),
-                if is_fixture_integration {
-                    relay_outcome
-                } else {
-                    OfflineRelayOutcome::NoMatch
-                },
-                if is_fixture_integration && relay_outcome == OfflineRelayOutcome::Match {
-                    outputs.clone()
-                } else {
-                    BTreeMap::new()
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    if relay_evidence.is_empty() {
-        bail!("offline Notary fixture has no exact Relay consultation profile");
-    }
-    let notary_config = compiled
-        .notary_private
-        .get(Path::new("config/notary.yaml"))
-        .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
-    let notary_config: StandaloneRegistryNotaryConfig = serde_norway::from_slice(notary_config)
-        .context("generated Notary config did not parse for offline evaluation")?;
-    let harness = OfflineNotaryHarness::compile(
-        notary_config,
-        relay_evidence,
-        project_cel_worker_config(worker_program),
-    )
-    .context("production Notary offline harness did not compile")?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to build the offline Notary evaluation runtime")?;
-    let mut claims = BTreeMap::new();
-    let mut evaluated_any = false;
-    let mut relay_calls = 0_u64;
-    for service in loaded.project.services.values() {
-        if service.kind != ServiceKind::Evidence {
-            continue;
-        }
-        let mut claim_groups = BTreeMap::<DisclosureMode, Vec<String>>::new();
-        for (claim_id, claim) in &service.claims {
-            let consultation = claim_consultation_name(service, claim)?;
-            if service.consultations[consultation].integration != integration_alias {
-                continue;
-            }
-            let disclosure = match &claim.disclosure {
-                DisclosureDeclaration::Mode(mode) => *mode,
-                DisclosureDeclaration::Policy { default, .. } => *default,
-            };
-            claim_groups
-                .entry(disclosure)
-                .or_default()
-                .push(claim_id.clone());
-        }
-        if claim_groups.is_empty() {
-            continue;
-        }
-        evaluated_any = true;
-        let mut target = EvidenceEntity::new(subject_type.as_str());
-        let mut identifiers = BTreeMap::new();
-        let mut requester_identifiers = BTreeMap::new();
-        let mut attributes = BTreeMap::new();
-        for consultation in service
-            .consultations
-            .values()
-            .filter(|consultation| consultation.integration == integration_alias)
-        {
-            for (name, request_path) in &consultation.input {
-                let value = fixture
-                    .input
-                    .get(name)
-                    .ok_or_else(|| anyhow!("fixture omitted a compiled consultation input"))?;
-                if request_path == "request.target.id" {
-                    target.id = Some(
-                        value
-                            .as_str()
-                            .ok_or_else(|| anyhow!("target id fixture input must be a String"))?
-                            .to_string(),
-                    );
-                } else if let Some(scheme) =
-                    request_path.strip_prefix("request.target.identifiers.")
-                {
-                    identifiers.insert(
-                        scheme.to_string(),
-                        value
-                            .as_str()
-                            .ok_or_else(|| {
-                                anyhow!("target identifier fixture input must be a String")
-                            })?
-                            .to_string(),
-                    );
-                } else if let Some(name) = request_path.strip_prefix("request.target.attributes.") {
-                    attributes.insert(name.to_string(), value.clone());
-                } else if let Some(scheme) =
-                    request_path.strip_prefix("request.requester.identifiers.")
-                {
-                    requester_identifiers.insert(
-                        scheme.to_string(),
-                        value
-                            .as_str()
-                            .ok_or_else(|| {
-                                anyhow!("requester identifier fixture input must be a String")
-                            })?
-                            .to_string(),
-                    );
-                } else {
-                    bail!("compiled consultation input uses an unsupported request path");
-                }
-            }
-        }
-        target.identifiers = identifiers
-            .into_iter()
-            .map(|(scheme, value)| EvidenceIdentifier {
-                scheme,
-                value,
-                issuer: None,
-                country: None,
-            })
-            .collect();
-        target.attributes = attributes;
-        let requester = if requester_identifiers.is_empty() {
-            None
-        } else {
-            let mut requester = EvidenceEntity::new("AuthenticatedRequester");
-            requester.identifiers = requester_identifiers
-                .into_iter()
-                .map(|(scheme, value)| EvidenceIdentifier {
-                    scheme,
-                    value,
-                    issuer: None,
-                    country: None,
-                })
-                .collect();
-            Some(requester)
-        };
-        let variables = fixture
-            .variables
-            .iter()
-            .map(|(name, value)| {
-                value
-                    .as_str()
-                    .map(|value| (name.clone(), value.to_string()))
-                    .ok_or_else(|| anyhow!("fixture variable is not a full-date string"))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        let purpose = service.purpose.as_str();
-        let variables = RequestVariables::try_new(variables).map_err(|error| anyhow!(error))?;
-        for (disclosure, claim_ids) in claim_groups {
-            let request = EvaluateRequest {
-                requester: requester.clone(),
-                target: Some(target.clone()),
-                relationship: None,
-                on_behalf_of: None,
-                variables: variables.clone(),
-                claims: claim_ids
-                    .iter()
-                    .map(|claim| ClaimRef::from(claim.as_str()))
-                    .collect(),
-                disclosure: Some(
-                    match disclosure {
-                        DisclosureMode::Value => "value",
-                        DisclosureMode::Predicate => "predicate",
-                        DisclosureMode::Redacted => "redacted",
-                    }
-                    .to_string(),
-                ),
-                format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                purpose: Some(purpose.to_string()),
-            };
-            let evidence = runtime.block_on(harness.evaluate(
-                OfflineNotaryRequest::new(authentication, request).with_header_purpose(purpose),
-            ));
-            relay_calls = relay_calls.saturating_add(evidence.relay_calls());
-            if let Some(error) = evidence.error_class() {
-                if require_pre_source_denial && evidence.relay_calls() != 0 {
-                    bail!("derived authorization denial occurred after Relay access");
-                }
-                return Ok(ProductClaimsFixtureEvaluation {
-                    result: Err(error.as_str().to_string()),
-                    relay_calls,
-                    consultations: Vec::new(),
-                });
-            }
-            if evidence.relay_calls() != evidence.consultation_count() as u64 {
-                bail!("offline Notary did not reuse each request-scoped consultation exactly once");
-            }
-            for claim in evidence.claims() {
-                let value = if claim.disclosure() == "redacted" {
-                    Value::String("redacted".to_string())
-                } else if claim.disclosure() == "predicate" {
-                    claim.satisfied().map_or(Value::Null, Value::Bool)
-                } else if let Some(value) = claim.value() {
-                    value.clone()
-                } else {
-                    Value::Null
-                };
-                if claims.insert(claim.claim_id().to_string(), value).is_some() {
-                    bail!("offline Notary returned a duplicate project claim id");
-                }
-            }
-        }
-    }
-    if !evaluated_any {
-        bail!("offline fixture does not select a project Notary service");
-    }
-    Ok(ProductClaimsFixtureEvaluation {
-        result: Ok(claims),
-        relay_calls,
-        consultations: Vec::new(),
-    })
-}
-
-fn project_cel_worker_config(
-    worker_program: &Path,
-) -> registry_notary_server::cel_worker::CelWorkerConfig {
-    let mut config =
-        registry_notary_server::cel_worker::CelWorkerConfig::for_current_exe_subcommand();
-    config.command = worker_program.to_path_buf();
-    config.command_args = vec![std::ffi::OsString::from("__registryctl-cel-worker-v1")];
-    config.command_envs.clear();
-    config.current_dir = None;
-    // Debug and sanitizer builds can take longer than the production worker's
-    // evaluation deadline to cold-start the isolated subprocess. Keep startup
-    // separately bounded while preserving the production evaluation deadline.
-    config.startup_timeout = std::time::Duration::from_secs(10);
-    config
 }
 
 struct CallBudgetCoverageHost;
@@ -2421,14 +1448,13 @@ fn platform_call_budget_result(
             );
             matches!(
                 runtime.block_on(
-                    WorkerProcess::with_program(worker_program)
-                        .evaluate_with_host(
-                            &request,
-                            &mut CallBudgetCoverageHost,
-                            tokio::time::Instant::now()
-                                .checked_add(std::time::Duration::from_secs(10))
-                                .expect("fixture hard deadline is representable"),
-                        ),
+                    WorkerProcess::with_program(worker_program).evaluate_with_host(
+                        &request,
+                        &mut CallBudgetCoverageHost,
+                        tokio::time::Instant::now()
+                            .checked_add(std::time::Duration::from_secs(10))
+                            .expect("fixture hard deadline is representable"),
+                    ),
                 ),
                 Err(WorkerError::BudgetExceeded)
             )

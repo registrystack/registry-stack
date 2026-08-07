@@ -12,31 +12,14 @@ entities:
       guardian_id: guardian_key
     source_revision: population-export-v1
     generation: 2026-07-12
-issuance:
-  issuer: did:web:population-notary.invalid
-  signing_kid: project-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-callers:
-  benefits-service:
-    api_key_fingerprint: { secret: BENEFITS_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:population:read"]
-  emergency-service:
-    api_key_fingerprint: { secret: EMERGENCY_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:population:emergency"]
 relay:
   origin: https://population-relay.internal.invalid
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [population-relay-client]
-
-notary_relay:
-  base_url: http://127.0.0.1:8080
-  workload_client_id: population-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: population-consultation-client, principal_id: population-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: population-relay }
-  notary: { service: population-notary }

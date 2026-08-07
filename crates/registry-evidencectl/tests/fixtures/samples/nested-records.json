@@ -1,0 +1,15 @@
+{
+  "total": 42,
+  "results": [
+    {
+      "trackingId": "abc-123",
+      "status": "open",
+      "tags": ["a", "b", "c"]
+    },
+    {
+      "trackingId": "def-456-longer",
+      "status": "closed",
+      "tags": ["x"]
+    }
+  ]
+}

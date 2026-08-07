@@ -1,0 +1,14 @@
+{
+  "query": [
+    {"name": "program", "value": "Prg00000001"},
+    {"name": "orgUnits", "value": "Org00000001"},
+    {"name": "fields", "value": "trackedEntity,attributes[attribute,value]"},
+    {"name": "pageSize", "value": "2"},
+    {"name": "page", "value": "1"},
+    {"name": "totalPages", "value": "true"},
+    {"name": "filter", "value": "Gvn00000001:EQ:Synthetic"},
+    {"name": "filter", "value": "Fam00000001:EQ:Subject"},
+    {"name": "filter", "value": "Dob00000001:EQ:2000-02-29"}
+  ],
+  "body": null
+}

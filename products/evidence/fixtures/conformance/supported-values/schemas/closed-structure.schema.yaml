@@ -1,0 +1,8 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: urn:example:fixture:schema:closed-structure:v1
+type: object
+additionalProperties: false
+required: [status, quantity]
+properties:
+  status: {type: string, enum: [C-A, C-B, C-C, C-BOUND]}
+  quantity: {type: integer, minimum: 0, maximum: 9}

@@ -1,0 +1,244 @@
+---
+title: Build and deploy an Evidence Gateway project
+description: Compile one editable Evidence Gateway project into a reviewed candidate and hand it to an operator without copying local development state.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-06"
+doc_type: tutorial
+persona:
+  - assertion provider
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Complete [Prove an Evidence Gateway project](../prove-an-evidence-project/) and its review before starting
+this tutorial. You will turn that editable project into one reviewed production candidate, then
+bind its secrets and runtime paths on the target host. This tutorial uses released `evidence` and
+`evidencectl` binaries. It does not copy `.evidence/dev`, generate a key, register a caller, or
+deploy a service for you.
+
+<QuickstartMeta
+  outcome="A reviewed Evidence Gateway candidate, one target-host validation ceremony, and one independently verified synthetic assertion."
+  time="About 45 minutes after the authoring project is reviewed"
+  level="Production handoff with synthetic deployment data"
+  prerequisites={['A released Evidence Gateway toolset', 'A reviewed editable Evidence Gateway project', 'An operator with target-host and secret-manager access', 'A shell with curl and an editor']}
+/>
+
+## Before you start
+
+You need a released Evidence Gateway toolset on `PATH`, an editable project that runs locally, and an
+operator who can provision owner-only secrets and a private listener on the target host.
+Use Registry Mint only when no suitable OpenID Connect (OIDC) issuer exists. An existing OIDC
+issuer and Mint are equivalent choices from Evidence Gateway's perspective.
+
+Confirm the released binaries before changing the project:
+
+```sh
+curl -fsSL "https://github.com/registrystack/registry-stack/releases/download/<released-tag>/evidencectl-<released-tag>-install.sh" | bash
+evidence --version
+evidencectl --version
+```
+
+Keep all source responses, credentials, tokens, and local `.evidence/` state outside the candidate.
+
+## Add production metadata and fixtures
+
+Create a synthetic fixture for every question under `fixtures/`, then add one `governance` block and
+stable concept identifiers to each question. The metadata binds the reviewed requirement, frameworks,
+Evidence Type, validity, observation timezone, fixture, and disclosure families.
+
+```yaml
+answers:
+  - concept: is_adult
+    id: urn:example:concepts:is-adult
+    type: boolean
+
+governance:
+  requirement: urn:example:requirements:adult-status:v1
+  kind: criterion
+  referenceFrameworks:
+    - urn:example:frameworks:adult-eligibility:v1
+  evidenceType: urn:example:evidence-types:adult-status:v1
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/adult-status.yaml
+  disclosureFamilies:
+    - urn:example:disclosure-families:adult-status
+```
+
+Do not invent these URIs during the build. Review them with the institution that owns the
+requirement and disclosure decision.
+
+## Create complete environment targets
+
+Keep reviewed Evidence semantics and complete environment bindings in one protected branch of the
+deployment repository:
+
+```text
+shared/
+  evidence-project/
+environments/
+  local/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+  staging/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+  production/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+```
+
+Omit the Mint directories when the deployment uses another OIDC issuer. Every environment target
+is complete. Do not use overlays, environment branches, symlinks, or runtime substitutions. Git
+contains public keys and nonsecret provider configuration, but never private JWKs, HMAC keys,
+provider tokens, auto-auth credentials, access tokens, live responses, or real identifiers.
+
+`governance.yaml` provides bundle-owned production values. It contains version `1`,
+`assuranceProfile: production`, service and issuer, authentication, audit, subject binding, rate
+limits, signing, optional response formats, and authority profiles. Secret references use
+`secret:file/<name>` only. Do not place secret values or absolute secret paths in this file.
+
+`runtime.yaml` is the ordinary Evidence Gateway runtime document. It binds the final absolute candidate
+bundle path, private listener, secret root, audit path, and optional private certificate authority
+files. The build copies its bytes unchanged, so the target host remains the authority for path,
+ownership, permission, secret, and trust validation.
+Set `bundleDirectory` to `<new-candidate-directory>/bundle`, and keep the listener on a numeric
+loopback or private address. The runtime cannot override the governed service, authentication,
+authority, source, disclosure, or signing fields.
+
+`public-keys/` contains the exact active and published service JWKs named by `governance.yaml`.
+Production and evidence-grade targets bind the matching non-exportable provider key through the
+Transit signer in `runtime.yaml`. Use
+[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+before building the first strict candidate.
+
+## Build the candidate
+
+Choose a new output path. The command refuses an existing path and does not modify the editable
+project:
+
+```sh
+evidencectl build \
+  --project "<deployment-repository>/shared/evidence-project" \
+  --target "<deployment-repository>/environments/production/evidence" \
+  --output "<new-candidate-directory>"
+```
+
+The candidate contains the runtime document and closed bundle:
+
+```text
+<new-candidate-directory>/
+  runtime.yaml
+  bundle/
+    evidence.yaml
+    adapters/
+    derivations/
+    schemas/
+    fixtures/
+    public-keys/
+```
+
+The build validates the generated bundle through the real `evidence` binary and every referenced
+fixture before it publishes the candidate. It does not contact an identity provider, Mint, or a
+source endpoint. It validates governed public-key semantics without contacting Transit or
+generating an unrelated signing key. The target-host check performs the provider self-test. Record
+the printed bundle revision with the approved candidate path.
+
+## Provision the target host
+
+Transfer the exact candidate. The operator provisions the audit HMAC key, subject-binding HMAC key,
+and source credentials beneath the runtime secret root. The workload-local Transit proxy holds the
+provider token and auto-auth state; Evidence Gateway receives only access to the configured Unix
+socket. Its non-exportable signing key remains in Transit.
+Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity.
+
+Start the workload-local Transit proxy. Run the grouped offline ceremony once after the candidate,
+runtime bindings, trust files, secrets, and proxy socket are in place:
+
+```sh
+evidencectl doctor --project "<candidate>"
+evidencectl fixtures run --project "<candidate>"
+```
+
+Start Evidence Gateway only after both commands pass:
+
+```sh
+evidence --runtime "<candidate>/runtime.yaml" serve
+```
+
+Route traffic through operator-controlled TLS only after `GET /ready` succeeds. The listener stays
+private. Each requirement's own configuration revision remains the deployed assertion
+`configurationRevision`.
+
+## Exercise and verify the HTTP boundary
+
+Create an owner-only Curl configuration. Put its `Authorization: Bearer` header in the file through
+your approved secret-management path, not on a command line or in shell history. Do not commit it.
+
+```sh
+umask 077
+install -m 600 /dev/null "<owner-only-curl-config>"
+```
+
+The file contains this Curl configuration directive, with the actual token supplied outside the
+command line:
+
+```text
+header = "Authorization: Bearer <access-token>"
+```
+
+Send one request for a synthetic deployment test record:
+
+```sh
+curl --fail --silent --show-error \
+  --config "<owner-only-curl-config>" \
+  --header 'Content-Type: application/json' \
+  --data-binary "@<synthetic-request.json>" \
+  "https://<evidence-host>/v1/evidence" \
+  --output "<assertion.jws.json>"
+```
+
+Verify the retained response with an independently prepared production verification policy and
+trusted public keys, then verify the audit chain:
+
+```sh
+evidence verify \
+  --jws "<assertion.jws.json>" \
+  --jwks "<trusted-evidence-jwks.json>" \
+  --policy "<production-verification-policy.json>"
+evidence --runtime "<candidate>/runtime.yaml" verify-audit
+```
+
+The signing policy and secret references are governed bundle content. Rotate a key by publishing a
+new public JWK whose `kid` is its RFC 7638 thumbprint, not by replacing a key under an unchanged
+identifier.
+
+## Expected result
+
+You have a retained signed response that verifies under the independent production policy, an audit
+chain that passes verification, and a recorded bundle revision for the exact candidate serving the
+synthetic request.
+
+## Clean up the request credential
+
+Remove the temporary Curl configuration when the deployment check is complete. Retain the signed
+response and audit-verification record according to the operator's evidence-retention procedure.
+
+```sh
+rm -f "<owner-only-curl-config>"
+```
+
+## Next
+
+- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
+- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

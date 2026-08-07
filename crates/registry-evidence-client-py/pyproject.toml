@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "registry-evidence-client"
+version = "0.17.0"
+description = "Python binding for the Evidence relying-party client, via PyO3."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+
+[tool.maturin]
+# `python/registry_evidence_client/` already holds a hand-written `__init__.py`
+# (plus its `__init__.pyi` stub), so this is maturin's mixed Rust/Python
+# layout: the compiled extension is built as the *submodule*
+# `registry_evidence_client.registry_evidence_client`, and `__init__.py`
+# re-exports its public names with `from .registry_evidence_client import *`.
+python-source = "python"
+module-name = "registry_evidence_client"
+# This crate's own local feature, not `pyo3/extension-module` directly: only
+# activating the crate's own `[features]` entry sets the `CARGO_FEATURE_*`
+# environment variable `build.rs` gates on to add the macOS linker argument
+# `pyo3`'s `extension-module` feature needs (see `build.rs`'s own comment).
+# Passing the dependency-qualified feature straight through would enable the
+# same `pyo3` feature without ever setting that variable, and the build would
+# fail with the same unresolved-symbol linker error `build.rs` exists to fix.
+features = ["extension-module"]

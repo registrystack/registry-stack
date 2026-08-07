@@ -1,0 +1,51 @@
+fixture: registry.evidence.anti-reconstruction/v1
+synthetic_only: true
+rejected_bundles:
+  - id: threshold-ladder
+    shared_disclosure_family: urn:example:fixture:disclosure-family:protected-scalar-a
+    definitions:
+      - {concept: urn:example:fixture:concept:threshold-a, parameter: 18, requester: requester-a}
+      - {concept: urn:example:fixture:concept:threshold-b, parameter: 19, requester: requester-a}
+      - {concept: urn:example:fixture:concept:threshold-c, parameter: 20, requester: requester-a}
+    threat: Repeated booleans narrow a protected scalar.
+    expected: reject complete enabled bundle even with rate limits
+  - id: geographic-overlap
+    shared_disclosure_family: urn:example:fixture:disclosure-family:protected-partition-a
+    definitions:
+      - {concept: urn:example:fixture:concept:area-a, partition: coarse-a, requester: requester-a}
+      - {concept: urn:example:fixture:concept:area-b, partition: overlapping-b, requester: requester-a}
+    threat: Intersecting partitions disclose a more precise location.
+    expected: reject unless authorization separation proves the answers cannot be combined
+  - id: coexisting-revisions
+    shared_disclosure_family: urn:example:fixture:disclosure-family:protected-revision-a
+    definitions:
+      - {concept: urn:example:fixture:concept:status, revision: v1, requester: requester-a}
+      - {concept: urn:example:fixture:concept:status, revision: v2, requester: requester-a}
+    threat: Changed boundaries disclose the underlying fact.
+    expected: reject unsafe simultaneous authorization
+  - id: relationship-graph
+    shared_disclosure_family: urn:example:fixture:disclosure-family:protected-relationship-a
+    definitions:
+      - {concept: urn:example:fixture:concept:relationship-a, roles: [subject-a, subject-b]}
+      - {concept: urn:example:fixture:concept:relationship-b, roles: [subject-b, subject-c]}
+    threat: Combinations reconstruct an unapproved family or association graph.
+    expected: reject unsafe relationship combination
+allowed_control:
+  id: unrelated-minimized-concepts
+  definitions:
+    - urn:example:fixture:concept:code-a
+    - urn:example:fixture:concept:boolean-b
+  review_evidence: No shared protected source fact, partition intersection, threshold ladder, or relationship graph under the same authorization surface.
+bundle_validation:
+  rule: Any two enabled requirements sharing a disclosureGuard family reject the complete bundle at startup.
+  applies_to: [threshold-ladders, overlapping-partitions, coexisting-revisions, relationship-graph-definitions]
+  rate_limits: Never make a shared-family bundle valid.
+  scope: Static disclosure-combination validation only; this is not a runtime policy engine.
+existence_collapse:
+  internal: [no_match, ambiguous, required_fact_missing]
+  public:
+    status: 422
+    code: evidence_not_available
+    title: Evidence could not be produced
+    exact_body_shape_equal: true
+  prohibited: [candidate_count, score, near_match_hint, field_comparison, class-specific-message]

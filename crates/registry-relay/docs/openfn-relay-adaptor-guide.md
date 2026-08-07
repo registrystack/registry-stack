@@ -5,9 +5,9 @@ workflow reads protected registry records, metadata, relationships, or
 aggregate outputs through a scoped Relay credential.
 
 Use this pattern only when the workflow is authorized to read registry data
-directly. If the workflow needs a governed trust decision, such as whether a
-farmer is eligible or a certified value such as farmed land size, call Registry
-Notary instead.
+directly. If the workflow needs a signed answer it can verify later, such as
+whether a farmer meets an eligibility condition, call Registry Evidence
+instead.
 
 ## Adaptor
 
@@ -152,7 +152,7 @@ execute(
 ```
 
 Relay evidence offering routes are discovery only. They tell the workflow which
-Registry Notary endpoint to use; Relay does not evaluate a claim.
+Registry Evidence endpoint to use; Relay does not evaluate a claim.
 
 ## Guardrails
 

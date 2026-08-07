@@ -55,6 +55,14 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertIn("release-source registry-stack", result.stdout)
         self.assertNotIn("lab", result.stdout)
 
+    def test_monorepo_mode_passes_without_retired_notary_crates(self) -> None:
+        with MonorepoFixture() as stack_root:
+            shutil.rmtree(stack_root / "crates" / "registry-notary-server")
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_monorepo_mode_rejects_legacy_vendor_mode(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_validator(stack_root, "vendor")
@@ -245,6 +253,9 @@ class MonorepoFixture:
             "crates/registry-manifest-core",
             "crates/registry-notary-server",
             "crates/registry-relay",
+            "crates/registry-evidence",
+            "crates/registry-evidencectl",
+            "crates/registry-mint",
             "crates/registryctl",
         ):
             (stack_root / crate_dir).mkdir(parents=True)

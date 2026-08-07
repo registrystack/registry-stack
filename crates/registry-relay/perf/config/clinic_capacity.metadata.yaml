@@ -8,14 +8,6 @@ catalog:
   publisher:
     name: Perf Test Harness
 
-federation:
-  node_id: did:web:perf.example.test
-  issuer: https://perf.example.test
-  jwks_uri: https://perf.example.test/.well-known/jwks.json
-  federation_api: https://perf.example.test/federation
-  supported_protocol_versions:
-    - registry-notary-federation/v0.1
-
 evaluation_profiles:
   - id: facility-identity-v1
     ruleset: facility-identity-v1
@@ -65,10 +57,10 @@ datasets:
         entity: facility
         lookup_keys: [id]
         access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://perf.example.test/notary
-          discovery_url: https://perf.example.test/.well-known/evidence-service
+          kind: registry-evidence
+          conforms_to: registry.assertion-evidence/v1
+          endpoint_url: https://perf.example.test/evidence
+          discovery_url: https://perf.example.test/.well-known/evidence/jwks.json
           ruleset: facility-identity-v1
         policy:
           purpose:
@@ -85,10 +77,10 @@ datasets:
         entity: facility
         lookup_keys: [region_code]
         access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://perf.example.test/notary
-          discovery_url: https://perf.example.test/.well-known/evidence-service
+          kind: registry-evidence
+          conforms_to: registry.assertion-evidence/v1
+          endpoint_url: https://perf.example.test/evidence
+          discovery_url: https://perf.example.test/.well-known/evidence/jwks.json
           ruleset: facility-region-v1
         policy:
           purpose:

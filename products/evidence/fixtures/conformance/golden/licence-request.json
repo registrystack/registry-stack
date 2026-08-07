@@ -1,0 +1,17 @@
+{
+  "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+  "requirement": "urn:example:fixture:requirement:professional-licence-status:v1",
+  "purpose": "fixture-registration",
+  "subjects": [
+    {
+      "role": "subject",
+      "selector": {
+        "profile": "licence-register-v1",
+        "values": {
+          "licence_reference": "synthetic-licence-001",
+          "registry_region": "RR-A"
+        }
+      }
+    }
+  ]
+}

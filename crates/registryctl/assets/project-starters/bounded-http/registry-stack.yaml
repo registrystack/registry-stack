@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: http
-  release: 0.16.2
-  content_digest: sha256:f38293e4a9dde186eaafda4c5066518232e492167feb06f6ef2e6396aa837194
+  release: 0.17.0
+  content_digest: sha256:03d4bc6862ab99db080c63dc8dbbbfc45e976b6a255ef67908f276bbb48044f1
 
 registry:
   id: fictional-citizen-registry
@@ -13,28 +13,13 @@ integrations:
 
 services:
   person-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: public-service-person-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access:
-      scopes: ["evidence:person:read"]
     consultations:
       person_record:
         integration: person-record
         input:
           person_id: request.target.identifiers.registry_person_id
-    claims:
-      person-record-exists:
-        cel: person_record.matched
-        disclosure: predicate
-      person-active:
-        output: person_record.active
-        disclosure: value
-    credential_profiles:
-      person-status:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/person-status/v1
-        validity: 10m
-        claims: [person-record-exists, person-active]

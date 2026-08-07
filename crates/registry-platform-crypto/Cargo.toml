@@ -10,6 +10,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+transit = ["dep:reqwest"]
+
 [dependencies]
 async-trait.workspace = true
 aws-lc-rs.workspace = true
@@ -19,6 +23,7 @@ hmac.workspace = true
 p256.workspace = true
 pkcs1.workspace = true
 registry-platform-canonical-json.workspace = true
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -29,4 +34,5 @@ zeroize.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-tokio.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

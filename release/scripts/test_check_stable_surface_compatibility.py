@@ -39,6 +39,26 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.ContractError, "stack-wide meaning"):
             self.module.parse_error_registry(text)
 
+    def test_retired_notary_errors_do_not_enter_the_current_contract(self) -> None:
+        text = """\
+## Registry Notary
+| Code | Meaning | Cause |
+| --- | --- | --- |
+| `notary.retired` | historical Notary error | x |
+## Registry Relay
+| Code | Meaning | Cause |
+| --- | --- | --- |
+| `relay.active` | maintained Relay error | x |
+"""
+        self.assertEqual(
+            {
+                "relay.active": self.module.ErrorContract(
+                    "maintained Relay error", frozenset({"registry-relay"})
+                )
+            },
+            self.module.parse_error_registry(text),
+        )
+
     def test_error_additions_are_allowed_but_removal_and_change_are_not(self) -> None:
         old = {
             "request.invalid": self.module.ErrorContract(
@@ -78,7 +98,7 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
                 "release_line": 1,
                 "metrics": [
                     {
-                        "product": "registry-notary",
+                        "product": "registry-relay",
                         "name": "product_requests_total",
                         "type": "counter",
                         "meaning": "Completed requests.",
@@ -88,10 +108,57 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
                 ],
             }
             validated = self.module.validate_metrics_contract(contract, root)
-            self.assertIn(("registry-notary", "product_requests_total"), validated)
+            self.assertIn(("registry-relay", "product_requests_total"), validated)
             contract["metrics"][0]["labels"] = {"route": "Raw route."}
             with self.assertRaisesRegex(self.module.ContractError, "selected label"):
                 self.module.validate_metrics_contract(contract, root)
+
+    def test_current_stable_surfaces_accept_only_maintained_products(self) -> None:
+        self.assertEqual({"registry-relay"}, set(self.module.OPENAPI_SPECS))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "metrics.rs"
+            source.write_text("# TYPE retired_total counter\n", encoding="utf-8")
+            contract = {
+                "schema": "registry-stack.selected-metrics/v1",
+                "release_line": 1,
+                "metrics": [
+                    {
+                        "product": "registry-notary",
+                        "name": "retired_total",
+                        "type": "counter",
+                        "meaning": "A retired metric.",
+                        "labels": {},
+                        "source": "metrics.rs",
+                    }
+                ],
+            }
+            with self.assertRaisesRegex(self.module.ContractError, "maintained product"):
+                self.module.validate_metrics_contract(contract, root)
+
+    def test_historical_notary_metrics_do_not_block_current_retirement(self) -> None:
+        relay = {
+            "product": "registry-relay",
+            "name": "relay_requests_total",
+            "type": "counter",
+            "meaning": "Completed Relay requests.",
+            "labels": {},
+            "source": "relay.rs",
+        }
+        notary = {
+            "product": "registry-notary",
+            "name": "notary_requests_total",
+            "type": "counter",
+            "meaning": "Completed Notary requests.",
+            "labels": {},
+            "source": "notary.rs",
+        }
+        base = {
+            (relay["product"], relay["name"]): relay,
+            (notary["product"], notary["name"]): notary,
+        }
+        current = {(relay["product"], relay["name"]): relay}
+        self.assertEqual([], self.module.compare_metrics_contracts(base, current))
 
     def test_metric_additions_are_allowed_but_protected_fields_do_not_change(self) -> None:
         metric = {
@@ -205,6 +272,48 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
             }
             errors = self.module.compare_diagnostic_contracts(old, changed)
             self.assertTrue(any(f"changed {field}" in error for error in errors))
+
+    def test_historical_notary_diagnostics_do_not_block_current_retirement(self) -> None:
+        key = ("notary_activation", "registry_notary", "registry_notary.retired")
+        base = {
+            key: self.module.DiagnosticContract(
+                "registry_notary",
+                "The retired Notary activation failed.",
+                "the historical activation must satisfy the retired rule",
+                "/reference/diagnostics/operator/#registry_notary--retired",
+            )
+        }
+        self.assertEqual([], self.module.compare_diagnostic_contracts(base, {}))
+
+    def test_a_retired_code_is_skipped_and_its_siblings_stay_protected(self) -> None:
+        retired = ("fixture_execution", "registryctl_relay_offline_harness",
+                   "authorization.denied")
+        sibling = ("fixture_execution", "registryctl_relay_offline_harness",
+                   "authorization.allowed")
+        contract = self.module.DiagnosticContract(
+            "registryctl",
+            "The offline harness refused the request.",
+            "the harness must refuse an unauthorized request",
+            "/reference/diagnostics/fixture/#registryctl--authorization.denied",
+        )
+        base = {retired: contract, sibling: contract}
+
+        errors = self.module.compare_diagnostic_contracts(base, {})
+
+        self.assertEqual(
+            [f"diagnostic code removed: {' '.join(sibling)}"],
+            errors,
+            "only the recorded code is exempt; every other code under the same "
+            "family and product is still guarded",
+        )
+
+    def test_every_retirement_record_states_why_the_code_went_away(self) -> None:
+        for key, reason in self.module.RETIRED_DIAGNOSTIC_CODES.items():
+            with self.subTest(code=key):
+                self.assertEqual(3, len(key), "a record names family, product and code")
+                self.assertTrue(
+                    reason.strip(), f"{' '.join(key)} was retired without a reason"
+                )
 
     def test_diagnostic_catalog_rejects_shape_duplicates_reordering_and_lifecycle_drift(
         self,

@@ -71,8 +71,9 @@ test("public evidence describes conditional repeatability and the compact releas
     page,
     /\| `build_repeatable` \| Met only while the latest applicable clean proof is successful and no older than 30 days \|/,
   );
-  assert.match(page, /24-hour candidate manifest and bundle/i);
+  assert.match(page, /seven-day candidate manifest and bundle/i);
   assert.match(page, /one keyless Sigstore bundle authenticates `SHA256SUMS`/i);
+  assert.match(page, /artifact attestations authenticate the candidate manifest and bundle/i);
   assert.match(
     page,
     /one compact release manifest recording candidate and promotion identity/i,

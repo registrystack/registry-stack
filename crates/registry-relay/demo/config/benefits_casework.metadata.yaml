@@ -15,13 +15,6 @@ catalog:
   application_profiles:
   - id: bregdcat-ap
     version: '3.0'
-federation:
-  node_id: did:web:social-affairs.demo.example.gov
-  issuer: https://social-affairs.demo.example.gov
-  jwks_uri: https://social-affairs.demo.example.gov/.well-known/jwks.json
-  federation_api: https://social-affairs.demo.example.gov/federation
-  supported_protocol_versions:
-  - registry-notary-federation/v0.1
 evaluation_profiles:
 - id: benefits-person-v1
   ruleset: benefits-person-v1
@@ -68,10 +61,10 @@ datasets:
     lookup_keys:
     - id
     access:
-      kind: registry-notary
-      conforms_to: registry-notary-federation/v0.1
-      endpoint_url: https://benefits-notary.demo.example.gov
-      discovery_url: https://benefits-notary.demo.example.gov/.well-known/evidence-service
+      kind: registry-evidence
+      conforms_to: registry.assertion-evidence/v1
+      endpoint_url: https://benefits-evidence.demo.example.gov
+      discovery_url: https://benefits-evidence.demo.example.gov/.well-known/evidence/jwks.json
       ruleset: benefits-person-v1
     policy:
       purpose:

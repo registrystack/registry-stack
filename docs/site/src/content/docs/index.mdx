@@ -1,45 +1,51 @@
 ---
 title: Registry Stack documentation
-description: Start a registry from a spreadsheet, expose bounded evidence, or connect an existing registry.
+description: Answer a bounded question with Evidence Gateway, start a registry from a spreadsheet, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
-last_reviewed: "2026-07-31"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps an institution expose selected registry data through
-Registry Relay and bounded evidence through Registry Notary without giving
-callers direct access to the source.
+Registry Stack helps an institution answer questions about data it already
+holds without giving callers direct access to the source. Two doors: Evidence Gateway
+signs the answer to one bounded question, and Registry Relay exposes selected
+records through a protected read-only API.
+
+## Answer a bounded question with Evidence Gateway
+
+Use Evidence Gateway when the caller needs to learn only a fact, not to read a record.
+It answers one bounded question about one subject and signs the answer,
+releasing the answer rather than the row behind it. Adult status, residence
+region, professional licence status, and legal-parent relationship are coequal
+acceptance definitions; you author whichever one your institution needs, the
+same way.
+
+[Evidence Gateway overview](start/evidence-quickstart/) explains the source, assertion,
+verification, and audit boundaries. Continue with
+[your first Evidence Gateway assertion](tutorials/first-evidence-assertion/) to see the
+boundary in one verified request. When local authoring is complete,
+[build and deploy an Evidence Gateway project](tutorials/build-and-deploy-evidence-project/) creates a
+reviewed candidate without promoting local development state. Registry Mint remains an optional
+token issuer for deployments without a suitable identity provider.
 
 ## Start a registry from a spreadsheet
 
 Use the maintained spreadsheet path when the institution has a workbook or
 can prepare a reviewed workbook derivative.
-The first run starts Registry Relay and Registry Notary over the shipped
-synthetic workbook. It records a live authorization denial and a minimized
-evidence result; the offline derived fixture supplies the zero-source-access
-evidence that a local file cannot count itself.
+The first run starts Registry Relay over the shipped synthetic workbook. It
+records a live authorization denial and a selected-field response; the offline
+derived fixture supplies the zero-source-access evidence that a local file
+cannot count itself.
 
 [Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
 takes about 20 minutes and uses released artifacts without a source checkout.
 After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
-
-## Expose bounded evidence
-
-The spreadsheet starter already includes one evidence service.
-Registry Relay performs the exact source lookup and sends only the field needed
-by the rule to Registry Notary.
-Notary returns predicate claims rather than the workbook row.
-
-[Expose evidence from a spreadsheet registry](tutorials/verify-claim-registry-api/)
-shows how to change that rule while preserving authorization, source, and
-disclosure boundaries.
 
 ## Connect an existing registry
 
@@ -56,13 +62,17 @@ the source requires authentication or response normalization.
 ## Keep the product boundaries clear
 
 Registry Relay owns source access and protected record surfaces.
-Registry Notary owns evidence evaluation and disclosure.
+Evidence Gateway owns bounded question answering, signing, and minimum disclosure, and
+runs independently of Relay against its own configured authoritative HTTP sources.
 The caller receives only the output authorized for that service.
 
-Both paths use the same authoring, offline test, disposable development, and
-build commands. The 1.0 project-local workbook path stops there. A governed
-deployment starts after an operator-managed HTTP source is bound, then
-continues through independent approval and package generation.
+Both registryctl paths, spreadsheet and HTTP, use the same authoring, offline
+test, disposable development, and build commands. The 1.0 project-local
+workbook path stops there. A governed deployment starts after an
+operator-managed HTTP source is bound, then continues through independent
+approval and package generation. Evidence Gateway is not one of those paths: Evidence Gateway
+has its own toolset and deployment project shape, covered by the
+[Evidence Gateway overview](start/evidence-quickstart/).
 
 ## Move beyond the first run
 
@@ -70,4 +80,3 @@ continues through independent approval and package generation.
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)
-- [Cut over a pre-1.0 project](start/pre-1.0-cutover/)

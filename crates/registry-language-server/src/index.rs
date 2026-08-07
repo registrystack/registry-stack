@@ -20,8 +20,6 @@ pub enum RegistrySymbolKind {
     Entity,
     Service,
     Consultation,
-    Claim,
-    CredentialProfile,
     Fixture,
     Environment,
 }
@@ -34,8 +32,6 @@ impl RegistrySymbolKind {
             Self::Entity => "entity",
             Self::Service => "service",
             Self::Consultation => "consultation",
-            Self::Claim => "claim",
-            Self::CredentialProfile => "credential profile",
             Self::Fixture => "fixture",
             Self::Environment => "environment",
         }
@@ -47,8 +43,6 @@ impl RegistrySymbolKind {
             Self::Integration | Self::Entity => SymbolKind::MODULE,
             Self::Service => SymbolKind::INTERFACE,
             Self::Consultation => SymbolKind::FUNCTION,
-            Self::Claim => SymbolKind::PROPERTY,
-            Self::CredentialProfile => SymbolKind::OBJECT,
             Self::Fixture => SymbolKind::EVENT,
             Self::Environment => SymbolKind::PACKAGE,
         }
@@ -116,14 +110,6 @@ impl SymbolQuery {
         Self {
             kind,
             scope: None,
-            name: name.into(),
-        }
-    }
-
-    fn scoped(kind: RegistrySymbolKind, scope: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            kind,
-            scope: Some(scope.into()),
             name: name.into(),
         }
     }
@@ -695,68 +681,6 @@ impl IndexBuilder<'_> {
                     }
                 }
             }
-
-            if let Some(claims) = service.value.get("claims").and_then(YamlValue::as_mapping) {
-                for claim in claims {
-                    self.add_resolvable_symbol(
-                        SymbolKey::scoped(
-                            RegistrySymbolKind::Claim,
-                            &service_name,
-                            &claim.key.value,
-                        ),
-                        Some(service_name.clone()),
-                        path,
-                        claim.key.range,
-                    );
-                    if let Some(output) = claim.value.get_scalar("output") {
-                        if let Some((consultation, _)) = output.value.split_once('.') {
-                            self.add_reference(
-                                SymbolQuery::scoped(
-                                    RegistrySymbolKind::Consultation,
-                                    &service_name,
-                                    consultation,
-                                ),
-                                path,
-                                scalar_prefix_range(output, consultation),
-                            );
-                        }
-                    }
-                }
-            }
-
-            if let Some(profiles) = service
-                .value
-                .get("credential_profiles")
-                .and_then(YamlValue::as_mapping)
-            {
-                for profile in profiles {
-                    self.add_resolvable_symbol(
-                        SymbolKey::scoped(
-                            RegistrySymbolKind::CredentialProfile,
-                            &service_name,
-                            &profile.key.value,
-                        ),
-                        Some(service_name.clone()),
-                        path,
-                        profile.key.range,
-                    );
-                    if let Some(claims) =
-                        profile.value.get("claims").and_then(YamlValue::as_sequence)
-                    {
-                        for claim in claims.iter().filter_map(YamlValue::as_scalar) {
-                            self.add_reference(
-                                SymbolQuery::scoped(
-                                    RegistrySymbolKind::Claim,
-                                    &service_name,
-                                    &claim.value,
-                                ),
-                                path,
-                                claim.range,
-                            );
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -842,19 +766,6 @@ impl IndexBuilder<'_> {
                 path,
                 name.range,
             );
-        }
-        if let Some(claims) = document
-            .get("expect")
-            .and_then(|expect| expect.get("claims"))
-            .and_then(YamlValue::as_mapping)
-        {
-            for claim in claims {
-                self.add_reference(
-                    SymbolQuery::global(RegistrySymbolKind::Claim, &claim.key.value),
-                    path,
-                    claim.key.range,
-                );
-            }
         }
     }
 
@@ -952,6 +863,7 @@ struct YamlPair {
 enum YamlValue {
     Scalar(YamlScalar),
     Mapping(Vec<YamlPair>),
+    #[allow(dead_code)]
     Sequence(Vec<YamlValue>),
     Other,
 }
@@ -964,6 +876,7 @@ impl YamlValue {
         }
     }
 
+    #[allow(dead_code)]
     fn as_sequence(&self) -> Option<&[YamlValue]> {
         match self {
             Self::Sequence(entries) => Some(entries),
@@ -1092,12 +1005,6 @@ fn scalar_from_node(
         value,
         range: source_map.range(start_byte, end_byte),
     })
-}
-
-fn scalar_prefix_range(scalar: &YamlScalar, prefix: &str) -> Range {
-    let mut end = scalar.range.start;
-    end.character += prefix.encode_utf16().count() as u32;
-    Range::new(scalar.range.start, end)
 }
 
 fn meaningful_named_children(node: Node<'_>) -> Vec<Node<'_>> {
@@ -1281,13 +1188,9 @@ entities:
   residents: { file: entities/residents.yaml }
 services:
   person-check:
-    kind: evidence
+    kind: consultation_api
     consultations:
       person_record: { integration: people }
-    claims:
-      active: { output: person_record.active, disclosure: predicate }
-    credential_profiles:
-      person-status: { claims: [active] }
   records:
     kind: records_api
     entity: residents
@@ -1311,7 +1214,7 @@ services:
         write(
             temp.path(),
             "integrations/people/fixtures/active.yaml",
-            "name: active-person\nexpect: { claims: { active: true } }\n",
+            "name: active-person\n",
         );
         temp
     }
@@ -1332,28 +1235,18 @@ services:
                 && symbol.name == "residents"
                 && symbol.location.path.ends_with("residents.yaml")
         }));
+        assert!(index.symbols().iter().any(|symbol| {
+            symbol.kind == RegistrySymbolKind::Consultation && symbol.name == "person_record"
+        }));
 
         let manifest = temp.path().join(PROJECT_FILE);
         let locations = index.definitions_at(&manifest, Position::new(10, 38));
         assert_eq!(locations.len(), 1);
         assert!(locations[0].path.ends_with("integration.yaml"));
-
-        let fixture = temp.path().join("integrations/people/fixtures/active.yaml");
-        let claim_locations = index.definitions_at(&fixture, Position::new(1, 21));
-        assert_eq!(claim_locations.len(), 1);
-        assert_eq!(claim_locations[0].path, normalize_lookup_path(&manifest));
-
-        let consultation_locations = index.definitions_at(&manifest, Position::new(12, 28));
-        assert_eq!(consultation_locations.len(), 1);
-        assert_eq!(
-            consultation_locations[0].path,
-            normalize_lookup_path(&manifest)
-        );
-        assert_eq!(consultation_locations[0].range.start, Position::new(10, 6));
     }
 
     #[test]
-    fn reports_missing_duplicate_and_ambiguous_references() {
+    fn reports_missing_and_duplicate_references() {
         let temp = fixture_project();
         write(
             temp.path(),
@@ -1366,21 +1259,8 @@ services:
   first:
     consultations:
       lookup: { integration: missing }
-    claims:
-      shared: { cel: true }
-      shared: { cel: false }
-      broken: { output: absent.value }
-    credential_profiles:
-      broken: { claims: [absent-claim] }
-  second:
-    claims:
-      shared: { cel: true }
+      lookup: { integration: people }
 "#,
-        );
-        write(
-            temp.path(),
-            "integrations/people/fixtures/active.yaml",
-            "name: active-person\nexpect: { claims: { shared: true, absent-fixture-claim: true } }\n",
         );
         let index = ProjectIndex::load(temp.path()).unwrap();
         let messages = index
@@ -1394,19 +1274,7 @@ services:
             .any(|message| message.contains("Unknown integration")));
         assert!(messages
             .iter()
-            .any(|message| message.contains("Duplicate claim")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Ambiguous claim")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Unknown consultation")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Unknown claim reference 'absent-claim'")));
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Unknown claim reference 'absent-fixture-claim'")));
+            .any(|message| message.contains("Duplicate consultation")));
     }
 
     #[test]
@@ -1581,7 +1449,7 @@ services:
             (RegistrySymbolKind::Registry, "fictional-citizen-registry"),
             (RegistrySymbolKind::Integration, "person-record"),
             (RegistrySymbolKind::Service, "person-verification"),
-            (RegistrySymbolKind::Claim, "person-active"),
+            (RegistrySymbolKind::Consultation, "person_record"),
             (RegistrySymbolKind::Fixture, "active-person"),
             (RegistrySymbolKind::Environment, "local"),
         ] {
@@ -1593,6 +1461,33 @@ services:
                 "missing {kind:?} {name}"
             );
         }
+    }
+
+    #[test]
+    fn retired_notary_authoring_fields_are_not_indexed() {
+        let temp = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            r#"version: 1
+registry: { id: demo }
+services:
+  retired:
+    claims:
+      active: { cel: true }
+    credential_profiles:
+      status: { claims: [active] }
+"#,
+        );
+
+        let index = ProjectIndex::load(temp.path()).unwrap();
+        assert!(
+            index
+                .symbols()
+                .iter()
+                .all(|symbol| symbol.name != "active" && symbol.name != "status"),
+            "retired Notary authoring fields must not remain in the current editor surface"
+        );
     }
 
     #[test]

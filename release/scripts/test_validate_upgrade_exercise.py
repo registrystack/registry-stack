@@ -307,6 +307,28 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.ExerciseError, "must be newer"):
             self.validate_record(record, allow_template=False)
 
+    def test_v1_rejects_post_notary_target_before_historical_path_binding(
+        self,
+    ) -> None:
+        record = self.candidate()
+        record["target_release"]["version"] = "v0.17.0"
+        del record["target_release"]["notary_image_digest"]
+        self.module.load_candidate.reset_mock()
+
+        with mock.patch.object(
+            self.module,
+            "git_bytes",
+            side_effect=AssertionError("historical paths must not be read"),
+        ) as git_bytes:
+            with self.assertRaisesRegex(
+                self.module.ExerciseError,
+                "historical Notary-era contract.*before v0.17.0",
+            ):
+                self.validate_record(record, allow_template=False)
+
+        git_bytes.assert_not_called()
+        self.module.load_candidate.assert_not_called()
+
     def test_prerelease_version_order_uses_semver_precedence(self) -> None:
         for lower, higher in (
             ("v1.0.0-rc.1", "v1.0.0-rc.2"),

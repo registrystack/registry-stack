@@ -17,7 +17,7 @@ from typing import Any
 
 
 OWNER = "registrystack"
-RETENTION_DAYS = 7
+RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
     "registry-notary-candidate",
     "registry-relay-candidate",

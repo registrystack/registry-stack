@@ -53,18 +53,6 @@ services:
       - source: registry-postgresql-tls-certificate
         target: postgresql-tls-certificate
 
-  registry-notary-stage-secrets:
-    <<: *stager-hardening
-    volumes:
-      - registry-operator-files-notary-serve:/registryctl-stage/output/notary-serve
-    secrets:
-      - source: registry-notary-relay-workload-credential
-        target: notary-relay-workload-credential
-      - source: registry-notary-signing-key
-        target: notary-signing-key
-      - source: registry-postgresql-tls-certificate
-        target: postgresql-tls-certificate
-
   registry-postgres:
     image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     platform: linux/amd64
@@ -161,43 +149,6 @@ services:
       - registry-relay-consultation-audit:/var/lib/registry/audit
       - registry-operator-files-relay-consultation-serve:/run/secrets:ro
 
-  registry-notary:
-    <<: *product-hardening
-    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    restart: unless-stopped
-    command: [product-action, serve]
-    networks: [registry-runtime]
-    ports:
-      - target: 8081
-        published: "4255"
-        host_ip: 127.0.0.1
-        protocol: tcp
-        mode: ingress
-    depends_on:
-      registry-postgres:
-        condition: service_healthy
-      registry-relay-consultation:
-        condition: service_healthy
-      registry-notary-stage-secrets:
-        condition: service_completed_successfully
-    env_file: [../operator/secrets/notary-environment]
-    volumes:
-      - type: bind
-        source: ./bundles/notary
-        target: /run/registry/bundle
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./anchors/notary
-        target: /run/registry/anchor
-        read_only: true
-        bind:
-          create_host_path: false
-      - registry-notary-state:/var/lib/registry/state:ro
-      - registry-notary-audit:/var/lib/registry/audit
-      - registry-operator-files-notary-serve:/run/secrets:ro
-
 networks:
   registry-runtime:
 
@@ -212,19 +163,10 @@ volumes:
     name: registry-adopter-probe_registry-relay-consultation-state
   registry-relay-consultation-audit:
     name: registry-adopter-probe_registry-relay-consultation-audit
-  registry-notary-state:
-    name: registry-adopter-probe_registry-notary-state
-  registry-notary-audit:
-    name: registry-adopter-probe_registry-notary-audit
   registry-operator-files-postgresql-serve:
   registry-operator-files-relay-consultation-serve:
-  registry-operator-files-notary-serve:
 
 secrets:
-  registry-notary-signing-key:
-    file: ../operator/secrets/notary-signing-key
-  registry-notary-relay-workload-credential:
-    file: ../operator/secrets/notary-relay-workload-credential
   registry-postgresql-tls-certificate:
     file: ../operator/secrets/postgresql-tls-certificate
   registry-postgresql-tls-private-key:

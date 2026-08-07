@@ -1,0 +1,3 @@
+id: urn:example:fixture:scheme:category
+version: '1'
+codes: [category-a, category-bound]

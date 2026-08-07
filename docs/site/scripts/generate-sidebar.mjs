@@ -95,7 +95,7 @@ export function buildProductSidebar(manifest, opts = {}) {
       for (const entry of [...rest].sort(byNavOrder)) items.push(leaf(entry));
     }
 
-    groups.push({ label: productLabel(repoId), collapsed: true, items });
+    groups.push({ label: repo.label ?? productLabel(repoId), collapsed: true, items });
   }
 
   return groups;

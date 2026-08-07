@@ -8,6 +8,7 @@ import { test } from 'node:test';
 
 import {
   applyDocsetMetadataOverrides,
+  applyRepoDisplayName,
   frontmatterBlock,
   stripPageTypeBanner,
   validateLastReviewed,
@@ -23,6 +24,42 @@ const docsets = {
     { id: 'v0.8.4', status: 'archived' },
   ],
 };
+
+test('uses the Evidence Gateway display name in generated product prose', () => {
+  const md = [
+    'Evidence is the product. Evidence Gateway is already current.',
+    'Evidence Type and Core Criterion and Core Evidence Vocabulary keep their formal names.',
+    'OOTS uses an Evidence Broker and an Evidence Provider.',
+    'Inline `Evidence` and `registry-evidence` are technical identifiers.',
+    '[Evidence guidance](https://example.com/Evidence+Exchange) keeps its link target.',
+    '',
+    '```json',
+    '{ "type": "Evidence" }',
+    '```',
+    '',
+    '### Evidence',
+    '## Request Evidence',
+  ].join('\n');
+
+  const transformed = applyRepoDisplayName(md, 'registry-evidence');
+  assert.match(transformed, /Evidence Gateway is the product/);
+  assert.doesNotMatch(transformed, /Evidence Gateway Gateway/);
+  assert.match(transformed, /Evidence Type and Core Criterion and Core Evidence Vocabulary/);
+  assert.match(transformed, /Evidence Broker and an Evidence Provider/);
+  assert.match(transformed, /Inline `Evidence` and `registry-evidence`/);
+  assert.match(
+    transformed,
+    /\[Evidence Gateway guidance\]\(https:\/\/example\.com\/Evidence\+Exchange\)/,
+  );
+  assert.match(transformed, /\{ "type": "Evidence" \}/);
+  assert.match(transformed, /### Assertion evidence/);
+  assert.match(transformed, /## Request an assertion from Evidence Gateway/);
+});
+
+test('leaves other product documentation unchanged', () => {
+  const md = 'Evidence is a generic noun here.';
+  assert.equal(applyRepoDisplayName(md, 'registry-relay'), md);
+});
 
 test('strips a leading Page-type banner and its trailing blank line', () => {
   const md = [

@@ -94,6 +94,18 @@ test('small product (<= threshold) stays flat, Overview first, ordered by nav_or
   ]);
 });
 
+test('a manifest label overrides the derived product group label', () => {
+  const [group] = buildProductSidebar({
+    repos: {
+      'registry-evidence': {
+        label: 'Evidence Gateway',
+        docs: [doc('products/registry-evidence/index', 'explanation', 0, 'Evidence Gateway')],
+      },
+    },
+  });
+  assert.equal(group.label, 'Evidence Gateway');
+});
+
 test('equal nav orders use host-independent English collation', () => {
   const labels = ['README', 'notary', 'alpha', '-dash', '_meta'];
   const [group] = buildProductSidebar({
@@ -155,7 +167,10 @@ test('product group labels drop the shared "Registry" prefix', () => {
     labels.every((l) => !/^Registry\b/.test(l)),
     `no group label should start with "Registry": ${labels.join(', ')}`,
   );
-  assert.ok(labels.includes('Relay') && labels.includes('Notary'), labels.join(', '));
+  assert.ok(
+    labels.includes('Relay') && labels.includes('Evidence Gateway') && !labels.includes('Notary'),
+    labels.join(', '),
+  );
 });
 
 test('the real manifest yields one group per product with every doc present exactly once', async () => {

@@ -3,30 +3,127 @@
 This is the Registry Stack monorepo: registry-facing services over data
 institutions already hold. Pre-1.0; APIs and deployment contracts may change.
 
-Two runtime patterns anchor everything:
+Two independent runtime patterns are relevant:
 
 - **Registry Relay** exposes protected, scoped, read-only HTTP APIs over
   existing sources.
-- **Registry Notary** certifies evidence: claim evaluation, credential
-  issuance, disclosure policy, audit provenance.
+- **Evidence** returns signed, minimum-disclosure assertions from fixed
+  requests to authoritative sources.
+
+The two patterns compose without merging their product boundaries: Evidence
+may use a Relay-protected API as a fixed HTTP source.
 
 Registry Manifest describes sources portably; Relay is its consumer in code
-(Notary does not depend on the manifest crates). `registry-platform-*` crates
-are shared primitives. `registryctl` is adopter tooling.
+and `registry-platform-*` crates are shared primitives. `registryctl` is Relay
+adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
+
+Registry Mint is a supporting service, not a third pattern: it issues the
+access tokens a resource server such as Evidence verifies, for deployments with
+no identity provider. The dependency runs one way only in production: no
+Evidence crate depends on Mint at runtime. Mint's tests drive Evidence's
+authenticator, and Evidence test code may drive a real Mint instance to prove a
+client against a real authorization server.
 
 ## Repository map
 
 | Area | Owns |
 |---|---|
 | `crates/registry-relay` | Protected read APIs (Relay) |
-| `crates/registry-notary*` | Evidence gateway: server, core, client, source adapters, worker harness (Notary) |
+| `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
+| `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
+| `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
+| `crates/registry-evidence-client-node` | Node.js binding for `registry-evidence-client`, via napi-rs |
+| `crates/registry-evidence-client-py` | Python binding for `registry-evidence-client`, via PyO3 |
+| `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
+| `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
-| `crates/registry-platform-*` | Shared primitives: audit, authcommon, cache, config, crypto, httpsec, httputil, oid4vci, oidc, ops, pdp, replay, sdjwt, sts, testing |
-| `crates/registryctl` | Adopter tooling |
+| `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
+| `crates/registryctl` | Relay adopter tooling |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Notes on inputs that intentionally stay out of this tree (e.g. Crosswalk stays a pinned git dependency) |
+
+## Evidence product boundary
+
+Evidence is its own minimum-disclosure assertion product, not a Relay mode.
+Evidence may consume a Relay-protected API through its ordinary fixed HTTP
+source contract, but it does not inherit Relay's authorization or policy
+model. Evidence serializes the same stateless assertion as a signed flattened
+JWS or, under its own frozen profile, as an SD-JWT VC response. The latter is a
+second encoding of one response, never a credential lifecycle.
+
+The runtime implementation is one `registry-evidence` crate and one `evidence`
+binary. It may reuse narrowly applicable `registry-platform-*`
+primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
+and testing.
+
+`registry-evidence-verifier` is the portable response-verification library the
+runtime depends on. It owns the response wire formats, the Evidence payload
+contract, and relying-party verification, so client tooling can verify a signed
+Evidence response without the runtime. It is a library, not a second runtime and
+not a pattern of its own, and it carries no server, source access, or
+service-runtime dependency; portable means free of the service runtime, not
+target independent.
+
+`registry-evidence-client` is the relying-party SDK beside the runtime. It
+requests assertions over the public HTTP contract and links
+`registry-evidence-verifier` for every verification decision, so it sits outside
+the frozen Version 1 runtime contract and adds no Evidence semantics of its own.
+`registry-evidence-client-node` (napi-rs) and `registry-evidence-client-py`
+(PyO3) are thin bindings over that SDK and carry the same boundary. All three
+are covered by the same source-product and domain neutrality checks as the
+runtime.
+
+`registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
+like `registryctl` is for the rest of the stack. It sits outside the frozen
+Version 1 runtime contract: it generates key material, starts incomplete
+OpenAPI authoring workspaces, and drives fixture runs for complete deployment
+projects. It delegates runtime evaluation, signing, bundle validation, and
+fixture evaluation to the `evidence` binary, and reuses
+`registry-evidence-client` and `registry-evidence-verifier` for relying-party
+request preparation and offline response verification. It adds no Evidence
+semantics of its own. Its source is covered by the same source-product and
+domain neutrality checks as the runtime.
+
+Evidence configuration and scripts are trusted, startup-only deployment
+artifacts. Rust owns authentication, authorization, fixed source execution,
+bounded script execution, output validation, evidence construction, signing,
+and audit. Rhai owns bounded request preparation, source extraction, and
+requirement-specific derivation, using only deterministic, bounded,
+domain-neutral primitives supplied by Rust.
+Adult status, residence region, professional licence status, and legal-parent
+relationship are coequal full-path Evidence acceptance definitions. None may
+become a Rust domain type, built-in operation, special route, or implementation
+phase.
+
+Evidence implementation changes require its approved Version 1 contracts,
+schedule, and Definition of Done to remain aligned in tracked product material.
+Do not call the product implemented when only one assertion case or a subset of
+that DoD passes. Stop before the approved concept's non-goals and future
+profiles.
+
+Evidence source compatibility is proven with sanitized local mocks in ordinary
+tests. Public demo checks are opt-in, ignored, read-only local tests after the
+mock suite passes. Credentials, tokens, live responses, demo-subject
+identifiers, and human login or two-factor details must not be committed,
+logged, placed in snapshots, or passed on command lines.
+The provider-published shared credentials for the public DHIS2 demo at
+`https://play.im.dhis2.org/stable-2-43-1/` are a documentation-only exception:
+public tutorials may state them and place them in ignored, owner-only local
+files.
+The provider-published human login credentials and synthetic Josh Hoeger record
+identifiers for the public OpenCRVS Farajaland integration demo are a second
+documentation-only exception. Public tutorials may state them so readers can
+inspect the same synthetic record, use its stated selectors in tutorial
+commands, and create their own Record Search client.
+The exceptions do not cover OAuth client credentials created by a reader,
+tokens, live responses, real identifiers, other demo-subject identifiers in
+tracked files, logs, or snapshots.
+
+DHIS2 and OpenCRVS names and behavior are test-only. Evidence production code,
+dependencies, Cargo features, public configuration schemas, routes, and CLI
+options must remain source-product neutral.
 
 The adopter demo is maintained separately in
 [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
@@ -48,16 +145,41 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 --workspace --all-targets`, `cargo clippy --workspace --all-targets --
 -D warnings`, `cargo test --locked --workspace`, the full `cargo deny check`
 (advisories included; unresolvable RUSTSEC advisories carry scoped ignores in
-`deny.toml` with review triggers), and the OpenAPI drift checks for both
-products (`just openapi-check` from `products/notary`, `just openapi-contract`
-from `crates/registry-relay`). cargo-deny needs v0.19+ to parse this
-`deny.toml`; CI pins 0.19.8.
+`deny.toml` with review triggers), and the Relay OpenAPI drift check
+(`just openapi-contract` from `crates/registry-relay`). cargo-deny needs v0.19+
+to parse this `deny.toml`; CI pins 0.19.8.
+
+Evidence-specific contracts, source neutrality, and verifier portability:
+
+```bash
+products/evidence/scripts/check-contracts.sh
+products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
+```
+
+Evidence client bindings, from `crates/registry-evidence-client-node`:
+
+```bash
+npm ci
+npm run build:debug
+npm test
+npm run check:types
+cmp ../../LICENSE LICENSE
+```
+
+and from `crates/registry-evidence-client-py`:
+
+```bash
+cargo build --locked -p registry-evidence-client-py --lib \
+  --features registry-evidence-client-py/extension-module
+python3 -m unittest discover -s tests/python -v
+cmp ../../LICENSE LICENSE
+```
 
 Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
-python3 -m unittest release/scripts/test_openid_conformance_runner.py
 release/scripts/registry-release validate release/manifests/<current>.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -68,7 +190,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
 ## Rules that bite
 
 - Every commit needs a DCO sign-off: `git commit -s`.
-- Commit subjects: imperative mood; `fix(notary):` / `feat(relay):` style
+- Commit subjects: imperative mood; `feat(relay):` and `feat(evidence):` style
   prefixes are the norm for product-scoped changes.
 - History may be rewritten during review (session commits get squashed). In
   durable docs, cite only commits reachable from pushed `main`, and prefer
@@ -76,7 +198,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
 - Major functionality and bug fixes require automated tests with the change.
 - Keep a change scoped to one owning area (`crates/`, `products/`,
   `docs/site/`, `release/`).
-- Changes to authentication, authorization, credential issuance, signing,
+- Changes to authentication, authorization, assertion evaluation or signing,
   audit integrity, release provenance, deployment defaults, or data
   minimization are security-sensitive and need explicit review notes.
 - Generated outputs (OpenAPI under `docs/site/openapi/`, `docs/site`
@@ -84,7 +206,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
   generator commands, never hand-edited, and must be bit-for-bit repeatable.
   If you change an HTTP endpoint, regenerating and committing the OpenAPI
   documents is part of the change, not a follow-up.
-- Suspected vulnerabilities (credential disclosure, auth bypass, audit
+- Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit
   redaction failure, connector data leakage, signing key handling) go through
   `SECURITY.md`, never public issues or PRs.
 

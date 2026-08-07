@@ -65,7 +65,7 @@ fn sign_verify_and_assemble_share_one_signed_artifact_root() {
     let signing_inputs = project.join(".registry-stack/build/local/signing-inputs");
     let mut lane_roots = Vec::new();
 
-    for lane in ["relay-public", "relay-consultation", "notary"] {
+    for lane in ["relay-public", "relay-consultation"] {
         let input = signing_inputs.join(lane);
         let anchor = anchors.join(format!("{lane}.json"));
         successful(vec![
@@ -159,8 +159,6 @@ fn sign_verify_and_assemble_share_one_signed_artifact_root() {
         lane_roots[0].display().to_string(),
         "--relay-consultation".to_string(),
         lane_roots[1].display().to_string(),
-        "--notary".to_string(),
-        lane_roots[2].display().to_string(),
         "--output-file".to_string(),
         approved_set.display().to_string(),
     ]);

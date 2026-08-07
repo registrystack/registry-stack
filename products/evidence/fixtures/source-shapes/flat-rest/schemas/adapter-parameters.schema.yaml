@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [requestedField, resultLimit]
+properties:
+  requestedField: {const: fact_code}
+  resultLimit: {const: 2}

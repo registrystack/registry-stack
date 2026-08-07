@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "trackingId": "TRACKING-CANARY-0001",
+      "type": "birth",
+      "status": "REGISTERED",
+      "dateOfEvent": "2000-02-29",
+      "declaration": {"child.name": {"firstname": "Synthetic", "surname": "One"}}
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "trackingId": "TRACKING-CANARY-0002",
+      "type": "birth",
+      "status": "REGISTERED",
+      "dateOfEvent": "2001-03-01",
+      "declaration": {"child.name": {"firstname": "Synthetic", "surname": "Two"}}
+    }
+  ],
+  "total": 2
+}

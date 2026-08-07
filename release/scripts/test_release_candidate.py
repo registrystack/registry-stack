@@ -45,10 +45,12 @@ def json_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
-def security_evidence_members() -> dict[str, bytes]:
+def security_evidence_members(
+    image_names: tuple[str, ...] = ("registry-relay",),
+) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
-        for name in ("registry-notary", "registry-relay")
+        for name in image_names
     }
     refs["postgresql"] = POSTGRESQL_REF
     members = {
@@ -58,11 +60,10 @@ def security_evidence_members() -> dict[str, bytes]:
             {
                 "schema_version": "registry-stack.advisory-verdict.v2",
                 "verdict": "passed",
-                "subjects": [
-                    "registry-notary-image",
-                    "registry-relay-image",
-                    "postgresql-runtime",
-                ],
+                "subjects": sorted(
+                    [f"{name}-image" for name in image_names]
+                    + ["postgresql-runtime"]
+                ),
             }
         ),
     }
@@ -966,16 +967,13 @@ class ReleaseCandidateTest(TestCase):
         return path
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
-        bundle_root = self.root.parent / "v2-bundle"
+        bundle_root = self.root / "v2-bundle"
         evidence_members = security_evidence_members()
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         files = {
             "registryctl-v1.2.3-linux-amd64": b"registryctl",
             "registry-docs-v1.2.3.tar.gz": b"docs",
             "registry-stack-v1.2.3.sbom.spdx.json": b"sbom",
-            "security/registry-notary.grype.json": evidence_members[
-                "grype/registry-notary.grype.json"
-            ],
             "security/registry-relay.grype.json": evidence_members[
                 "grype/registry-relay.grype.json"
             ],
@@ -990,7 +988,7 @@ class ReleaseCandidateTest(TestCase):
             path = bundle_root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(payload)
-        bundle_path = self.root.parent / "registry-stack-v1.2.3-candidate.tar.gz"
+        bundle_path = self.root / "registry-stack-v1.2.3-candidate.tar.gz"
         with tarfile.open(bundle_path, "w:gz") as archive:
             for name in sorted(files):
                 archive.add(bundle_root / name, arcname=name)
@@ -1040,7 +1038,7 @@ class ReleaseCandidateTest(TestCase):
                     "digest": IMAGE_DIGEST,
                     "final_ref": f"ghcr.io/registrystack/{name}:v1.2.3",
                 }
-                for name in ("registry-notary", "registry-relay")
+                for name in ("registry-relay",)
             ],
             "docs": {
                 "name": "registry-docs-v1.2.3.tar.gz",
@@ -1059,7 +1057,7 @@ class ReleaseCandidateTest(TestCase):
                     "sha256": sha256(files[f"security/{name}.grype.json"]),
                     "status": "passed",
                 }
-                for name in ("registry-notary", "registry-relay")
+                for name in ("registry-relay",)
             ],
             "advisory": {
                 "name": "security/advisory-verdict.json",
@@ -1111,6 +1109,123 @@ class ReleaseCandidateTest(TestCase):
             self.module.validate_candidate_manifest(
                 mismatched,
                 now=self.now,
+            )
+
+    def test_v2_candidate_image_inventory_is_version_aware(self) -> None:
+        current, _, _, _ = self.make_v2_candidate()
+        self.module.validate_candidate_manifest(current, now=self.now)
+
+        historical = copy.deepcopy(current)
+        historical["release"]["version"] = "0.16.3"
+        historical["release"]["tag"] = "v0.16.3"
+        historical_evidence = next(
+            item
+            for item in historical["payloads"]
+            if item["kind"] == "security-evidence"
+        )
+        historical_evidence["name"] = (
+            "registry-stack-v0.16.3-security-evidence.tar.gz"
+        )
+        historical["bundle"]["name"] = (
+            "registry-stack-v0.16.3-candidate.tar.gz"
+        )
+        historical["images"][0]["final_ref"] = (
+            "ghcr.io/registrystack/registry-relay:v0.16.3"
+        )
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "image inventory must be exactly.*registry-notary",
+        ):
+            self.module.validate_candidate_manifest(historical, now=self.now)
+
+        historical["images"].append(
+            {
+                "name": "registry-notary",
+                "candidate_ref": (
+                    "ghcr.io/registrystack/registry-notary-candidate@"
+                    f"{CONFIG_DIGEST}"
+                ),
+                "digest": CONFIG_DIGEST,
+                "final_ref": "ghcr.io/registrystack/registry-notary:v0.16.3",
+            }
+        )
+        historical["scans"].append(
+            {
+                "image": "registry-notary",
+                "name": "security/registry-notary.grype.json",
+                "sha256": ARCHIVE_SHA,
+                "status": "passed",
+            }
+        )
+        self.module.validate_candidate_manifest(historical, now=self.now)
+
+    def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current_path = root / "current.tar.gz"
+            current_members = security_evidence_members()
+            current_path.write_bytes(
+                security_evidence_tar(sorted(current_members.items()))
+            )
+            current_refs = {
+                "registry-relay": (
+                    "ghcr.io/registrystack/registry-relay-candidate@"
+                    f"{IMAGE_DIGEST}"
+                )
+            }
+            self.module.validate_security_evidence_archive(
+                current_path,
+                product_image_refs=current_refs,
+                product_scan_sha256={
+                    "registry-relay": sha256(
+                        current_members["grype/registry-relay.grype.json"]
+                    )
+                },
+                advisory_sha256=sha256(
+                    current_members["advisory-verdict.json"]
+                ),
+            )
+
+            historical_refs = {
+                **current_refs,
+                "registry-notary": (
+                    "ghcr.io/registrystack/registry-notary-candidate@"
+                    f"{IMAGE_DIGEST}"
+                ),
+            }
+            with self.assertRaisesRegex(
+                self.module.CandidateError,
+                "security evidence archive is incomplete",
+            ):
+                self.module.validate_security_evidence_archive(
+                    current_path,
+                    product_image_refs=historical_refs,
+                    product_scan_sha256={},
+                    advisory_sha256=sha256(
+                        current_members["advisory-verdict.json"]
+                    ),
+                )
+
+            historical_path = root / "historical.tar.gz"
+            historical_members = security_evidence_members(
+                ("registry-notary", "registry-relay")
+            )
+            historical_path.write_bytes(
+                security_evidence_tar(sorted(historical_members.items()))
+            )
+            self.module.validate_security_evidence_archive(
+                historical_path,
+                product_image_refs=historical_refs,
+                product_scan_sha256={
+                    name: sha256(
+                        historical_members[f"grype/{name}.grype.json"]
+                    )
+                    for name in historical_refs
+                },
+                advisory_sha256=sha256(
+                    historical_members["advisory-verdict.json"]
+                ),
             )
 
     def test_v2_candidate_allows_only_current_in_progress_run_before_oidc(
@@ -1346,12 +1461,12 @@ class ReleaseCandidateTest(TestCase):
         unbound_spdx["image-sbom/postgresql.spdx.json"] = json_bytes(spdx)
 
         unbound_syft = dict(base)
-        syft = json.loads(unbound_syft["syft/registry-notary.syft.json"])
+        syft = json.loads(unbound_syft["syft/registry-relay.syft.json"])
         syft["source"]["metadata"]["userInput"] = (
-            "ghcr.io/registrystack/registry-notary-candidate@sha256:"
+            "ghcr.io/registrystack/registry-relay-candidate@sha256:"
             + "9" * 64
         )
-        unbound_syft["syft/registry-notary.syft.json"] = json_bytes(syft)
+        unbound_syft["syft/registry-relay.syft.json"] = json_bytes(syft)
 
         incomplete_verdict = dict(base)
         verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
@@ -1359,15 +1474,15 @@ class ReleaseCandidateTest(TestCase):
         incomplete_verdict["advisory-verdict.json"] = json_bytes(verdict)
 
         substituted_scan = dict(base)
-        scan = json.loads(substituted_scan["grype/registry-notary.grype.json"])
+        scan = json.loads(substituted_scan["grype/registry-relay.grype.json"])
         scan["substituted"] = True
-        substituted_scan["grype/registry-notary.grype.json"] = json_bytes(scan)
+        substituted_scan["grype/registry-relay.grype.json"] = json_bytes(scan)
 
         for members, message in (
             (invalid_digest, "PostgreSQL digest is not canonical or immutable"),
             (unreviewed_digest, "does not match the reviewed release image"),
             (unbound_spdx, "PostgreSQL SPDX subject is not bound"),
-            (unbound_syft, "registry-notary.syft.json.*is not bound"),
+            (unbound_syft, "registry-relay.syft.json.*is not bound"),
             (incomplete_verdict, "does not cover every runtime"),
             (substituted_scan, "does not match its scan payload"),
         ):
@@ -1462,9 +1577,9 @@ class ReleaseCandidateTest(TestCase):
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
         too_long = copy.deepcopy(candidate)
         too_long["validity"]["expires_at"] = (
-            self.now + timedelta(hours=24, minutes=1)
+            self.now + timedelta(days=7, minutes=1)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with self.assertRaisesRegex(self.module.CandidateError, "24 hours"):
+        with self.assertRaisesRegex(self.module.CandidateError, "7 days"):
             self.module.validate_candidate_manifest(too_long, now=self.now)
 
         expired = copy.deepcopy(candidate)
@@ -1500,7 +1615,7 @@ class ReleaseCandidateTest(TestCase):
             (("advisory", "verdict"), "failed", "verdict must be passed"),
             (
                 ("images", 0, "final_ref"),
-                "ghcr.io/registrystack/registry-notary:v9.9.9",
+                "ghcr.io/registrystack/registry-relay:v9.9.9",
                 "final_ref",
             ),
             (("bundle", "sha256"), "9" * 64, "bundle sha256 mismatch"),

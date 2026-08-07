@@ -114,7 +114,6 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
 
   for (const code of [
     'relay.consultation.activation.source_credentials_unavailable',
-    'notary.relay.credentials_rejected',
     'pdp.purpose_not_permitted',
     'pdp.evidence_stale',
     'source.cardinality_violation',
@@ -123,8 +122,6 @@ test('diagnosis uses generated references and stable code vocabulary', async () 
     'rejected_validation',
     'rejected_rollback',
     'relay.consultation.activation.unsupported_plan',
-    'notary.relay.profile_mismatch',
-    'registry.admin.capability.not_supported',
   ]) {
     assert.ok(source.includes(`\`${code}\``), `missing stable code ${code}`);
   }
@@ -150,7 +147,7 @@ test('advanced operations preserve product activation and confidentiality bounda
 
   assert.match(source, /separate (?:product )?bundles/i);
   assert.match(source, /not atomic project activation/i);
-  assert.match(source, /admit (?:caller )?traffic only after both product/i);
+  assert.match(source, /admit (?:caller )?traffic to a lane only after that lane's product/i);
   assert.match(source, /do not use personal data|with synthetic identifiers/i);
 
   for (const superseded of [
@@ -301,9 +298,7 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
     [
       'registry-relay-public-verify-state',
       'registry-relay-consultation-verify-state',
-      'registry-notary-verify-state',
       'registry-relay-consultation-stage-secrets',
-      'registry-notary-stage-secrets',
       'registry-postgresql-stage-secrets',
       'up --detach --wait --wait-timeout 120',
     ].join('[\\s\\S]*'),
@@ -312,7 +307,6 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
   for (const page of [backup, update]) {
     for (const stager of [
       'registry-relay-consultation-stage-secrets',
-      'registry-notary-stage-secrets',
       'registry-postgresql-stage-secrets',
     ]) {
       assert.match(page, new RegExp(`run --rm --no-deps ${stager}`));
@@ -322,7 +316,6 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
     for (const verifier of [
       'registry-relay-public-verify-state',
       'registry-relay-consultation-verify-state',
-      'registry-notary-verify-state',
     ]) {
       assert.match(page, new RegExp(`run --rm --no-deps ${verifier}`));
     }
@@ -331,7 +324,7 @@ test('backup and update use only the generated 1.0 deployment lifecycle', async 
   assert.match(backup, /generated\/compose\.yaml up --detach --wait --wait-timeout 120/);
   assert.match(
     update,
-    /registry-relay-public-preview-state[\s\S]*registry-relay-consultation-preview-state[\s\S]*registry-notary-preview-state[\s\S]*\n\S[^\n]* stop\n[\s\S]*registry-relay-public-accept-state[\s\S]*registry-relay-consultation-accept-state[\s\S]*registry-notary-accept-state[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state[\s\S]*registry-relay-consultation-stage-secrets[\s\S]*registry-postgresql-stage-secrets[\s\S]*\n\S[^\n]* up --detach --wait --wait-timeout 120\n[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-notary-verify-state/,
+    /registry-relay-public-preview-state[\s\S]*registry-relay-consultation-preview-state[\s\S]*\n\S[^\n]* stop\n[\s\S]*registry-relay-public-accept-state[\s\S]*registry-relay-consultation-accept-state[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state[\s\S]*registry-relay-consultation-stage-secrets[\s\S]*registry-postgresql-stage-secrets[\s\S]*\n\S[^\n]* up --detach --wait --wait-timeout 120\n[\s\S]*registry-relay-public-verify-state[\s\S]*registry-relay-consultation-verify-state/,
   );
   assert.match(update, /\n\S[^\n]* up --detach --wait --wait-timeout 120/);
 });

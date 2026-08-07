@@ -14,13 +14,13 @@ from pathlib import Path
 
 expected = {
   ".gitignore": "84a80d00398b512ef755f17c1764c15b491058265d06d2cea71af37641324b83",
-  "environments/local.yaml": "0ae0ce73cd6a775e188aaa0caed37cccce378c392aa021544872b16d6f0047a6",
-  "integrations/person-record/fixtures/active.yaml": "4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
+  "environments/local.yaml": "3af49441f405f725b25c9b1075c408fcd4b768b2b0bbd70a59b04c878ae8df45",
+  "integrations/person-record/fixtures/active.yaml": "df873d90889c90ccc30132c5b911e555d1a9816ba409bc9cb37504a6466650b7",
   "integrations/person-record/fixtures/ambiguous.yaml": "6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
-  "integrations/person-record/fixtures/no-match.yaml": "f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
+  "integrations/person-record/fixtures/no-match.yaml": "415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "0c3bb602db4d2ec2fdf7d0224a30ee814d6345e36625f5e6ffdb2c09f7bef951"
+  "registry-stack.yaml": "73e73a00632488badd087c1a2c6830f961ba9533763a7127bed13984809a1386"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"opencrvs-events-api-overlay-v1.sh", "opencrvs-events-api-overlay-v1.sh.sha256"}
@@ -85,27 +85,17 @@ integrations:
         path: /oauth/token
         generation: 1
 
-callers:
-  synthetic-case-client:
-    api_key_fingerprint: { secret: SYNTHETIC_CASE_CLIENT_TOKEN_HASH }
-    scopes: ["evidence:birth-event:read"]
-
 relay:
   origin: https://relay.opencrvs.invalid
   issuer: https://workload-issuer.opencrvs.invalid
   jwks_url: https://workload-issuer.opencrvs.invalid/.well-known/jwks.json
   audience: registry-relay
   allowed_clients: [synthetic-opencrvs-relay-client]
-
-notary_relay:
-  base_url: http://registry-relay-consultation:8080
-  workload_client_id: synthetic-opencrvs-notary
-  token_file: /run/secrets/relay-workload-token
+  consultation: { client_id: synthetic-opencrvs-consultation-client, principal_id: synthetic-opencrvs-consultation-principal }
 
 deployment:
   profile: local
   relay: { service: synthetic-opencrvs-relay }
-  notary: { service: synthetic-opencrvs-notary }
 REGISTRYCTL_ENVIRONMENTS_LOCAL_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search'
@@ -193,22 +183,12 @@ interactions:
 expect:
   outcome: ambiguous
   outputs: {}
-  claims: {}
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_AMBIGUOUS_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
 cat >'integrations/birth-event-search/fixtures/match.yaml' <<'REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_MATCH_YAML_EOF'
 name: birth-event-match
 classification: synthetic
-request:
-  target:
-    type: Person
-    identifiers:
-      - { scheme: opencrvs_tracking_id, value: TRK-SYNTH000001 }
-  claims: [birth-event-found, birth-event-registered]
-  disclosure: predicate
-  format: application/vnd.registry-notary.claim-result+json
-  purpose: birth-event-registration-verification
 input: { tracking_id: TRK-SYNTH000001 }
 interactions:
   - expect:
@@ -251,9 +231,6 @@ expect:
   outputs:
     event_type: birth
     registered: true
-  claims:
-    birth-event-found: true
-    birth-event-registered: true
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_MATCH_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -288,9 +265,6 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims:
-    birth-event-found: false
-    birth-event-registered: false
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_NO_MATCH_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -311,7 +285,7 @@ interactions:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: Bearer
         expires_in: 300
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_OAUTH_EXPIRY_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -332,7 +306,7 @@ interactions:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: Bearer
         unexpected: rejected
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_OAUTH_EXTRA_MEMBER_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -350,7 +324,7 @@ interactions:
       status: 200
       headers: { Content-Type: text/plain }
       body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer }
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_OAUTH_MEDIA_TYPE_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -368,7 +342,7 @@ interactions:
       status: 302
       headers: { Location: https://redirect.opencrvs.invalid/oauth/token }
       body: {}
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_OAUTH_REDIRECT_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -388,7 +362,7 @@ interactions:
       body:
         access_token: SYNTHETIC_FIXTURE_TOKEN
         token_type: bearer
-expect: { error: source.response_malformed, outputs: {}, claims: {} }
+expect: { error: source.response_malformed, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_OAUTH_TOKEN_TYPE_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -420,7 +394,7 @@ interactions:
     respond:
       status: 200
       body: { total: one, results: [] }
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_SOURCE_MALFORMED_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -450,7 +424,7 @@ interactions:
         limit: 2
         offset: 0
     respond: { status: 503, body: {} }
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_SOURCE_REJECTED_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -480,7 +454,7 @@ interactions:
         limit: 2
         offset: 0
     respond: { timeout: 10s }
-expect: { error: source.deadline_exceeded, outputs: {}, claims: {} }
+expect: { error: source.deadline_exceeded, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_SOURCE_TIMEOUT_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search/fixtures'
@@ -518,7 +492,7 @@ interactions:
             type: birth
             status: REGISTERED
             trackingId: TRK-SYNTH999999
-expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }
+expect: { error: failure.subject_mismatch, outputs: {} }
 REGISTRYCTL_INTEGRATIONS_BIRTH_EVENT_SEARCH_FIXTURES_SUBJECT_MISMATCH_YAML_EOF
 
 mkdir -p 'integrations/birth-event-search'
@@ -580,28 +554,16 @@ integrations:
 
 services:
   birth-event-verification:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: birth-event-registration-verification
     legal_basis: public-service-delivery
     consent: not_required
-    access:
-      scopes: ["evidence:birth-event:read"]
     consultations:
       event:
         integration: birth-event-search
         input:
           tracking_id: request.target.identifiers.opencrvs_tracking_id
-    claims:
-      birth-event-found:
-        cel: event.matched
-        disclosure: predicate
-      birth-event-registered:
-        cel: >-
-          event.matched
-            && event.event_type == "birth"
-            && event.registered
-        disclosure: predicate
 REGISTRYCTL_REGISTRY_STACK_YAML_EOF
 
 printf '%s\n' 'Applied the synthetic OpenCRVS Events API-shaped OAuth and Rhai overlay.'

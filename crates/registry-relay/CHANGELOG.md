@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- SP DCI `response_schema_path` schemas compile under a schema compiler that
+  carries JSON Schema drafts 4, 6, 7, and 2020-12 and resolves no remote or file
+  references. A schema declaring 2020-12 in `$schema` is compiled as 2020-12,
+  which treats `format` as an annotation instead of an assertion, so a committed
+  schema that leans on `format` to constrain a value needs an explicit `pattern`
+  or `enum` to keep constraining it. A schema with no `$schema`, or one naming a
+  draft the compiler does not carry such as 2019-09, compiles under draft 7,
+  which does assert `format`. The 2020-12 keywords `prefixItems`,
+  `dependentRequired`, and `dependentSchemas` are enforced whatever draft a
+  schema declares. An external `$ref` naming an `http(s)://` or `file://` target
+  is never fetched or read, at config validation or while serving a response, so
+  inline the referenced definitions. The SP DCI sync adapter is built only with
+  `--features spdci-api-standards`; released Relay images do not carry it.
+- Correct the `response_schema_path` self-containment contract in the
+  configuration guide. Config validation accepts a schema carrying an external
+  `$ref` rather than refusing it with `spdci.config.schema_compile_failed`, and
+  the unresolved reference instead fails every record at request time, so SP DCI
+  generic search, details, and support answer `500 internal.unhandled` for any
+  non-empty result.
+
+## 0.16.3 - 2026-08-01
+
+- No user-visible Registry Relay changes. The v0.16.2 workflow stopped at an
+  unpublished draft before public image promotion. Install v0.16.3.
+
 ## 0.16.2 - 2026-08-01
 
 - No user-visible Registry Relay changes. This release fixes forward from the

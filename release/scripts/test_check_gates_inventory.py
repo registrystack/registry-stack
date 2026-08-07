@@ -335,7 +335,7 @@ class GateInventoryTest(unittest.TestCase):
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
-        mutated = workflow.replace("retention-days: 7", "retention-days: 8", 1)
+        mutated = workflow.replace("retention-days: 8", "retention-days: 7", 1)
         self.assertEqual(
             ["Candidate artifact retention"],
             self.module.artifact_retention_violations(mutated),
@@ -371,9 +371,11 @@ class GateInventoryTest(unittest.TestCase):
         self.assertIsNotNone(publish)
         for marker in (
             "name: Reconcile exact staged draft before first public image write",
-            "name: Burn version on first exact digest promotion",
-            "require-image-tag-absent",
-            "irreversible version burn",
+            "name: Reconcile exact image digests",
+            "reconcile-image-tag",
+            '--expected-digest "${digest}"',
+            'if [[ "${state}" == absent ]]; then',
+            'test "${state}" = present',
             'test "$(crane digest "${final_ref}")" = "${digest}"',
         ):
             with self.subTest(marker=marker):
@@ -394,9 +396,7 @@ class GateInventoryTest(unittest.TestCase):
         for marker in (
             "name: Clean retryable final additions and reverify exact staged assets",
             "contract/final-upload-release.json",
-            "upload-assets: false",
-            "name: Upload provenance to the exact bound draft",
-            "if: steps.release_state.outputs.release_state == 'draft'",
+            "name: Sign and upload the checksum closure",
             "name: Classify exact bound draft or published release",
             "name: Recheck complete signed release and exact public images",
             "name: Publish immutable release",
@@ -409,19 +409,9 @@ class GateInventoryTest(unittest.TestCase):
                         mutated
                     ),
                 )
-        provenance = self.module.yaml_job_block(workflow, "release-provenance")
-        self.assertIsNotNone(provenance)
-        narrowed = provenance.replace("contents: write", "contents: read", 1)
-        self.assertEqual(
-            ["Final release mutations require the bound draft"],
-            self.module.release_draft_mutation_barrier_violations(
-                workflow.replace(provenance, narrowed, 1)
-            ),
-        )
         for step_name in (
             "Clean retryable final additions and reverify exact staged assets",
-            "Sign and upload the complete pre-provenance asset closure",
-            "Upload provenance to the exact bound draft",
+            "Sign and upload the checksum closure",
             "Classify exact bound draft or published release",
             "Recheck complete signed release and exact public images",
             "Publish immutable release",
@@ -585,6 +575,10 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_release_workflow_classification_is_reported(self) -> None:
         workflows = (
             (
+                ".github/workflows/evidence-dev.yml",
+                "Evidence development workflow change classification",
+            ),
+            (
                 ".github/workflows/release.yml",
                 "Release workflow change classification",
             ),
@@ -636,46 +630,16 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_advisory_checker_identity_gate_is_reported(self) -> None:
+    def test_missing_relay_advisory_checker_tests_are_reported(self) -> None:
+        path = "crates/registry-relay/tests/advisory_baseline_check_test.py"
         text = self.workflow.replace(
-            "run: python3 release/scripts/check_advisory_checker_copies.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Advisory checker byte identity",
-            self.module.missing_gates(text),
-        )
-
-    def test_missing_advisory_checker_identity_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 -m unittest release/scripts/test_check_advisory_checker_copies.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Advisory checker identity guard tests",
-            self.module.missing_gates(text),
-        )
-
-    def test_missing_advisory_checker_tests_are_reported(self) -> None:
-        for path, gate in (
-            (
-                "products/notary/tests/advisory_baseline_check_test.py",
-                "Notary advisory checker tests",
+            path,
+            path.replace(
+                "advisory_baseline_check_test.py",
+                "disabled_advisory_test.py",
             ),
-            (
-                "crates/registry-relay/tests/advisory_baseline_check_test.py",
-                "Relay advisory checker tests",
-            ),
-        ):
-            with self.subTest(path=path):
-                text = self.workflow.replace(
-                    path,
-                    path.replace(
-                        "advisory_baseline_check_test.py",
-                        "disabled_advisory_test.py",
-                    ),
-                )
-                self.assertIn(gate, self.module.missing_gates(text))
+        )
+        self.assertIn("Relay advisory checker tests", self.module.missing_gates(text))
 
     def test_missing_relay_all_features_shard_is_reported(self) -> None:
         classifier = self.classifier.replace(
@@ -730,8 +694,6 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_root_secret_scan_names_all_synthetic_platform_jwt_fixtures(self) -> None:
         for fixture_path in (
-            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\.json$",
-            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
             r"^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\.jwt$",
             r"^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
         ):
@@ -798,16 +760,6 @@ class GateInventoryTest(unittest.TestCase):
             "OpenID conformance runner tests", self.module.missing_gates(text)
         )
 
-    def test_missing_external_integration_runner_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_integration_e2_runner.py",
-            "python3 release/scripts/integration-e2-runner.py dry-run",
-        )
-        self.assertIn(
-            "External integration evidence runner tests",
-            self.module.missing_gates(text),
-        )
-
     def test_release_tool_runs_conformance_candidate_binding_tests(self) -> None:
         release_tool = self.workflow[
             self.workflow.index("  release-tool:\n") : self.workflow.index(
@@ -826,16 +778,6 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn(
             "First-country release-form runner tests",
-            self.module.missing_gates(text),
-        )
-
-    def test_missing_external_integration_packet_validation_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 release/scripts/integration-e2-runner.py validate",
-            "python3 release/scripts/integration-e2-runner.py plan",
-        )
-        self.assertIn(
-            "External integration evidence packet",
             self.module.missing_gates(text),
         )
 

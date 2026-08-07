@@ -87,7 +87,6 @@ const REQUIRED_STATIC_CAPABILITIES: [PreflightStaticCapability; 4] = [
 #[serde(rename_all = "snake_case")]
 pub enum PreflightProduct {
     RegistryRelay,
-    RegistryNotary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -109,11 +108,6 @@ pub enum PreflightSecretConsumer {
     SourceOauthMtlsPrivateKey,
     SourceJwksMtlsPrivateKey,
     EntityPostgresConnection,
-    IssuanceSigningKey,
-    CallerApiKeyFingerprint,
-    Oid4vciClientSigningKey,
-    Oid4vciAccessTokenSigningKey,
-    Oid4vciSensitiveStateKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -129,8 +123,6 @@ pub enum PreflightRuntimeFileKind {
     EntityXlsx,
     EntityParquet,
     RelayStateRootCertificate,
-    NotaryStateRootCertificate,
-    NotaryToRelayToken,
 }
 
 impl PreflightRuntimeFileKind {
@@ -138,7 +130,7 @@ impl PreflightRuntimeFileKind {
         match self {
             // Entity source files can contain country-held person data, so they retain the same
             // owner-only posture as private credential material.
-            Self::EntityCsv | Self::EntityXlsx | Self::EntityParquet | Self::NotaryToRelayToken => {
+            Self::EntityCsv | Self::EntityXlsx | Self::EntityParquet => {
                 RuntimeFilePosture::PrivateMaterial
             }
             Self::SourceCa
@@ -147,8 +139,7 @@ impl PreflightRuntimeFileKind {
             | Self::SourceOauthMtlsCertificate
             | Self::SourceJwksCa
             | Self::SourceJwksMtlsCertificate
-            | Self::RelayStateRootCertificate
-            | Self::NotaryStateRootCertificate => RuntimeFilePosture::PublicTrustMaterial,
+            | Self::RelayStateRootCertificate => RuntimeFilePosture::PublicTrustMaterial,
         }
     }
 
@@ -163,17 +154,13 @@ impl PreflightRuntimeFileKind {
             | Self::SourceOauthMtlsCertificate
             | Self::SourceJwksCa
             | Self::SourceJwksMtlsCertificate
-            | Self::RelayStateRootCertificate
-            | Self::NotaryStateRootCertificate
-            | Self::NotaryToRelayToken => MAX_RUNTIME_FILE_BYTES,
+            | Self::RelayStateRootCertificate => MAX_RUNTIME_FILE_BYTES,
         }
     }
 
     const fn generation(self) -> PreflightGenerationState {
         match self {
-            Self::RelayStateRootCertificate
-            | Self::NotaryStateRootCertificate
-            | Self::NotaryToRelayToken => PreflightGenerationState::NotDeclared,
+            Self::RelayStateRootCertificate => PreflightGenerationState::NotDeclared,
             Self::SourceCa
             | Self::SourceMtlsCertificate
             | Self::SourceOauthCa

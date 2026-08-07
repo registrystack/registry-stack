@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
+import { publishedArchiveLimit } from '../src/lib/docset-retention.mjs';
 
 const docsetIdPattern = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const shaPattern = /^[0-9a-f]{40}$/;
@@ -73,6 +74,7 @@ export function validateDocsets(manifest) {
   if (!Array.isArray(manifest.docsets) || manifest.docsets.length === 0) {
     throw new Error('docsets.yaml must contain a non-empty docsets list');
   }
+  publishedArchiveLimit(manifest);
 
   const ids = new Set();
   for (const [index, docset] of manifest.docsets.entries()) {

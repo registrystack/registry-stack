@@ -1,0 +1,59 @@
+{
+  "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location.",
+  "$defs": {
+    "p256-public-jwk": {
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "ES256"
+        },
+        "crv": {
+          "const": "P-256"
+        },
+        "kid": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "kty": {
+          "const": "EC"
+        },
+        "x": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "y": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kty",
+        "kid",
+        "alg",
+        "crv",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/jwks-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "keys": {
+      "items": {
+        "$ref": "#/$defs/p256-public-jwk"
+      },
+      "maxItems": 33,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "keys"
+  ],
+  "title": "Evidence public JWKS Version 1",
+  "type": "object"
+}

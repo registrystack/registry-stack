@@ -1,15 +1,16 @@
 ---
 title: Architecture overview
-description: How the registry stack uses a two-layer design of portable metadata and runtime services to publish, consult, and prove registry facts.
+description: How the registry stack uses a two-layer design of portable metadata and runtime services to describe sources, serve protected reads, and answer bounded questions.
 status: current
 owner: registry-docs
 source_repos:
   - registry-manifest
   - registry-platform
   - registry-relay
-  - registry-notary
+  - registry-evidence
+  - registry-mint
   - solmara-lab
-last_reviewed: "2026-07-14"
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -19,78 +20,91 @@ standards_referenced:
   - openapi
   - shacl
   - json-schema
-  - json-ld
   - sd-jwt-vc
-  - verifiable-credentials
   - cccev
-  - w3c-did
 ---
 
 The formal registry stack has four products: Registry Platform, Registry Manifest, Registry Relay,
-and Registry Notary.
+and Evidence Gateway.
 The stack is organized around two layers: a portable metadata layer and a runtime services layer.
-The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
-exposes, without touching production sources.
-The runtime services layer (Registry Relay, Registry Notary) binds those artifacts to real data, enforces
-access control, evaluates claims, serves delegated evaluation between trusted Notaries, and issues
-credentials.
+The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a
+registry exposes, without touching production sources.
+The runtime services layer enforces access against real data. Registry Relay binds Registry Manifest
+descriptions to protected reads. Evidence Gateway uses its own governed bundle and authoritative HTTP
+sources to answer bounded questions with signed assertions.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
-Solmara Lab is a separate adopter project that runs published stack images in local and hosted demo
-topologies. It is not a formal Registry Stack product.
+Registry Mint is a supporting service rather than a fifth product: it issues the short-lived access
+tokens a resource server such as Evidence Gateway verifies, for deployments that have callers and no identity
+provider.
+Solmara Lab is a separate adopter project built around synthetic registry data. It is not a formal
+Registry Stack product or a production integration reference.
 
 At runtime, Registry Stack exposes source data through two patterns:
 
-- Protected Registry APIs: controlled read-only interfaces over existing registry sources.
+- Protected registry APIs: controlled read-only interfaces over existing registry sources.
   Registry Relay implements this runtime surface.
-- Evidence Gateway: the governed evidence path. A runtime service evaluates request context,
-  source context, supported policy terms, freshness, redaction, and audit provenance before it
-  returns a result or denial. Registry Notary implements claim evaluation and credential issuance.
-  Registry Relay implements governed read routes when evidence is returned from a protected API.
+- Minimum-disclosure assertions: one bounded question about one subject, answered with a signed
+  assertion that carries the answer and not the record. Evidence Gateway implements this runtime surface.
+
+The two patterns are independent. Evidence Gateway contacts its configured authoritative HTTP
+sources directly. It does not require Registry Relay or inherit Relay authorization. A deployment
+can configure a Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source
+rather than part of the Evidence Gateway product boundary. The retired Solmara workflow is not a
+current integration path.
 
 This split matters because it separates the obligation to describe (what a registry declares it can expose
 and under what policy) from the obligation to enforce (what a running service will actually return to an
 authorized caller). A reviewer can audit the portable metadata bundle before any runtime service is
-deployed. An integrator can validate schemas and claim shapes offline. A governance team can publish
+deployed. An integrator can validate schemas offline. A governance team can publish
 updated policy documents without touching deployment config.
 
 {/* SVG diagram. Essential labels are restated in the HTML list that follows. */}
 <figure>
   <img src="../../images/registry-architecture-flow.svg"
-       alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
-            metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
-            Registry Notary evaluates claims from compiler-pinned Relay consultations and issues credentials
-            only from exact Relay-backed evaluation provenance.
-            The separate Solmara Lab adopter project wires published runtime images into demo
-            topologies." />
+       alt="Architecture flow: Registry Platform provides shared primitives to both runtime services.
+            Registry Manifest compiles portable metadata contracts. Registry Relay binds those
+            descriptions to real sources and serves protected read-only APIs. Evidence Gateway answers one
+            bounded question about one subject and returns a signed assertion carrying the answer and
+            not the record, using its own configured authoritative HTTP sources. Registry Mint is a
+            supporting service issuing the short-lived access tokens Evidence Gateway verifies. The separate
+            Solmara Lab adopter project provides synthetic registry data for demonstrations." />
 </figure>
 
-## Evidence and decision ownership
+## Evidence Gateway and decision ownership
 
 The following responsibility flow is normative for 1.0 project authoring:
 
 1. A source system owns its operational data and any decisions made inside that source.
-2. Registry Relay owns source-specific acquisition, source-access policy, and typed normalization.
+2. Registry Relay owns source-specific acquisition, source-access policy, and typed normalization
+   for Relay's protected read APIs.
    Relay returns only the declared consultation outcome and typed outputs. It does not assign a
    consumer consequence to those outputs.
-3. Registry Notary owns atomic, precise, reusable evidence statements plus the authorization and
-   disclosure policy for evaluating and releasing them. Purpose-bound authorization controls who
-   can request evidence and what can be disclosed. It does not turn the evidence statement into a
-   consumer rule.
-4. An evidence consumer determines how returned evidence is used. The accountable decision owner
+3. Evidence Gateway owns the bounded assertion plus the authorization and disclosure policy for evaluating
+   and releasing it. The requirement is the unit of disclosure: purpose, audience, and requester
+   entitlement decide whether a requirement may be invoked at all, and never narrow the answer it
+   returns. Evidence Gateway does not turn the assertion into a consumer rule.
+4. An assertion consumer determines how the returned assertion is used. The accountable decision owner
    retains responsibility for requirements, eligibility, qualification, prioritization, approval,
    routing, payment, workflow, and action policy.
 
-These are three different policy categories: Relay source-access and adaptation policy, Notary
-evidence authorization and disclosure policy, and consumer use, decision, and action policy.
+{/* Evidence: "The requirement is the unit of disclosure. Purpose, audience, and requester
+     entitlement decide whether a requirement may be invoked at all; they never narrow the answer
+     it returns", products/evidence/CONCEPT.md section 5.2, restated in
+     products/evidence/OPERATOR-CONTRACT.md, "Purpose does not narrow disclosure". The consumer
+     boundary is the Version 1 non-goal list: Evidence Gateway is not a workflow, orchestration, or
+     case-management engine and not a runtime policy engine or general PDP. */}
+
+These are three different policy categories: Relay source-access and adaptation policy, Evidence Gateway
+authorization and disclosure policy, and consumer use, decision, and action policy.
 Project authors must keep them separate even when one deployment operates every component. The
-caller, evidence consumer, and decision owner can be the same component or separate components.
+caller, assertion consumer, and decision owner can be the same component or separate components.
 
-An evidence consumer can be a social-protection programme, admissions service, licensing
-authority, healthcare workflow, lender, insurer, or credential verifier. The caller is the
-technical client that invokes Notary, which may be a portal, intermediary, wallet backend, or
-workflow connector acting for the consumer.
+An assertion consumer can be a social-protection programme, admissions service, licensing
+authority, healthcare workflow, lender, insurer, or relying verifier. The caller is the
+technical client that invokes Evidence Gateway, which may be a portal, intermediary, or workflow connector
+acting for the consumer.
 
-| Context | Caller | Evidence consumer | Decision owner |
+| Context | Caller | Assertion consumer | Decision owner |
 | --- | --- | --- | --- |
 | Social protection | Case-management connector | Programme workflow | Administering authority |
 | Public administration | Procedure portal or intermediary | Online procedure | Competent authority |
@@ -98,10 +112,14 @@ workflow connector acting for the consumer.
 | Healthcare | Clinical or case system | Care or public-health workflow | Provider or health authority |
 | Regulated private service | Application platform | Lending or insurance workflow | Lender or insurer |
 
-Registry Notary can attest a decision already made by an authoritative source system. The claim
-identifier and its review documentation must identify that fact as a source-owned decision.
-Notary attests what the source decided; it does not recompute the decision or take ownership of
-the source's policy.
+An assertion may describe a property, classification, eligibility decision, status, or relationship.
+When the configured source returns the final fact, the requirement carries the `source-derived`
+acquisition posture and Evidence Gateway reports what the source decided rather than recomputing it. The
+requirement identifier and its review documentation must identify that fact as a source-owned
+decision.
+{/* Evidence: acquisition postures source-derived, field-projected, and record-transformed,
+     products/evidence/OPERATOR-CONTRACT.md, "Source and selector controls"; assertion subject
+     matter, products/evidence/CONCEPT.md executive summary. */}
 
 ## Data and contract flow
 
@@ -117,40 +135,58 @@ the source's policy.
    endpoints through configured auth.
 5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
    and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
-   outputs. Registry Notary evaluates evidence claims from those Relay outputs. Caller identity
-   and authorization details can authorize or parameterize a request but cannot supply evidence. It renders evaluation
-   results as
-   `application/vnd.registry-notary.claim-result+json`
-   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes stored
-   evaluations that pass issuance checks into SD-JWT VC credentials (`application/dc+sd-jwt`).
-6. An evidence consumer receives the returned evidence. The decision owner applies any
-   consumer-specific requirement, decision, workflow, or action rules outside Relay and Notary.
-7. A trusted Registry Notary can call another trusted Registry Notary through
-   `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
-   discovery metadata for that relationship, but local Notary peer policy grants access.
+   outputs.
+6. Evidence Gateway evaluates one predefined, versioned requirement per request, aligned with CCCEV through
+   its frozen field mapping. Rust owns authentication, authorization, the one fixed bounded HTTP JSON
+   source request, output validation, assertion construction, signing, and audit; trusted Rhai
+   scripts prepare that request and extract typed facts. Caller identity and authorization details
+   can authorize or parameterize a request but cannot supply facts. Its fixed HTTP source is configured
+   directly for the authoritative system.
+7. Evidence Gateway returns the assertion as a flattened JWS JSON response (`application/jose+json`) by
+   default. Where the immutable bundle and the one matched authority grant both permit it, the same
+   stateless assertion may instead be serialized as a visibly unsigned JSON envelope or as an SD-JWT
+   VC (`application/dc+sd-jwt`) under the frozen Version 1 profile. That serialization adds a
+   response format, never a credential lifecycle: no issuance session, holder binding ceremony,
+   status list, revocation, or presentation verification.
+8. Where a deployment has callers and no identity provider, Registry Mint issues the short-lived
+   access tokens Evidence Gateway verifies. The dependency runs one way: `registry-mint` carries
+   `registry-evidence` as a development dependency so its tests drive Evidence Gateway's authenticator, and
+   `registry-evidence` depends on no other product crate.
+9. A consumer receives the returned assertion. The decision owner applies any
+   consumer-specific requirement, decision, workflow, or action rules outside Relay and Evidence Gateway.
 For what each project does and does not own, refer to the product overview pages linked in the capabilities table.
+
+{/* Evidence: response formats and the SD-JWT VC profile,
+     products/evidence/OPERATOR-CONTRACT.md, "Response formats", and contract
+     registry.evidence.sd-jwt-vc-profile/v1 in
+     products/evidence/contracts/sd-jwt-vc-profile.yaml (frozen); CCCEV alignment, contract
+     registry.evidence.cccev-mapping/v1 in products/evidence/contracts/cccev-field-mapping.yaml
+     (frozen); dependency direction, crates/registry-mint/Cargo.toml dev-dependencies and
+     crates/registry-evidence/Cargo.toml. */}
 
 ## Capabilities at a glance
 
-The two-layer design supports one capability sequence: describe what the registry can provide,
-expose protected registry APIs, then return evidence that matches the purpose and policy of the
-request.
+The two-layer design supports complementary capabilities: describe what a registry can provide,
+expose protected registry APIs, or answer a bounded question with a signed assertion that matches
+the purpose and policy of the request.
 A caller cannot safely use a registry until its fields, schemas, services, policies, and evidence
 offerings are inspectable, so metadata comes first.
 
 | Capability | Use it when | Primary project |
 | --- | --- | --- |
 | Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](../../map/boundaries-and-map/) |
-| Protected Registry APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
-| Evidence Gateway | A caller needs a status, predicate, selected value, redacted result, protected read, denial, or supported credential instead of unrestricted source-record access. | [Registry Notary](../../products/registry-notary/) and governed [Registry Relay](../../products/registry-relay/) routes |
+| Protected registry APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
+| Minimum-disclosure assertions | A caller needs one bounded fact about one subject, signed and audience-scoped, instead of access to the record behind it. | [Evidence Gateway](../../products/registry-evidence/) |
 
-Shared audit and operational behavior makes Registry Relay and Registry Notary reviewable:
-Registry Platform supplies the shared primitives for authentication, HTTP security, audit envelopes,
-cryptography, and credential support that both runtime services compose. The external
-[Solmara Lab](https://github.com/registrystack/solmara-lab/tree/00cd51a2be4a405ef75d337ddcede0f9de134b1f)
-adopter project gives reviewers runnable demo topologies without becoming part of the formal stack.
+Shared audit and operational behavior makes Registry Relay and Evidence Gateway reviewable:
+Registry Platform supplies the shared primitives for authentication, OIDC verification, HTTP
+security, audit envelopes, and cryptography that both runtime services compose, and the shared
+SD-JWT serialization crate that Evidence Gateway composes for its credential-format response.
 
 ## Next
 
-- [Evidence issuance](../evidence-issuance/) explains claim evaluation, disclosure policy,
-  delegated evaluation, and credential issuance in Registry Notary.
+- [Evidence Gateway quickstart](../../start/evidence-quickstart/) maps what Evidence Gateway answers and the current
+  authoring, operation, and verification material.
+- [Evidence Gateway security model](../../security/evidence/) states the invariants the runtime enforces and
+  the duties that remain with the operator.
+- [Boundaries and map](../../map/boundaries-and-map/) records what each product owns and does not own.

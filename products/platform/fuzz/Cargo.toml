@@ -15,7 +15,6 @@ jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_r
 libfuzzer-sys = "0.4"
 registry-platform-authcommon = { path = "../../../crates/registry-platform-authcommon" }
 registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
-registry-platform-oid4vci = { path = "../../../crates/registry-platform-oid4vci" }
 registry-platform-oidc = { path = "../../../crates/registry-platform-oidc" }
 registry-platform-sdjwt = { path = "../../../crates/registry-platform-sdjwt" }
 serde = { version = "1", features = ["derive"] }
@@ -27,13 +26,6 @@ tokio = { version = "1", features = ["rt", "time"] }
 [[bin]]
 name = "authcommon_parsers"
 path = "fuzz_targets/authcommon_parsers.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "oid4vci_request_and_proof"
-path = "fuzz_targets/oid4vci_request_and_proof.rs"
 test = false
 doc = false
 bench = false

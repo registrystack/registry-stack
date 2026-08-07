@@ -210,12 +210,7 @@ fn trusted_local_value_path_is_prohibited(address: &ProjectFieldAddress) -> bool
     let field_name = path.rsplit('/').next().unwrap_or_default();
     matches!(
         field_name,
-        "token_file"
-            | "workload_token_file"
-            | "secret_file"
-            | "private_key_file"
-            | "cel"
-            | "x-registry-source"
+        "token_file" | "secret_file" | "private_key_file" | "cel" | "x-registry-source"
     ) || path == "/starter/content_digest"
 }
 
@@ -229,9 +224,8 @@ pub struct ProjectBuildOptions {
 
 /// Product-labelled approved baselines for a project build.
 ///
-/// Public Relay, consultation Relay, and Notary are independently signed
-/// inputs. A consultation project supplies both Relay pairs, plus Notary when
-/// that product is projected. The `against` and `anchor` fields on
+/// Public Relay and consultation Relay are independently signed inputs. The
+/// `against` and `anchor` fields on
 /// [`ProjectBuildOptions`] remain available for single-lane callers.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectBuildBaselineSetOptions {
@@ -239,8 +233,6 @@ pub struct ProjectBuildBaselineSetOptions {
     pub relay_anchor: Option<PathBuf>,
     pub relay_consultation_against: Option<PathBuf>,
     pub relay_consultation_anchor: Option<PathBuf>,
-    pub notary_against: Option<PathBuf>,
-    pub notary_anchor: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,7 +327,6 @@ pub struct FixtureReport {
     pub inputs: Vec<String>,
     pub calls: Vec<String>,
     pub outputs: Vec<String>,
-    pub claims: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -405,11 +396,6 @@ struct ServiceDeclaration {
     kind: ServiceKind,
     #[serde(default)]
     version: u32,
-    /// Subject category evaluated by an evidence service. Omission is
-    /// normalized to `person` without erasing whether the field was authored,
-    /// so records services cannot silently accept it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    subject_type: Option<EvidenceSubjectType>,
     #[serde(default)]
     purpose: String,
     #[serde(default)]
@@ -417,15 +403,9 @@ struct ServiceDeclaration {
     #[serde(default = "default_consent")]
     consent: ConsentDeclaration,
     #[serde(default)]
-    access: AccessDeclaration,
-    #[serde(default)]
     variables: BTreeMap<String, RequestVariable>,
     #[serde(default)]
     consultations: BTreeMap<String, ConsultationDeclaration>,
-    #[serde(default)]
-    claims: BTreeMap<String, ClaimDeclaration>,
-    #[serde(default)]
-    credential_profiles: BTreeMap<String, CredentialProfileDeclaration>,
     #[serde(default)]
     entity: Option<String>,
     #[serde(default)]
@@ -447,37 +427,10 @@ struct ServiceDeclaration {
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
-#[serde(rename_all = "snake_case")]
-enum EvidenceSubjectType {
-    #[default]
-    Person,
-    Project,
-}
-
-impl EvidenceSubjectType {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Person => "person",
-            Self::Project => "project",
-        }
-    }
-}
-
-impl ServiceDeclaration {
-    const fn effective_subject_type(&self) -> EvidenceSubjectType {
-        match self.subject_type {
-            Some(subject_type) => subject_type,
-            None => EvidenceSubjectType::Person,
-        }
-    }
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ServiceKind {
-    Evidence,
+    ConsultationApi,
     RecordsApi,
 }
 
@@ -491,14 +444,6 @@ fn default_consent() -> ConsentDeclaration {
 enum ConsentDeclaration {
     NotRequired,
     Required,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct AccessDeclaration {
-    #[serde(default)]
-    scopes: Vec<String>,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1016,69 +961,6 @@ struct RequestVariable {
 struct ConsultationDeclaration {
     integration: String,
     input: BTreeMap<String, String>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ClaimDeclaration {
-    #[serde(default)]
-    output: Option<String>,
-    #[serde(default)]
-    cel: Option<String>,
-    #[serde(default)]
-    value: Option<ClaimValueDeclaration>,
-    disclosure: DisclosureDeclaration,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum ClaimEvidence {
-    RegistryBacked,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ClaimValueDeclaration {
-    #[serde(rename = "type")]
-    value_type: OutputType,
-    #[serde(default)]
-    nullable: bool,
-    #[serde(default)]
-    max_bytes: Option<u32>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-enum DisclosureDeclaration {
-    Mode(DisclosureMode),
-    Policy {
-        default: DisclosureMode,
-        allowed: Vec<DisclosureMode>,
-    },
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-enum DisclosureMode {
-    Value,
-    Predicate,
-    Redacted,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct CredentialProfileDeclaration {
-    format: String,
-    #[serde(rename = "type")]
-    credential_type: String,
-    validity: String,
-    claims: Vec<String>,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1691,21 +1573,9 @@ struct EnvironmentDocument {
     #[serde(default)]
     entities: BTreeMap<String, EnvironmentEntityBinding>,
     #[serde(default)]
-    issuance: Option<IssuanceBinding>,
-    #[serde(default)]
-    callers: BTreeMap<String, CallerBinding>,
-    #[serde(default)]
     relay: Option<RelayBinding>,
     #[serde(default)]
-    notary_relay: Option<NotaryRelayBinding>,
-    #[serde(default)]
     relay_state: Option<RelayStateBinding>,
-    #[serde(default)]
-    notary_state: Option<NotaryStateBinding>,
-    #[serde(default)]
-    notary_cel: Option<NotaryCelBinding>,
-    #[serde(default)]
-    oid4vci: Option<Oid4vciBinding>,
     deployment: DeploymentBinding,
 }
 
@@ -1718,8 +1588,6 @@ struct DevelopmentDeclaration {
     default_fixture: String,
     #[serde(default)]
     relay_port: Option<u16>,
-    #[serde(default)]
-    notary_port: Option<u16>,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1874,45 +1742,6 @@ enum RecordProvider {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct IssuanceBinding {
-    issuer: String,
-    signing_key: SecretReference,
-    signing_kid: String,
-    #[serde(default)]
-    algorithm: IssuanceSigningAlgorithm,
-    generation: u64,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
-enum IssuanceSigningAlgorithm {
-    #[default]
-    #[serde(rename = "EdDSA")]
-    EdDsa,
-    #[serde(rename = "ES256")]
-    Es256,
-}
-
-impl IssuanceSigningAlgorithm {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::EdDsa => "EdDSA",
-            Self::Es256 => "ES256",
-        }
-    }
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct CallerBinding {
-    api_key_fingerprint: SecretReference,
-    scopes: Vec<String>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct RelayBinding {
     origin: String,
     issuer: String,
@@ -1920,7 +1749,17 @@ struct RelayBinding {
     audience: String,
     allowed_clients: Vec<String>,
     #[serde(default)]
+    consultation: Option<RelayConsultationBinding>,
+    #[serde(default)]
     local_api_keys: Option<RelayLocalApiKeyBinding>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RelayConsultationBinding {
+    client_id: String,
+    principal_id: String,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1930,15 +1769,6 @@ struct RelayLocalApiKeyBinding {
     match_principal: String,
     no_match_principal: String,
     scopes: Vec<String>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NotaryRelayBinding {
-    base_url: String,
-    workload_client_id: String,
-    token_file: PathBuf,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1958,139 +1788,10 @@ struct RelayPostgresqlBinding {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct NotaryStateBinding {
-    postgresql: NotaryPostgresqlBinding,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NotaryPostgresqlBinding {
-    root_certificate_path: PathBuf,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct NotaryCelBinding {
-    worker_memory_bytes: u64,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciBinding {
-    public_base_url: String,
-    credential: Oid4vciCredentialBinding,
-    authorization_server: Oid4vciAuthorizationServerBinding,
-    client: Oid4vciClientBinding,
-    /// Machine OIDC clients admitted to create registrar-initiated offers.
-    ///
-    /// These clients use the pinned authorization server and the Notary public
-    /// base URL as their resource audience. They are deliberately separate
-    /// from the citizen client so generated subject-access classification
-    /// remains closed.
-    #[serde(default)]
-    registrar_clients: Vec<String>,
-    access_token: Oid4vciSigningKeyBinding,
-    sensitive_state_key: SecretReference,
-    subject: Oid4vciSubjectBinding,
-    redirect_uri: String,
-    allowed_wallet_origins: Vec<String>,
-    #[serde(default)]
-    tx_code: Oid4vciTxCodeBinding,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    representative_issuance: Option<Oid4vciRepresentativeIssuanceBinding>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciRepresentativeIssuanceBinding {
-    relationship: String,
-    proof_claim: String,
-    target_id_type: String,
-    #[serde(default = "default_oid4vci_representative_max_proof_age_seconds")]
-    max_proof_age_seconds: u64,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciTxCodeBinding {
-    #[serde(default = "default_oid4vci_tx_code_required")]
-    required: bool,
-}
-
-impl Default for Oid4vciTxCodeBinding {
-    fn default() -> Self {
-        Self {
-            required: default_oid4vci_tx_code_required(),
-        }
-    }
-}
-
-const fn default_oid4vci_tx_code_required() -> bool {
-    true
-}
-
-const fn default_oid4vci_representative_max_proof_age_seconds() -> u64 {
-    300
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciCredentialBinding {
-    service: String,
-    profile: String,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciAuthorizationServerBinding {
-    issuer: String,
-    jwks_url: String,
-    userinfo_url: String,
-    authorize_url: String,
-    token_url: String,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciClientBinding {
-    id: String,
-    signing_key: SecretReference,
-    signing_kid: String,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciSigningKeyBinding {
-    signing_key: SecretReference,
-    signing_kid: String,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Oid4vciSubjectBinding {
-    token_claim: String,
-    id_type: String,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct DeploymentBinding {
     profile: DeploymentProfile,
     #[serde(default)]
     relay: Option<ServiceBinding>,
-    #[serde(default)]
-    notary: Option<ServiceBinding>,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -2100,7 +1801,6 @@ enum DeploymentProfile {
     Local,
     HostedLab,
     Production,
-    EvidenceGrade,
 }
 
 impl DeploymentProfile {
@@ -2109,7 +1809,6 @@ impl DeploymentProfile {
             Self::Local => "local",
             Self::HostedLab => "hosted_lab",
             Self::Production => "production",
-            Self::EvidenceGrade => "evidence_grade",
         }
     }
 }
@@ -2125,113 +1824,12 @@ struct ServiceBinding {
 struct FixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
-    #[serde(default)]
-    request: Option<GovernedFixtureRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
     interactions: Vec<FixtureInteraction>,
     expect: FixtureExpectation,
 }
-
-/// The closed governed request accepted by an independently authored synthetic
-/// fixture witness.
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedFixtureRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    requester: Option<GovernedFixtureTarget>,
-    target: GovernedFixtureTarget,
-    #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
-    #[serde(
-        default,
-        skip_serializing_if = "registry_notary_core::RequestVariables::is_empty"
-    )]
-    variables: registry_notary_core::RequestVariables,
-    claims: Vec<registry_notary_core::ClaimRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    disclosure: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    format: Option<String>,
-    purpose: String,
-}
-
-impl GovernedFixtureRequest {
-    fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
-        registry_notary_core::EvaluateRequest {
-            requester: self.requester.as_ref().map(governed_fixture_entity),
-            target: Some(registry_notary_core::EvidenceEntity {
-                entity_type: self.target.entity_type.clone(),
-                id: self.target.id.clone(),
-                identifiers: self
-                    .target
-                    .identifiers
-                    .iter()
-                    .map(|identifier| registry_notary_core::EvidenceIdentifier {
-                        scheme: identifier.scheme.clone(),
-                        value: identifier.value.clone(),
-                        issuer: None,
-                        country: None,
-                    })
-                    .collect(),
-                attributes: self.target.attributes.clone(),
-                assurance: None,
-                profile: None,
-            }),
-            relationship: None,
-            on_behalf_of: None,
-            variables: self.variables.clone(),
-            claims: self.claims.clone(),
-            disclosure: self.disclosure.clone(),
-            format: self.format.clone(),
-            purpose: Some(self.purpose.clone()),
-        }
-    }
-}
-
-fn governed_fixture_entity(entity: &GovernedFixtureTarget) -> registry_notary_core::EvidenceEntity {
-    registry_notary_core::EvidenceEntity {
-        entity_type: entity.entity_type.clone(),
-        id: entity.id.clone(),
-        identifiers: entity
-            .identifiers
-            .iter()
-            .map(|identifier| registry_notary_core::EvidenceIdentifier {
-                scheme: identifier.scheme.clone(),
-                value: identifier.value.clone(),
-                issuer: None,
-                country: None,
-            })
-            .collect(),
-        attributes: entity.attributes.clone(),
-        assurance: None,
-        profile: None,
-    }
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedFixtureTarget {
-    #[serde(rename = "type")]
-    entity_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    identifiers: Vec<GovernedFixtureIdentifier>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    attributes: BTreeMap<String, Value>,
-}
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedFixtureIdentifier {
-    scheme: String,
-    value: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 struct FixtureInteraction {
     expect: FixtureRequestExpectation,
@@ -2266,8 +1864,6 @@ struct FixtureExpectation {
     #[serde(default)]
     outputs: BTreeMap<String, Value>,
     #[serde(default)]
-    claims: BTreeMap<String, Value>,
-    #[serde(default)]
     error: Option<String>,
     #[serde(default)]
     outcome: Option<String>,
@@ -2301,7 +1897,6 @@ struct CompiledProject {
     reviewable: BTreeMap<PathBuf, Box<[u8]>>,
     relay_private: BTreeMap<PathBuf, Box<[u8]>>,
     relay_consultation_private: BTreeMap<PathBuf, Box<[u8]>>,
-    notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
     approval_state: Value,
     explanation: ProjectExplanationReportV1,
@@ -2311,8 +1906,6 @@ struct CompiledProject {
 }
 
 struct FixtureProfile {
-    service_id: String,
-    consultation_id: String,
     integration_alias: String,
     id: String,
     version: String,
@@ -2334,34 +1927,21 @@ struct VerifiedBaseline {
 enum VerifiedBaselineLane {
     Relay,
     RelayConsultation,
-    Notary,
 }
 
 #[derive(Default)]
 struct VerifiedBaselineSet {
     relay: Option<VerifiedBaseline>,
     relay_consultation: Option<VerifiedBaseline>,
-    notary: Option<VerifiedBaseline>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SemanticDigests {
-    claim: String,
     integration: String,
     service_policy: String,
     operator_security: String,
 }
-
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct DisclosureReviewProfile {
-    default: DisclosureMode,
-    allowed: BTreeSet<DisclosureMode>,
-}
-
-type DisclosureReviewProfiles = BTreeMap<String, BTreeMap<String, DisclosureReviewProfile>>;
 
 struct GeneratedPack {
     alias: String,
@@ -2386,4 +1966,29 @@ struct GeneratedProfile {
     version: String,
     contract: AuthoredConsultationContract,
     binding: AuthoredArtifact,
+}
+
+#[cfg(test)]
+mod relay_only_authoring_model_tests {
+    use super::*;
+
+    #[test]
+    fn consultation_api_uses_the_relay_specific_wire_value() {
+        assert_eq!(
+            serde_json::to_value(ServiceKind::ConsultationApi).expect("service kind serializes"),
+            Value::String("consultation_api".to_string())
+        );
+        assert_eq!(
+            serde_json::from_value::<ServiceKind>(Value::String("consultation_api".to_string()))
+                .expect("consultation API service kind parses"),
+            ServiceKind::ConsultationApi
+        );
+    }
+
+    #[test]
+    fn retired_evidence_service_kind_is_rejected() {
+        let error = serde_json::from_value::<ServiceKind>(Value::String("evidence".to_string()))
+            .expect_err("retired evidence service kind must be unknown");
+        assert!(error.to_string().contains("unknown variant"));
+    }
 }

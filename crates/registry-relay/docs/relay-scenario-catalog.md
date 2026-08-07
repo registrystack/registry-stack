@@ -22,7 +22,7 @@ Status labels:
 | Planning analyst | Query configured aggregates without enumerating sensitive rows |
 | Metadata consumer | Discover datasets, schemas, policies, profiles, and standards surfaces |
 | Auditor | Reconstruct who accessed what, for which purpose, and under which scope |
-| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, or Registry Notary discovery contracts |
+| Standards integrator | Consume Relay through DCAT, OGC, SP DCI, or evidence offering discovery contracts |
 
 ## Systems
 
@@ -31,10 +31,10 @@ Status labels:
 | Source registry | Operational system of record, such as CSV, XLSX, Parquet, or PostgreSQL |
 | Registry Relay | Read-only gateway, metadata publisher, standards adapter, and audit emitter |
 | Registry Manifest | Portable metadata source used for static publication and runtime metadata |
-| Registry Notary | Claim evaluation, evidence verification, credential issuance, and verification semantics |
-| Service portal or case system | Calls Relay or Notary during a service workflow |
+| Registry Evidence | Signed minimum-disclosure assertions from fixed requests to authoritative sources |
+| Service portal or case system | Calls Relay or Evidence during a service workflow |
 | Audit sink | Receives chained platform audit records |
-| Standards consumer | Reads OGC, DCAT, SP DCI, Registry Notary discovery, or OpenAPI views |
+| Standards consumer | Reads OGC, DCAT, SP DCI, evidence offering discovery, or OpenAPI views |
 
 ## Reusable patterns
 
@@ -85,18 +85,18 @@ sequenceDiagram
   Consumer->>Relay: Authenticated scoped metadata discovery
 ```
 
-### Relay to Registry Notary handoff
+### Relay to Registry Evidence handoff
 
 ```mermaid
 sequenceDiagram
   participant Client as Service Client
   participant Relay as Registry Relay
-  participant Notary as Registry Notary
+  participant Evidence as Registry Evidence
 
   Client->>Relay: Discover evidence offering metadata
-  Relay-->>Client: Notary endpoint or discovery URL
-  Client->>Notary: Submit claim or evidence request
-  Notary-->>Client: Verification result or credential
+  Relay-->>Client: Evidence endpoint and discovery URL
+  Client->>Evidence: Request an assertion
+  Evidence-->>Client: Signed minimum-disclosure assertion
 ```
 
 ## Scenario matrix
@@ -109,14 +109,14 @@ sequenceDiagram
 | 4 | Operator publishes portable metadata separately from Relay runtime | Metadata publication | Supported | Static publication is manual; no managed release process yet. |
 | 5 | Metadata consumer reads DCAT and SHACL views | Metadata publication | Supported | Profile coverage depends on manifest quality |
 | 6 | Auditor traces row access through platform audit records | Governance | Supported | External audit storage is deployment-owned |
-| 7 | Client requests a signed credential from Registry Notary after Relay discovery | Notary handoff | Supported | Relay publishes evidence offering discovery only |
-| 8 | Client discovers evidence offerings and calls Registry Notary | Notary handoff | Supported | Notary request semantics live in Notary docs |
+| 7 | Client requests a signed assertion from Registry Evidence after Relay discovery | Evidence handoff | Supported | Relay publishes evidence offering discovery only |
+| 8 | Client discovers evidence offerings and calls Registry Evidence | Evidence handoff | Supported | Request semantics live in the Evidence docs |
 | 9 | GIS consumer reads spatial entities through OGC API Features | Standards adapter | Supported | Requires spatial config and feature build |
 | 10 | Catalog consumer reads metadata through OGC API Records | Standards adapter | Supported | Records surface is metadata-only |
 | 11 | EDR consumer queries admin-area aggregates | Standards adapter | Lab-supported | Requires configured spatial aggregates and feature build |
 | 12 | SP DCI sync consumer calls a configured registry adapter | Standards adapter | Lab-supported | Async DCI APIs are out of scope |
 | 14 | Program system writes registry data through Relay | Write workflow | Out of scope | Relay V1 is read-only |
-| 15 | Relay performs local evidence verification | Evidence verification | Out of scope | Registry Notary owns verification execution |
+| 15 | Relay performs local evidence verification | Evidence verification | Out of scope | Registry Evidence owns assertion execution |
 | 16 | Relay enforces row-level authorization expressions | Fine-grained auth | Planned | V1 uses scopes, filters, purpose headers, and projection |
 
 ## Demo coverage

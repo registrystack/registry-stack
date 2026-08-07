@@ -1,0 +1,65 @@
+fixture: registry.evidence.acceptance.professional-licence/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  legal_local_date: '2026-08-02'
+  selector: {licence_reference: synthetic-licence-001, registry_region: RR-A}
+  selectors:
+    subject: {profile: licence-register-v1, values: {licence_reference: synthetic-licence-001, registry_region: RR-A}}
+  expectedRequestParts:
+    query: [{name: licence_reference, value: synthetic-licence-001}, {name: registry_region, value: RR-A}, {name: fields, value: "licence_state,valid_from,valid_until"}, {name: limit, value: "2"}]
+    body: null
+  expectedTransport: {path: /v1/records, fixedHeaders: [{name: Accept, value: application/json}]}
+cases:
+  - id: positive
+    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-20', historical_states: [PENDING]}]}
+    expected_values: {licence-active: true, licence-expiry-category: within-30-days}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-inactive-is-success
+    source: {total: 1, records: [{licence_state: SUSPENDED, valid_from: '2025-01-01', valid_until: '2026-12-31', historical_states: [CURRENT]}]}
+    expected_values: {licence-active: false, licence-expiry-category: later}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-valid-from
+    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2026-08-02', valid_until: '2026-12-31', historical_states: []}]}
+    expected_values: {licence-active: true, licence-expiry-category: later}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-valid-until
+    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-02', historical_states: []}]}
+    expected_values: {licence-active: true, licence-expiry-category: within-30-days}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-after-valid-until
+    legal_local_date: '2026-08-03'
+    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', valid_until: '2026-08-02', historical_states: []}]}
+    expected_values: {licence-active: false, licence-expiry-category: expired}
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: missing-fact
+    source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', historical_states: []}]}
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+  - {id: missing-record, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: no-match, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: source-failure, source_failure: wrong-media-type, expected_public_problem: dependency_unavailable, signed_success: false}
+  - id: negative-exact-date-leak
+    injected_derivation:
+      - {concept_id: urn:example:fixture:concept:licence-active, value: true}
+      - {concept_id: urn:example:fixture:concept:licence-expiry-category, value: '2026-08-20'}
+    expected: output-gate-rejection
+  - {id: anti-reconstruction, companion_bundle: coexisting-revisions, expected: bundle-rejection}
+privacy_expectation:
+  evidence_contains: [urn:example:fixture:concept:licence-active, urn:example:fixture:concept:licence-expiry-category]
+  evidence_excludes: [valid_from, valid_until, historical_states, licence_reference, registry_region]
+  diagnostics_exclude: [synthetic-licence-001, '2026-08-20', PENDING, CURRENT]
+  minimization_claim: disclosure minimization only

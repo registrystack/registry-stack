@@ -14,6 +14,7 @@ import {
 import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
 import { buildDocsetArchive } from './build-archives.mjs';
 import { loadDocsets } from './docsets.mjs';
+import { publishedArchiveDocsets } from '../src/lib/docset-retention.mjs';
 
 const defaultArchiveBaseUrl = 'https://docs.registrystack.org/_archive-bundles';
 const defaultReleaseBaseUrl =
@@ -222,9 +223,12 @@ export async function assembleArchives({
   let bootstrapped = 0;
   let restored = 0;
   const sources = {};
-  const archived = docsets.docsets.filter(
-    (entry) => entry.status === 'archived' && entry.id !== excludeDocsetId,
-  );
+  const published = publishedArchiveDocsets(docsets);
+  const publishedIds = new Set(published.map((entry) => entry.id));
+  const omitted = docsets.docsets
+    .filter((entry) => entry.status === 'archived' && !publishedIds.has(entry.id))
+    .map((entry) => entry.id);
+  const archived = published.filter((entry) => entry.id !== excludeDocsetId);
   for (const docset of archived) {
     const lockEntry = lock.archives[docset.id];
     if (await restoreLocalBundle({ docsRoot, docset, lockEntry })) {
@@ -260,6 +264,7 @@ export async function assembleArchives({
     bootstrapped,
     restored,
     skipped: excludeDocsetId ? [excludeDocsetId] : [],
+    omitted,
     sources,
   };
 }
@@ -287,7 +292,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     console.log(
       `Assembled ${result.restored + result.bootstrapped} immutable archive(s): ` +
         `${result.restored} restored, ${result.bootstrapped} bootstrapped, ` +
-        `${result.skipped.length} supplied separately.`,
+        `${result.skipped.length} supplied separately, ` +
+        `${result.omitted.length} outside the publication window.`,
     );
   } catch (error) {
     console.error(error.message);

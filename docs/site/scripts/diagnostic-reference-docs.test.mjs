@@ -15,8 +15,8 @@ const repoRoot = resolve(siteRoot, '../..');
 const execFileAsync = promisify(execFile);
 const expectedCounts = {
   authoring: 17,
-  fixture: 16,
-  operator: 60,
+  fixture: 15,
+  operator: 42,
 };
 
 async function artifactBytes(catalog) {

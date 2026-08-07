@@ -440,7 +440,7 @@ fn project_service_validation_instance_path(document: &Value) -> Option<String> 
     }
     for (service_id, service) in services {
         let branch = match service.get("kind").and_then(Value::as_str) {
-            Some("evidence") => "evidenceService",
+            Some("consultation_api") => "consultationService",
             Some("records_api") => "recordsService",
             Some(_) => {
                 return Some(format!(
@@ -1980,10 +1980,6 @@ mod schema_authority_tests {
                 "/$defs/integrationRequestByteSize",
                 "/$defs/integrationResponseByteSize",
                 "/$defs/integrationSourceByteSize",
-                "/$defs/oid4vci/properties/registrar_clients",
-                "/$defs/oid4vci/properties/representative_issuance/properties/max_proof_age_seconds",
-                "/$defs/oid4vci/properties/tx_code/properties/required",
-                "/properties/issuance/properties/algorithm",
             ]
         );
         assert!(
@@ -2025,48 +2021,6 @@ mod schema_authority_tests {
             );
         }
 
-        let issuance_omitted: IssuanceBinding = serde_json::from_value(json!({
-            "issuer": "https://issuer.invalid",
-            "signing_key": {"secret": "ISSUER_KEY"},
-            "signing_kid": "issuer-key",
-            "generation": 1
-        }))
-        .expect("omitted issuance algorithm parses");
-        let issuance_explicit: IssuanceBinding = serde_json::from_value(json!({
-            "issuer": "https://issuer.invalid",
-            "signing_key": {"secret": "ISSUER_KEY"},
-            "signing_kid": "issuer-key",
-            "algorithm": "EdDSA",
-            "generation": 1
-        }))
-        .expect("explicit issuance algorithm parses");
-        assert_eq!(
-            serde_json::to_value(issuance_omitted).expect("issuance serializes"),
-            serde_json::to_value(issuance_explicit).expect("issuance serializes")
-        );
-
-        let tx_omitted: Oid4vciTxCodeBinding =
-            serde_json::from_value(json!({})).expect("omitted tx-code default parses");
-        let tx_explicit: Oid4vciTxCodeBinding = serde_json::from_value(json!({"required": true}))
-            .expect("explicit tx-code default parses");
-        assert_eq!(
-            serde_json::to_value(tx_omitted).expect("tx code serializes"),
-            serde_json::to_value(tx_explicit).expect("tx code serializes")
-        );
-
-        let environment_schema: Value =
-            serde_json::from_str(ProjectSchemaKind::Environment.document())
-                .expect("environment schema parses");
-        let registrar_clients_default: Vec<String> = serde_json::from_value(
-            environment_schema["$defs"]["oid4vci"]["properties"]["registrar_clients"]["default"]
-                .clone(),
-        )
-        .expect("registrar client default parses");
-        assert_eq!(
-            registrar_clients_default,
-            Vec::<String>::default(),
-            "schema and serde use the same empty registrar-client default"
-        );
     }
 
     fn collect_keyword_addresses(

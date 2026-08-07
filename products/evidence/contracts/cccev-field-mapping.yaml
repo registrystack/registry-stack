@@ -1,0 +1,91 @@
+contract: registry.evidence.cccev-mapping/v1
+status: frozen
+semantic_reference:
+  vocabulary: CCCEV
+  version: 2.2.0
+  url: https://semiceu.github.io/CCCEV/releases/2.2.0/
+mapping:
+  Evidence.schema:
+    source: evidence_extension
+    rule: Fixed profile discriminator registry.assertion-evidence/v1.
+  Evidence.requestNonce:
+    source: evidence_extension
+    rule: Exact echo of the caller-supplied request nonce; uninterpreted correlation data with no CCCEV-native counterpart, never a subject binding, identifier, or freshness proof.
+  Evidence.id:
+    source: dct:identifier
+    rule: Core-created globally unique evidence identifier.
+  Evidence.type:
+    source: cccev:Evidence
+    rule: Literal Evidence in Version 1.
+  Evidence.supportsRequirement:
+    source: cccev:supportsRequirement
+    range: cccev:Requirement
+    rule: Exact configured requirement identifier and revision.
+  Evidence.isConformantTo:
+    source: dct:conformsTo
+    range: cccev:EvidenceType
+    rule: Exact configured Evidence Type identifier.
+  Evidence.issuedBy:
+    source: dct:creator
+    range: cccev:Agent
+    rule: Legal issuer responsible for the assertion semantics.
+  Evidence.providedBy:
+    source: cccev:providedBy
+    range: cccev:Agent
+    rule: Technical Evidence provider that constructs and signs the payload.
+  Evidence.issuedAt:
+    source: dct:issued
+    range: xsd:dateTime
+    rule: Core-assigned UTC instant after successful evaluation.
+  Evidence.observedAt:
+    source: evidence_extension
+    range: xsd:dateTime
+    rule: Observation instant used by derivation.
+  Evidence.validUntil:
+    source: dct:valid
+    range: xsd:dateTime
+    rule: Optional exclusive UTC validity bound computed from fixed configuration.
+  Evidence.purpose:
+    source: evidence_extension
+    rule: Authorized configured purpose code, not caller-defined prose.
+  Evidence.audience:
+    source: evidence_extension
+    rule: Audience derived from authenticated authority context.
+  Evidence.configurationRevision:
+    source: evidence_extension
+    rule: sha256 digest of the configuration and artifact closure of the one requirement the assertion answers, not of the whole bundle.
+  Evidence.subjects:
+    source: evidence_extension
+    rule: Closed role-bound, audience-scoped subject bindings; selectors are never included.
+  Evidence.supportedValues:
+    source: cccev:supportsValue
+    range: cccev:SupportedValue
+    rule: Exactly the concept-value set declared by the selected requirement.
+  SubjectBinding.role:
+    source: evidence_extension
+    rule: Exact configured requirement role identifier.
+  SubjectBinding.binding:
+    source: evidence_extension
+    rule: Audience-scoped opaque binding over the complete canonical role and selector bundle.
+  SupportedValue.providesValueFor:
+    source: cccev:providesValueFor
+    range: cccev:InformationConcept
+    rule: Exact configured Information Concept identifier.
+  SupportedValue.value:
+    source: cccev:value
+    rule: One closed Version 1 form validated against the concept declaration; bounded decimals use canonical decimal strings to preserve exact coefficient and scale.
+bundle_model:
+  requirement_kinds:
+    criterion: cccev:Criterion
+    information_requirement: cccev:InformationRequirement
+    constraint: cccev:Constraint
+  evidence_type: cccev:EvidenceType
+  information_concept: cccev:InformationConcept
+  reference_framework: cccev:ReferenceFramework
+  evidence_type_list:
+    source: cccev:EvidenceTypeList
+    semantics: Types within a list are AND; alternative lists are OR.
+    runtime_rule: Preserved as metadata only; Version 1 does not execute multi-evidence or multi-source fulfillment.
+extension_policy:
+  namespace: https://registrystack.org/ns/evidence/v1#
+  rule: Evidence extensions are explicit and must never be described as CCCEV-native properties.

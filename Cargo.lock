@@ -1156,6 +1156,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1307,6 +1325,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "crossterm"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
+dependencies = [
+ "bitflags 2.13.0",
+ "crossterm_winapi",
+ "derive_more",
+ "document-features",
+ "mio",
+ "parking_lot",
+ "rustix",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
+]
+
+[[package]]
+name = "crossterm_winapi"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "crosswalk-cel"
 version = "0.2.0"
 source = "git+https://github.com/PublicSchema/crosswalk?rev=1d44ec735fdc8a7c719264b339574371e8330337#1d44ec735fdc8a7c719264b339574371e8330337"
@@ -1438,28 +1483,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cryptoki"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff765b99fc49f3116c9a908484486a2b92fd73c48da45c3a69716471c6cc56c6"
-dependencies = [
- "bitflags 2.13.0",
- "cryptoki-sys",
- "libloading",
- "log",
- "secrecy",
-]
-
-[[package]]
-name = "cryptoki-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1fd850498411e4057f1cba79e6e2bc7cbe960544c1046ab46d4685c403a1121"
-dependencies = [
- "libloading",
-]
-
-[[package]]
 name = "csv"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,6 +1502,12 @@ checksum = "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "ctor"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d83cb7e7a873830708d6b02a78cd36a592c6fa14bf267b68725103b85c0d77f"
 
 [[package]]
 name = "ctutils"
@@ -2251,9 +2280,6 @@ name = "deadpool-runtime"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
-dependencies = [
- "tokio",
-]
 
 [[package]]
 name = "debug_unsafe"
@@ -2326,6 +2352,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case 0.10.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2364,6 +2412,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
 ]
 
 [[package]]
@@ -2819,6 +2876,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -3608,6 +3674,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "inquire"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6654738b8024300cf062d04a1c13c10c8e2cea598ec1c47dc9b6641159429756"
+dependencies = [
+ "bitflags 2.13.0",
+ "crossterm",
+ "dyn-clone",
+ "fuzzy-matcher",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "insta"
 version = "1.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3824,7 +3904,6 @@ dependencies = [
  "anyhow",
  "base64",
  "bytecount",
- "clap",
  "fancy-regex 0.13.0",
  "fraction",
  "getrandom 0.2.17",
@@ -3836,7 +3915,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "regex",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "time",
@@ -3964,9 +4042,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link",
@@ -4024,6 +4102,12 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lock_api"
@@ -4153,6 +4237,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02bd0af71c67b473010cbbc60715ee815645a4dc942899111f494b4b737d6fda"
 dependencies = [
  "libc",
+ "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
 ]
@@ -4181,6 +4266,66 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a198f9589efc03f544388dfc4a19fe8af4323662b62f598b8dcfdac62c14771c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "napi"
+version = "3.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f71d6bc097c4a6eb853c3f24991ab8c9f50f57d1f719e305175541482217e36"
+dependencies = [
+ "bitflags 2.13.0",
+ "ctor",
+ "futures",
+ "napi-build",
+ "napi-sys",
+ "nohash-hasher",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "napi-build"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5282704fbe8d49b0cf8b08e3f33233416a528658f205c7e5ace63b582de0b11c"
+
+[[package]]
+name = "napi-derive"
+version = "3.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9002b2940f0184444754546e0fcd15182f56948e6f381968b019d549387c42"
+dependencies = [
+ "convert_case 0.11.0",
+ "ctor",
+ "napi-derive-backend",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "napi-derive-backend"
+version = "6.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d60b5d773ad46c698c8cc2cd9fde0b283d39cbb7f71c04bee633c7bdba4423bd"
+dependencies = [
+ "convert_case 0.11.0",
+ "proc-macro2",
+ "quote",
+ "semver",
+ "syn",
+]
+
+[[package]]
+name = "napi-sys"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85fbf1fa9f1babfe396d74bbbf52b3643770243e8f5b0b46715d4caf7f0dfc9a"
+dependencies = [
+ "libloading",
 ]
 
 [[package]]
@@ -5016,6 +5161,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc153f5fd745cc038b5eed86622125969f8a39834a57bc96beaaf2512b1da729"
+dependencies = [
+ "libc",
+ "once_cell",
+ "portable-atomic",
+ "pyo3-build-config",
+ "pyo3-ffi",
+ "pyo3-macros",
+]
+
+[[package]]
+name = "pyo3-build-config"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb77d9aa6d647507b55c69ee714d266d84c526c78ff0bc6dd8757f58591e64d1"
+dependencies = [
+ "target-lexicon",
+]
+
+[[package]]
+name = "pyo3-ffi"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3160087aa5733bce7d9a729f8c55f85a2a53b74742a09613178eeebff0722253"
+dependencies = [
+ "libc",
+ "pyo3-build-config",
+]
+
+[[package]]
+name = "pyo3-macros"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91f9d455db760a9a0b0ddeaac25f1390b8a36ba73dfbda9f127cac6fc340d4d5"
+dependencies = [
+ "proc-macro2",
+ "pyo3-macros-backend",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "pyo3-macros-backend"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e343bcec300ff262f5806a33a4e51b6d097a8a46435f512fcb83e95592581625"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5337,7 +5539,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-config-report"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "jsonschema 0.46.6",
  "serde",
@@ -5345,8 +5547,181 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidence"
+version = "0.17.0"
+dependencies = [
+ "assert-json-diff",
+ "async-trait",
+ "axum",
+ "axum-test",
+ "base64",
+ "bytes",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "clap",
+ "criterion",
+ "ed25519-dalek",
+ "fs2",
+ "http",
+ "jsonschema 0.18.3",
+ "jsonwebtoken",
+ "p256",
+ "rand_core 0.6.4",
+ "rcgen",
+ "registry-evidence-verifier",
+ "registry-platform-audit",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-sdjwt",
+ "reqwest 0.12.28",
+ "rhai",
+ "rustix",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "utoipa",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-evidence-client"
+version = "0.17.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "p256",
+ "registry-evidence",
+ "registry-evidence-verifier",
+ "registry-mint",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-sdjwt",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "ulid",
+ "url",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-evidence-client-node"
+version = "0.17.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "jsonschema 0.18.3",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "p256",
+ "registry-evidence-client",
+ "registry-evidence-verifier",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-evidence-client-py"
+version = "0.17.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "jsonschema 0.18.3",
+ "p256",
+ "pyo3",
+ "pyo3-build-config",
+ "registry-evidence-client",
+ "registry-evidence-verifier",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "registry-evidence-verifier"
+version = "0.17.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "jsonschema 0.18.3",
+ "p256",
+ "registry-platform-crypto",
+ "registry-platform-sdjwt",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
+name = "registry-evidencectl"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "clap",
+ "getrandom 0.4.3",
+ "inquire",
+ "p256",
+ "registry-evidence-client",
+ "registry-platform-crypto",
+ "rhai",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "signal-hook",
+ "tempfile",
+ "ureq",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-language-server"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5359,7 +5734,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5370,7 +5745,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5384,175 +5759,49 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-notary"
-version = "0.16.2"
+name = "registry-mint"
+version = "0.17.0"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-test",
  "base64",
- "chrono",
  "clap",
  "ed25519-dalek",
- "getrandom 0.4.3",
- "hyper",
- "hyper-util",
- "jsonschema 0.18.3",
- "registry-config-report",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-ops",
- "reqwest 0.12.28",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "wiremock",
-]
-
-[[package]]
-name = "registry-notary-client"
-version = "0.16.2"
-dependencies = [
- "async-trait",
- "axum",
- "axum-test",
- "base64",
- "flate2",
- "registry-notary-core",
- "registry-notary-server",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-sdjwt",
- "reqwest 0.12.28",
- "secrecy",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "registry-notary-core"
-version = "0.16.2"
-dependencies = [
- "base64",
- "humantime-serde",
- "ipnet",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
- "registry-platform-ops",
- "registry-platform-sdjwt",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "ulid",
- "url",
- "utoipa",
-]
-
-[[package]]
-name = "registry-notary-server"
-version = "0.16.2"
-dependencies = [
- "async-trait",
- "aws-lc-rs",
- "axum",
- "axum-test",
- "base64",
- "chrono",
- "criterion",
- "crosswalk-core",
- "cryptoki",
- "deadpool",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "jsonschema 0.18.3",
+ "http",
  "jsonwebtoken",
- "native-tls",
- "postgres-native-tls",
- "registry-notary-client",
- "registry-notary-core",
- "registry-notary-worker-harness",
+ "p256",
+ "registry-evidence",
  "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-cache",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
- "registry-platform-ops",
- "registry-platform-pdp",
- "registry-platform-replay",
- "registry-platform-sdjwt",
- "registry-platform-testing",
  "reqwest 0.12.28",
  "rustix",
  "serde",
  "serde_json",
  "serde_norway",
- "sha2 0.11.0",
- "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "time",
  "tokio",
- "tokio-postgres",
  "tower-http 0.7.0",
  "tracing",
+ "tracing-subscriber",
  "ulid",
- "utoipa",
- "wiremock",
+ "url",
  "zeroize",
 ]
 
 [[package]]
-name = "registry-notary-worker-harness"
-version = "0.16.2"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "registry-platform-audit"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
  "registry-platform-canonical-json",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5569,7 +5818,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5582,19 +5831,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-cache"
-version = "0.16.2"
-dependencies = [
- "async-trait",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-canonical-json"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5604,7 +5842,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5615,11 +5853,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "time",
+ "zeroize",
 ]
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5630,10 +5869,12 @@ dependencies = [
  "pkcs1",
  "proptest",
  "registry-platform-canonical-json",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "url",
@@ -5642,7 +5883,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "axum",
  "http",
@@ -5657,7 +5898,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "axum",
  "base64",
@@ -5683,23 +5924,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-platform-oid4vci"
-version = "0.16.2"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-replay",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-oidc"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "axum",
  "base64",
@@ -5715,7 +5941,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
@@ -5732,26 +5958,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-pdp"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "registry-platform-replay"
-version = "0.16.2"
-dependencies = [
- "async-trait",
- "getrandom 0.4.3",
- "registry-platform-cache",
- "thiserror 2.0.18",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "registry-platform-sdjwt"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -5768,7 +5982,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5779,14 +5993,11 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
- "registry-platform-oid4vci",
  "registry-platform-oidc",
- "registry-platform-replay",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tower",
  "wiremock",
@@ -5794,7 +6005,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -5834,8 +6045,6 @@ dependencies = [
  "rcgen",
  "registry-config-report",
  "registry-manifest-core",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-config",
@@ -5877,7 +6086,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5895,8 +6104,6 @@ dependencies = [
  "regex",
  "registry-config-report",
  "registry-language-server",
- "registry-notary-core",
- "registry-notary-server",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -5925,9 +6132,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
- "futures-channel",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -6287,6 +6492,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
@@ -6323,15 +6529,6 @@ dependencies = [
  "generic-array 0.14.9",
  "pkcs8",
  "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "secrecy"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
-dependencies = [
  "zeroize",
 ]
 
@@ -6628,6 +6825,27 @@ name = "sif-itree"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7f45b8998ced5134fb1d75732c77842a3e888f19c1ff98481822e8fbfbf930b"
+
+[[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-mio"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
+dependencies = [
+ "libc",
+ "mio",
+ "signal-hook",
+]
 
 [[package]]
 name = "signal-hook-registry"
@@ -7075,6 +7293,12 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "target-lexicon"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tempfile"
@@ -8344,17 +8568,6 @@ dependencies = [
  "cmpv2",
  "cms",
  "der",
-]
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "base64",
- "registry-platform-crypto",
- "registry-platform-sdjwt",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

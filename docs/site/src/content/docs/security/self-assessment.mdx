@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-24"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -24,14 +24,14 @@ against that public guide.
 | Repository | [registrystack/registry-stack](https://github.com/registrystack/registry-stack) |
 | Assessment type | Maintainer self-assessment |
 | Review history | No public review ledger yet |
-| Last reviewed | 2026-06-24 |
+| Last reviewed | 2026-08-03 |
 
 ## Overview
 
 Registry Stack helps operators publish governed registry-facing services over
 data they already hold. The two main runtime patterns are protected registry
-APIs through Registry Relay and governed evidence responses through Registry
-Notary.
+APIs through Registry Relay and signed minimum-disclosure assertions through
+Evidence Gateway.
 
 The public architecture, boundary model, and product roles are documented in
 [Architecture](../../explanation/architecture/) and
@@ -57,12 +57,12 @@ Software guarantees include:
   governed evidence evaluation.
 - Disclosure controls that can return narrower evidence instead of source
   records.
-- Credential issuance for configured Notary surfaces, including SD-JWT VC
-  issuance where configured.
+- Signed, stateless Evidence Gateway assertions, serialized as a flattened JWS or, under
+  Evidence Gateway's frozen profile, as an SD-JWT VC response.
 - Hash-chained audit records emitted by runtime services.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
-  and tag-bound release provenance.
+  and attestations for the exact candidate manifest and bundle.
 
 Operator responsibilities include:
 
@@ -92,15 +92,16 @@ Development evidence:
 - Release validation checks source tag matching, source-ref ancestry, default
   branch reachability, and manifest consistency.
 - Current GitHub Release payloads are covered by one keyless Sigstore-signed
-  `SHA256SUMS` file. Tag-triggered releases also publish release-level SLSA
-  provenance. The public verification process is documented in
+  `SHA256SUMS` file. The protected-main publication workflow verifies the
+  candidate attestations before promotion. The public verification process is documented in
   [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 Known release-integrity gaps:
 
 - OCI image signatures are not yet published for root monorepo releases.
-- Existing releases produced before the provenance workflow change may not
-  include release-level SLSA provenance assets.
+- Ordinary Beta releases do not publish a second generic SLSA provenance
+  asset. Candidate attestations and the signed checksum closure cover the
+  current Beta provenance boundary.
 - Public claims about signing are scoped to the release asset or product
   surface that actually performs signing.
 
@@ -119,8 +120,8 @@ Primary public evidence:
 - [RS-SEC-G](../../spec/rs-sec-g/)
 - [Contracts](../../reference/contracts/)
 - [OpenSSF evidence](../openssf-evidence/)
-- [Registry Notary API reference](../../reference/apis/registry-notary/)
+- [Evidence Gateway API reference](../../reference/apis/registry-evidence/)
 - [Registry Relay API reference](../../reference/apis/registry-relay/)
 - GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
-  security evidence, image lock, release manifest, and provenance
+  security evidence, image lock, release manifest, and candidate attestations
 - [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)

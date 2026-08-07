@@ -1,0 +1,299 @@
+fixture: registry.evidence.reference.dhis2-adult-status/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: tracked-entity-reference-v1
+      values: {record_reference: Tei00000001}
+  derivationSelectorInputs:
+    subject:
+      profile: tracked-entity-reference-v1
+      values: {record_reference: Tei00000001}
+  expectedRequestParts:
+    query:
+      - name: program
+        value: Prg00000001
+      - name: orgUnits
+        value: Org00000001
+      - name: trackedEntities
+        value: Tei00000001
+      - name: fields
+        value: "trackedEntity,attributes[attribute,value]"
+      - name: pageSize
+        value: "2"
+      - name: page
+        value: "1"
+      - name: totalPages
+        value: "true"
+    body: null
+  expectedTransport:
+    path: /api/tracker/trackedEntities
+    fixedHeaders:
+      - name: Accept
+        value: application/json
+cases:
+  - id: positive
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Dob00000001
+              value: "2000-01-01"
+            - attribute: Oth00000001
+              value: SOURCE-UNRELATED-CANARY
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        date_of_birth: "2000-01-01"
+      value: true
+
+  - id: negative-false-is-success
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Dob00000001
+              value: "2010-01-01"
+    expected:
+      lookup: match
+      derivationRuns: true
+      facts:
+        record_reference: Tei00000001
+        date_of_birth: "2010-01-01"
+      value: false
+      signed: true
+
+  - id: boundary-on
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Dob00000001
+              value: "2008-08-02"
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        record_reference: Tei00000001
+        date_of_birth: "2008-08-02"
+      value: true
+
+  - id: missing-fact
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Oth00000001
+              value: SOURCE-UNRELATED-CANARY
+    expected:
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: no-match
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 0
+        pageCount: 0
+      trackedEntities: []
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: ambiguous
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 2
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: []
+        # The second record carries no reference of its own, only the
+        # attribute list the projection insists on. The pager decides this page
+        # before any record is read, so a response shape that demanded a
+        # complete record here would turn an ordinary ambiguous lookup into a
+        # source-protocol failure.
+        - attributes: []
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  # A tracker page whose envelope is truncated, inconsistent, or wrongly typed is
+  # never read as an authoritative no-match, unique match, or duplicate.
+  - id: truncated-pager
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: pager-count-mismatch
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 2
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: total-collection-mismatch
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: fractional-total
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1.5
+        pageCount: 1
+      trackedEntities: []
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  # One tracked entity carrying the configured attribute twice, or carrying it
+  # with a non-string value, is a provider or configuration fault rather than a
+  # record that legitimately lacks a date of birth.
+  - id: duplicate-configured-attribute
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Dob00000001
+              value: "2000-01-01"
+            - attribute: Dob00000001
+              value: "2010-01-01"
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: non-string-attribute-value
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000001
+          attributes:
+            - attribute: Dob00000001
+              value: 20000101
+    expected:
+      error: source_protocol_error
+      derivationRuns: false
+      signed: false
+
+  - id: returned-subject-mismatch
+    response:
+      pager:
+        page: 1
+        pageSize: 2
+        total: 1
+        pageCount: 1
+      trackedEntities:
+        - trackedEntity: Tei00000002
+          attributes:
+            - attribute: Dob00000001
+              value: "2000-01-01"
+    expected:
+      lookup: match
+      error: derivation_input_error
+      publicProblem: evidence_not_available
+      derivationRuns: true
+      signed: false
+
+  - id: source-failure
+    sourceFailure: timeout
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+
+  # An expired provider session answers a JSON request with an HTML sign-in page.
+  - id: source-html-sign-in-page
+    sourceFailure: invalid-media-type
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+
+  - id: hostile-reference
+    selectorOverrides:
+      subject:
+        values: {record_reference: "X&fields=*%0D%0AInjected:yes"}
+    expected:
+      sourceRequestCount: 1
+      expectedTransport:
+        path: /api/tracker/trackedEntities
+        query: "program=Prg00000001&orgUnits=Org00000001&trackedEntities=X%26fields%3D%2A%250D%250AInjected%3Ayes&fields=trackedEntity%2Cattributes%5Battribute%2Cvalue%5D&pageSize=2&page=1&totalPages=true"
+        body: null
+
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
+privacyExpectation:
+  evidenceContains: [urn:gov:example:concept:adult-status]
+  evidenceExcludes: [date_of_birth, record_reference, tracked-entity-reference-v1, Tei00000001, Tei00000002]
+  diagnosticsExclude: [Tei00000001, Tei00000002, "2000-01-01", SOURCE-UNRELATED-CANARY]

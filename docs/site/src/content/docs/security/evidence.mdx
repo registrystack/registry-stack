@@ -1,0 +1,255 @@
+---
+title: Evidence Gateway security model
+description: "The security invariants Evidence Gateway enforces, how each traces to a named test, and the duties that remain with the operator."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-07"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Evidence Gateway's security model is contract-driven. The invariant matrix in
+`products/evidence/contracts/security-invariant-matrix.yaml` is the source of
+truth for what the runtime guarantees, `products/evidence/contracts/security-test-traceability.yaml`
+binds every invariant to the named tests that prove it, and continuous
+integration regenerates and byte-diffs both contracts through the
+`evidence-contracts` job, which runs
+`products/evidence/scripts/check-contracts.sh`. A change that narrows a
+guarantee or drops its test fails that job rather than merging unnoticed.
+
+## What the invariant matrix guarantees
+
+The matrix pins 40 numbered invariants, `V1-I01` through `V1-I40`, each with a
+rule, the threat it closes, its enforcement, and one `negative_test` id. This
+section groups them by theme and cites each id in backticks; the matrix itself
+is the complete, normative text.
+
+### Closed request and requirement scope
+
+Evidence Gateway evaluates only predefined, versioned requirement revisions
+(`V1-I01`). The request schema is closed, so callers cannot supply
+thresholds, expressions, scripts, paths, headers, source fields, relationship
+types, adapter parameters, or response projections (`V1-I02`). Because a
+bundle enabling several requirements at once can reconstruct a protected
+value across them, the complete enabled bundle is reviewed as one disclosure
+surface (`V1-I03`).
+
+### Authentication and authorization
+
+Principals and attributes derive only from configured, validated
+authentication sources, and missing data denies rather than falling back to
+another claim (`V1-I04`). One authorization decision binds requester,
+optional actor, requirement revision, purpose, every role, profile, and
+origin tuple, authority, and audience together, so partial matches across
+grants cannot be unioned into access (`V1-I05`). Selector profiles and values
+are provider-lookup inputs only, never proof of authority (`V1-I06`), and a
+caller-supplied consent, approval, or grant reference cannot create authority
+on its own (`V1-I07`). Callers cannot choose selector fields, operators,
+weights, thresholds, normalization, or query plans; named profiles close the
+exact field set (`V1-I08`).
+
+### Source access and the Rhai boundary
+
+Source calls are fixed by trusted configuration and executed only by the
+core, closing off SSRF, credential forwarding, and script-directed
+networking (`V1-I09`). Provider lookup exposes only `match`, `no_match`, or
+`ambiguous`; Evidence Gateway never surfaces or chooses candidates (`V1-I10`). Rhai
+scripts return one closed lookup result and declared typed concept values
+only (`V1-I11`), and the core rejects undeclared concepts, extra fields, and
+any value that violates its type, codelist, cardinality, precision, or size
+before evidence construction (`V1-I12`). Public evidence is assembled only by
+the core after that validation, so a script cannot inject envelope fields,
+subject identifiers, or unsupported claims (`V1-I25`).
+
+### Fail-closed behavior and non-disclosure
+
+Missing facts, undefined decisions, script failures, audit failures, and
+evaluation failures all fail closed rather than releasing partial or
+unaudited evidence (`V1-I13`). Raw source responses are never persisted or
+logged (`V1-I14`), and selector, source, and disclosed values never appear in
+logs or native audit (`V1-I15`). No-match, ambiguous, missing-fact, and
+inconsistent-derivation outcomes collapse to one public problem shape by
+default, so a caller cannot use response shape, message, or timing as an
+existence oracle for registry membership (`V1-I16`). Subject bindings are
+scoped to their audience, purpose, role, and selector bundle, so the same
+subject is not linkable across purposes or relying parties (`V1-I17`).
+
+### Configuration and process tenancy
+
+Configuration is immutable for the life of the serving process: there is no
+runtime override, reload, merge, or fallback path (`V1-I18`). One process
+serves one operator-controlled trust domain, with one service trust domain,
+issuer governance boundary, bundle lifecycle, signer, and audit boundary
+(`V1-I19`). Rate controls are defense in depth rather than a substitute for
+safe bundle design; combination validation runs independently of configured
+rate limits (`V1-I20`).
+
+### Signing and response integrity
+
+A signed flattened JWS over the exact evidence payload is mandatory,
+available to every authorized grant, and the default response; unsigned
+output exists only through its own exact media type when both the bundle and
+the matched grant permit it (`V1-I21`). Missing or failed signing never falls
+back to unsigned evidence (`V1-I22`). Private signing material is owned by
+the core alone and stays absent from bundle values, Rhai, logs, audit, and
+errors (`V1-I23`). A signature authenticates the provider and payload
+integrity; it does not assert legal-signature status or source truth
+(`V1-I24`).
+
+### Discovery, nonce handling, and response-format authorization
+
+Evidence Gateway definition discovery is authenticated and requester-scoped; it never
+creates authority or exposes deployment internals such as selectors, source
+plans, or credentials (`V1-I26`). Every request carries one canonical
+32-byte random nonce that is echoed into the evidence payload but never
+stored, uniqueness-checked, or exposed to authorization, rate limits, Rhai,
+source requests, logs, metrics, traces, or native audit (`V1-I27`). The
+unsigned response format is authorized only when the immutable bundle
+enables it and the one complete matched grant also permits it; API
+selection, runtime configuration, or other grants create no permission on
+their own (`V1-I28`). The final immutable response bytes exist before the
+disclosure-release audit is durably accepted, and those are the exact bytes
+released afterward (`V1-I29`). Every native audit event records the closed
+response-protection mode, and a signing key identity is present exactly for
+signed release (`V1-I30`).
+
+### Verification and token binding
+
+Strict signed verification compares the response against independently
+retained expectations, the expected nonce, the expected unordered set of
+unique role-bound subject bindings, and the expected concept identifiers,
+forms, and cardinalities, and returns one generic policy-mismatch error
+rather than revealing which comparison failed (`V1-I31`). An access token
+carrying a proof-of-possession confirmation claim is denied rather than
+accepted as an ordinary bearer token, because Evidence Gateway validates no sender
+proof and accepting one would discard the constraint the token was issued
+under (`V1-I32`).
+
+### Assurance and fixed acquisition
+
+The local assurance profile alone may omit requirement fixtures, while production and evidence-grade
+retain complete fixture validation (`V1-I34`). Assertions, definition responses, and audit events carry
+the governed assurance profile, and verification compares it with an independent expectation
+(`V1-I35`). Credential-free source access is limited to local authoring against an exact numeric
+loopback HTTP origin and sends no authentication header (`V1-I36`). Configured authority claims use
+distinct token members and cannot reuse registered JWT claims, except that the principal may use `sub`
+(`V1-I37`). Every authority selector set must fill each selector-bound path template it can activate
+(`V1-I38`). A search-then-fetch acquisition is one fixed search and, only after a unique schema-valid
+match, one fixed fetch; only validated prior facts cross the stage boundary and no response or script
+can create another call (`V1-I40`).
+
+### Telemetry
+
+Operational telemetry is off by default, served only on a separate
+operator-private listener, and every series label is drawn from a closed set
+(route template, method, status category, problem code) rather than from
+request content (`V1-I33`).
+
+### Cross-cutting controls
+
+The matrix also pins 23 cross-cutting controls, keyed by name rather than a
+`V1-I` id, each with its own negative test. They cover bundle and secret
+trust (`config_trust`, `secret_parsing`), durable audit ordering
+(`audit_order`), listener exposure and outbound transport
+(`transport_identity`, `outbound_tls_and_proxy`, `transport_pinning`), secret
+file identity (`secret_file_identity`), the closed runtime file
+(`runtime_ownership_split`), request- and script-boundary details
+(`request_preparation`, `subject_role_order`, `source_response_shape`,
+`script_resource_exhaustion`, `reserved_header_aliases`,
+`jwks_route_parity`, `unsigned_envelope_distinct`, `exact_decimal`,
+`entity_reference_projection`), signing and audit key governance
+(`signing_key_governance`, `audit_key_epoch`), and the SD-JWT VC serialization
+(`sd_jwt_vc_projection_integrity`, `sd_jwt_vc_format_authorization`,
+`sd_jwt_vc_holder_key_closed`, `sd_jwt_vc_claims_closed`).
+
+## How test traceability works
+
+Each invariant's `negative_test` id in the matrix is a key into
+`products/evidence/contracts/security-test-traceability.yaml`, which lists
+the file and function name of every test that proves it. A negative test may
+be split across several functions, but the matrix states one binding review
+rule: a test may be split, never weakened or deleted.
+
+The mapping is not narrative. `crates/registry-evidence/tests/security_contract_traceability.rs`
+reads both contracts and checks three things: every matrix id has a
+traceability entry and every traceability entry maps to a matrix id, so
+neither can drift from the other; each referenced test file exists and
+contains a matching `fn <name>(` signature; and that signature sits under a
+`#[test]` or `#[tokio::test]` attribute rather than a plain function that
+happens to share a name. A traceability entry that names a deleted or
+renamed test fails this check before it fails anything else.
+
+```bash
+products/evidence/scripts/check-contracts.sh
+```
+
+Three concrete examples:
+
+- `V1-I04` (principals and attributes derive only from configured
+  authentication sources) traces to `sec-missing-principal-no-fallback`,
+  proven by `missing_principal_never_falls_back_to_client_id_or_azp` in
+  `crates/registry-evidence/src/runtime_tests.rs`.
+- `V1-I23` (private signing material stays core-owned and absent from bundle
+  values, Rhai, logs, audit, and errors) traces to
+  `sec-private-key-canary-unreachable`, proven by
+  `yaml_names_and_secret_references_are_strict` in
+  `crates/registry-evidence/src/config.rs` and
+  `jwks_contains_public_material_only` in
+  `crates/registry-evidence/src/signing.rs`.
+- `V1-I29` (final immutable response bytes exist before the disclosure-release
+  audit is durably accepted) traces to `sec-release-bytes-pre-audited`,
+  proven by four tests in `crates/registry-evidence/src/runtime_tests.rs`:
+  `disclosure_audit_failure_prevents_signed_response_release`,
+  `disclosure_audit_failure_prevents_unsigned_response_release`,
+  `signing_failure_returns_a_problem_and_never_an_unsigned_body`, and
+  `sd_jwt_signing_failure_no_fallback_format`.
+
+## What the operator must uphold
+
+The invariant matrix describes what the `evidence` binary enforces in code.
+`products/evidence/OPERATOR-CONTRACT.md` states duties that remain with the
+operator because no service-side control can hold them for a deployment it
+does not otherwise touch.
+
+Owner-only key files. Each secret file below the configured
+`secretProviders.file.root` must be a regular, non-symlink file owned by the
+service identity with mode `0600`; the file provider rejects anything else.
+Audit and subject-binding secret files must contain independently generated
+raw key bytes and be at least 32 bytes. The runtime derives separated audit-chain and identifier
+subkeys from each master, but Evidence Gateway also requires the two secret references and resolved
+master bytes to be distinct.
+
+Immutable bundle and runtime file. The operator mounts one reviewed governed
+bundle and one closed `runtime.yaml` read-only at startup; the bundle
+directory, the runtime file, and every captured artifact must be
+non-writable to the service process, with directories and files carrying no
+write bits. There is no runtime upload, editor, approval API, hot reload,
+merge, mutation, governed-field override, or fallback bundle or runtime
+file: a new revision is a new deployment, not a live change.
+
+Secret handling. Source credentials and local-development private signing material reach
+Evidence Gateway only through the secret-reference mechanism and must not appear in
+YAML values, Rhai, command arguments, environment dumps, logs, audit,
+errors, snapshots, or generated contracts. Production and evidence-grade deployment uses a
+workload-local Vault or OpenBao Transit proxy over a Unix socket, leaving the service private key
+non-exportable. The operator configures one active public ES256 P-256 JWK, whose derived RFC 7638
+thumbprint is its `kid`, and retains published public keys for at least the maximum assertion
+validity plus allowed clock skew. A revoked key can be neither active nor published.
+
+## Report a vulnerability
+
+Suspected Evidence Gateway vulnerabilities, including credential disclosure,
+authentication bypass, audit redaction failure, source connector data
+leakage, and signing-key handling bugs, go through the private disclosure
+process in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md),
+never a public issue or pull request. See
+[Report a vulnerability](../report-a-vulnerability/) for the complete in-scope
+list and reporting steps.
+
+## Next
+
+- [Security overview](../)
+- [Report a vulnerability](../report-a-vulnerability/)

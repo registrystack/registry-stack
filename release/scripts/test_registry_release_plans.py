@@ -17,8 +17,6 @@ CROSSWALK_REF = "1" * 40
 EXACT_ARTIFACT_INVENTORY = (
     "registry-docs",
     "registry-manifest-cli",
-    "registry-notary",
-    "registry-notary-cel-worker",
     "registry-relay",
     "registry-relay-rhai-worker",
     "registryctl",

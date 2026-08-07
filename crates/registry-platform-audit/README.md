@@ -13,7 +13,10 @@ helpers for registry services.
   stream, operation ULID, and phase.
 - A `cfg(test)` in-memory conformance sink plus a public-API integration test.
   No in-memory sink exists in production builds.
-- Built-in `JsonlFileSink`, `JsonlStdoutSink`, and `SyslogSink`.
+- Built-in `JsonlFileSink`, `DurableSegmentedJsonlSink`, `JsonlStdoutSink`, and
+  `SyslogSink`.
+- `DurableSegmentedAuditLog` for keyed chain-head ownership, concurrent
+  append ordering, and group commit over `DurableSegmentedJsonlSink`.
 - `verify_chain` and `verify_jsonl_lines` for retained audit consistency
   checks.
 - `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
@@ -34,7 +37,7 @@ use serde_json::json;
 
 async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
     let sink = JsonlFileSink::new("audit.jsonl");
-    let profile = AuditProfile::registry_notary_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
+    let profile = AuditProfile::registry_relay_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
     let chain = profile.bootstrap_or_start_empty(&sink).await?;
 
     let envelope = chain
@@ -200,6 +203,19 @@ production use.
 
 - `JsonlFileSink::new` rotates at 10 MiB and retains 50 files by default.
 - `JsonlFileSink::with_rotation(path, 0, max_files)` disables size rotation.
+- `DurableSegmentedJsonlSink` is the parallel evidence-grade file contract. It
+  seals the active file as `<path>.<eight-digit-sequence>` when the configured
+  threshold is reached, keeps the keyed chain continuous across segments, and
+  never deletes or compacts sealed history. It requires an owner-only audit
+  directory for direct use.
+- `DurableSegmentedAuditLog` adds keyed startup verification and group commit.
+  It retains Evidence's established owner-controlled directory contract while
+  keeping active and lock files owner-only. Use this type when each append must
+  return only after its own bytes are durable.
+- Use `verify_segmented_audit_chain` for operator full-chain verification.
+  Use `visit_stopped_segmented_audit_chain` only for a bounded, caller-owned
+  projection that requires a stopped writer and the complete retained chain
+  starting at sealed segment one.
 - `AuditProfile::bootstrap_or_start_empty` and
   `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
   new appends, which is the normal startup path for persistent sinks.
@@ -239,8 +255,8 @@ production use.
 - `DurableAuditOperationId` validates canonical ULID syntax only. The consumer
   must enforce that the id is server-minted and is not derived from a subject
   selector, token, source identifier, or other sensitive input.
-- Use `AuditProfile::registry_relay_from_env` or
-  `AuditProfile::registry_notary_from_env` in production. `unkeyed_dev_only` is
+- Use `AuditProfile::production_from_env` or
+  `AuditProfile::registry_relay_from_env` in production. `unkeyed_dev_only` is
   for tests and local development.
 - Use `AuditKeyHasher::audit_reference_hash` for durable audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service

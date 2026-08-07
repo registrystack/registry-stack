@@ -15,7 +15,7 @@
       "const": "io.registrystack.registry_release_lock"
     },
     "schema_version": {
-      "const": "1.0"
+      "const": "2.0"
     },
     "signed_payload": {
       "description": "Standard-base64 encoding of the exact RFC 8785 canonical RegistryReleaseLockV1 payload bytes signed by sigstore_bundle.",

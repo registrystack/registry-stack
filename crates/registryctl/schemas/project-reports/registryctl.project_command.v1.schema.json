@@ -89,7 +89,6 @@
         "inputs",
         "calls",
         "outputs",
-        "claims",
         "passed"
       ],
       "additionalProperties": false,
@@ -107,9 +106,6 @@
           "$ref": "#/$defs/string_list"
         },
         "outputs": {
-          "$ref": "#/$defs/string_list"
-        },
-        "claims": {
           "$ref": "#/$defs/string_list"
         },
         "outcome": {
@@ -136,11 +132,9 @@
       "properties": {
         "dimension": {
           "enum": [
-            "claim",
             "integration",
             "service_policy",
             "operator_security",
-            "disclosure",
             "compiler"
           ]
         }

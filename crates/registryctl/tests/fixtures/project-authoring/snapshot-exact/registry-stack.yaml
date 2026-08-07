@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: snapshot
-  release: 0.16.2
-  content_digest: sha256:79d2261e4337e093dd1a1dabc6ea0c240ae9f220fe437643d3323fed606f258c
+  release: 0.17.0
+  content_digest: sha256:f7ec1358ec4813bda04fd7454cbe9e672371a692360eeae5d47f6189e2775488
 registry: { id: fictional-population-registry }
 integrations:
   person-snapshot: { file: integrations/person-snapshot/integration.yaml }
@@ -10,43 +10,22 @@ entities:
   people: { file: entities/people.yaml }
 services:
   benefits-eligibility:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: benefits-eligibility
     legal_basis: public-service-delivery
     consent: not_required
-    access: { scopes: ["evidence:population:read"] }
     consultations:
       person:
         integration: person-snapshot
         input: { person_id: request.target.identifiers.population_person_id }
-    claims:
-      population-record-exists: { cel: person.matched, disclosure: predicate }
-      population-registration-status: { output: person.registration_status, disclosure: value }
-      residency-confirmed: { output: person.residency_confirmed, disclosure: predicate }
-    credential_profiles:
-      population-evidence:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/population-evidence/v1
-        validity: 10m
-        claims: [population-record-exists, population-registration-status, residency-confirmed]
   emergency-assistance:
-    kind: evidence
+    kind: consultation_api
     version: 1
     purpose: emergency-assistance
     legal_basis: vital-interests
     consent: not_required
-    access: { scopes: ["evidence:population:emergency"] }
     consultations:
       person:
         integration: person-snapshot
         input: { person_id: request.target.identifiers.population_person_id }
-    claims:
-      emergency-record-exists: { cel: person.matched, disclosure: predicate }
-      emergency-status: { output: person.registration_status, disclosure: redacted }
-    credential_profiles:
-      emergency-status:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/emergency-status/v1
-        validity: 5m
-        claims: [emergency-record-exists, emergency-status]

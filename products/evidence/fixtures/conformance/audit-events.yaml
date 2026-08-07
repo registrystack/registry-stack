@@ -1,0 +1,110 @@
+fixture: registry.evidence.audit-events/v1
+synthetic_only: true
+access_attempt:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:access-001
+  occurredAt: '2026-08-02T00:00:00Z'
+  operation: fixture-operation-00000001
+  phase: access-attempt
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: signed
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: authorized
+  durationMilliseconds: 2
+disclosure_release:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:release-001
+  occurredAt: '2026-08-02T00:00:01Z'
+  operation: fixture-operation-00000001
+  phase: disclosure-release
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: signed
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: released
+  disclosedConcepts: [urn:example:fixture:concept:boolean-a]
+  evidenceId: urn:example:fixture:evidence:001
+  signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
+  durationMilliseconds: 12
+unsigned_disclosure_release:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:release-002
+  occurredAt: '2026-08-02T00:00:02Z'
+  operation: fixture-operation-00000001
+  phase: disclosure-release
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: unsigned
+  sourceId: source-a
+  adapterId: adapter-a
+  decision: released
+  disclosedConcepts: [urn:example:fixture:concept:boolean-a]
+  evidenceId: urn:example:fixture:evidence:001
+  durationMilliseconds: 12
+authorization_refusal:
+  schema: registry.evidence.audit.authorization-refusal/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:authorization-refusal-001
+  occurredAt: '2026-08-02T00:00:03Z'
+  operation: fixture-operation-00000002
+  phase: denial
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  requesterPseudonym: hmac-sha256:v1:3333333333333333333333333333333333333333333333333333333333333333
+  actorPseudonym: hmac-sha256:v1:4444444444444444444444444444444444444444444444444444444444444444
+  decision: not-authorized
+  safeErrorCategory: not-authorized
+  durationMilliseconds: 3
+negative:
+  - raw-principal
+  - raw-actor-or-grant
+  - raw-selector-value
+  - separate-field-hash
+  - plain-sha256-subject-hash
+  - base64url-reencoded-audit-hmac
+  - globally-stable-subject-pseudonym
+  - source-or-supported-value
+  - credential-token-or-private-key
+  - candidate-count-score-hint-or-comparison
+  - release-fields-on-access-event
+  - missing-release-fields-on-release-event
+  - signing-key-on-unsigned-release-event
+  - missing-signing-key-on-signed-release-event
+  - request-derived-field-on-authorization-refusal
+  - unmatched-authority-on-authorization-refusal
+  - response-protection-on-authorization-refusal
+  - missing-authorization-refusal-category
+  - full-schema-on-authorization-refusal
+  - refusal-schema-on-authorized-event
+  - request-nonce-in-any-event
+order:
+  authorization_refusal_durable_before: [not-authorized-response]
+  access_attempt_durable_before: [credential-resolution, source-access]
+  disclosure_release_durable_after: [signing]
+  disclosure_release_durable_before: [response-release]

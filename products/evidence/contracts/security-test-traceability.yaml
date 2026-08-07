@@ -1,0 +1,287 @@
+contract: registry.evidence.security-test-traceability/v1
+entries:
+  - id: sec-assurance-profile-fixture-boundary
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
+      - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_the_exact_loopback_mint_identity}
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_exact_local_mint}
+      - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
+      - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
+  - id: expected-assurance-profile-mismatch
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
+  - id: sec-unknown-or-disabled-requirement
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+  - id: sec-caller-query-material-rejected
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}
+      - {file: crates/registry-evidence/src/server.rs, name: request_json_is_strict_and_closed}
+  - id: sec-unsafe-definition-combination
+    tests: [{file: crates/registry-evidence/src/config.rs, name: a_shared_disclosure_family_rejects_the_complete_bundle}]
+  - id: sec-missing-principal-no-fallback
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: missing_principal_never_falls_back_to_client_id_or_azp}]
+  - id: sec-sender-constrained-token-denied
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: sender_constrained_tokens_are_denied_rather_than_downgraded}]
+  - id: sec-telemetry-bounded-and-operator-private
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: metrics_report_bounded_series_without_disclosing_request_content}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_configured_metrics_listener_serves_beside_the_evidence_listener}
+      - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
+  - id: sec-no-entitlement-union
+    tests: [{file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}]
+  - id: sec-authenticated-authorization-refusal-audited
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
+  - id: sec-selector-possession-no-authority
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
+  - id: sec-caller-grant-reference-rejected
+    tests: [{file: crates/registry-evidence/src/model.rs, name: request_rejects_query_material_and_unknown_fields}]
+  - id: sec-selector-shape-not-callable
+    tests:
+      - {file: crates/registry-evidence/src/selector.rs, name: selector_claim_values_are_scalar_only}
+      - {file: crates/registry-evidence/src/config.rs, name: active_source_role_sets_reject_unreachable_inputs_at_startup}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authority}
+  - id: sec-source-request-immutable
+    tests:
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: exact_request_applies_path_query_body_headers_auth_and_projection_once}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_acquisition_posture_fixture_executes_with_one_bounded_request}
+      - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
+  - id: sec-candidate-material-rejected
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
+  - id: sec-rhai-output-shape-closed
+    tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: extraction_decodes_only_the_closed_union_and_validates_facts}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_rejects_an_extra_extracted_fact_before_derivation_or_release}
+  - id: sec-derived-value-output-gate
+    tests:
+      - {file: crates/registry-evidence/src/kernel.rs, name: extraction_failures_and_invalid_outputs_fail_closed}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
+  - id: sec-evaluation-and-audit-fail-closed
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: access_audit_failure_blocks_credentials_and_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
+  - id: sec-source-canary-absent-everywhere
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
+  - id: sec-protected-canaries-redacted
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: derived_value_debug_redacts_every_value_carrier}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: request_parts_debug_redacts_query_and_body_values}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value}
+  - id: sec-unresolved-public-collapse
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_existence_disclosure_mode_governs_the_public_collapse}
+      - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
+  - id: sec-subject-binding-scope
+    tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
+  - id: sec-runtime-bundle-mutation-absent
+    tests:
+      - {file: crates/registry-evidence/src/bundle.rs, name: revision_binds_paths_and_exact_bytes_deterministically}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture}
+  - id: sec-mutually-distrustful-configuration
+    tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]
+  - id: sec-rate-limit-does-not-legalize-ladder
+    tests: [{file: crates/registry-evidence/src/config.rs, name: a_shared_disclosure_family_rejects_the_complete_bundle}]
+  - id: sec-jws-mutation-and-duplicate-payload
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: payload_and_protected_header_mutation_fail}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: duplicate_jws_members_and_unknown_kid_are_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: signed_payload_must_satisfy_the_complete_evidence_schema}
+  - id: sec-signing-failure-no-release
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_is_transient_audited_and_never_releases_unsigned_evidence}]
+  - id: sec-private-key-canary-unreachable
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: yaml_names_and_secret_references_are_strict}
+      - {file: crates/registry-evidence/src/signing.rs, name: jwks_contains_public_material_only}
+  - id: sec-verifier-rejects-untrusted-provider
+    tests: [{file: crates/registry-evidence-verifier/src/verifier.rs, name: signature_never_substitutes_for_provider_and_issuer_trust_policy}]
+  - id: sec-script-cannot-construct-evidence
+    tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: ambient_and_diagnostic_capabilities_are_unavailable}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: derivation_decode_is_closed_and_retains_protected_types}
+  - id: sec-discovery-requester-scoped
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: real_router_serves_all_definitions_concurrently_without_crossing_boundaries}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_requires_authentication_and_returns_no_unentitled_definitions}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
+  - id: sec-missing-or-writable-bundle-fails
+    tests: [{file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}]
+  - id: sec-audit-order-and-failure
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: access_audit_failure_blocks_credentials_and_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
+      - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_is_durable_keyed_and_redacted}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_verifies_a_nonempty_keyed_chain_before_accepting_appends}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_same_length_chain_corruption}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_a_truncated_final_record}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
+      - {file: crates/registry-evidence/src/audit.rs, name: same_length_external_mutation_fails_readiness_and_future_appends}
+      - {file: crates/registry-evidence/src/audit.rs, name: appends_rotate_into_sealed_segments_and_the_chain_spans_the_seam}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_restart_after_rotation_continues_from_the_sealed_tail}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_missing_active_segment_recovers_from_the_sealed_tail}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_corrupt_sealed_tail_is_rejected_at_startup}
+      - {file: crates/registry-evidence/src/audit.rs, name: sealed_segment_corruption_passes_startup_and_fails_the_verifier}
+      - {file: crates/registry-evidence/src/audit.rs, name: pathname_replacement_is_rejected_even_when_the_append_would_rotate}
+      - {file: crates/registry-evidence/src/audit.rs, name: an_archived_middle_segment_is_reported_as_missing_not_as_corruption}
+      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_extend_one_keyed_chain_without_forking}
+      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_share_durable_writes}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_failed_durable_write_poisons_the_sink_instead_of_forking_the_chain}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_poisoned_sink_fails_concurrent_waiters_instead_of_hanging_them}
+      - {file: crates/registry-evidence/src/audit.rs, name: readiness_holds_while_appends_are_in_flight}
+      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_fails_on_sealed_segment_corruption}
+      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_reports_an_archived_segment_as_missing_not_corrupt}
+  - id: sec-secret-values-rejected-from-bundle
+    tests: [{file: crates/registry-evidence/src/config.rs, name: yaml_names_and_secret_references_are_strict}]
+  - id: sec-proxy-identity-header-rejected
+    tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]
+  - id: sec-decimal-no-float-coercion
+    tests: [{file: crates/registry-evidence/src/kernel.rs, name: scalar_decimal_and_collection_forms_are_exact}]
+  - id: sec-entity-reference-seed-protected
+    tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: protected_seed_has_no_comparison_or_string_conversion_capability}
+      - {file: crates/registry-evidence/src/binding.rs, name: entity_reference_is_audience_and_concept_scoped}
+  - id: sec-request-preparation-closed
+    tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: preparation_inputs_and_request_parts_are_closed_and_bounded}
+      - {file: crates/registry-evidence/src/source.rs, name: saturated_source_admission_fails_at_the_configured_timeout}
+      - {file: crates/registry-evidence/src/source.rs, name: saturated_oauth_single_flight_fails_before_credentials_or_transport}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: materialized_request_reuses_path_template_query_and_body_without_auth_material}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: get_body_is_rejected_before_static_or_oauth_credential_acquisition}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
+  - id: sec-runtime-cannot-override-governed-bundle
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: runtime_document_is_closed_and_contains_no_governed_override_surface}
+      - {file: crates/registry-evidence/src/bundle.rs, name: runtime_and_ca_bytes_are_captured_under_an_independent_read_only_revision}
+  - id: sec-tls-and-proxy-authority-fixed
+    tests:
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_plan_rejects_unbound_missing_and_malformed_captures}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: runtime_ca_capture_rejects_symlink_malformed_and_mutable_files}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: ambient_proxy_variables_are_ignored_in_an_isolated_process}
+  - id: sec-subject-array-order-nonsemantic
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: multi_role_request_order_is_not_semantic_and_output_uses_declaration_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: reordered_grant_subjects_resolve_by_role_and_emit_declaration_order}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+  - id: sec-request-nonce-strict-and-contained
+    tests:
+      - {file: crates/registry-evidence/src/model.rs, name: request_nonce_canonicality_is_exact}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_nonce_is_strict_and_never_reaches_source_or_audit}
+      - {file: crates/registry-evidence/src/server.rs, name: request_json_is_strict_and_closed}
+  - id: sec-unsigned-requires-bundle-and-grant
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_output_requires_both_bundle_and_grant_permission}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: accept_negotiation_is_closed_and_fails_before_source_access}
+      - {file: crates/registry-evidence/src/server.rs, name: accept_negotiation_matrix_is_closed_and_exact}
+      - {file: crates/registry-evidence/src/config.rs, name: response_formats_are_closed_unique_and_keep_signed_mandatory}
+  - id: sec-release-bytes-pre-audited
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_unsigned_response_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: signing_failure_returns_a_problem_and_never_an_unsigned_body}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_signing_failure_no_fallback_format}
+  - id: sec-audit-response-protection-mode
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: all_four_definitions_pass_the_explicitly_authorized_unsigned_path}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_grant}
+  - id: sec-verifier-independent-expectations
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authenticity_is_reported_separately_from_current_validity}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: assertion_lifetime_above_the_accepted_maximum_fails}
+  - id: sec-unsigned-envelope-not-jws
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: unsigned_envelope_is_rejected_by_the_strict_jws_verifier}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
+  - id: sec-secret-file-identity
+    tests:
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_uses_open_file_owner_and_exact_mode_checks}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_read_is_bounded}
+  - id: sec-transport-backend-and-single-attempt
+    tests:
+      - {file: crates/registry-evidence/src/source.rs, name: evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_reset_transport_failure_yields_exactly_one_connection_attempt}
+  - id: sec-jwks-route-config-parity
+    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: configured_jwks_path_is_mechanically_the_served_route}]
+  - id: sec-source-response-shape-enforced
+    tests:
+      - {file: crates/registry-evidence/src/kernel.rs, name: a_projected_response_outside_its_declared_shape_fails_before_extraction}
+      - {file: crates/registry-evidence/src/config.rs, name: source_schema_roles_are_mandatory_distinct_and_directory_scoped}
+  - id: sec-script-operation-exhaustion
+    tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]
+  - id: sec-reserved-header-aliases-closed
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}
+  - id: sec-sd-jwt-projection-integrity
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: external_rfc9901_and_draft18_vectors_verify_shared_cryptography_and_preserve_profile_boundary}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_round_trips_and_verifies_under_the_same_policy}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_disclosure_modification_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_added_disclosure_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_removed_digest_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_payload_modification_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_protected_header_modification_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_unknown_kid_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_rejected_by_flattened_jws_verifier}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_accepts_an_authentic_and_current_stored_sd_jwt_vc}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_rejects_a_stored_sd_jwt_vc_whose_disclosure_was_replaced}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_requires_exactly_one_stored_response_format}
+  - id: sec-sd-jwt-format-requires-bundle-and-grant
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_bundle}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_format_not_permitted_by_grant}
+      - {file: crates/registry-evidence/src/config.rs, name: response_formats_are_closed_unique_and_keep_signed_mandatory}
+  - id: sec-sd-jwt-holder-key-closed
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_with_private_member_rejected}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_wrong_algorithm_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
+  - id: sec-service-key-governance
+    tests:
+      - {file: crates/registry-evidence/src/bundle.rs, name: strict_public_jwk_rejects_private_material_and_duplicate_members}
+      - {file: crates/registry-evidence/src/signing.rs, name: configured_key_id_must_match_provider}
+      - {file: crates/registry-evidence/src/signing.rs, name: flattened_jws_has_exact_protected_header_and_valid_signature}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: transit_signer_uses_the_common_vault_openbao_es256_wire_contract}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: transit_signer_rejects_unsafe_or_mismatched_metadata}
+      - {file: crates/registry-platform-crypto/src/lib.rs, name: public_jwk_thumbprint_uses_required_members_only}
+  - id: sec-audit-key-epoch
+    tests:
+      - {file: crates/registry-platform-audit/src/lib.rs, name: audit_profile_chain_and_identifier_keys_are_domain_separated}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profiles_reject_weak_master_secrets_without_echo}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
+  - id: sec-sd-jwt-claims-closed
+    tests: [{file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]
+  - id: sec-local-source-none-boundary
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: unauthenticated_source_is_local_loopback_only_and_matches_the_bundle_schema}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: local_unauthenticated_loopback_source_sends_no_authentication_header}
+  - id: sec-authority-claim-names-closed
+    tests: [{file: crates/registry-evidence/src/config.rs, name: authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims}]
+  - id: sec-path-binding-unreachable-selector-set
+    tests: [{file: crates/registry-evidence/tests/source_contracts.rs, name: an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused}]
+  - id: sec-search-then-fetch-bounded
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
+      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}

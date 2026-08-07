@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [total]
+properties:
+  total: {type: integer, minimum: 0, maximum: 1000000}
+  official_residence_code: {type: string, minLength: 1, maxLength: 32}

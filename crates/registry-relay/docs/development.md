@@ -139,9 +139,10 @@ check only. Keep the external SEMIC recipe as the release validation signal.
 ### Fixture corpus
 
 Relay-local response credential fixtures were removed with Relay credential
-issuance. Keep credential issuance fixtures in Registry Notary. Relay fixtures
-should cover ordinary data responses, metadata responses, and rejection or
-migration paths for removed credential-issuance configuration only.
+issuance. Signed-answer fixtures belong to the product that signs. Relay
+fixtures should cover ordinary data responses, metadata responses, and
+rejection or migration paths for removed credential-issuance configuration
+only.
 
 ## Coverage metrics
 

@@ -1,0 +1,137 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/verification-policy-v1.json
+title: Evidence relying-procedure verification policy Version 1
+type: object
+additionalProperties: false
+required:
+  - expectedAssuranceProfile
+  - issuedBy
+  - providedBy
+  - requirement
+  - evidenceType
+  - purpose
+  - audience
+  - configurationRevision
+  - requestNonce
+  - expectedSubjects
+  - expectedOutputs
+  - maximumAssertionLifetimeSeconds
+  - revokedKeyIds
+properties:
+  expectedAssuranceProfile: {enum: [local, production, evidence-grade]}
+  issuedBy: {type: string, format: uri, maxLength: 512}
+  providedBy: {type: string, format: uri, maxLength: 512}
+  requirement: {type: string, format: uri, maxLength: 512}
+  evidenceType: {type: string, format: uri, maxLength: 512}
+  purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+  audience: {type: string, format: uri, maxLength: 512}
+  configurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+    description: >-
+      The requirement-scoped revision the relying party pinned, as the
+      requirement's own definition published it. A deployment's unrelated edits
+      do not change it.
+  requestNonce:
+    type: string
+    pattern: '^[A-Za-z0-9_-]{43}$'
+    description: The exact nonce from the independently retained original request.
+  expectedSubjects:
+    type: array
+    minItems: 1
+    maxItems: 8
+    uniqueItems: true
+    description: Unordered set of unique role-bound opaque bindings. Subject order alone is never semantic.
+    items: {$ref: '#/$defs/expected-subject'}
+  expectedOutputs:
+    type: array
+    minItems: 1
+    maxItems: 16
+    uniqueItems: true
+    description: Expected concept identifiers, value forms, and cardinalities, one per disclosed Supported Value.
+    items: {$ref: '#/$defs/expected-output'}
+  maximumAssertionLifetimeSeconds:
+    type: integer
+    minimum: 1
+    maximum: 31536000
+    description: Longest acceptable validUntil minus issuedAt interval.
+  revokedKeyIds:
+    type: array
+    maxItems: 33
+    uniqueItems: true
+    items: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
+    description: Emergency denylist of Evidence service-key RFC 7638 thumbprints, checked before a pinned JWKS key is selected. An empty list is explicit.
+  clockSkewSeconds:
+    type: integer
+    minimum: 0
+    maximum: 300
+    default: 0
+    description: The only optional field. Omitting it means zero tolerance.
+$defs:
+  expected-subject:
+    type: object
+    additionalProperties: false
+    required: [role, binding]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      binding: {type: string, pattern: '^urn:evidence:subject:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$'}
+  expected-output:
+    type: object
+    additionalProperties: false
+    required: [concept, form]
+    properties:
+      concept: {type: string, format: uri, maxLength: 512}
+      form: {$ref: '#/$defs/expected-form'}
+  expected-form:
+    oneOf:
+      - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
+      - type: object
+        additionalProperties: false
+        required: [list]
+        properties:
+          list:
+            type: object
+            additionalProperties: false
+            required: [minimumItems, maximumItems]
+            properties:
+              minimumItems: {type: integer, minimum: 1, maximum: 64}
+              maximumItems: {type: integer, minimum: 1, maximum: 64}
+ownership:
+  document: relying party
+  producer: the relying procedure that retained the original request and accepted the original transaction
+  consumer: offline re-verification by the `evidence verify` operator command
+command:
+  surface: evidence verify (--jws <file> | --sd-jwt-vc <file>) --jwks <file> --policy <file> [--at <rfc3339-utc>]
+  jws: one stored flattened JWS JSON response file
+  sd-jwt-vc: one stored SD-JWT VC response file, in the issued compact serialization
+  format_selection: exactly one stored response file is named, and naming it states its format; the command never infers a format from a file's contents, so a stored response is never re-verified under the other format's rules
+  policy_scope: one policy document governs both formats, because the same Evidence payload is verified whichever serialization carried it
+  jwks: the pinned trusted key set, which is the complete trust set for the run
+  policy: one document accepted by this schema
+  at: strict RFC 3339 at zero offset; system time when omitted
+  network: prohibited; no socket is opened, no metadata is resolved, and no key is fetched
+  input_bound: every input file is refused above 1 MiB before it is read
+output:
+  lines:
+    - 'verified-at: the chosen verification instant'
+    - 'authentic: yes or no, printed once verification ran'
+    - 'currently-valid: yes or no, printed only for an authentic response'
+  inspection: on full success the verified Evidence JSON is also printed, for the operator who already holds the stored response
+  failure: only the closed class is reported, on standard error, with no field-level detail
+  classes: [malformed, protected-header, key, signature, payload, policy, time, disclosure]
+  disclosure_class: reported only for a stored SD-JWT VC whose disclosures do not reconstruct the payload the signature covers
+  exit_codes:
+    0: authentic and currently valid
+    3: authentic but not currently valid
+    1: every other outcome, including a policy mismatch, an unusable input document, and an unreadable file
+$comment: >-
+  Every expectation and revoked-key decision in this document must come from independent trusted state,
+  such as the independently retained original request and an accepted original
+  transaction. Copying values out of the JWS under verification proves nothing,
+  and a policy that omitted an expectation would silently skip a comparison, so
+  the document is closed and every field except clockSkewSeconds is required. A
+  failed comparison, including the expected nonce, the expected role-bound
+  subject set, and the expected output contract, reports the one generic policy
+  class, so re-verification is never an oracle for which hidden comparison
+  failed. Authenticity and current usability are separate answers: an expired
+  assertion stays cryptographically authentic without being current evidence.

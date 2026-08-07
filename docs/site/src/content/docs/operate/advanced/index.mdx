@@ -6,9 +6,8 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-  - registry-notary
   - registry-platform
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -33,13 +32,15 @@ Each guide names the evidence to retain, the limit of each gate, and a recovery 
 
 - [Operate bounded Script workers and protocol helpers](operate-script-workers/)
 
-Registry Relay and Registry Notary activate separate product bundles.
-Stage Relay first, stage Notary against that Relay, and admit traffic only after both product
-boundaries pass.
+The public Relay lane and the consultation Relay lane activate separate product bundles, each
+with its own anchor, identity, and anti-rollback state.
+Neither serving workload depends on the other; only the consultation lane's state actions wait on
+a healthy PostgreSQL.
+Admit traffic to a lane only after that lane's product boundary passes.
 This sequence is compatible staged admission, not atomic project activation.
 
-{/* Evidence: products/notary/docs/configuration-trust-and-integrity.md and
-    products/notary/docs/deployment-hardening-runbook.md. */}
+{/* Evidence: crates/registryctl/src/deployment.rs and
+    docs/site/src/content/docs/operate/advanced/recover-upgrade-migrate-and-rollback.mdx. */}
 
 ## Next
 

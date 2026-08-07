@@ -1,0 +1,514 @@
+---
+title: Request a birth certificate SD-JWT VC from OpenCRVS
+description: >-
+  Map a synthetic OpenCRVS birth into a governed structured value, request it as SD-JWT VC, and
+  verify the credential across the Evidence Gateway HTTP boundary.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-07"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Extend the project created in
+[Issue registered-parent evidence from OpenCRVS](../verify-a-registered-parent-with-opencrvs/)
+with a birth-record question and request the answer as a Selective Disclosure JWT Verifiable
+Credential (SD-JWT VC). The credential exposes `givenName`, `familyName`, `dateOfBirth`, and
+`placeOfBirth` as four independently disclosable fields.
+
+<QuickstartMeta
+  outcome="A verified SD-JWT VC containing a governed birth-record extract from synthetic data."
+  time="About 25 minutes"
+  level="Institution source with synthetic data"
+  prerequisites={[
+    'The completed OpenCRVS registered-parent tutorial project',
+    'A Record Search client for the public OpenCRVS demo',
+    'The Evidence Gateway toolset',
+    'curl and an editor',
+  ]}
+/>
+
+This tutorial uses the provider-published synthetic Josh Hoeger registration, selected by national
+ID `3617402568`. Do not substitute a real person. The demo maintainers can reset its data,
+accounts, and integrations.
+
+## Understand the credential boundary
+
+The example is informed by the European Union Once-Only Technical System
+[birth-evidence sample](https://code.europa.eu/oots/tdd/tdd_chapters/-/raw/master/OOTS-EDM/xml/Request-Response%20Samples/4.5.4%20-%20OOTS-EDM%20XML%20Examples%20of%20the%20Evidence%20Exchange/2%20Example%20for%20requesting%20a%20Birth%20Certificate%20-%20natural%20person/Evidence%20Samples/BirthEvidence.xml?ref_type=heads),
+but this tutorial does not implement that exchange protocol.
+Evidence Gateway produces a governed extract from a registered birth:
+
+```json
+{
+  "birthCertificate": {
+    "givenName": "...",
+    "familyName": "...",
+    "dateOfBirth": "...",
+    "placeOfBirth": {
+      "locationId": "..."
+    }
+  }
+}
+```
+
+The deployment's law and governance determine whether that extract is accepted as a birth
+certificate. Evidence Gateway proves which provider signed the configured assertion. It does not grant
+legal status to the document.
+
+Each direct child of `birthCertificate` has its own SD-JWT disclosure. `placeOfBirth` is one atomic
+nested value, so its `locationId` is not disclosed separately from its container.
+
+This response is a second serialization of one stateless assertion, not a credential lifecycle.
+There is no issuance session, status list, revocation, or presentation exchange.
+
+## Draft a birth-record source
+
+Continue in the `registered-parent` directory created by
+[Issue registered-parent evidence from OpenCRVS](../verify-a-registered-parent-with-opencrvs/).
+The retained `source.openapi.yaml` includes the bounded birth fields used in this tutorial.
+
+Draft a separate source so the certificate question cannot inherit the parent-identifier
+projection:
+
+```sh
+evidencectl source suggest \
+  --project . \
+  --source-id opencrvs-birth-certificate \
+  --operation 'POST /events/search' \
+  --select /total \
+  --select '/results/*/type' \
+  --select '/results/*/status' \
+  --select '/results/*/dateOfEvent' \
+  --select '/results/*/placeOfEvent' \
+  --select '/results/*/declaration/child.nid' \
+  --select '/results/*/declaration/child.name/firstname' \
+  --select '/results/*/declaration/child.name/surname' \
+  --select '/results/*/declaration/child.birthLocationId'
+```
+
+The command writes editable source artifacts. The selected operation remains a draft until you
+close the OpenCRVS-specific request and extraction decisions.
+
+## Configure the fixed search
+
+Replace `sources/opencrvs-birth-certificate.yaml` with:
+
+```yaml
+transport: http-json
+baseUrl: https://events.farajaland-integration.opencrvs.dev
+posture: record-transformed
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://auth.farajaland-integration.opencrvs.dev/token
+  clientIdRef: secret:file/opencrvs-client-id
+  clientSecretRef: secret:file/opencrvs-client-secret
+  scope: recordsearch
+  credentialPlacement: form-body
+  maximumCacheSeconds: 300
+  assumedLifetimeSeconds: 600
+request:
+  method: POST
+  path: /events/search
+  fixedHeaders:
+    - name: Accept
+      value: application/json
+  selectorInputs:
+    - role: child
+      alternatives:
+        - profile: opencrvs-national-id-v1
+          fields: [national_id]
+  prepareScript: adapters/opencrvs-birth-certificate-prepare.rhai
+  adapterParameters:
+    childSelectorRole: child
+    eventType: birth
+    registeredStatus: REGISTERED
+    childNationalIdField: child.nid
+    childNameField: child.name
+    childBirthLocationField: child.birthLocationId
+    resultLimit: 2
+    resultOffset: 0
+  adapterParametersSchema: schemas/opencrvs-birth-certificate-parameters.schema.yaml
+  preparationLimits:
+    query: forbidden
+    jsonBody: required
+    maximumJsonDepth: 12
+    maximumCollectionItems: 32
+    maximumStringBytes: 512
+    maximumNormalizedBytes: 8192
+  projection:
+    - /total
+    - /results/*/type
+    - /results/*/status
+    - /results/*/dateOfEvent
+    - /results/*/placeOfEvent
+    - /results/*/declaration/child.nid
+    - /results/*/declaration/child.name/firstname
+    - /results/*/declaration/child.name/surname
+    - /results/*/declaration/child.birthLocationId
+  redirects: deny
+  timeoutMilliseconds: 10000
+  maximumResponseBytes: 262144
+  concurrencyLimit: 8
+responseSchema: schemas/opencrvs-birth-certificate-response.schema.yaml
+extractScript: adapters/opencrvs-birth-certificate-extract.rhai
+factSchema: schemas/opencrvs-birth-certificate-facts.schema.yaml
+```
+
+The source can search only for one registered birth by the authorized child selector. The caller
+cannot change the event type, status, response projection, or result ceiling. It reuses the
+owner-only Record Search credentials from the registered-parent tutorial.
+
+Replace `schemas/opencrvs-birth-certificate-parameters.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required:
+  - childSelectorRole
+  - eventType
+  - registeredStatus
+  - childNationalIdField
+  - childNameField
+  - childBirthLocationField
+  - resultLimit
+  - resultOffset
+properties:
+  childSelectorRole: {const: child}
+  eventType: {const: birth}
+  registeredStatus: {const: REGISTERED}
+  childNationalIdField: {const: child.nid}
+  childNameField: {const: child.name}
+  childBirthLocationField: {const: child.birthLocationId}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}
+```
+
+Replace `adapters/opencrvs-birth-certificate-prepare.rhai` with:
+
+```rhai
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
+    let child = selectors[parameters["childSelectorRole"]];
+    let data = #{};
+    data[parameters["childNationalIdField"]] = #{
+        type: "exact",
+        term: child["values"]["national_id"]
+    };
+
+    #{
+        query: [],
+        body: #{
+            query: #{
+                type: "and",
+                clauses: [#{
+                    eventType: parameters["eventType"],
+                    status: #{
+                        type: "exact",
+                        term: parameters["registeredStatus"]
+                    },
+                    data: data
+                }]
+            },
+            limit: parameters["resultLimit"],
+            offset: parameters["resultOffset"]
+        }
+    }
+}
+```
+
+## Extract the birth facts
+
+Replace `adapters/opencrvs-birth-certificate-extract.rhai` with:
+
+```rhai
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
+    let total = source_response["total"];
+    let results = source_response["results"];
+    if results.len > parameters["resultLimit"] {
+        throw("source_protocol_error");
+    }
+
+    if total == 0 {
+        if results.len != 0 { throw("source_protocol_error"); }
+        return #{outcome: "no_match"};
+    }
+    if total > 1 {
+        if results.len < 2 { throw("source_protocol_error"); }
+        return #{outcome: "ambiguous"};
+    }
+    if results.len != 1 { throw("source_protocol_error"); }
+
+    let result = results[0];
+    if result["type"] != parameters["eventType"] ||
+       result["status"] != parameters["registeredStatus"] ||
+       !result.contains("declaration") {
+        throw("source_protocol_error");
+    }
+
+    let declaration = result["declaration"];
+    let child_id_field = parameters["childNationalIdField"];
+    let child_name_field = parameters["childNameField"];
+    let birth_location_field = parameters["childBirthLocationField"];
+    if !declaration.contains(child_id_field) ||
+       !declaration.contains(child_name_field) ||
+       !declaration.contains(birth_location_field) ||
+       result["placeOfEvent"] != declaration[birth_location_field] {
+        throw("source_protocol_error");
+    }
+
+    let child_name = declaration[child_name_field];
+    #{
+        outcome: "match",
+        facts: #{
+            child_national_id: declaration[child_id_field],
+            given_name: child_name["firstname"],
+            family_name: child_name["surname"],
+            date_of_birth: result["dateOfEvent"],
+            place_of_birth_id: result["placeOfEvent"]
+        }
+    }
+}
+```
+
+The extraction accepts exactly one registered birth. It also requires the top-level event place
+to match the declaration's birth-location identifier before constructing facts.
+
+Replace `schemas/opencrvs-birth-certificate-facts.schema.yaml` with:
+
+```yaml
+type: object
+additionalProperties: false
+required:
+  - child_national_id
+  - given_name
+  - family_name
+  - date_of_birth
+  - place_of_birth_id
+properties:
+  child_national_id: {type: string, minLength: 1, maxLength: 128}
+  given_name: {type: string, minLength: 1, maxLength: 200}
+  family_name: {type: string, minLength: 1, maxLength: 200}
+  date_of_birth: {type: string, format: date}
+  place_of_birth_id: {type: string, minLength: 1, maxLength: 128}
+```
+
+## Define the governed certificate shape
+
+Create `schemas/birth-certificate.yaml`:
+
+```yaml
+$id: urn:registrystack:evidence:local:schema:birth-certificate:v1
+type: object
+additionalProperties: false
+required: [givenName, familyName, dateOfBirth, placeOfBirth]
+properties:
+  givenName:
+    type: string
+    minLength: 1
+    maxLength: 200
+  familyName:
+    type: string
+    minLength: 1
+    maxLength: 200
+  dateOfBirth:
+    type: string
+    format: date
+  placeOfBirth:
+    type: object
+    additionalProperties: false
+    required: [locationId]
+    properties:
+      locationId:
+        type: string
+        minLength: 1
+        maxLength: 128
+```
+
+The schema closes every returned field. The location is an OpenCRVS identifier because the public
+search response does not provide a reviewed human-readable place label.
+
+Create `questions/birth-certificate.yaml`:
+
+```yaml
+id: birth-certificate
+question: What birth details are recorded for this person?
+purpose: civil-registration-extract
+subject:
+  role: child
+  selector: national_id
+  profile: opencrvs-national-id-v1
+  derivation: true
+source:
+  ref: opencrvs-birth-certificate
+answers:
+  - concept: birth_certificate
+    type: reviewed-structured-value
+    schema: schemas/birth-certificate.yaml
+    maximumSerializedBytes: 2048
+    sdJwtVc:
+      claim: birthCertificate
+      disclosure: top-level
+responseFormats: [signed-jws, sd-jwt-vc]
+derivation: derivations/birth-certificate.rhai
+disclosure:
+  allow: [birth_certificate]
+```
+
+`birthCertificate` is a configured JSON claim name. Evidence Gateway has no built-in birth-certificate
+type. The same mechanism can project any reviewed structured value under another non-reserved
+claim name. `responseFormats` explicitly permits the local bundle and this question's local grant
+to return that projection as SD-JWT VC while retaining signed JWS.
+
+Create `derivations/birth-certificate.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    if facts.child_national_id != selectors.child.values.national_id {
+        throw("derivation_input_error");
+    }
+
+    #{
+        birth_certificate: #{
+            form: "reviewed-structured-value",
+            schema: "urn:registrystack:evidence:local:schema:birth-certificate:v1",
+            fields: #{
+                givenName: facts.given_name,
+                familyName: facts.family_name,
+                dateOfBirth: facts.date_of_birth,
+                placeOfBirth: #{locationId: facts.place_of_birth_id}
+            }
+        }
+    }
+}
+```
+
+Evidence Gateway validates the complete value against the schema before mapping any field to an SD-JWT
+disclosure. A derivation cannot add undeclared certificate fields.
+
+## Start and prepare the SD-JWT request
+
+Compile and start the updated local project:
+
+```sh
+evidencectl dev --detach
+```
+
+Prepare the request and retain `sd-jwt-vc` as the expected response format before the source is
+called:
+
+```sh
+evidencectl request prepare birth-certificate \
+  --purpose civil-registration-extract \
+  --subject child:national_id=3617402568 \
+  --format sd-jwt-vc \
+  --name opencrvs-birth-certificate
+```
+
+Preparation obtains local authorization and records the expected issuer, audience, subject
+binding, requirement, value form, request nonce, and response format. It does not contact
+OpenCRVS.
+
+## Request the credential over HTTP
+
+Send the retained request across the real Evidence Gateway boundary:
+
+```sh
+curl -fsS \
+  --config .evidence/requests/opencrvs-birth-certificate/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @.evidence/requests/opencrvs-birth-certificate/request.json \
+  --output opencrvs-birth-certificate.sd-jwt
+```
+
+Evidence Gateway authenticates the caller, authorizes the exact question and purpose, obtains an OpenCRVS
+token, performs the fixed birth search, validates and derives the value, signs the SD-JWT VC, and
+durably records the disclosure release before returning the bytes.
+
+## Verify before reading
+
+Verify the credential against the pre-response context:
+
+```sh
+evidencectl verify opencrvs-birth-certificate.sd-jwt \
+  --context .evidence/requests/opencrvs-birth-certificate/verification.json \
+  --output opencrvs-birth-certificate.verified.json
+```
+
+```text
+VERIFIED
+```
+
+Inspect the verified Evidence Gateway payload:
+
+```sh
+python3 -m json.tool opencrvs-birth-certificate.verified.json
+```
+
+The supported value retains the governed evidence form:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:birth-certificate:birth_certificate",
+  "value": {
+    "form": "reviewed-structured-value",
+    "schema": "urn:registrystack:evidence:local:schema:birth-certificate:v1",
+    "fields": {
+      "givenName": "Josh",
+      "familyName": "Hoeger",
+      "dateOfBirth": "<synthetic-date>",
+      "placeOfBirth": {
+        "locationId": "<synthetic-location-id>"
+      }
+    }
+  }
+}
+```
+
+The signed credential carries an always-visible `birthCertificate` container and four nested
+disclosures. Count the disclosure segments in the verified credential:
+
+```sh
+awk -F '~' '{print "disclosures:", NF - 2}' opencrvs-birth-certificate.sd-jwt
+```
+
+```text
+disclosures: 4
+```
+
+Evidence Gateway's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
+selected disclosures, and key-binding JWT validation remain outside this profile.
+
+## Inspect the audit and clean up
+
+Stop the services, verify the last operation, and remove the sealed local generation:
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+evidencectl dev clean
+```
+
+The audit records the authorized requirement, purpose, requester pseudonym, decision, response
+format, and disclosed concept. It does not record the child selector, OpenCRVS token, source
+response, or certificate fields.
+
+Delete the Record Search client in OpenCRVS when you finish. Remove its two credential files when
+you no longer need the project.
+
+## Next
+
+- [Request another Evidence Gateway assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
+- [Prove an Evidence Gateway project](../prove-an-evidence-project/)
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

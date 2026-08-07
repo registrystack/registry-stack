@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,4 +148,61 @@ test('current scope rejects links to undeclared archives', (t) => {
   const current = run(root, ['--scope', 'current']);
   assert.equal(current.status, 1);
   assert.match(current.stderr, /links to unknown archive/);
+});
+
+test('allows frozen links to archives outside the publication window', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  const manifestPath = resolve(root, 'src/data/docsets.yaml');
+  const manifest = readFileSync(manifestPath, 'utf8')
+    .replace('current: latest\n', 'current: latest\npublished_archive_limit: 1\n')
+    .replace('released: v1\n', 'released: v2.0.0\n')
+    .replaceAll('id: v1\n', 'id: v1.0.0\n')
+    .replaceAll('path: /v/v1/\n', 'path: /v/1.0.0/\n')
+    .replaceAll('id: v2\n', 'id: v2.0.0\n')
+    .replaceAll('path: /v/v2/\n', 'path: /v/2.0.0/\n');
+  writeFileSync(manifestPath, manifest);
+  write(root, 'dist/dev/index.html', '<html></html>');
+  write(root, 'dist/index.html', '<html><a href="/v/1.0.0/removed/">Old docs</a></html>');
+
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('allows retained archive links to retired archives without a production mount', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  const manifestPath = resolve(root, 'src/data/docsets.yaml');
+  const manifest = readFileSync(manifestPath, 'utf8')
+    .replace('current: latest\n', 'current: latest\npublished_archive_limit: 1\n')
+    .replace('released: v1\n', 'released: v2.0.0\n')
+    .replaceAll('id: v1\n', 'id: v1.0.0\n')
+    .replaceAll('path: /v/v1/\n', 'path: /v/1.0.0/\n')
+    .replaceAll('id: v2\n', 'id: v2.0.0\n')
+    .replaceAll('path: /v/v2/\n', 'path: /v/2.0.0/\n');
+  writeFileSync(manifestPath, manifest);
+  write(
+    root,
+    'dist/v/2.0.0/index.html',
+    '<html><a href="/v/1.0.0/removed/">Old docs</a></html>',
+  );
+
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects mutable development links to retired archives', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  const manifestPath = resolve(root, 'src/data/docsets.yaml');
+  const manifest = readFileSync(manifestPath, 'utf8')
+    .replace('current: latest\n', 'current: latest\npublished_archive_limit: 1\n')
+    .replace('released: v1\n', 'released: v2.0.0\n')
+    .replaceAll('id: v1\n', 'id: v1.0.0\n')
+    .replaceAll('path: /v/v1/\n', 'path: /v/1.0.0/\n')
+    .replaceAll('id: v2\n', 'id: v2.0.0\n')
+    .replaceAll('path: /v/v2/\n', 'path: /v/2.0.0/\n');
+  writeFileSync(manifestPath, manifest);
+  write(root, 'dist/dev/index.html', '<html><a href="/v/1.0.0/removed/">Old docs</a></html>');
+
+  const result = run(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /links to missing/);
 });

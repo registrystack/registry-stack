@@ -1,0 +1,27 @@
+fixture: registry.evidence.acquisition-postures/v1
+synthetic_only: true
+cases:
+  - posture: source-derived
+    source_response: {total: 1, result: {final_code: C-A}}
+    declared_facts: [final_code]
+    derive: exact final code only
+    expected_claim: acquisition and disclosure minimization
+    negative: source-returns-undeclared-field
+  - posture: field-projected
+    source_response: {total: 1, result: {fact_a: '2000-02-29', fact_b: C-B}}
+    declared_facts: [fact_a, fact_b]
+    derive: declared concept value from only projected facts
+    expected_claim: strong acquisition and disclosure minimization
+    negative: fixed-projection-expanded
+  - posture: record-transformed
+    source_response: {total: 1, result: {fact_a: C-A, legacy_field: synthetic-source-canary, historical_entries: [S-OLD]}}
+    declared_facts: [fact_a, legacy_field, historical_entries]
+    derive: declared minimized concept from fact_a only
+    expected_claim: disclosure minimization only
+    negative: full-lifecycle-minimization-overclaim
+shared_expectations:
+  - same fixed HTTP JSON executor and Rhai ABI
+  - each posture case uses a single acquisition with exactly one evidence-data request
+  - response and facts remain in one bounded evaluation
+  - no raw field reaches evidence, audit, logs, errors, snapshots, or disk
+  - declared posture is included in bundle review metadata, never caller-selected

@@ -1,0 +1,235 @@
+---
+title: Return a governed value
+description: Add a controlled non-boolean answer to the first Evidence Gateway project and verify the signed result.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-04"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting this
+tutorial. You will add a governed age-bracket question to that project while keeping its adult
+status question. The same date of birth can then answer either question without disclosing the
+date or exact age.
+
+<QuickstartMeta
+  outcome="A verified assertion containing one controlled age-bracket value."
+  time="About 10 minutes"
+  level="Local development with synthetic data"
+  prerequisites={[
+    'The completed first Evidence Gateway assertion tutorial',
+    'Its adult-status project and registry.py',
+    'Python 3',
+    'A shell with curl',
+  ]}
+/>
+
+## Choose the minimum useful answer
+
+Adult status answers a yes-or-no criterion. A service that selects different paths for children,
+young adults, and older adults needs more information, but still does not need a date of birth or
+exact age.
+
+This tutorial permits four answers:
+
+- `under-18`
+- `18-to-24`
+- `25-to-64`
+- `65-or-older`
+
+The provider reviews this closed list. The caller cannot request a narrower bracket or an exact
+age.
+
+## Restart the registry
+
+In the terminal that owns the Python registry, return to the `first-evidence-assertion` directory
+and start the same source again:
+
+```sh
+python3 registry.py
+```
+
+Leave the registry running. The source still returns each synthetic person's identifier, name, and
+date of birth. This tutorial will use the child record, `person-456`, to exercise a different
+registry lookup from the first tutorial.
+
+## Add the age-bracket question
+
+In another terminal, enter the existing project:
+
+```sh
+cd adult-status
+```
+
+### `questions/age-bracket.yaml`
+
+Create a second question definition alongside `questions/adult-status.yaml`:
+
+```yaml
+id: age-bracket
+question: Which age bracket does this person belong to?
+purpose: service-path-selection
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+answers:
+  - concept: age_bracket
+    type: controlled-category
+    values: [under-18, 18-to-24, 25-to-64, 65-or-older]
+derivation: derivations/age-bracket.rhai
+disclosure:
+  allow: [age_bracket]
+```
+
+The new question uses the same OpenAPI operation, projected fact, and subject mapping as adult
+status. `values` defines the complete category list. The local compiler turns that list into the
+codelist enforced by the Evidence Gateway runtime.
+
+### `derivations/age-bracket.rhai`
+
+Create this new derivation alongside `derivations/adult-status.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
+    if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
+        #{age_bracket: "under-18"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 25)) < 0 {
+        #{age_bracket: "18-to-24"}
+    } else if compare_dates(context.legal_local_date, add_calendar_years(born, 65)) < 0 {
+        #{age_bracket: "25-to-64"}
+    } else {
+        #{age_bracket: "65-or-older"}
+    }
+}
+```
+
+The script chooses one category from the reviewed list. Evidence Gateway rejects any other return value
+before constructing or signing an assertion.
+
+## Start the updated project
+
+Capture the edited project in a new immutable local generation:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence Gateway ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+The command compiles both files in `questions/` into the same local Evidence Gateway service. The adult
+status question remains available. Authentication, source bounds, signing, verification, and audit
+apply to both questions.
+
+## Request and verify the bracket
+
+Prepare a request for the updated question:
+
+```sh
+evidencectl request prepare age-bracket \
+  --purpose service-path-selection \
+  --subject person_id=person-456 \
+  --name age-bracket
+```
+
+Send the prepared request across the real HTTP boundary:
+
+```sh
+curl --silent --show-error \
+  --config .evidence/requests/age-bracket/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/jose+json' \
+  --data-binary @.evidence/requests/age-bracket/request.json \
+  --output age-bracket.jws.json
+```
+
+Verify the response before reading the category:
+
+```sh
+evidencectl verify age-bracket.jws.json \
+  --context .evidence/requests/age-bracket/verification.json \
+  --output age-bracket.verified.json
+```
+
+```text
+VERIFIED
+```
+
+Inspect the verified payload:
+
+```sh
+python3 -m json.tool age-bracket.verified.json
+```
+
+The relevant supported value has this shape:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+  "value": "under-18"
+}
+```
+
+The source value `2012-05-20` is currently in the `under-18` category. The verified assertion
+does not include the date of birth, exact age, name, or `person_id`.
+
+Minimum disclosure is relative to the authorized purpose. A boolean was enough for the first
+question. A controlled category is enough for this service-path decision. Evidence Gateway protects both
+without treating boolean answers as the only minimized form.
+
+## Inspect the audit and clean up
+
+Stop the local Evidence Gateway services:
+
+```sh
+evidencectl dev stop
+```
+
+Inspect the last verified operation:
+
+```sh
+evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
+DISCLOSURE RELEASED age_bracket
+```
+
+The audit names the disclosed concept, not the category value or source fact.
+
+Remove the stopped generated runtime while preserving the editable project and request artifacts:
+
+```sh
+evidencectl dev clean
+```
+
+Return to the registry terminal and press `Ctrl+C`.
+
+## Next
+
+- [Control which applications can request Evidence Gateway](../control-who-can-request-evidence/)
+- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
+- [Configure Evidence Gateway](../../configure/evidence/)
+- [Review the Evidence Gateway security model](../../security/evidence/)

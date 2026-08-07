@@ -1,0 +1,70 @@
+openapi: 3.0.3
+info:
+  title: Example Records API
+  version: "1.0.0"
+servers:
+  - url: https://records.example.test/api
+paths:
+  /records:
+    get:
+      summary: Search records
+      parameters:
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            maximum: 100
+      responses:
+        "200":
+          description: A page of records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordSearchResponse'
+    post:
+      summary: Create a record
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+    delete:
+      summary: Delete every record
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+components:
+  schemas:
+    RecordSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [total, results]
+      properties:
+        total:
+          type: integer
+        recordedOn:
+          type: string
+          format: date-time
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Record'
+    Record:
+      type: object
+      additionalProperties: false
+      properties:
+        trackingId:
+          type: string
+        status:
+          type: string
+          enum: [open, closed]
+        notes:
+          type: string
+          nullable: true

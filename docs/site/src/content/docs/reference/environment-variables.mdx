@@ -1,26 +1,27 @@
 ---
 title: Environment variable reference
-description: Environment variables read by Registry Notary, Registry Relay, and registryctl, with links to the full configuration references.
+description: Environment variables read by the Evidence Gateway, Registry Mint, and Registry Relay binaries and by registryctl, with links to the full configuration references.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-notary
+  - registry-evidence
+  - registry-mint
   - registry-relay
   - registry-registryctl
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-This page lists the environment variables read directly by the Registry Notary binary, the Registry Relay binary, and registryctl. These are fixed variable names that the process resolves itself.
+This page lists the environment variables read directly by the Evidence Gateway binary, the Registry Mint binary, the Registry Relay binary, and registryctl. These are fixed variable names that the process resolves itself.
 
-Secret material such as credential hashes, signing keys, and upstream tokens is not read from a fixed variable name. Instead, each config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration references rather than repeated on this page. See the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/) and the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables.
+The stack's other kind of environment variable is operator-named. Secret material such as credential hashes and upstream tokens is not read from a fixed variable name: a config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration reference rather than repeated on this page. Registry Relay is the product that works that way; see the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
 ## Configuration expansion
 
-Registry Notary and Registry Relay expand `${VAR}` expressions before YAML
-parsing.
+Registry Relay expands `${VAR}` expressions before YAML parsing, using the shared
+`expand_config_env_vars` helper in `registry-platform-config`.
 `${VAR}` requires `VAR` to be set to a non-empty value.
 `${VAR:-fallback}` uses `fallback` when `VAR` is unset or empty, including
 `${VAR:-}` for an explicit empty result.
@@ -29,18 +30,37 @@ Whitespace-only values are non-empty.
 Diagnostics name the variable or use the supplied message; they never include
 the variable value.
 
-## Registry Notary
+Evidence Gateway and Registry Mint do not expand environment references in configuration.
+Both parse their documents as written: Evidence Gateway in `RuntimeConfig::parse_yaml`
+(`crates/registry-evidence/src/config.rs`) and Registry Mint in `MintConfig::load`
+(`crates/registry-mint/src/config.rs`).
 
-The Registry Notary binary reads the variables below. Each also has an equivalent command-line flag.
+## Evidence Gateway
+
+The `evidence` binary reads the two variables below. Each is a global that applies to every subcommand.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `REGISTRY_NOTARY_CONFIG` | YAML config path. Equivalent to `--config`. | Required for commands that load config. |
-| `REGISTRY_NOTARY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars. Equivalent to `--env-file`. | Optional. |
-| `REGISTRY_NOTARY_BIND` | Override `server.bind` for direct server startup. Equivalent to `--bind`. Closed product and development actions use the verified bundle listener instead. | Optional. |
-| `REGISTRY_NOTARY_HEALTHCHECK_URL` | Health endpoint URL for the `healthcheck` command. | Defaults to `http://127.0.0.1:8080/healthz`. |
-| `REGISTRY_NOTARY_HEALTHCHECK_TIMEOUT_MS` | Health probe timeout in milliseconds for the `healthcheck` command. | Defaults to `5000`. |
-| `REGISTRY_NOTARY_LOG_FORMAT` | Operational log format: `text` or `json`. | Defaults to `text`. |
+| `REGISTRY_EVIDENCE_RUNTIME` | Absolute path to the one operator runtime file that binds the governed bundle. Equivalent to the global `--runtime` flag. | Defaults to `/etc/registry-evidence/runtime.yaml`. |
+| `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard output. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
+
+Evidence Gateway reads no secret from an environment variable. A configured secret reference uses one grammar, `secret:file/<name>`, enforced by `SecretRef::parse` in `crates/registry-evidence/src/config.rs`, and resolves to an owner-only regular file under the `secretProviders.file.root` directory named in `runtime.yaml` (`crates/registry-evidence/src/secrets.rs`). Neither the runtime file nor the governed bundle can name an environment variable to read a credential from. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file and the bundle it binds.
+
+## Registry Mint
+
+The `mint` binary reads the variables below.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `MINT_CONFIG` | YAML config path for `mint check` and `mint serve`. Equivalent to `--config`. | Required for those two subcommands, by flag or by variable. |
+| `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
+
+Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
+in its configuration: `signing.activePublicJwkFile`, `signing.publishedPublicJwkFiles`,
+`signing.revokedKeyIds`, `signer`, and `clients.directory`. None is an environment variable. The
+`mint token` subcommand is a caller tool rather than an operator one: it reads no server configuration
+at all, and takes the caller's private JWK and any delegation subject as file paths rather than as
+values. See the [Registry Mint reference](../mint/) for the full configuration surface.
 
 ## Registry Relay
 
@@ -52,6 +72,7 @@ The Registry Relay binary reads the variables below.
 | `REGISTRY_RELAY_ENV_FILE` | Dotenv-style file to load before config validation resolves env vars, used when `--env-file` is not passed. | Optional. |
 | `REGISTRY_RELAY_BIND` | Override `server.bind` for direct server startup. Closed product and development actions use the verified bundle listener instead. | Optional. |
 | `REGISTRY_RELAY_LOG_FORMAT` | Operational log format: `json` or `jsonl` select JSON output; any other value selects text. | Defaults to text. |
+| `RUST_LOG` | Tracing filter for the operational logs on standard error. | Defaults to `info`. |
 | `DATA_GATE_POSTGRES_ROOT_CERT_PATH` | Path to a PEM file with a custom root certificate to trust for a Postgres source connector's TLS connection. | Optional. Falls back to the system default trust store when unset. |
 
 The audit hash secret and other secret material are read from operator-named variables declared in config fields such as `audit.hash_secret_env` (for example, `REGISTRY_RELAY_AUDIT_HASH_SECRET`), API key fingerprint env names, and the Postgres `connection_env`. For the full list of config fields that name secret environment variables, see the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
@@ -64,11 +85,15 @@ generated inputs contain the reference names, not the secret values.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `REGISTRYCTL_NO_UPDATE_CHECK` | Disable the automatic update check when set to a non-empty value other than `0` or `false`. | Optional. |
-| `REGISTRYCTL_UPDATE_CHECK` | Disable the automatic update check when set to `0` or `false`. | Optional. |
-| `REGISTRYCTL_VERSION` | Pinned release the installer downloads. Read by the install script, not the running binary. | Defaults to the installer's pinned release. |
-| `CI` | When set to a non-empty value other than `0` or `false`, disables the automatic update check. | Optional. |
+| `REGISTRYCTL_ENVIRONMENT` | Selects the project environment when `--environment` is not passed. Must be valid Unicode and must name an environment the project declares. | Optional. Falls back to the project's `default_environment`, then to the only declared environment. |
+| `REGISTRYCTL_VERSION` | Pinned release tag for the historical unversioned installer. A versioned installer asset refuses an override that does not match its own filename release. Read by the install script, not the running binary. | Defaults to the installer's pinned tag. |
+| `REGISTRYCTL_INSTALL_DIR` | Directory the install script installs into. Read by the install script, not the running binary. | Defaults to `~/.local/bin`. |
+| `REGISTRYCTL_ASSET_DIR` | Directory of already-downloaded release assets the install script reads instead of downloading. Read by the install script, not the running binary. | Optional. |
+
+The `registryctl update-check` command was removed before 1.0, so the variables that used to
+disable it (`REGISTRYCTL_NO_UPDATE_CHECK`, `REGISTRYCTL_UPDATE_CHECK`, and `CI`) no longer have
+any effect. Setting them is harmless and does nothing.
 
 ## Source
 
-The fixed variable names above are transcribed from the binaries and the registryctl source. For the canonical definitions, read the [Registry Notary binary entry point](https://github.com/registrystack/registry-stack/blob/main/crates/registry-notary/src/main.rs), the [Registry Relay binary entry point](https://github.com/registrystack/registry-stack/blob/main/crates/registry-relay/src/main.rs), and the [registryctl library source](https://github.com/registrystack/registry-stack/blob/main/crates/registryctl/src/lib.rs). The operator-named secret variables are documented in the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/) and the [Registry Relay configuration reference](../../products/registry-relay/configuration/).
+The fixed variable names above are transcribed from the binaries and the registryctl source, at the paths given here. For the canonical definitions, read the Evidence Gateway binary entry point `crates/registry-evidence/src/main.rs` (the `Cli` struct and `install_operational_logging`), the Registry Mint binary entry point `crates/registry-mint/src/main.rs` (the `Command` enum and `main`), the Registry Relay binary entry point `crates/registry-relay/src/main.rs` (`default_config_path_from_env`, `default_env_file_from_env`, `default_bind_from_env`, `OperationalLogFormat::from_env`, and `init_tracing`), the Relay Postgres connector at `crates/registry-relay/src/connector/mod.rs`, and for registryctl `crates/registryctl/src/main.rs` (`resolve_environment`) together with `crates/registryctl/install.sh`. The operator-named secret variables are documented in the [Registry Relay configuration reference](../../products/registry-relay/configuration/).

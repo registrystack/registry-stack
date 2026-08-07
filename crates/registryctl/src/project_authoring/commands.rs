@@ -304,7 +304,7 @@ pub fn test_registry_project_selected_with_context(
     let compiled =
         compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
     validate_generated_product_configs(&compiled)?;
-    let (reports, generated_observations, request_observations, call_budget_actual) =
+    let (reports, generated_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -319,7 +319,6 @@ pub fn test_registry_project_selected_with_context(
             &loaded,
             &reports,
             &generated_observations,
-            &request_observations,
             call_budget_actual,
         )?)
     } else {
@@ -342,9 +341,8 @@ pub fn test_registry_project_selected_with_context(
 }
 
 fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<EnvironmentDocument> {
-    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
-    let requires_issuance = project_issues_credentials(&loaded.project);
-    let requires_notary_relay = project_requires_notary_relay(&loaded.project);
+    let requires_relay = project_requires_relay(&loaded.project);
+    let requires_relay_consultation = project_requires_consultation_relay(&loaded.project);
     let mut integrations = BTreeMap::new();
     for (alias, integration) in &loaded.integrations {
         if matches!(
@@ -473,66 +471,28 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             )
         })
         .collect();
-    let callers = loaded
-        .project
-        .services
-        .iter()
-        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
-        .map(|(service_id, service)| {
-            (
-                service_id.clone(),
-                CallerBinding {
-                    api_key_fingerprint: SecretReference {
-                        secret: "REGISTRY_PROJECT_FIXTURE_API_KEY_HASH".to_string(),
-                    },
-                    scopes: service.access.scopes.clone(),
-                },
-            )
-        })
-        .collect();
     Ok(EnvironmentDocument {
         version: 1,
         development: None,
         integrations,
         entities,
-        issuance: requires_issuance.then(|| IssuanceBinding {
-            issuer: "did:web:notary.fixture.invalid".to_string(),
-            signing_key: SecretReference {
-                secret: "REGISTRY_PROJECT_FIXTURE_ISSUER_JWK".to_string(),
-            },
-            signing_kid: "offline-fixture-key".to_string(),
-            generation: 1,
-            algorithm: IssuanceSigningAlgorithm::default(),
-        }),
-        callers: if requires_notary {
-            callers
-        } else {
-            BTreeMap::new()
-        },
         relay: requires_relay.then(|| RelayBinding {
             origin: "https://relay.fixture.invalid".to_string(),
             issuer: "https://workload.fixture.invalid".to_string(),
             jwks_url: "https://workload.fixture.invalid/.well-known/jwks.json".to_string(),
             audience: "registry-relay".to_string(),
             allowed_clients: vec!["registry-project-fixture-client".to_string()],
+            consultation: requires_relay_consultation.then(|| RelayConsultationBinding {
+                client_id: "registry-project-fixture-consultation-client".to_string(),
+                principal_id: "registry-project-fixture-principal".to_string(),
+            }),
             local_api_keys: None,
         }),
-        notary_relay: requires_notary_relay.then(|| NotaryRelayBinding {
-            base_url: "https://relay.fixture.invalid".to_string(),
-            workload_client_id: "registry-project-fixture-notary".to_string(),
-            token_file: PathBuf::from("/run/secrets/offline-fixture-token"),
-        }),
         relay_state: None,
-        notary_state: None,
-        notary_cel: None,
-        oid4vci: None,
         deployment: DeploymentBinding {
             profile: DeploymentProfile::Local,
             relay: requires_relay.then(|| ServiceBinding {
                 service: "registry-project-fixture-relay".to_string(),
-            }),
-            notary: requires_notary.then(|| ServiceBinding {
-                service: "registry-project-fixture-notary".to_string(),
             }),
         },
     })
@@ -577,380 +537,6 @@ fn offline_private_path(
         .next()
         .expect("one private path was checked")
         .to_owned())
-}
-
-struct GovernedFixtureInputContract<'a> {
-    name: &'a str,
-    declaration: &'a InputDeclaration,
-}
-
-fn validate_governed_fixture_request(
-    loaded: &LoadedRegistryProject,
-    outbound: &GovernedFixtureRequest,
-) -> Result<()> {
-    let purpose = outbound.purpose.as_str();
-    let services = loaded
-        .project
-        .services
-        .values()
-        .filter(|service| service.kind == ServiceKind::Evidence && service.purpose == purpose)
-        .collect::<Vec<_>>();
-    if services.is_empty() {
-        bail!("governed fixture request purpose is not declared by this project");
-    }
-    let claims = &outbound.claims;
-    if claims.is_empty() || claims.len() > MAX_CLAIMS {
-        bail!("governed fixture request claim count is outside the project bound");
-    }
-    let mut ids = Vec::with_capacity(claims.len());
-    let mut claim_versions = BTreeMap::new();
-    let mut selected_claims = Vec::with_capacity(claims.len());
-    for claim in claims {
-        let id = claim.id.as_str();
-        let service = services
-            .iter()
-            .copied()
-            .find(|service| service.claims.contains_key(id))
-            .ok_or_else(|| anyhow!("governed fixture request contains an unknown project claim"))?;
-        let authored_version = service.version.to_string();
-        if claim
-            .version
-            .as_deref()
-            .is_some_and(|version| version != authored_version)
-        {
-            bail!("governed fixture request claim version does not match the authored project");
-        }
-        if claim_versions
-            .insert(id.to_string(), authored_version)
-            .is_some()
-        {
-            bail!("governed fixture request contains an unknown or duplicate project claim");
-        }
-        ids.push(id.to_string());
-        let selected_claim = service
-            .claims
-            .get(id)
-            .ok_or_else(|| anyhow!("selected project claim is absent after claim resolution"))?;
-        selected_claims.push((service, selected_claim));
-    }
-    let first_claim = selected_claims
-        .first()
-        .map(|(_, claim)| *claim)
-        .ok_or_else(|| anyhow!("governed fixture request must select at least one project claim"))?;
-    let disclosure = outbound
-        .disclosure
-        .as_deref()
-        .unwrap_or_else(|| expanded_disclosure(&first_claim.disclosure).0);
-    if registry_notary_core::DisclosureProfile::parse(disclosure).is_none() {
-        bail!("governed fixture request disclosure profile is invalid");
-    }
-    if selected_claims.iter().any(|(_, claim)| {
-        !expanded_disclosure(&claim.disclosure)
-            .1
-            .contains(&disclosure)
-    }) {
-        bail!("governed fixture request disclosure is not allowed for every selected project claim");
-    }
-    if outbound
-        .format
-        .as_deref()
-        .is_some_and(|format| format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
-    {
-        bail!("governed fixture request format must be the governed claim-result media type");
-    }
-    for (name, _) in outbound.variables.iter() {
-        if !selected_claims
-            .iter()
-            .any(|(service, _)| service.variables.contains_key(name))
-        {
-            bail!("governed fixture request variable is not declared by a selected project service");
-        }
-    }
-    let subject_type = selected_claim_subject_type(&selected_claims)?;
-    let mut input_claims = selected_claims.clone();
-    let representative_binding = loaded
-        .environment
-        .as_ref()
-        .and_then(|environment| environment.oid4vci.as_ref())
-        .and_then(|binding| {
-            binding
-                .representative_issuance
-                .as_ref()
-                .map(|representative| (binding, representative))
-        });
-    if let Some((binding, representative)) = representative_binding {
-        if let Some(proof_claim) = representative_proof_claim_for_selected_ids(
-            &loaded.project,
-            &binding.credential.service,
-            &binding.credential.profile,
-            &representative.proof_claim,
-            &ids,
-        )? {
-            input_claims.push(proof_claim);
-        }
-    }
-    validate_governed_fixture_target(
-        loaded,
-        &input_claims,
-        outbound.requester.as_ref(),
-        &outbound.target,
-        &outbound.variables,
-        subject_type,
-    )?;
-    Ok(())
-}
-
-fn representative_proof_claim_for_selected_ids<'a>(
-    project: &'a RegistryProject,
-    service_id: &str,
-    profile_id: &str,
-    proof_claim_id: &str,
-    selected_claim_ids: &[String],
-) -> Result<Option<(&'a ServiceDeclaration, &'a ClaimDeclaration)>> {
-    let service = project
-        .services
-        .get(service_id)
-        .ok_or_else(|| anyhow!("representative credential service is absent"))?;
-    let credential = service
-        .credential_profiles
-        .get(profile_id)
-        .ok_or_else(|| anyhow!("representative credential profile is absent"))?;
-    let selected_root = credential
-        .claims
-        .first()
-        .is_some_and(|root| selected_claim_ids.iter().any(|selected| selected == root));
-    if !selected_root
-        || selected_claim_ids
-            .iter()
-            .any(|selected| selected == proof_claim_id)
-    {
-        return Ok(None);
-    }
-    let proof_claim = service
-        .claims
-        .get(proof_claim_id)
-        .ok_or_else(|| anyhow!("representative proof claim is absent"))?;
-    Ok(Some((service, proof_claim)))
-}
-
-fn selected_claim_subject_type(
-    selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
-) -> Result<&'static str> {
-    let mut subject_types = selected_claims
-        .iter()
-        .map(|(service, _)| service.effective_subject_type())
-        .collect::<BTreeSet<_>>();
-    if subject_types.len() != 1 {
-        bail!("governed fixture request cannot combine evidence services with different subject types");
-    }
-    Ok(subject_types
-        .pop_first()
-        .ok_or_else(|| anyhow!("governed fixture request selected no evidence service"))?
-        .as_str())
-}
-
-fn validate_governed_fixture_target(
-    loaded: &LoadedRegistryProject,
-    selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
-    requester: Option<&GovernedFixtureTarget>,
-    target: &GovernedFixtureTarget,
-    variables: &registry_notary_core::RequestVariables,
-    subject_type: &str,
-) -> Result<()> {
-    if !target.entity_type.eq_ignore_ascii_case(subject_type) {
-        bail!("governed fixture request target type does not match the authored project");
-    }
-
-    let mut id_contracts = Vec::new();
-    let mut identifier_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
-    let mut requester_identifier_contracts =
-        BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
-    let mut attribute_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
-    let mut variable_contracts = BTreeMap::<String, Vec<GovernedFixtureInputContract<'_>>>::new();
-    for (service, claim) in selected_claims {
-        if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-            bail!("governed governed fixture requests require registry-backed project claims");
-        }
-        let consultation_name = claim_consultation_name(service, claim)?;
-        let consultation = service
-            .consultations
-            .get(consultation_name)
-            .ok_or_else(|| anyhow!("selected project claim has no authored consultation"))?;
-        let integration = loaded
-            .integrations
-            .get(&consultation.integration)
-            .ok_or_else(|| anyhow!("selected consultation has no authored integration"))?;
-        for (name, mapping) in &consultation.input {
-            let declaration = integration.document.input.get(name).ok_or_else(|| {
-                anyhow!("selected consultation input has no authored contract")
-            })?;
-            let contract = GovernedFixtureInputContract { name, declaration };
-            if mapping == "request.target.id" {
-                id_contracts.push(contract);
-            } else if let Some(scheme) = mapping.strip_prefix("request.target.identifiers.") {
-                identifier_contracts
-                    .entry(scheme.to_string())
-                    .or_default()
-                    .push(contract);
-            } else if let Some(scheme) = mapping.strip_prefix("request.requester.identifiers.") {
-                requester_identifier_contracts
-                    .entry(scheme.to_string())
-                    .or_default()
-                    .push(contract);
-            } else if let Some(name) = mapping.strip_prefix("request.target.attributes.") {
-                attribute_contracts
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(contract);
-            } else if let Some(name) = mapping.strip_prefix("request.variables.") {
-                variable_contracts
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(contract);
-            } else {
-                bail!("authored consultation uses an unsupported governed fixture input");
-            }
-        }
-    }
-
-    if id_contracts.is_empty() != target.id.is_none() {
-        bail!("governed fixture request target fields do not exactly match the selected authored inputs");
-    }
-    if requester_identifier_contracts.is_empty() != requester.is_none() {
-        bail!(
-            "governed fixture request requester must be present exactly when selected claims bind authenticated requester identifiers"
-        );
-    }
-    let mut identifiers = BTreeMap::new();
-    for identifier in &target.identifiers {
-        if identifiers
-            .insert(identifier.scheme.as_str(), identifier.value.as_str())
-            .is_some()
-        {
-            bail!("governed fixture request target contains a duplicate identifier scheme");
-        }
-    }
-    if identifiers.keys().copied().collect::<BTreeSet<_>>()
-        != identifier_contracts
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-        || target
-            .attributes
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != attribute_contracts
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-    {
-        bail!("governed fixture request target fields do not exactly match the selected authored inputs");
-    }
-    if let Some(requester) = requester {
-        validate_governed_requester_type(requester)?;
-        if requester.id.is_some() || !requester.attributes.is_empty() {
-            bail!(
-                "governed fixture request requester must contain only the required authenticated identifiers"
-            );
-        }
-        let mut requester_identifiers = BTreeMap::new();
-        for identifier in &requester.identifiers {
-            if requester_identifiers
-                .insert(identifier.scheme.as_str(), identifier.value.as_str())
-                .is_some()
-            {
-                bail!("governed fixture request requester contains a duplicate identifier scheme");
-            }
-        }
-        if requester_identifiers
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>()
-            != requester_identifier_contracts
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>()
-        {
-            bail!(
-                "governed fixture request requester identifiers do not exactly match the selected authored inputs"
-            );
-        }
-        for (scheme, contracts) in &requester_identifier_contracts {
-            let value = requester_identifiers.get(scheme.as_str()).ok_or_else(|| {
-                anyhow!("governed fixture request requester identifier is absent after exact-shape validation")
-            })?;
-            validate_governed_fixture_input(
-                &format!("requester.identifiers.{scheme}"),
-                contracts,
-                &Value::String((*value).to_string()),
-            )?;
-        }
-    }
-
-    if let Some(id) = &target.id {
-        validate_governed_fixture_input("target.id", &id_contracts, &Value::String(id.clone()))?;
-    }
-    for (scheme, contracts) in &identifier_contracts {
-        let value = identifiers.get(scheme.as_str()).ok_or_else(|| {
-            anyhow!("governed fixture request target identifier is absent after exact-shape validation")
-        })?;
-        validate_governed_fixture_input(
-            &format!("target.identifiers.{scheme}"),
-            contracts,
-            &Value::String((*value).to_string()),
-        )?;
-    }
-    for (name, contracts) in &attribute_contracts {
-        let value = target.attributes.get(name).ok_or_else(|| {
-            anyhow!("governed fixture request target attribute is absent after exact-shape validation")
-        })?;
-        validate_governed_fixture_input(&format!("target.attributes.{name}"), contracts, value)?;
-    }
-    for (name, contracts) in &variable_contracts {
-        let value = variables.get(name).ok_or_else(|| {
-            anyhow!("governed fixture request omits a variable required by the selected authored inputs")
-        })?;
-        validate_governed_fixture_input(
-            &format!("variables.{name}"),
-            contracts,
-            &Value::String(value.to_string()),
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_governed_requester_type(requester: &GovernedFixtureTarget) -> Result<()> {
-    if !requester.entity_type.eq_ignore_ascii_case("person") {
-        bail!("governed fixture request requester type must be Person");
-    }
-    Ok(())
-}
-
-fn validate_governed_fixture_input(
-    path: &str,
-    contracts: &[GovernedFixtureInputContract<'_>],
-    value: &Value,
-) -> Result<()> {
-    for contract in contracts {
-        validate_fixture_input_value(contract.name, contract.declaration, value).map_err(|_| {
-            anyhow!("governed fixture request {path} violates its selected authored type or bounds")
-        })?;
-    }
-    Ok(())
-}
-
-fn contains_sensitive_request_key(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            matches!(
-                key.to_ascii_lowercase().as_str(),
-                "credential" | "credentials" | "password" | "secret" | "token" | "api_key"
-            ) || contains_sensitive_request_key(value)
-        }),
-        Value::Array(values) => values.iter().any(contains_sensitive_request_key),
-        _ => false,
-    }
 }
 
 pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCommandReport> {
@@ -1016,7 +602,7 @@ fn check_registry_project_internal(
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
     validate_project_workbook_inputs(&loaded, &compiled)?;
-    let (fixtures, generated_observations, request_observations, call_budget_actual) =
+    let (fixtures, generated_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -1030,7 +616,6 @@ fn check_registry_project_internal(
         &loaded,
         &fixtures,
         &generated_observations,
-        &request_observations,
         call_budget_actual,
     )?;
     let authored_values = if include_trusted_local_authored_values {
@@ -1089,14 +674,9 @@ pub fn preflight_registry_project(
         .as_ref()
         .ok_or_else(|| anyhow!("preflight requires an explicit environment"))?;
     let mut input = offline_preflight_input(&loaded, environment, &options.environment)?;
-    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
-    if requires_relay {
+    if project_requires_relay(&loaded.project) {
         input.require_product(PreflightProduct::RegistryRelay);
         input.record_product_validator_available(PreflightProduct::RegistryRelay);
-    }
-    if requires_notary {
-        input.require_product(PreflightProduct::RegistryNotary);
-        input.record_product_validator_available(PreflightProduct::RegistryNotary);
     }
     Ok(run_offline_preflight(input))
 }
@@ -1145,17 +725,7 @@ pub fn inspect_project_capabilities(
             SupportEvidence::LinkedCrate,
         ),
         (
-            SupportComponent::RegistryNotaryProduct,
-            SupportState::Available,
-            SupportEvidence::LinkedCrate,
-        ),
-        (
             SupportComponent::RegistryRelayValidator,
-            SupportState::Available,
-            SupportEvidence::LinkedProductValidator,
-        ),
-        (
-            SupportComponent::RegistryNotaryValidator,
             SupportState::Available,
             SupportEvidence::LinkedProductValidator,
         ),
@@ -1170,22 +740,12 @@ pub fn inspect_project_capabilities(
             SupportEvidence::EmbeddedSchema,
         ),
         (
-            SupportComponent::RegistryNotaryConfigSchema,
-            SupportState::Available,
-            SupportEvidence::EmbeddedSchema,
-        ),
-        (
             SupportComponent::RegistryctlDistribution,
             SupportState::Available,
             SupportEvidence::ReleaseMetadata,
         ),
         (
             SupportComponent::RegistryRelayImage,
-            SupportState::NotEvaluated,
-            SupportEvidence::NoEvidence,
-        ),
-        (
-            SupportComponent::RegistryNotaryImage,
             SupportState::NotEvaluated,
             SupportEvidence::NoEvidence,
         ),
@@ -1216,18 +776,11 @@ pub fn inspect_project_capabilities(
             enabled.insert(capability);
         }
     }
-    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
-    if requires_relay {
+    if project_requires_relay(&loaded.project) {
         declarations.insert(CapabilityId::RegistryRelayProduct);
-    }
-    if requires_notary {
-        declarations.insert(CapabilityId::RegistryNotaryProduct);
     }
     if environment.deployment.relay.is_some() {
         enabled.insert(CapabilityId::RegistryRelayProduct);
-    }
-    if environment.deployment.notary.is_some() {
-        enabled.insert(CapabilityId::RegistryNotaryProduct);
     }
     for capability in declarations {
         input.record_project_declaration(capability)?;
@@ -1257,28 +810,7 @@ pub fn inspect_project_capabilities(
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("capability service count exceeds the report cap"))?;
         }
-        for claim in service.claims.values() {
-            if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
-                continue;
-            }
-            let consultation_name = claim_consultation_name(service, claim)?;
-            let consultation = service
-                .consultations
-                .get(consultation_name)
-                .ok_or_else(|| anyhow!("registry-backed claim consultation is unavailable"))?;
-            let capability = *integration_capabilities
-                .get(consultation.integration.as_str())
-                .ok_or_else(|| anyhow!("consultation capability is unavailable"))?;
-            let counts = usage.entry(capability).or_default();
-            counts.claims = counts
-                .claims
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("capability claim count exceeds the report cap"))?;
-        }
-        let product = match service.kind {
-            ServiceKind::RecordsApi => CapabilityId::RegistryRelayProduct,
-            ServiceKind::Evidence => CapabilityId::RegistryNotaryProduct,
-        };
+        let product = CapabilityId::RegistryRelayProduct;
         let counts = usage.entry(product).or_default();
         counts.services = counts
             .services
@@ -1288,10 +820,6 @@ pub fn inspect_project_capabilities(
             .consultations
             .checked_add(u32::try_from(service.consultations.len())?)
             .ok_or_else(|| anyhow!("product consultation count exceeds the report cap"))?;
-        counts.claims = counts
-            .claims
-            .checked_add(u32::try_from(service.claims.len())?)
-            .ok_or_else(|| anyhow!("product claim count exceeds the report cap"))?;
     }
     if let Some(script_usage) = usage.get(&CapabilityId::SourceScript).copied() {
         usage.insert(CapabilityId::RhaiRuntime, script_usage);
@@ -1451,36 +979,6 @@ fn offline_preflight_input(
             )?,
         }
     }
-    if let Some(issuance) = &environment.issuance {
-        add_preflight_secret(
-            &mut input,
-            &environment_file,
-            "/issuance/signing_key/secret",
-            &issuance.signing_key,
-            PreflightSecretConsumer::IssuanceSigningKey,
-        )?;
-    }
-    for (caller_id, caller) in &environment.callers {
-        add_preflight_secret(
-            &mut input,
-            &environment_file,
-            &format!(
-                "/callers/{}/api_key_fingerprint/secret",
-                escape_explanation_pointer_segment(caller_id)
-            ),
-            &caller.api_key_fingerprint,
-            PreflightSecretConsumer::CallerApiKeyFingerprint,
-        )?;
-    }
-    if let Some(binding) = &environment.notary_relay {
-        add_preflight_runtime_file(
-            &mut input,
-            &environment_file,
-            "/notary_relay/token_file",
-            &binding.token_file,
-            PreflightRuntimeFileKind::NotaryToRelayToken,
-        )?;
-    }
     if let Some(binding) = &environment.relay_state {
         add_preflight_runtime_file(
             &mut input,
@@ -1489,36 +987,6 @@ fn offline_preflight_input(
             &binding.postgresql.root_certificate_path,
             PreflightRuntimeFileKind::RelayStateRootCertificate,
         )?;
-    }
-    if let Some(binding) = &environment.notary_state {
-        add_preflight_runtime_file(
-            &mut input,
-            &environment_file,
-            "/notary_state/postgresql/root_certificate_path",
-            &binding.postgresql.root_certificate_path,
-            PreflightRuntimeFileKind::NotaryStateRootCertificate,
-        )?;
-    }
-    if let Some(oid4vci) = &environment.oid4vci {
-        for (reference, consumer, pointer) in [
-            (
-                &oid4vci.client.signing_key,
-                PreflightSecretConsumer::Oid4vciClientSigningKey,
-                "/oid4vci/client/signing_key/secret",
-            ),
-            (
-                &oid4vci.access_token.signing_key,
-                PreflightSecretConsumer::Oid4vciAccessTokenSigningKey,
-                "/oid4vci/access_token/signing_key/secret",
-            ),
-            (
-                &oid4vci.sensitive_state_key,
-                PreflightSecretConsumer::Oid4vciSensitiveStateKey,
-                "/oid4vci/sensitive_state_key/secret",
-            ),
-        ] {
-            add_preflight_secret(&mut input, &environment_file, pointer, reference, consumer)?;
-        }
     }
     Ok(input)
 }
@@ -1642,7 +1110,7 @@ fn build_registry_project_inner(
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
     let artifact_inputs = validate_project_workbook_inputs(&loaded, &compiled)?;
-    let (fixtures, generated_observations, request_observations, call_budget_actual) =
+    let (fixtures, generated_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -1656,7 +1124,6 @@ fn build_registry_project_inner(
         &loaded,
         &fixtures,
         &generated_observations,
-        &request_observations,
         call_budget_actual,
     )?;
     let output = loaded

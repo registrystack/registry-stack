@@ -23,4 +23,4 @@ interactions:
         limit: 2
         offset: 0
     respond: { status: 503, body: {} }
-expect: { error: source.status_rejected, outputs: {}, claims: {} }
+expect: { error: source.status_rejected, outputs: {} }

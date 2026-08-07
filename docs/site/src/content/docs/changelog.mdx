@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-08-01"
+last_reviewed: "2026-08-03"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -16,7 +16,38 @@ documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
 
+## 2026-08-03
+
+Product direction update:
+
+- Recorded the decision to retire Registry Notary from the current product
+  surface while preserving historical changelogs, decision records, and
+  release manifests.
+- Reframed the supported product paths around Registry Relay for scoped,
+  protected reads and Evidence for minimum-disclosure assertions.
+- Kept Evidence independent from the retired Notary product model, with
+  Registry Mint limited to supporting token issuance.
+
+Adopter-facing breaking change:
+
+- Raised the registryctl approved-set schema to version `2.0` and made
+  registryctl refuse an approved set issued before the retirement, including a
+  version `1.0` document, a set carrying a `notary` lane, and a set binding
+  cross-lane interface digests.
+- Required affected deployments to re-approve their baseline from the current
+  lane bundles, because the removed cross-lane interface digests are no longer
+  verified and the old approval's integrity claim is no longer enforced. See
+  [Approve the initial product baseline](../operate/approve-initial-baseline/).
+
 ## 2026-08-01
+
+Stabilization updates for the v0.16.3 beta-26 release candidate:
+
+- Recorded that v0.16.2 stopped after staging an unpublished draft and before
+  public image or documentation publication.
+- Added the v0.16.3 candidate archive and retained v0.16.0 through v0.16.2 as
+  failed-train records.
+- Simplified Beta publication recovery without changing product behavior.
 
 Fix-forward updates for the v0.16.2 beta-25 release candidate:
 

@@ -1,12 +1,13 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
 import { pathForDocset } from '../lib/docset-path.mjs';
+import { selectableDocsets as retainedDocsets } from '../lib/docset-retention.mjs';
 
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
-const selectableDocsets = docsetsManifest.docsets.filter((docset) => docset.status !== 'draft');
+const selectableDocsets = retainedDocsets(docsetsManifest) as typeof docsetsManifest.docsets;
 
 const activePath = activeDocset?.path ?? '/';
 ---

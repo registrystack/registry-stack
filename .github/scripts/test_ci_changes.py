@@ -7,13 +7,13 @@ import json
 import re
 import subprocess
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
 from ci_changes import (
     AUTHORING_REFERENCE_CONTRACT_SOURCES,
     AUTHORING_REFERENCE_INPUTS,
+    EVIDENCE_TUTORIAL_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
     Workspace,
@@ -22,6 +22,49 @@ from ci_changes import (
     validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
+
+
+class CiRetirementTest(unittest.TestCase):
+    def test_current_ci_surfaces_do_not_reference_retired_notary(self) -> None:
+        current_ci_surfaces = (
+            Path(".github/dependabot.yml"),
+            Path(".github/scripts/ci_changes.py"),
+            Path(".github/workflows/ci.yml"),
+            Path(".github/workflows/nightly-rust-coverage.yml"),
+            Path(".github/workflows/nightly-security.yml"),
+        )
+        for path in current_ci_surfaces:
+            with self.subTest(path=path):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?i)notary")
+
+        self.assertFalse(
+            Path(".github/workflows/notary-postgres-conformance.yml").exists()
+        )
+
+
+class PlatformRetirementTest(unittest.TestCase):
+    def test_orphan_platform_crates_and_oid4vci_fuzz_surface_are_absent(self) -> None:
+        retired_crates = (
+            "registry-platform-cache",
+            "registry-platform-oid4vci",
+            "registry-platform-replay",
+            "registry-platform-sts",
+        )
+        for crate in retired_crates:
+            with self.subTest(crate=crate):
+                self.assertNotIn(crate, SHARDS["platform"])
+                self.assertFalse(Path("crates", crate).exists())
+
+        self.assertIn("registry-platform-pdp", SHARDS["platform"])
+        self.assertIn("registry-platform-testing", SHARDS["platform"])
+        self.assertFalse(
+            Path(
+                "products/platform/fuzz/fuzz_targets/oid4vci_request_and_proof.rs"
+            ).exists()
+        )
+        self.assertFalse(
+            Path("products/platform/fuzz/corpus/oid4vci_request_and_proof").exists()
+        )
 
 
 class CiChangesTest(unittest.TestCase):
@@ -58,6 +101,81 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
 
+    def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials exist.
+        # A tutorial missing here would not trigger the job that replays it, so
+        # it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-evidence-tutorials.sh"
+        )
+        registry = re.search(
+            r"^EVIDENCE_TUTORIALS=\((.*?)^\)", gate.read_text(), re.DOTALL | re.MULTILINE
+        )
+        if registry is None:
+            self.fail("the gate must declare EVIDENCE_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                self.assertIn(
+                    f"docs/site/src/content/docs/tutorials/{slug}.mdx",
+                    EVIDENCE_TUTORIAL_INPUTS,
+                )
+
+    def test_evidence_tutorial_inputs_cover_every_helper_the_gate_invokes(self) -> None:
+        # Same reasoning as the tutorial registry above, one layer down. The gate
+        # delegates to sibling scripts, and a change to one of those changes what
+        # every tutorial replay does. A helper missing here routes the change
+        # past the job that would have caught it.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-evidence-tutorials.sh"
+        )
+        helpers = set(
+            re.findall(r"scripts/([A-Za-z0-9._-]+\.(?:sh|mjs))", gate.read_text())
+        )
+        self.assertTrue(helpers, "the gate must invoke at least one helper")
+        for helper in sorted(helpers):
+            with self.subTest(helper=helper):
+                self.assertIn(f"docs/site/scripts/{helper}", EVIDENCE_TUTORIAL_INPUTS)
+
+    def test_evidence_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-evidence-tutorials.sh",
+            "docs/site/scripts/check-evidence-tutorials.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["evidence_tutorial"]
+                )
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-evidence/src/runtime.rs",))[
+                "evidence_tutorial"
+            ]
+        )
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-evidencectl/src/scaffold.rs",))[
+                "evidence_tutorial"
+            ]
+        )
+        # The gate runs `mint` too, so a Mint change that breaks the served
+        # tutorial has to reach the job that replays it.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-mint/src/lib.rs",))[
+                "evidence_tutorial"
+            ]
+        )
+        self.assertFalse(
+            classify(
+                self.workspace,
+                ("docs/site/src/content/docs/tutorials/author-registry-project.mdx",),
+            )["evidence_tutorial"]
+        )
+
     def test_reverse_dependencies_are_included(self) -> None:
         outputs = classify(
             self.workspace,
@@ -65,7 +183,6 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
-        self.assertIn("registry-notary", outputs["rust_packages"])
         self.assertTrue(outputs["registryctl_tutorial"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
@@ -84,6 +201,78 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(outputs["rust_matrix"], {"include": []})
         self.assertTrue(outputs["docs"])
         self.assertFalse(outputs["docs_archives"])
+
+    def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
+        for path in (
+            "crates/registry-evidence/src/source.rs",
+            "products/evidence/contracts/source-contract.yaml",
+            "products/evidence/reference/request-adapter/ADAPTER-API.md",
+            "products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/fixtures/cases.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["evidence_contracts"])
+                self.assertIn("registry-evidence", outputs["rust_packages"])
+                # registry-mint dev-depends on registry-evidence so its
+                # compatibility test proves Evidence accepts a minted token.
+                # Changing Evidence must therefore run the mint shard too.
+                self.assertEqual(
+                    {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+                    {"evidence", "mint"},
+                )
+
+    def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
+        # A Node-binding-only change has no bearing on any tutorial's shell
+        # commands or fixtures, so it must not replay them; but the binding's
+        # own source neutrality still needs the contracts gate to run.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client-node/src/lib.rs",),
+        )
+        self.assertFalse(outputs["evidence_tutorial"])
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["client_bindings"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"evidence"},
+        )
+
+    def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
+        # Both bindings are Cargo path-dependents of the SDK and the verifier,
+        # so either can change the native surface or the error envelope the
+        # packages wrap. Selecting the job from changed paths alone would skip
+        # the npm suite, the type-drift check, and the Python unittest suite for
+        # exactly the changes most able to break them.
+        for path in (
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-evidence-verifier/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertIn(
+                    "registry-evidence-client-node", outputs["rust_packages"]
+                )
+                self.assertIn("registry-evidence-client-py", outputs["rust_packages"])
+
+    def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("\n  evidence-contracts:\n", workflow)
+        self.assertIn("products/evidence/scripts/check-contracts.sh", workflow)
+        self.assertIn(
+            "products/evidence/scripts/check-source-neutrality.sh", workflow
+        )
+        self.assertIn("\n  relay-contracts:\n", workflow)
+        self.assertIn("name: Relay OpenAPI contract", workflow)
+        self.assertNotIn("\n  notary-contracts:\n", workflow)
+        self.assertNotIn("notary_contracts", workflow)
+
+        rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
+            "\n  project-authoring-determinism:\n", 1
+        )[0]
+        self.assertIn("\n      - evidence-contracts\n", rust_result)
+        self.assertIn("\n      - relay-contracts\n", rust_result)
+        self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
         current_content = classify(
@@ -104,7 +293,6 @@ class CiChangesTest(unittest.TestCase):
 
     def test_archive_dependent_scripts_select_archive_verification(self) -> None:
         for path in (
-            ".github/scripts/ci_changes.py",
             "docs/site/scripts/check-built-links.mjs",
             "docs/site/scripts/check-seo.mjs",
             "docs/site/scripts/docsets.mjs",
@@ -112,6 +300,18 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["docs_archives"])
+
+    def test_release_or_classifier_changes_skip_historical_archive_rebuilds(
+        self,
+    ) -> None:
+        for path in (
+            ".github/scripts/ci_changes.py",
+            ".github/workflows/docs-pages.yml",
+            ".github/workflows/release.yml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertFalse(outputs["docs_archives"])
 
     def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
         outputs = classify(self.workspace, (), run_all=True)
@@ -166,11 +366,9 @@ class CiChangesTest(unittest.TestCase):
                 "crates/registryctl/schemas/project-authoring/fixture.schema.json",
                 "crates/registryctl/schemas/project-authoring/entity.schema.json",
                 "schemas/registry-relay.config.schema.json",
-                "schemas/registry-notary.config.schema.json",
                 "crates/registryctl/schemas/project-authoring/parity-coverage.json",
                 "crates/registryctl/schemas/project-authoring/documentation-intent.json",
                 "crates/registry-relay/config/documentation-intent.json",
-                "crates/registry-notary-core/config/documentation-intent.json",
             ),
         )
         validate_authoring_reference_routing(
@@ -237,7 +435,6 @@ on:
 
     def test_diagnostic_reference_inputs_run_docs(self) -> None:
         inputs = (
-            "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/**",
             "crates/registry-relay/src/process_startup.rs",
@@ -273,14 +470,6 @@ on:
             ),
             (
                 "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
                 {
                     "docs": True,
                     "project_authoring": True,
@@ -356,38 +545,6 @@ on:
                 {
                     "docs": True,
                     "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-server/src/standalone/activation.rs",
-                {
-                    "docs": True,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary/src/config_loader.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-core/src/config/root.rs",
-                {
-                    "docs": True,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-notary-server/src/runtime/evaluation.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
                     "registryctl_tutorial": True,
                 },
             ),
@@ -480,14 +637,6 @@ on:
                 "README.md",
                 {"docs": False, "rust": False, "registryctl_tutorial": False},
             ),
-            (
-                "crates/registry-notary-client/src/lib.rs",
-                {
-                    "docs": False,
-                    "notary_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
         )
 
         for path, expected in cases:
@@ -566,30 +715,6 @@ on:
         )
         self.assertFalse(outputs["release_tool"])
         self.assertFalse(outputs["release_source_proof"])
-
-    def test_nightly_notary_fuzz_inventory_matches_declared_targets(self) -> None:
-        workflow = Path(".github/workflows/nightly-security.yml").read_text(
-            encoding="utf-8"
-        )
-        target_block = re.search(
-            r"name: Run notary fuzz smoke.*?for target in \\\n"
-            r"(?P<targets>.*?)\n\s*do",
-            workflow,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(target_block)
-        configured = re.findall(
-            r"^\s+([a-z][a-z0-9_]*)",
-            target_block["targets"],
-            re.MULTILINE,
-        )
-
-        manifest = tomllib.loads(
-            Path("products/notary/fuzz/Cargo.toml").read_text(encoding="utf-8")
-        )
-        declared = [target["name"] for target in manifest["bin"]]
-        self.assertCountEqual(configured, declared)
-
 
 class RunCargoPackagesTest(unittest.TestCase):
     def test_builds_a_direct_cargo_argument_vector(self) -> None:

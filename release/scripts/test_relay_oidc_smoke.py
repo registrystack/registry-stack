@@ -265,6 +265,86 @@ class RelayOidcSmokeTest(TestCase):
         self.assertEqual("candidate-neutral-harness-plan", plan["classification"])
         self.assertEqual(candidate, plan["candidate"])
 
+    def test_plan_declares_the_source_read_and_minimization_checks(self) -> None:
+        plan = self.runner.plan_document(
+            {"release_id": "beta-17", "source_ref": "a" * 40, "topology": "release"}
+        )
+
+        self.assertIn("source-read-scope-denied", plan["checks"])
+        self.assertIn("source-read-records", plan["checks"])
+        self.assertIn("source-read-minimized-projection", plan["checks"])
+
+    def test_template_pins_the_separate_entity_read_scope(self) -> None:
+        self.runner.validate_assets()
+        template = self.runner.TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("read_scope: smoke_registry:rows", template)
+        self.assertIn('"registry-smoke-reader": $mapped_scope', template)
+
+    def test_source_read_config_grants_the_declared_entity_read_scope(self) -> None:
+        token = fake_token(role_claim={"registry-smoke-reader": {"org-1": "active"}})
+        profile = self.runner.inspect_token(token, self.topology())
+
+        metadata_only = self.runner.render_relay_config(profile, host_port=19191)
+        read_grant = self.runner.render_relay_config(
+            profile, host_port=19191, mapped_scope="smoke_registry:rows"
+        )
+
+        self.assertIn(
+            '"registry-smoke-reader": "smoke_registry:metadata"', metadata_only
+        )
+        self.assertIn('"registry-smoke-reader": "smoke_registry:rows"', read_grant)
+        self.assertNotIn("$", read_grant)
+
+    def test_source_read_result_rejects_undeclared_and_altered_records(self) -> None:
+        declared = {
+            "data": [{"id": "person-001", "display_name": "Registry Smoke Person"}],
+            "pagination": {"has_more": False},
+        }
+        self.assertEqual("pass", self.runner.source_read_result(declared)[0])
+
+        leaked = {
+            "data": [
+                {
+                    "id": "person-001",
+                    "display_name": "Registry Smoke Person",
+                    "person_id": "person-001",
+                }
+            ]
+        }
+        leaked_result, leaked_detail = self.runner.source_read_result(leaked)
+        self.assertEqual("fail", leaked_result)
+        self.assertIn("person_id", leaked_detail)
+
+        altered = {"data": [{"id": "person-001", "display_name": "Someone Else"}]}
+        altered_result, altered_detail = self.runner.source_read_result(altered)
+        self.assertEqual("fail", altered_result)
+        self.assertNotIn("Someone Else", altered_detail)
+
+        for malformed in ({"data": []}, {}, {"data": ["person-001"]}):
+            self.assertEqual("fail", self.runner.source_read_result(malformed)[0])
+
+    def test_expected_record_is_derived_from_the_pinned_fixture(self) -> None:
+        header, row = self.runner.FIXTURE_PATH.read_text(
+            encoding="utf-8"
+        ).splitlines()[:2]
+        source_row = dict(zip(header.split(","), row.split(",")))
+
+        self.assertEqual(
+            {
+                "id": source_row["person_id"],
+                "display_name": source_row["display_name"],
+            },
+            self.runner.SOURCE_READ_RECORD,
+        )
+        self.assertNotIn("person_id", self.runner.SOURCE_READ_RECORD)
+
+    def test_readme_states_the_source_read_evidence(self) -> None:
+        readme = (self.runner.CONFIG_DIR / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("smoke_registry:rows", readme)
+        self.assertIn("person_id", readme)
+
     def test_solmara_live_run_cannot_emit_evidence_from_metadata(self) -> None:
         args = Namespace(
             topology="solmara",

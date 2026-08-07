@@ -24,7 +24,7 @@ release_image_context="${RELEASE_IMAGE_CONTEXT:-${repo_root}}"
 created_builder=false
 
 case "${name}" in
-  registry-notary|registry-relay)
+  registry-relay)
     dockerfile="${repo_root}/release/docker/Dockerfile.${name}"
     ;;
   *)

@@ -24,7 +24,7 @@ Public issues remain the source of truth for work selection:
 
 ## October 2026 To March 2027
 
-- Harden Registry Relay and Registry Notary deployment profiles for pilot
+- Harden Registry Relay and Evidence deployment profiles for pilot
   operators, especially configuration diagnostics, audit posture, and
   verification commands.
 - Expand coverage for governed registry reads, evidence issuance, sidecar
