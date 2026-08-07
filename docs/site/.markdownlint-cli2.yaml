@@ -29,6 +29,7 @@ config:
       - LegendList
       - HomeLanding
       - QuickstartMeta
+      - RegistryctlInstallCommand
       - ProjectStarterSequence
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference

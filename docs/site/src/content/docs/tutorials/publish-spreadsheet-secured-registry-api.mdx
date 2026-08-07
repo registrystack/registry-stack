@@ -15,6 +15,7 @@ standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import RegistryctlInstallCommand from '../../../components/RegistryctlInstallCommand.astro';
 
 Start with a three-row public works workbook. By the end of this tutorial, you
 will have a protected records API in Registry Relay and a private consultation
@@ -38,25 +39,22 @@ first run.
 
 ## Before you start
 
-Choose an exact published 1.x tag from the
-[Registry Stack releases](https://github.com/registrystack/registry-stack/releases), then
-download its installer:
+Install the latest released Registryctl:
+
+<RegistryctlInstallCommand />
+
+This quick installation path trusts Registry Docs hosting, GitHub, and TLS.
+The installer verifies the Registryctl binary and its matching signed release lock against the
+release checksums.
+The download and execution are separate so a failed download cannot look like a
+successful installation. When your acceptance process requires publisher
+authentication, inspect the downloaded installer's tag-frozen `verify_url` and
+complete its `release/VERIFY.md` procedure before running the installer.
+
+Run the installer after applying the verification policy you need:
 
 ```sh
-tag="v<major>.<minor>.<patch>"
-installer="registryctl-${tag}-install.sh"
-curl --proto '=https' --tlsv1.2 --fail --location \
-  --output "$installer" \
-  "https://github.com/registrystack/registry-stack/releases/download/${tag}/${installer}"
-```
-
-This quick installation path trusts GitHub and TLS. The installer verifies the
-Registryctl binary and its matching signed release lock against the release
-checksums. When your acceptance process requires publisher authentication,
-follow `release/VERIFY.md` from the same tag before running the installer.
-
-```sh
-bash "$installer"
+bash registryctl-install.sh
 ```
 
 A successful 1.0 installer ends with the installed binary and signed release

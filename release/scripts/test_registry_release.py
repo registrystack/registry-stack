@@ -645,11 +645,16 @@ class RegistryReleaseTest(TestCase):
         self.assertIn(".github/workflows/release-candidate.yml", text)
         self.assertIn("not a\nduplicate build in every ordinary Beta", text)
 
-    def test_registryctl_installer_uses_the_versioned_release_asset(self) -> None:
+    def test_registryctl_quick_installer_uses_the_stable_docs_url(self) -> None:
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
 
-        self.assertIn("registryctl-${tag}-install.sh", text)
-        self.assertIn('bash "./registryctl-${tag}-install.sh"', text)
+        self.assertIn(
+            "curl -fsSLo registryctl-install.sh "
+            "https://docs.registrystack.org/install.sh",
+            text,
+        )
+        self.assertIn("bash registryctl-install.sh", text)
+        self.assertNotIn("| bash", text)
         self.assertNotIn("raw.githubusercontent.com", text)
 
     def test_release_image_packaging_uses_release_dockerfiles(self) -> None:
