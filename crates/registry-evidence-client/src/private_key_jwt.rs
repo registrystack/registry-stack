@@ -283,7 +283,8 @@ pub struct PrivateKeyJwt {
 
 impl PrivateKeyJwt {
     /// Refuse a configuration that cannot authenticate, cannot protect its
-    /// assertion in transit, or cannot sign at all.
+    /// assertion in transit, or cannot produce an assertion the server it
+    /// registered with can verify.
     ///
     /// Every one of these would otherwise fail once per request, as an
     /// authentication refusal whose code says nothing about which part was wrong.
@@ -351,8 +352,17 @@ impl PrivateKeyJwt {
         //
         // The probe is deliberately not shaped like a JWS signing input, so the
         // signature it discards could not be presented as a client assertion.
-        registry_platform_crypto::sign(CLIENT_KEY_PROBE, &config.client_key)
+        let probe = registry_platform_crypto::sign(CLIENT_KEY_PROBE, &config.client_key)
             .map_err(|_| refuse("the client key cannot sign a client assertion"))?;
+        // Signing reads only the private half, so a JWK carrying one pair's `d`
+        // beside another pair's public fields signs perfectly well and produces
+        // assertions no server can verify: the public half an adopter registers
+        // is derived from those fields. Nothing downstream would catch it, since
+        // the server sees a valid signature over a key it was never given.
+        // Verifying the probe against this key's own public half is what proves
+        // the two belong together.
+        registry_platform_crypto::verify(CLIENT_KEY_PROBE, &probe, &config.client_key.public())
+            .map_err(|_| refuse("the client key's halves belong to different key pairs"))?;
         // Ties the message below to the constant, so the constant cannot drift
         // from the number the message states.
         const _: () = assert!(MAXIMUM_ASSERTION_LIFETIME_SECONDS == 300);
@@ -794,6 +804,24 @@ mod tests {
     fn unsignable_rs256_client_key() -> PrivateJwk {
         let mut key = rs256_client_key();
         key.p = key.q.clone();
+        key
+    }
+
+    /// An EdDSA key whose two halves belong to different key pairs. It signs,
+    /// and nothing it signs verifies against the public half an adopter would
+    /// register from this same document.
+    fn mismatched_eddsa_client_key() -> PrivateJwk {
+        let mut key = client_key(Some(KEY_ID));
+        key.x = client_key(None).x.clone();
+        key
+    }
+
+    /// The ES256 counterpart: `d` from one pair, `x` and `y` from another.
+    fn mismatched_es256_client_key() -> PrivateJwk {
+        let mut key = es256_client_key(Some(KEY_ID));
+        let other = es256_client_key(None);
+        key.x = other.x.clone();
+        key.y = other.y.clone();
         key
     }
 
@@ -1541,6 +1569,20 @@ mod tests {
                 config(
                     endpoint("https://tokens.example.org"),
                     unsignable_rs256_client_key(),
+                ),
+            ),
+            (
+                "the client key's halves belong to different key pairs",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    mismatched_eddsa_client_key(),
+                ),
+            ),
+            (
+                "the client key's halves belong to different key pairs",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    mismatched_es256_client_key(),
                 ),
             ),
             (
