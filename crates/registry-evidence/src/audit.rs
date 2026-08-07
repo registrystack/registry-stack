@@ -194,8 +194,10 @@ pub struct EvidenceAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
     /// Every source executed by a multi-stage acquisition, in execution order,
-    /// recorded only on the disclosure release that closed it. Absent for a
-    /// one or two stage acquisition, whose scalars already name every stage.
+    /// recorded only on the disclosure release that closed it. Absent for the
+    /// frozen one and two stage kinds, whose release shape stays byte-identical:
+    /// there the scalar names the last executed stage, and an earlier stage is
+    /// read from its own access-attempt event, as it always has been.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ids: Option<Vec<String>>,
     /// The adapter of each executed stage, positionally aligned with
