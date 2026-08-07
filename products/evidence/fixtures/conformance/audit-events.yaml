@@ -68,6 +68,32 @@ unsigned_disclosure_release:
   disclosedConcepts: [urn:example:fixture:concept:boolean-a]
   evidenceId: urn:example:fixture:evidence:001
   durationMilliseconds: 12
+disclosure_release_fetch_set:
+  schema: registry.evidence.audit/v1
+  assuranceProfile: evidence-grade
+  eventId: urn:example:fixture:audit:release-003
+  occurredAt: '2026-08-02T00:00:04Z'
+  operation: fixture-operation-00000003
+  phase: disclosure-release
+  requirement: urn:example:fixture:requirement:property:v1
+  bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  purpose: fixture-procedure
+  requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
+  authority: {kind: statutory}
+  subjects:
+    - role: subject
+      selectorProfile: opaque-record-v1
+      selectorBundlePseudonym: hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222
+  responseProtection: signed
+  sourceId: source-c
+  adapterId: adapter-b
+  sourceIds: [source-a, source-b, source-c]
+  adapterIds: [adapter-a, adapter-b, adapter-b]
+  decision: released
+  disclosedConcepts: [urn:example:fixture:concept:boolean-a]
+  evidenceId: urn:example:fixture:evidence:002
+  signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
+  durationMilliseconds: 21
 authorization_refusal:
   schema: registry.evidence.audit.authorization-refusal/v1
   assuranceProfile: evidence-grade
@@ -103,6 +129,8 @@ negative:
   - full-schema-on-authorization-refusal
   - refusal-schema-on-authorized-event
   - request-nonce-in-any-event
+  - stage-arrays-on-non-release-event
+  - mismatched-stage-arrays-on-release-event
 order:
   authorization_refusal_durable_before: [not-authorized-response]
   access_attempt_durable_before: [credential-resolution, source-access]
