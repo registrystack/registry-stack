@@ -15,6 +15,7 @@ SHARDS = {
     "platform": (
         "registry-platform-audit",
         "registry-platform-authcommon",
+        "registry-platform-buildinfo",
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
