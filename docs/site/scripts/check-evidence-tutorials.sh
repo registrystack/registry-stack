@@ -585,7 +585,11 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		reader_dir="$WORK_ROOT/reader/evidence-start"
 		;;
 	request-evidence-as-sd-jwt-vc)
-		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
+		# This follow-up deliberately rewrites the starter project to explore a
+		# structured VC. Give it a copy so the other follow-ups still begin from
+		# the exact project produced by first-evidence-assertion.
+		reader_dir="$WORK_ROOT/reader/request-evidence-as-sd-jwt-vc"
+		cp -R "$WORK_ROOT/reader/evidence-start/first-evidence-assertion" "$reader_dir"
 		;;
 	return-a-governed-value)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
