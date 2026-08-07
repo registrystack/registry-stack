@@ -24,7 +24,7 @@ use registry_evidence::{
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
     config::{
         AcquisitionConfig, AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig,
-        SelectorInput,
+        SelectorInput, StageRole,
     },
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
@@ -1160,7 +1160,87 @@ fn evaluate_fixture_acquisition(
                 .map(KernelOutcome::Match))
         }
         AcquisitionConfig::SearchThenFetchSet { .. } => {
-            Err(CliError("fetch-set fixture evaluation is not implemented"))
+            // The two frozen forms above read their sources from the config
+            // directly, because their stage lists are one and two entries long
+            // and their derivation inputs differ. This form walks the plan
+            // instead, so that the offline harness and the serving runtime
+            // agree on stage order, on what each stage receives, and on where
+            // an unresolved stage stops, by consuming one derivation rather
+            // than by two implementations happening to match.
+            if case.contains_key("source") {
+                return Err(CliError("search-then-fetch-set fixture must use sources"));
+            }
+            let responses = case
+                .get("sources")
+                .and_then(Value::as_object)
+                .ok_or(CliError("chained fixture sources are unavailable"))?;
+            let plan = requirement.acquisition.plan();
+            if responses.len() != plan.stages.len()
+                || !plan
+                    .stages
+                    .iter()
+                    .all(|stage| responses.contains_key(&stage.source))
+            {
+                return Err(CliError("chained fixture sources are not exact"));
+            }
+            // The search FactSet each member projects from, and the union the
+            // derivation receives. They are separate because a member reads
+            // only the search, never an earlier member: facts flow forward,
+            // never sideways.
+            let mut search_facts = BTreeMap::new();
+            let mut union = BTreeMap::new();
+            for stage in &plan.stages {
+                let source_config = bundle
+                    .config
+                    .sources
+                    .get(&stage.source)
+                    .ok_or(CliError("fixture source is unavailable"))?;
+                let response = match project_fixture_response(
+                    source_config,
+                    responses
+                        .get(&stage.source)
+                        .ok_or(CliError("fixture source response is unavailable"))?,
+                ) {
+                    Ok(response) => response,
+                    Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+                };
+                let prior_facts = stage.inputs.project(&search_facts);
+                let facts = match kernel.extract_source(&stage.source, &response, &prior_facts) {
+                    Ok(LookupResult::Match(facts)) => facts,
+                    // The search collapses structurally; a member that does
+                    // not resolve after a unique search match is a
+                    // dependency inconsistency, and the stages declared
+                    // after it are never evaluated.
+                    Ok(LookupResult::NoMatch) => match stage.role {
+                        StageRole::Search => return Ok(Ok(KernelOutcome::NoMatch)),
+                        StageRole::Member => {
+                            return Ok(Err(KernelError::SourceProtocol));
+                        }
+                    },
+                    Ok(LookupResult::Ambiguous) => match stage.role {
+                        StageRole::Search => return Ok(Ok(KernelOutcome::Ambiguous)),
+                        StageRole::Member => {
+                            return Ok(Err(KernelError::SourceProtocol));
+                        }
+                    },
+                    Err(error) => return Ok(Err(error)),
+                };
+                if stage.role == StageRole::Search {
+                    search_facts = facts.clone();
+                }
+                // Lossless: the bundle proved the stage fact names pairwise
+                // disjoint before it was allowed to load.
+                union.extend(facts);
+            }
+            Ok(kernel
+                .derive_and_validate_with_selectors(
+                    &requirement.id,
+                    &union,
+                    derivation_selectors,
+                    observed_at,
+                    projection(),
+                )
+                .map(KernelOutcome::Match))
         }
     }
 }
@@ -3697,6 +3777,136 @@ mod tests {
         );
 
         assert!(verify_audit_with_secret(&path, &test_audit_secret()).is_err());
+    }
+
+    /// The offline harness must serve the fetch-set form as completely as it
+    /// serves the two frozen ones: every mandatory coverage category, evaluated
+    /// through the same entry point, on a bundle an adopter can copy.
+    ///
+    /// This bundle is a profile bundle rather than a fifth coequal acceptance
+    /// definition, so it is exercised on its own instead of being added to the
+    /// list above. Adding it there would claim a status it does not have.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_cli_evaluates_the_fetch_set_acceptance_fixture() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/surviving-spouse-status");
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source_plans = compile_source_plans_with_runtime(
+            &bundle.config,
+            "/run/secrets/evidence",
+            &OutboundTlsConfig {
+                system_roots: true,
+                trust_profiles: Default::default(),
+            },
+            &Default::default(),
+        )
+        .expect("source plans compile");
+        let fixture = Path::new(
+            bundle.config.requirements[0]
+                .fixtures
+                .as_ref()
+                .expect("acceptance fixture is declared")
+                .as_str(),
+        );
+        let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
+            .get("cases")
+            .and_then(serde_norway::Value::as_sequence)
+            .expect("cases")
+            .len();
+        assert_eq!(
+            evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
+            Ok(FixtureSummary {
+                evaluated_cases: expected_cases,
+            })
+        );
+
+        set_tree_mode(directory.path(), 0o755, 0o444);
+    }
+
+    /// The stage keys a fetch-set fixture case must carry are the planned
+    /// stages, exactly: no missing stage, no extra one, and not the scalar
+    /// `source` key the single form uses. An adopter who omits a member would
+    /// otherwise get a case that silently exercised a shorter acquisition than
+    /// the one the bundle declares.
+    #[cfg(unix)]
+    #[test]
+    fn fetch_set_fixture_sources_must_name_every_planned_stage() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/surviving-spouse-status");
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let plan = requirement.acquisition.plan();
+        assert!(
+            plan.stages.len() >= 3,
+            "the fetch-set acceptance bundle needs a search and at least two members"
+        );
+        let fixture = bundle.fixtures[requirement
+            .fixtures
+            .as_ref()
+            .expect("acceptance fixture is declared")
+            .as_str()]
+        .clone();
+        let fixture = serde_json::to_value(fixture).expect("fixture is representable");
+        let positive = fixture["cases"]
+            .as_array()
+            .expect("cases are an array")
+            .iter()
+            .find(|case| case["id"] == "positive")
+            .and_then(|case| case.get("sources"))
+            .and_then(Value::as_object)
+            .expect("the positive case carries a source response per stage")
+            .clone();
+        let observed_at = DateTime::parse_from_rfc3339("2026-08-02T00:00:00Z")
+            .expect("fixed time parses")
+            .with_timezone(&Utc);
+        let selectors = Value::Object(JsonMap::new());
+        let evaluate = |case: Value| {
+            evaluate_fixture_acquisition(
+                &bundle,
+                &kernel,
+                requirement,
+                case.as_object().expect("case is an object"),
+                &selectors,
+                observed_at,
+            )
+        };
+
+        let mut short = positive.clone();
+        short.remove(&plan.stages[plan.stages.len() - 1].source);
+        assert_eq!(
+            evaluate(Value::Object(JsonMap::from_iter([(
+                "sources".to_owned(),
+                Value::Object(short)
+            )]))),
+            Err(CliError("chained fixture sources are not exact"))
+        );
+
+        let mut extra = positive.clone();
+        extra.insert("unplanned-source".to_owned(), Value::Null);
+        assert_eq!(
+            evaluate(Value::Object(JsonMap::from_iter([(
+                "sources".to_owned(),
+                Value::Object(extra)
+            )]))),
+            Err(CliError("chained fixture sources are not exact"))
+        );
+
+        assert_eq!(
+            evaluate(serde_json::json!({"source": Value::Object(positive)})),
+            Err(CliError("search-then-fetch-set fixture must use sources"))
+        );
+
+        set_tree_mode(directory.path(), 0o755, 0o444);
     }
 
     #[cfg(unix)]
