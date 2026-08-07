@@ -138,6 +138,7 @@ struct ClientDocument {
 pub(crate) struct ActiveClient {
     pub(crate) client_id: String,
     pub(crate) private_key_path: PathBuf,
+    pub(crate) evidence_audience: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -377,6 +378,7 @@ pub(crate) fn resolve_ready_client(
     Ok(ActiveClient {
         client_id: registration.client_id,
         private_key_path,
+        evidence_audience: document.evidence_audience,
     })
 }
 

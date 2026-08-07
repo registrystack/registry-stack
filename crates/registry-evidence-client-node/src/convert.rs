@@ -12,9 +12,9 @@ use std::{fmt, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use registry_evidence_client::{
     AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError, EvidenceRequestSpec,
-    ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument, PrivateKeyJwt,
-    PrivateKeyJwtConfig, SelectorValue, StaticToken, SubjectExpectations, SubjectRequest,
-    TokenError, TokenProvider,
+    EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument,
+    PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken, SubjectExpectations,
+    SubjectRequest, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use serde_json::{Map, Value};
@@ -266,6 +266,12 @@ fn assurance_profile_from_json(value: &Value) -> Result<AssuranceProfile, Conver
     })
 }
 
+fn response_format_from_json(value: &Value) -> Result<EvidenceResponseFormat, ConversionError> {
+    serde_json::from_value(value.clone()).map_err(|_| {
+        ConversionError::new("`responseFormat` must be \"signed-jws\" or \"sd-jwt-vc\"")
+    })
+}
+
 /// Build the specification [`registry_evidence_client::EvidenceClient::prepare`]
 /// validates. Only shape is checked here: an empty identifier, an out-of-range
 /// count, or any other business rule is the real client's own refusal, raised
@@ -297,7 +303,13 @@ pub fn spec_from_json(value: &Value) -> Result<EvidenceRequestSpec, ConversionEr
         .ok_or_else(|| ConversionError::new("`subjectExpectations` must be present"))?;
     let subject_expectations = subject_expectations_from_json(subject_expectations_json)?;
 
+    let response_format_json = object
+        .get("responseFormat")
+        .ok_or_else(|| ConversionError::new("`responseFormat` must be present"))?;
+    let response_format = response_format_from_json(response_format_json)?;
+
     Ok(EvidenceRequestSpec {
+        response_format,
         requirement: required_string(object, "requirement")?,
         purpose: required_string(object, "purpose")?,
         audience: required_string(object, "audience")?,
@@ -729,6 +741,7 @@ mod tests {
 
     fn valid_spec_json() -> Value {
         serde_json::json!({
+            "responseFormat": "signed-jws",
             "requirement": "urn:example:client:requirement:status:v1",
             "purpose": "example-decision",
             "audience": "urn:example:client:audience:relying-party",
@@ -758,6 +771,7 @@ mod tests {
     fn a_well_formed_specification_converts_in_full() {
         let spec = spec_from_json(&valid_spec_json()).expect("the specification is accepted");
         assert_eq!(spec.requirement, "urn:example:client:requirement:status:v1");
+        assert_eq!(spec.response_format, EvidenceResponseFormat::SignedJws);
         assert_eq!(spec.expected_assurance_profile, AssuranceProfile::Local);
         assert_eq!(spec.subjects.len(), 1);
         assert_eq!(spec.subjects[0].role, "subject");
@@ -777,6 +791,7 @@ mod tests {
     #[test]
     fn a_specification_missing_any_required_field_is_refused() {
         let required_fields = [
+            "responseFormat",
             "requirement",
             "purpose",
             "audience",
@@ -798,6 +813,27 @@ mod tests {
                 spec_from_json(&spec).is_err(),
                 "missing `{field}` was accepted"
             );
+        }
+    }
+
+    #[test]
+    fn a_specification_accepts_both_response_formats_and_refuses_other_values() {
+        let mut spec = valid_spec_json();
+        spec["responseFormat"] = Value::String("sd-jwt-vc".to_owned());
+        assert_eq!(
+            spec_from_json(&spec).unwrap().response_format,
+            EvidenceResponseFormat::SdJwtVc
+        );
+
+        for value in [
+            Value::String("jws".to_owned()),
+            Value::String("sd_jwt_vc".to_owned()),
+            Value::Null,
+            Value::Bool(true),
+        ] {
+            let mut spec = valid_spec_json();
+            spec["responseFormat"] = value;
+            assert!(spec_from_json(&spec).is_err());
         }
     }
 

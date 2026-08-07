@@ -1,199 +1,233 @@
-//! Core-owned pre-response verification context for the local adopter path.
+//! Core-owned relying-procedure preparation for the local adopter path.
 //!
-//! Preparation authenticates and authorizes the exact retained request before
-//! any source access. Verification then uses only that closed context and the
-//! returned bytes. The second half cannot initialize a runtime, open audit
-//! storage, resolve a source, or fetch keys over the network.
+//! Bearer-free preparation closes trusted metadata and exact request-origin
+//! subject bindings without deciding whether a caller may send the request.
+//! Response verification belongs to the relying-party client and its portable
+//! verifier, not to this runtime-local preparation seam.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    auth::Authenticator,
     bundle::DeploymentInputs,
     config::{AssuranceProfile, ConceptForm, ResponseFormat},
-    model::{request_nonce_is_canonical, Evidence, EvidenceRequest, JwksDocument},
+    model::{JwksDocument, RequestedSubject},
     runtime::{validate_verification_material, ValidatedVerificationMaterial},
     secrets::{SecretProvider, SecretResolver},
-    selector::{match_entitlement, resolve_selectors},
+    selector::{resolve_request_origin_subjects, ResolvedSubject},
     verifier::{
-        verify_flattened_jws, EvidenceVerificationPolicyDocument, ExpectedFormDocument,
-        ExpectedOutputDocument, ExpectedScalarFormDocument, ExpectedSubjectDocument,
+        ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
+        ExpectedSubjectDocument,
     },
 };
 
-pub const LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1: &str =
-    "registry.evidence.local-response-verification-context/v1";
+pub const LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1: &str =
+    "registry.evidence.local-relying-procedure-input/v1";
+pub const LOCAL_RELYING_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure/v1";
 
-/// One deliberately uninformative failure for the local verification seam.
+/// One deliberately uninformative failure for local procedure preparation.
 ///
-/// Authentication, entitlement, selector, secret, signing, context, and
-/// response failures collapse here so caller-controlled values cannot reach a
-/// retained CLI diagnostic.
+/// Shape, selector, secret, signing, and procedure failures collapse here so
+/// caller-controlled values cannot reach a retained CLI diagnostic.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-#[error("local response verification failed")]
-pub struct LocalVerificationError;
+#[error("local relying procedure preparation failed")]
+pub struct LocalProcedureError;
 
-/// Closed trusted state retained before sending the corresponding request.
-///
-/// `responseFormat` is explicit so a future encoding can reuse the common
-/// policy without ever inferring its format from attacker-controlled bytes.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LocalVerificationContext {
-    schema: String,
-    response_format: LocalResponseFormat,
-    trusted_jwks: JwksDocument,
-    verification_policy: EvidenceVerificationPolicyDocument,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalResponseFormat {
     SignedJws,
     SdJwtVc,
 }
 
-/// Authenticate and authorize one exact local request and close all response
-/// expectations before source access.
-pub async fn prepare_local_verification_context(
-    deployment: &DeploymentInputs,
-    request: &EvidenceRequest,
-    bearer: &str,
-) -> Result<LocalVerificationContext, LocalVerificationError> {
-    prepare_local_verification_context_for_format(
-        deployment,
-        request,
-        bearer,
-        LocalResponseFormat::SignedJws,
-    )
-    .await
+/// Selector-bearing local preparation input.
+///
+/// There is deliberately no request nonce here. The relying-party client
+/// generates the nonce only after this trusted procedure has been closed. The
+/// selector values are protected input and are never copied into the output.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalRelyingProcedureInput {
+    pub schema: String,
+    pub response_format: LocalResponseFormat,
+    pub requirement: String,
+    pub purpose: String,
+    pub audience: String,
+    pub subjects: Vec<RequestedSubject>,
 }
 
-/// Close the local verification expectations for one explicitly selected
-/// response format before any response or source access exists.
-pub async fn prepare_local_verification_context_for_format(
+/// Trusted local relying-procedure inputs for the portable client.
+///
+/// Every field is closed from the immutable deployment, the locally governed
+/// client audience, or exact bindings derived from the request-owned selector
+/// values. No authorization result, selector value, or binding secret crosses
+/// this seam.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalRelyingProcedure {
+    pub schema: String,
+    pub response_format: LocalResponseFormat,
+    pub trusted_jwks: JwksDocument,
+    pub expected_assurance_profile: AssuranceProfile,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub requirement: String,
+    pub evidence_type: String,
+    pub purpose: String,
+    pub audience: String,
+    pub configuration_revision: String,
+    pub expected_subjects: Vec<ExpectedSubjectDocument>,
+    pub expected_outputs: Vec<ExpectedOutputDocument>,
+    pub revoked_key_ids: Vec<String>,
+    pub maximum_assertion_lifetime_seconds: u64,
+    pub clock_skew_seconds: u64,
+}
+
+/// Close a local relying procedure without authenticating or authorizing the
+/// eventual caller.
+///
+/// This operation loads only immutable deployment state and the binding and
+/// signing material needed to create independent expectations. It never opens
+/// audit storage, resolves source credentials, calls a source, fetches
+/// authentication keys, or contacts the running Evidence service.
+pub async fn prepare_local_relying_procedure(
     deployment: &DeploymentInputs,
-    request: &EvidenceRequest,
-    bearer: &str,
-    response_format: LocalResponseFormat,
-) -> Result<LocalVerificationContext, LocalVerificationError> {
+    input: &LocalRelyingProcedureInput,
+) -> Result<LocalRelyingProcedure, LocalProcedureError> {
     let bundle = &deployment.bundle;
-    let configured_format = match response_format {
-        LocalResponseFormat::SignedJws => ResponseFormat::SignedJws,
-        LocalResponseFormat::SdJwtVc => ResponseFormat::SdJwtVc,
-    };
-    if bundle.config.assurance_profile != AssuranceProfile::Local
-        || !request_nonce_is_canonical(&request.request_nonce)
-        || request.holder_key.is_some()
-        || !bundle.config.response_formats.contains(&configured_format)
+    if input.schema != LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1
+        || bundle.config.assurance_profile != AssuranceProfile::Local
+        || input.audience.is_empty()
+        || input.audience.len() > 512
+        || url::Url::parse(&input.audience).is_err()
     {
-        return Err(LocalVerificationError);
+        return Err(LocalProcedureError);
     }
 
+    let configured_format = configured_response_format(input.response_format);
+    if !bundle.config.response_formats.contains(&configured_format) {
+        return Err(LocalProcedureError);
+    }
     let requirement = bundle
         .config
         .requirements
         .iter()
-        .find(|candidate| candidate.id == request.requirement)
-        .ok_or(LocalVerificationError)?;
-    // The local adopter path remains deliberately narrow: every value must be
-    // required and use one of the two forms taught by the shared start.
-    if requirement.concepts.is_empty()
-        || requirement
-            .concepts
-            .iter()
-            .any(|concept| !concept.required || local_expected_form(concept.form).is_none())
-    {
-        return Err(LocalVerificationError);
-    }
-    // The pinned revision covers this requirement's own closure, so it matches
-    // what the assertion will carry rather than the whole deployment.
+        .find(|candidate| candidate.id == input.requirement)
+        .ok_or(LocalProcedureError)?;
+    validate_local_requirement(requirement)?;
     let configuration_revision = bundle
         .configuration_revision(&requirement.id)
-        .ok_or(LocalVerificationError)?
+        .ok_or(LocalProcedureError)?
         .to_owned();
-
-    let authenticator = Authenticator::from_config(
-        &bundle.config.authentication,
-        bundle.config.assurance_profile,
-    );
-    let authenticated = authenticator
-        .authenticate(bearer)
-        .await
-        .map_err(|_| LocalVerificationError)?;
-    let matched =
-        match_entitlement(bundle, request, &authenticated).map_err(|_| LocalVerificationError)?;
-    if !matched.permits_response_format(configured_format) {
-        return Err(LocalVerificationError);
-    }
-    let resolved = resolve_selectors(bundle, request, &authenticated, &matched)
-        .map_err(|_| LocalVerificationError)?;
+    let resolved =
+        resolve_request_origin_subjects(bundle, requirement, &input.purpose, &input.subjects)
+            .map_err(|_| LocalProcedureError)?;
 
     let secrets = SecretResolver::new(
         [SecretProvider::File],
         &deployment.runtime.config.secret_providers.file.root,
     )
-    .map_err(|_| LocalVerificationError)?;
+    .map_err(|_| LocalProcedureError)?;
     let ValidatedVerificationMaterial {
         subject_binding_secret,
         signer: _,
         jwks,
     } = validate_verification_material(bundle, &deployment.runtime.config.signer, &secrets)
         .await
-        .map_err(|_| LocalVerificationError)?;
-    let expected_subjects = resolved
-        .subjects
+        .map_err(|_| LocalProcedureError)?;
+    let expected_subjects = expected_subjects(
+        &resolved,
+        subject_binding_secret.expose_secret(),
+        bundle.config.subject_binding.key_version,
+        &bundle.config.service.trust_domain,
+        &input.audience,
+        &input.purpose,
+    )?;
+
+    Ok(LocalRelyingProcedure {
+        schema: LOCAL_RELYING_PROCEDURE_SCHEMA_V1.to_owned(),
+        response_format: input.response_format,
+        trusted_jwks: jwks,
+        expected_assurance_profile: AssuranceProfile::Local,
+        issued_by: bundle.config.issuer.id.clone(),
+        provided_by: bundle.config.service.provider_id.clone(),
+        requirement: requirement.id.clone(),
+        evidence_type: requirement.evidence_type.clone(),
+        purpose: input.purpose.clone(),
+        audience: input.audience.clone(),
+        configuration_revision,
+        expected_subjects,
+        expected_outputs: local_expected_outputs(requirement),
+        revoked_key_ids: bundle.config.signing.revoked_key_ids.clone(),
+        maximum_assertion_lifetime_seconds: requirement.validity_seconds,
+        clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds,
+    })
+}
+
+fn configured_response_format(response_format: LocalResponseFormat) -> ResponseFormat {
+    match response_format {
+        LocalResponseFormat::SignedJws => ResponseFormat::SignedJws,
+        LocalResponseFormat::SdJwtVc => ResponseFormat::SdJwtVc,
+    }
+}
+
+fn validate_local_requirement(
+    requirement: &crate::config::RequirementConfig,
+) -> Result<(), LocalProcedureError> {
+    // The local adopter path remains deliberately narrow: every value must be
+    // required and use one of the four scalar forms taught by local authoring.
+    if requirement.concepts.is_empty()
+        || requirement
+            .concepts
+            .iter()
+            .any(|concept| !concept.required || local_expected_form(concept.form).is_none())
+    {
+        return Err(LocalProcedureError);
+    }
+    Ok(())
+}
+
+fn expected_subjects(
+    subjects: &[ResolvedSubject],
+    binding_key: &[u8],
+    binding_key_version: u32,
+    trust_domain: &str,
+    audience: &str,
+    purpose: &str,
+) -> Result<Vec<ExpectedSubjectDocument>, LocalProcedureError> {
+    subjects
         .iter()
         .map(|subject| {
             subject
                 .binding(
-                    subject_binding_secret.expose_secret(),
-                    bundle.config.subject_binding.key_version,
-                    &bundle.config.service.trust_domain,
-                    &resolved.audience,
-                    &resolved.purpose,
+                    binding_key,
+                    binding_key_version,
+                    trust_domain,
+                    audience,
+                    purpose,
                 )
                 .map(|binding| ExpectedSubjectDocument {
                     role: subject.role.clone(),
                     binding,
                 })
-                .map_err(|_| LocalVerificationError)
+                .map_err(|_| LocalProcedureError)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
 
-    Ok(LocalVerificationContext {
-        schema: LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1.to_owned(),
-        response_format,
-        trusted_jwks: jwks,
-        verification_policy: EvidenceVerificationPolicyDocument {
-            expected_assurance_profile: AssuranceProfile::Local,
-            issued_by: bundle.config.issuer.id.clone(),
-            provided_by: bundle.config.service.provider_id.clone(),
-            requirement: requirement.id.clone(),
-            evidence_type: requirement.evidence_type.clone(),
-            purpose: resolved.purpose,
-            audience: resolved.audience,
-            configuration_revision,
-            request_nonce: request.request_nonce.clone(),
-            expected_subjects,
-            expected_outputs: requirement
-                .concepts
-                .iter()
-                .map(|concept| ExpectedOutputDocument {
-                    concept: concept.id.clone(),
-                    form: ExpectedFormDocument::Scalar(
-                        local_expected_form(concept.form)
-                            .expect("the local concept forms were validated"),
-                    ),
-                })
-                .collect(),
-            revoked_key_ids: bundle.config.signing.revoked_key_ids.clone(),
-            maximum_assertion_lifetime_seconds: requirement.validity_seconds,
-            clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds,
-        },
-    })
+fn local_expected_outputs(
+    requirement: &crate::config::RequirementConfig,
+) -> Vec<ExpectedOutputDocument> {
+    requirement
+        .concepts
+        .iter()
+        .map(|concept| ExpectedOutputDocument {
+            concept: concept.id.clone(),
+            form: ExpectedFormDocument::Scalar(
+                local_expected_form(concept.form).expect("the local concept forms were validated"),
+            ),
+        })
+        .collect()
 }
 
 fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> {
@@ -206,47 +240,10 @@ fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> 
     }
 }
 
-/// Strictly verify one flattened JWS against a context retained before the
-/// response existed. This operation is entirely offline.
-pub fn verify_local_response(
-    context: LocalVerificationContext,
-    response: &[u8],
-) -> Result<Evidence, LocalVerificationError> {
-    verify_local_response_at(context, response, Utc::now())
-}
-
-/// Deterministic clock entry point used by the expiry test. Production callers
-/// use [`verify_local_response`] and cannot choose the verification instant.
-pub(crate) fn verify_local_response_at(
-    context: LocalVerificationContext,
-    response: &[u8],
-    now: DateTime<Utc>,
-) -> Result<Evidence, LocalVerificationError> {
-    if context.schema != LOCAL_VERIFICATION_CONTEXT_SCHEMA_V1 {
-        return Err(LocalVerificationError);
-    }
-    // The requirement validity and the verifier skew this policy carries are
-    // both bounded by the bundle schema, so a loaded deployment cannot reach a
-    // policy the verification policy contract forbids. A context assembled some
-    // other way is refused rather than verified against.
-    let policy = context
-        .verification_policy
-        .try_into_policy(now)
-        .map_err(|_| LocalVerificationError)?;
-    match context.response_format {
-        LocalResponseFormat::SignedJws => {
-            verify_flattened_jws(response, &context.trusted_jwks, &policy)
-        }
-        LocalResponseFormat::SdJwtVc => {
-            crate::verifier::verify_sd_jwt_vc(response, &context.trusted_jwks, &policy)
-        }
-    }
-    .map_err(|_| LocalVerificationError)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn bounded_integer_has_an_exact_local_verification_form() {
@@ -254,5 +251,35 @@ mod tests {
             local_expected_form(ConceptForm::BoundedInteger),
             Some(ExpectedScalarFormDocument::Integer)
         ));
+    }
+
+    #[test]
+    fn local_relying_procedure_input_is_closed_and_has_no_nonce() {
+        let input = json!({
+            "schema": LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1,
+            "responseFormat": "signed-jws",
+            "requirement": "urn:example:requirement:status",
+            "purpose": "status-check",
+            "audience": "urn:example:client:relying-party",
+            "subjects": [{
+                "role": "subject",
+                "selector": {
+                    "profile": "record-reference-v1",
+                    "values": {"record_reference": "synthetic-001"}
+                }
+            }]
+        });
+        let parsed: LocalRelyingProcedureInput =
+            serde_json::from_value(input.clone()).expect("the closed draft parses");
+        assert_eq!(parsed.response_format, LocalResponseFormat::SignedJws);
+
+        for member in ["requestNonce", "holderKey", "authorization"] {
+            let mut changed = input.clone();
+            changed[member] = json!("not-permitted");
+            assert!(
+                serde_json::from_value::<LocalRelyingProcedureInput>(changed).is_err(),
+                "{member} is outside the closed draft"
+            );
+        }
     }
 }

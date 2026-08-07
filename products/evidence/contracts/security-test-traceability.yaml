@@ -7,7 +7,7 @@ entries:
       - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_exact_local_mint}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_without_fixture_references_keeps_the_real_security_path}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
   - id: expected-assurance-profile-mismatch
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
@@ -30,6 +30,11 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
   - id: sec-no-entitlement-union
     tests: [{file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}]
+  - id: sec-authenticated-authorization-refusal-audited
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
   - id: sec-selector-possession-no-authority
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]
   - id: sec-caller-grant-reference-rejected

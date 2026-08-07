@@ -487,17 +487,37 @@ there is no insecure or trust-all mode. Version 1 ignores `HTTP_PROXY`,
 
 ## Audit and operational data
 
-The configured audit sink must durably accept the access-attempt event before
-the first evidence-data source read. It must durably accept the
-disclosure-release event after signing and before response release. Either
-failure blocks the applicable action.
+After successful authentication, the configured audit sink must durably accept
+a minimal authorization-refusal event before a generic `403` is returned. It
+must durably accept the access-attempt event before the first evidence-data
+source read and the disclosure-release event after signing and before response
+release. Any failure blocks the applicable action and returns a generic `503`
+when an HTTP response remains possible.
 
-Audit contains reviewed identifiers and decision categories, never raw
-selector values, per-field selector hashes, source values, Supported Values,
-credentials, tokens, or raw subject identifiers. When correlation is required,
-one keyed, domain-separated, versioned pseudonym covers the complete canonical
-role, selector-profile identifier, ordered field names, and selector value
-bundle. It must not be globally stable across purposes or audiences.
+Authorized-material audit events contain reviewed identifiers and decision
+categories, never raw selector values, per-field selector hashes, source
+values, Supported Values, credentials, tokens, or raw subject identifiers.
+When correlation is required, one keyed, domain-separated, versioned pseudonym
+covers the complete canonical role, selector-profile identifier, ordered field
+names, and selector value bundle. It must not be globally stable across purposes
+or audiences.
+
+After successful authentication, every authorization refusal writes one
+standalone minimal native event before the generic `403` is returned. The event
+contains only the operation and event identifiers, assurance profile, bundle
+revision, scoped requester pseudonym, optional actor pseudonym, closed
+`not-authorized` decision and safe error category, timestamp, and duration. It
+omits the requested requirement, purpose, subjects, unmatched authority,
+selector information, response protection, source, and evaluation material.
+The requester and actor pseudonym scope binds the operator trust domain,
+requested purpose, and authenticated audience, while those scope inputs remain
+omitted from the event. This prevents a new cross-purpose or cross-audience
+identifier. Request-rate accounting remains separately scoped to the principal,
+so varying purpose cannot multiply or evade the request budget.
+The audit sink must durably accept that event. If it cannot, Evidence returns
+the generic `503` instead of the `403`. Authentication, malformed-request, and
+invalid-selector failures remain operational-only and create no native audit
+event.
 
 Operational logs contain route templates, operation identifiers, duration,
 status category, and safe internal error categories only. Request bodies,
@@ -508,17 +528,27 @@ excluded from logs, metrics, traces, snapshots, panics, and errors.
 Audit and operational logging are separate channels and operators must not
 confuse them. The audit chain is the accountability record: durable, complete,
 tamper-evident, and it has no severity levels and no way to turn records off.
-Both records every request writes, the access-attempt event durable before any
-source read and the disclosure-release event durable before response release
-as described above, are pinned by frozen Version 1 security invariants and are
-not configurable. The `tracing` channel is the operational and diagnostic
-record: it has levels, it is buffered and lossy, and it is cheap. The rule for
-operators and integrators is: accountability facts belong in the audit chain
-and never only in tracing, and operational noise belongs in tracing and never
-in the audit chain. If an adopter needs more detail than the frozen audit
-record carries, which some regulators require, the correct shape is a separate
-operational log keyed by the audit record's `eventId`, not a verbosity setting
-on the chain.
+Every authorized evidence evaluation writes two records: the access-attempt
+event durable before any source read and the disclosure-release or terminal
+event required by its outcome. Every authenticated authorization refusal writes
+one minimal denial event before its response. Those gates are pinned by frozen
+Version 1 security invariants and are not configurable. The `tracing` channel
+is the operational and diagnostic record: it has levels, it is buffered and
+lossy, and it is cheap. The rule for operators and integrators is:
+accountability facts belong in the audit chain and never only in tracing, and
+operational noise belongs in tracing and never in the audit chain. If an
+adopter needs more detail than the frozen audit record carries, which some
+regulators require, the correct shape is a separate operational log keyed by
+the audit record's `eventId`, not a verbosity setting on the chain.
+
+The refusal event uses the distinct
+`registry.evidence.audit.authorization-refusal/v1` discriminator in the same
+keyed envelope and chain as `registry.evidence.audit/v1`. Updated semantic
+readers accept both closed shapes. Opaque keyed-chain verification remains
+compatible because it does not interpret the event payload. Older Version 1
+schema validators and local audit readers reject or cannot display the refusal
+shape, so operators must update semantic audit readers and the service together
+before routing traffic to the changed runtime.
 
 The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
@@ -998,20 +1028,25 @@ No-match and ambiguous outcomes are publicly indistinguishable by default.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 
-Every authorization refusal collapses to one generic `not_authorized` problem
-(code `n`) with HTTP 403 and reveals no layer detail: a principal outside the
-bundle audience, a requirement no matched grant permits, an authority the grant
-does not carry, and an unsigned-envelope request the bundle or grant does not
-allow all return the same body. This is deliberate; the response is not an
-oracle for which check failed. Because the wire response is intentionally
-uninformative, operators debug a 403 from trusted local state, not from the
-response. Confirm, in order: the Bearer principal is in the deployed bundle's
-audience; a grant matches the requested requirement, purpose, and subject
-roles; the grant carries the claimed authority; and, only for an unsigned
-request, both the bundle and that grant permit
-`application/vnd.registrystack.evidence-unsigned+json`. The keyed audit chain
-records the refusal phase for after-the-fact diagnosis; the caller never sees
-it.
+Every authorization refusal after successful authentication collapses to one
+generic problem with code `not_authorized` and HTTP 403 and reveals no layer
+detail: a principal outside the bundle audience, a requirement no matched grant
+permits, an authority the grant does not carry, and an unsigned-envelope request
+the bundle or grant does not allow all return the same body. This is deliberate;
+the response is not an oracle for which check failed. Because the wire response
+is intentionally uninformative, operators debug a 403 from trusted local state,
+not from the response. Confirm, in order: the Bearer principal is in the
+deployed bundle's audience; a grant matches the requested requirement, purpose,
+and subject roles; the grant carries the claimed authority; and, only for an
+unsigned request, both the bundle and that grant permit
+`application/vnd.registrystack.evidence-unsigned+json`. Before returning that
+problem, the keyed audit chain durably records the minimal refusal event under
+the response operation identifier. It proves that the authenticated requester
+was refused without recording which request field or authority check failed.
+The caller never sees the event. If the audit append fails, Evidence returns
+the generic `service_unavailable` problem with HTTP 503 instead. Authentication,
+malformed-request, and invalid-selector failures are operational-only and do not
+create this event.
 
 ## Measured throughput
 
@@ -1019,8 +1054,9 @@ One end-to-end measurement is kept in the repository so capacity planning
 starts from a number rather than an estimate. It drives the real router over
 real sockets, and every request in it runs token verification, rate limiting,
 Rhai request preparation, one outbound source call, Rhai extraction, evidence
-construction, in-process ES256 signing, and both durable audit appends. It does
-not model the latency or availability of an external Transit deployment.
+construction, in-process ES256 signing, and both durable audit appends for each
+successful request. It does not model the latency or availability of an
+external Transit deployment.
 
 | Measurement | Value |
 |---|---|

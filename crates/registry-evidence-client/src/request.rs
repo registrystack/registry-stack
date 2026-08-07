@@ -5,8 +5,9 @@
 //! party links this crate and the portable verifier, never the service runtime.
 //! The integration suite proves the two agree by driving a real deployment.
 //!
-//! `holderKey` is deliberately absent. It is meaningful only for the SD-JWT VC
-//! response format, which this client does not request.
+//! `holderKey` is deliberately absent. The client can request the SD-JWT VC
+//! response format, but its current relying-party profile requests the keyless
+//! form and introduces no holder-proof lifecycle.
 
 use std::{collections::BTreeMap, fmt};
 

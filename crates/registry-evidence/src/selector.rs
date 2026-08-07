@@ -489,6 +489,86 @@ pub fn authorize_and_resolve(
     resolve_selectors(bundle, request, context, &matched)
 }
 
+/// Resolve one statically configured request-origin subject shape without
+/// authenticating or authorizing a caller.
+///
+/// The local adopter path uses this before the request exists on the HTTP
+/// boundary. It proves only that the bundle defines the requirement, purpose,
+/// roles, profiles, and request-owned selector values needed to derive exact
+/// bindings. It deliberately does not inspect requester tags or select an
+/// entitlement for a caller. The running service remains the only authority
+/// that may accept the eventual request.
+pub(crate) fn resolve_request_origin_subjects(
+    bundle: &Bundle,
+    requirement: &crate::config::RequirementConfig,
+    purpose: &str,
+    requested: &[RequestedSubject],
+) -> Result<Vec<ResolvedSubject>, AuthorizationError> {
+    validate_request_subject_shape(requirement, requested)?;
+    if !requirement
+        .purposes
+        .iter()
+        .any(|configured| configured == purpose)
+    {
+        return Err(AuthorizationError::Unauthorized);
+    }
+
+    // Value origin belongs to the configured request shape. At least one
+    // authority profile must expose this exact tuple as request-owned, but no
+    // profile is chosen and no caller-specific condition is evaluated here.
+    // Local access policies deliberately repeat the same shape under distinct
+    // requester tags, so requiring uniqueness would turn static preparation
+    // back into a premature authorization decision.
+    let configured_as_request_origin = bundle
+        .config
+        .authority_profiles
+        .iter()
+        .flat_map(|(_, authority)| &authority.grants)
+        .any(|grant| {
+            grant.requirement == requirement.id
+                && grant.purpose == purpose
+                && same_subject_tuples(&grant.subjects, requested)
+                && grant
+                    .subjects
+                    .iter()
+                    .all(|subject| subject.value_origin == ValueOrigin::Request)
+        });
+    if !configured_as_request_origin {
+        return Err(AuthorizationError::Unauthorized);
+    }
+
+    // Emit the requirement's declaration order. Request array position has no
+    // meaning, while selector field declaration order is binding-significant
+    // and is preserved by `validate_values`.
+    requirement
+        .subject_roles
+        .iter()
+        .map(|declared| {
+            let subject = requested
+                .iter()
+                .find(|subject| subject.role == declared.role)
+                .ok_or(AuthorizationError::Unauthorized)?;
+            let profile = bundle
+                .config
+                .selector_profiles
+                .get(&subject.selector.profile)
+                .ok_or(AuthorizationError::Unauthorized)?;
+            let values = subject
+                .selector
+                .values
+                .as_ref()
+                .ok_or(AuthorizationError::Selector)?;
+            let fields = validate_values(bundle, profile, values)?;
+            Ok(ResolvedSubject {
+                role: subject.role.clone(),
+                selector_profile: subject.selector.profile.clone(),
+                value_origin: ValueOrigin::Request,
+                fields,
+            })
+        })
+        .collect()
+}
+
 /// Exercise the normal authorization and selector boundary for one captured
 /// offline fixture subject set without token, credential, or source access.
 ///

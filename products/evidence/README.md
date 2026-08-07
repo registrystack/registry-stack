@@ -83,10 +83,13 @@ neutral.
 beside the runtime, like `registryctl` for the rest of the stack. It sits
 outside the frozen Version 1 runtime contract: it generates key material,
 starts incomplete OpenAPI-assisted authoring workspaces, compiles a reviewed
-production candidate, and drives fixture runs for complete projects. It shells
-out to the `evidence` binary for every Evidence semantic decision and never
-re-implements evaluation, signing, or verification. Its source remains covered
-by the same source-product and domain-neutrality checks as the runtime.
+production candidate, and drives fixture runs for complete projects. It
+delegates runtime evaluation, signing, bundle validation, and fixture evaluation
+to the `evidence` binary, and reuses `registry-evidence-client` and
+`registry-evidence-verifier` for relying-party request preparation and offline
+response verification. It adds no Evidence semantics of its own. Its source
+remains covered by the same source-product and domain-neutrality checks as the
+runtime.
 
 `evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
 OpenAPI document exactly as `source.openapi.yaml` and creates empty

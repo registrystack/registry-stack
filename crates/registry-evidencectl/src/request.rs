@@ -1,8 +1,9 @@
-//! Closed request preparation for the first local tutorial.
+//! Closed request preparation for local adopter tutorials.
 //!
-//! This module assembles only the request described by validated ready state.
-//! Mint owns authentication and Evidence owns authorization and verification
-//! context semantics.
+//! The Evidence runtime supplies trusted local relying-procedure metadata and
+//! exact pinned subject bindings without making an authorization decision. The
+//! relying-party client owns the request, nonce, and retained verification
+//! context. Mint separately supplies the bearer used by the tutorial's curl.
 
 use std::{
     collections::BTreeMap,
@@ -11,13 +12,19 @@ use std::{
     os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
+    sync::Arc,
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{Args, Subcommand, ValueEnum};
+use registry_evidence_client::{
+    AssuranceProfile, EvidenceClient, EvidenceClientConfig, EvidenceRequestSpec,
+    EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument,
+    SelectorValue, StaticToken, SubjectExpectations, SubjectRequest,
+};
 use registry_platform_crypto::canonicalize_json;
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
@@ -30,6 +37,8 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_SELECTOR_VALUE_BYTES: usize = 200;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
+const LOCAL_PROCEDURE_INPUT_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure-input/v1";
+const LOCAL_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure/v1";
 
 #[derive(Debug, Subcommand)]
 pub enum RequestCommand {
@@ -73,19 +82,64 @@ pub struct PrepareArgs {
     mint_bin: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 enum PreparedResponseFormat {
     SignedJws,
     SdJwtVc,
 }
 
-impl PreparedResponseFormat {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SignedJws => "signed-jws",
-            Self::SdJwtVc => "sd-jwt-vc",
+impl From<PreparedResponseFormat> for EvidenceResponseFormat {
+    fn from(format: PreparedResponseFormat) -> Self {
+        match format {
+            PreparedResponseFormat::SignedJws => Self::SignedJws,
+            PreparedResponseFormat::SdJwtVc => Self::SdJwtVc,
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalProcedureInput<'a> {
+    schema: &'static str,
+    response_format: PreparedResponseFormat,
+    requirement: &'a str,
+    purpose: &'a str,
+    audience: &'a str,
+    subjects: Vec<LocalProcedureSubject<'a>>,
+}
+
+#[derive(Serialize)]
+struct LocalProcedureSubject<'a> {
+    role: &'a str,
+    selector: LocalProcedureSelector<'a>,
+}
+
+#[derive(Serialize)]
+struct LocalProcedureSelector<'a> {
+    profile: &'a str,
+    values: BTreeMap<&'a str, &'a str>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalRelyingProcedure {
+    schema: String,
+    response_format: PreparedResponseFormat,
+    trusted_jwks: JwksDocument,
+    expected_assurance_profile: AssuranceProfile,
+    issued_by: String,
+    provided_by: String,
+    requirement: String,
+    evidence_type: String,
+    purpose: String,
+    audience: String,
+    configuration_revision: String,
+    expected_subjects: Vec<ExpectedSubjectDocument>,
+    expected_outputs: Vec<ExpectedOutputDocument>,
+    revoked_key_ids: Vec<String>,
+    maximum_assertion_lifetime_seconds: u64,
+    clock_skew_seconds: u64,
 }
 
 pub fn run(command: RequestCommand) -> Result<ExitCode> {
@@ -115,9 +169,17 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
     require_absent(&destination)?;
     let mut staging = StagingDirectory::create(&requests_root)?;
 
-    let request = closed_request(question, &subjects)?;
-    let request_path = staging.path().join("request.json");
-    write_private_bytes(&request_path, &request)?;
+    let procedure_input =
+        local_procedure_input(question, &subjects, &client.evidence_audience, args.format);
+    let procedure_input_path = staging.path().join("procedure-input.json");
+    let procedure_input = canonicalize_json(&serde_json::to_value(procedure_input)?)
+        .context("failed to serialize the local relying procedure input")?;
+    write_private_bytes(&procedure_input_path, &procedure_input)?;
+    let procedure =
+        prepare_local_relying_procedure(&evidence, &ready.runtime_path, &procedure_input_path)?;
+    fs::remove_file(&procedure_input_path)
+        .context("failed to remove the private relying procedure input")?;
+    validate_local_relying_procedure(&procedure, question, &client.evidence_audience, args.format)?;
 
     let token = obtain_token(
         &mint,
@@ -126,15 +188,36 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
         &client.private_key_path,
         &client.assertion_audience,
     )?;
+    let token_provider = Arc::new(
+        StaticToken::new(token.as_str().to_owned())
+            .context("Registry Mint returned an unusable token")?,
+    );
+    let evidence_origin =
+        url::Url::parse(&ready.evidence_origin).context("the active Evidence origin is invalid")?;
+    let client_config = EvidenceClientConfig::new(
+        evidence_origin,
+        token_provider,
+        procedure.trusted_jwks.clone(),
+        procedure.revoked_key_ids.clone(),
+    );
+    let evidence_client =
+        EvidenceClient::new(client_config).context("the local Evidence client is invalid")?;
+    let spec = evidence_request_spec(procedure, &subjects);
+    let prepared = evidence_client
+        .prepare(spec)
+        .context("Evidence request preparation failed")?;
+    let request = prepared
+        .request_json()
+        .context("Evidence request serialization failed")?;
+    let request_path = staging.path().join("request.json");
+    write_private_bytes(&request_path, &request)?;
+
     let context_path = staging.path().join("verification.json");
-    prepare_context(
-        &evidence,
-        &ready.runtime_path,
-        &request_path,
-        &context_path,
-        &token,
-        args.format,
-    )?;
+    let retained = evidence_client.retain_verification(&prepared);
+    let mut context = canonicalize_json(&serde_json::to_value(retained)?)
+        .context("failed to serialize the retained Evidence verification context")?;
+    context.push(b'\n');
+    write_private_bytes(&context_path, &context)?;
     let authorization_path = staging.path().join("authorization.curl");
     write_authorization(&authorization_path, &token)?;
     drop(token);
@@ -162,6 +245,7 @@ struct RequestClient {
     client_id: String,
     private_key_path: PathBuf,
     assertion_audience: String,
+    evidence_audience: String,
 }
 
 fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Result<RequestClient> {
@@ -180,6 +264,7 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
                 client_id: client.client_id,
                 private_key_path: client.private_key_path,
                 assertion_audience: ready.token_url.clone(),
+                evidence_audience: client.evidence_audience,
             })
         }
         None => {
@@ -190,6 +275,7 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
                 client_id: caller.client_id.clone(),
                 private_key_path: caller.private_key_path.clone(),
                 assertion_audience: caller.assertion_audience.clone(),
+                evidence_audience: caller.evidence_audience.clone(),
             })
         }
     }
@@ -268,37 +354,117 @@ fn validate_request_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn closed_request(
-    question: &dev::ReadyQuestionState,
-    subjects: &[(&dev::ReadySubjectState, &str)],
-) -> Result<Vec<u8>> {
-    let mut random = [0_u8; 32];
-    getrandom::fill(&mut random).context("failed to generate a request nonce")?;
-    let nonce = URL_SAFE_NO_PAD.encode(random);
-    random.zeroize();
+fn local_procedure_input<'a>(
+    question: &'a dev::ReadyQuestionState,
+    subjects: &[(&'a dev::ReadySubjectState, &'a str)],
+    audience: &'a str,
+    response_format: PreparedResponseFormat,
+) -> LocalProcedureInput<'a> {
     let subjects = subjects
         .iter()
-        .map(|(subject, value)| {
-            let selector_values = Value::Object(Map::from_iter([(
-                subject.selector_field.clone(),
-                Value::String((*value).to_owned()),
-            )]));
-            json!({
-                "role": subject.role,
-                "selector": {
-                    "profile": subject.selector_profile,
-                    "values": selector_values,
-                }
-            })
+        .map(|(subject, value)| LocalProcedureSubject {
+            role: &subject.role,
+            selector: LocalProcedureSelector {
+                profile: &subject.selector_profile,
+                values: BTreeMap::from([(subject.selector_field.as_str(), *value)]),
+            },
         })
         .collect::<Vec<_>>();
-    let request = json!({
-        "requestNonce": nonce,
-        "requirement": question.requirement_uri,
-        "purpose": question.purpose,
-        "subjects": subjects,
-    });
-    canonicalize_json(&request).context("failed to serialize the closed Evidence request")
+    LocalProcedureInput {
+        schema: LOCAL_PROCEDURE_INPUT_SCHEMA_V1,
+        response_format,
+        requirement: &question.requirement_uri,
+        purpose: &question.purpose,
+        audience,
+        subjects,
+    }
+}
+
+fn prepare_local_relying_procedure(
+    evidence: &Path,
+    runtime: &Path,
+    input: &Path,
+) -> Result<LocalRelyingProcedure> {
+    let mut child = Command::new(evidence)
+        .arg("--runtime")
+        .arg(runtime)
+        .arg("prepare-local-relying-procedure")
+        .arg("--input")
+        .arg(input)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to invoke Evidence relying procedure preparation")?;
+    let mut output = Vec::new();
+    let read_result = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to open Evidence relying procedure output"))?
+        .take(MAX_CONTEXT_BYTES + 1)
+        .read_to_end(&mut output);
+    if read_result.is_err() || output.is_empty() || output.len() as u64 > MAX_CONTEXT_BYTES {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("Evidence relying procedure preparation failed");
+    }
+    let status = child.wait().context("failed to wait for Evidence")?;
+    if !status.success() {
+        bail!("Evidence relying procedure preparation failed");
+    }
+    serde_json::from_slice(&output)
+        .map_err(|_| anyhow!("Evidence relying procedure preparation failed"))
+}
+
+fn validate_local_relying_procedure(
+    procedure: &LocalRelyingProcedure,
+    question: &dev::ReadyQuestionState,
+    audience: &str,
+    response_format: PreparedResponseFormat,
+) -> Result<()> {
+    if procedure.schema != LOCAL_PROCEDURE_SCHEMA_V1
+        || procedure.response_format != response_format
+        || procedure.expected_assurance_profile != AssuranceProfile::Local
+        || procedure.requirement != question.requirement_uri
+        || procedure.purpose != question.purpose
+        || procedure.audience != audience
+    {
+        bail!("Evidence relying procedure preparation failed");
+    }
+    Ok(())
+}
+
+fn evidence_request_spec(
+    procedure: LocalRelyingProcedure,
+    subjects: &[(&dev::ReadySubjectState, &str)],
+) -> EvidenceRequestSpec {
+    let subjects = subjects
+        .iter()
+        .map(|(subject, value)| SubjectRequest {
+            role: subject.role.clone(),
+            selector_profile: subject.selector_profile.clone(),
+            selector_values: Some(vec![(
+                subject.selector_field.clone(),
+                SelectorValue::String((*value).to_owned()),
+            )]),
+        })
+        .collect();
+    EvidenceRequestSpec {
+        response_format: procedure.response_format.into(),
+        requirement: procedure.requirement,
+        purpose: procedure.purpose,
+        audience: procedure.audience,
+        evidence_type: procedure.evidence_type,
+        issued_by: procedure.issued_by,
+        provided_by: procedure.provided_by,
+        configuration_revision: procedure.configuration_revision,
+        expected_assurance_profile: procedure.expected_assurance_profile,
+        subjects,
+        expected_outputs: procedure.expected_outputs,
+        maximum_assertion_lifetime_seconds: procedure.maximum_assertion_lifetime_seconds,
+        clock_skew_seconds: procedure.clock_skew_seconds,
+        subject_expectations: SubjectExpectations::Pinned(procedure.expected_subjects),
+    }
 }
 
 fn obtain_token(
@@ -360,47 +526,6 @@ fn obtain_token(
         bail!("Registry Mint refused a token for client {client_id}");
     }
     Ok(token)
-}
-
-fn prepare_context(
-    evidence: &Path,
-    runtime: &Path,
-    request: &Path,
-    context: &Path,
-    token: &str,
-    response_format: PreparedResponseFormat,
-) -> Result<()> {
-    let context_file = create_private_file(context)?;
-    let mut child = Command::new(evidence)
-        .arg("--runtime")
-        .arg(runtime)
-        .arg("prepare-local-verification-context")
-        .arg("--request")
-        .arg(request)
-        .arg("--response-format")
-        .arg(response_format.as_str())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(context_file.try_clone()?))
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to invoke Evidence context preparation")?;
-    let write_result = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("failed to open Evidence authorization input"))?
-        .write_all(token.as_bytes());
-    if write_result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        bail!("Evidence context preparation failed");
-    }
-    let status = child.wait().context("failed to wait for Evidence")?;
-    if !status.success() {
-        bail!("Evidence context preparation failed");
-    }
-    context_file.sync_all()?;
-    validate_private_file(context, &context_file, 1, MAX_CONTEXT_BYTES)?;
-    Ok(())
 }
 
 fn write_authorization(path: &Path, token: &str) -> Result<()> {

@@ -1,7 +1,7 @@
 # Evidence Implementation Approach
 
 Status: Approved Version 1 implementation schedule and Definition of Done
-Date: 2026-08-02
+Date: 2026-08-06
 
 Source-contract and local-smoke details: [SOURCE-TESTING.md](SOURCE-TESTING.md)
 
@@ -98,6 +98,10 @@ Rust crates. The adopter tooling, the relying-party client, and its Node and
 Python bindings named above sit outside the frozen Version 1 runtime contract,
 delegate every Evidence semantic decision to the runtime or to the portable
 verifier, and add no Evidence semantics of their own.
+`registry-evidencectl` reuses the relying-party client for request preparation
+and the portable verifier for offline response verification; it continues to
+delegate runtime evaluation, signing, bundle validation, and fixture evaluation
+to the real `evidence` binary.
 
 Production code is source-product neutral. `src/`, production Cargo features,
 dependencies, public types, configuration schemas, routes, and CLI options
@@ -175,34 +179,44 @@ The production path is fixed:
 7. Make one authorization decision over requester, optional actor, requirement
    revision, purpose, role-bound selector profiles and value origins, subject
    authority, audience, and response format.
-8. Durably write the access-attempt audit event with at most one scoped keyed
+8. On authorization refusal after successful authentication, durably write a
+   standalone minimal denial event with the
+   `registry.evidence.audit.authorization-refusal/v1` discriminator and return
+   the generic `403`. The event contains no requested requirement, purpose,
+   subjects, unmatched authority, selector information, response protection,
+   source, or evaluation material. If the audit append fails, return the
+   generic `503` instead.
+9. Durably write the access-attempt audit event with at most one scoped keyed
    pseudonym over each complete canonical role and selector bundle.
-9. Run bounded request preparation with only the source-required authorized
+10. Run bounded request preparation with only the source-required authorized
    selectors and closed adapter parameters, then validate the complete
    `RequestParts` result.
-10. Resolve the configured source credential. When required, acquire or reuse a
+11. Resolve the configured source credential. When required, acquire or reuse a
    bounded OAuth 2.0 client-credentials token through the Rust-owned credential
    provider.
-11. Execute the one Rust-owned evidence-data source request.
-12. Run bounded Rhai extraction and validate the closed `match`, `no_match`, or
+12. Execute the one Rust-owned evidence-data source request.
+13. Run bounded Rhai extraction and validate the closed `match`, `no_match`, or
     `ambiguous` result. Stop safely on either non-match outcome.
-13. On `match`, run bounded Rhai derivation with only its declared authorized
+14. On `match`, run bounded Rhai derivation with only its declared authorized
     selector inputs and deterministic context.
-14. Validate the complete concept-value result against the selected
+15. Validate the complete concept-value result against the selected
     requirement.
-15. Construct the Evidence JSON payload in Rust without selector profiles or
+16. Construct the Evidence JSON payload in Rust without selector profiles or
     values and with the exact request nonce.
-16. For signed JWS, sign and serialize the exact final response bytes. For an
+17. For signed JWS, sign and serialize the exact final response bytes. For an
     explicitly authorized unsigned request, construct and serialize the closed
     self-identifying unsigned envelope without invoking the signer.
-17. Durably write the pseudonymized disclosure-release audit event with the
+18. Durably write the pseudonymized disclosure-release audit event with the
     closed response-protection mode and a signing key id only for JWS.
-18. Return those exact pre-audited bytes with their exact media type.
+19. Return those exact pre-audited bytes with their exact media type.
 
-Any failure through request-parts validation in step 9 prevents credential
+Any failure through request-parts validation in step 10 prevents credential
 acquisition and source access. Any failure after source
-access prevents evidence release. Audit failure prevents either response.
+access prevents evidence release. Audit failure prevents the applicable refusal
+response, source access, or evidence response.
 Signing failure on the signed path never produces an unsigned success response.
+Authentication, malformed-request, and invalid-selector failures have no native
+audit event and remain in the closed operational channel.
 
 ## Bundle and runtime contracts
 
@@ -582,6 +596,9 @@ reaches logs, audit, errors, or disk.
   decision over requester, optional actor, requirement revision, purpose,
   role-bound selector profile and value origin, subject authority, and
   audience and requested response format.
+- Durably record every authorization refusal after successful authentication as
+  a standalone minimal denial event before returning the generic `403`; return
+  the generic `503` if that audit append fails.
 - Write the pseudonymized access-attempt audit durably before source access and
   the disclosure-release audit durably after final response serialization and
   before release.
@@ -595,9 +612,11 @@ reaches logs, audit, errors, or disk.
   into every authority grant; signed JWS remains mandatory and default.
 - Run every acceptance definition through these boundaries.
 
-Exit gate: every denial occurs before source access; audit or signing failure
-prevents release; principal, subject, purpose, audience, values, and keys obey
-the privacy and trust invariants.
+Exit gate: every denial occurs before source access; an authenticated
+authorization refusal is durably accountable before its `403`; audit or signing
+failure prevents the applicable refusal, source access, or release; principal,
+subject, purpose, audience, values, and keys obey the privacy and trust
+invariants.
 
 ### Phase 4: native HTTP service and operations
 
@@ -698,7 +717,7 @@ follow-up issue.
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
 | Source minimization | Rust makes exactly one evidence-data request with fixed transport authority, fixed or closed selector-bound path, fixed non-secret headers, bounded reviewed query/body rendering, and an explicit client-side response projection. It declares `source-derived`, `field-projected`, or `record-transformed` honestly, enforces response, time, redirect, pagination, TLS trust, concurrency, and ambient-proxy denial, and never persists a source response. Basic, static Bearer, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
-| Privacy and audit | Access-attempt audit is durably accepted before source access. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records the closed response-protection mode and a signing key only for JWS, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
+| Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. Access-attempt audit is durably accepted before source access. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Audit records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
 | Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
 | Failure and operations | Stable safe errors, reviewed existence-disclosure semantics, public collapse of `no_match` and `ambiguous` by default, request limits, per-principal and failed-selector-attempt rate controls, authenticated requester-scoped discovery, health, readiness, dependency timeouts, and graceful shutdown work without exposing protected data. Discovery performs no source access and exposes no source plan, scripts, credentials, internal authority metadata, selector values, codelist values, or unrelated definitions. Readiness fails for missing bundle, selector binding, credential, audit, or signing dependencies required by the configured deployment. |
 | Multiple definitions | All four definitions run concurrently in one process and one trust domain without script state, limits, identifiers, subjects, source responses, audit context, or results crossing definition boundaries. Unsafe combined disclosure and mutually distrustful issuer configurations are rejected. |
@@ -889,6 +908,16 @@ At minimum, pin these acceptance and negative cases:
     credentials, authority-profile names and tags, selector values, codelist
     values, and unrelated definitions are absent; no provider request or
     evidence-data audit event occurs.
+63. An authorization refusal after successful authentication durably appends
+    exactly one standalone minimal denial event with the
+    `registry.evidence.audit.authorization-refusal/v1` discriminator before
+    returning the generic `403`. The event contains the scoped requester
+    pseudonym and optional actor pseudonym but omits the requested requirement,
+    purpose, subjects, unmatched authority, selector information, response
+    protection, source, and evaluation material. Append failure returns the
+    generic `503`, no source credential is acquired, and no source request is
+    made. Authentication, malformed-request, and invalid-selector failures
+    create no native audit event.
 
 ## Verification gates
 

@@ -31,7 +31,8 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.match(output, /assert-a-role-bound-relationship: 9 sh fences, 9 executed/u);
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
   assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
-  assert.match(output, /Checked 5 tutorials\./u);
+  assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
+  assert.match(output, /Checked 6 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -82,6 +83,27 @@ test('--only accepts the consumer follow-up', async () => {
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('--only accepts the caller-access follow-up', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'control-who-can-request-evidence',
+  ]);
+  assert.equal(code, 0, output);
+  assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('the caller-access replay expects the privacy-safe refusal audit line', async () => {
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(
+    /\n\tcontrol-who-can-request-evidence\)[\s\S]*?\n\t\t;;/u,
+  )?.[0];
+  assert.ok(branch, 'the caller-access replay spec must exist');
+  assert.match(branch, /"ACCESS REFUSED requester="/u);
+  assert.match(branch, /"reason=not_authorized"/u);
+  assert.doesNotMatch(branch, /ACCESS AUTHORIZED age-bracket/u);
 });
 
 test('--only refuses a slug that is not registered', async () => {

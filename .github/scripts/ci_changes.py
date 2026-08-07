@@ -71,6 +71,7 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/evidence-tutorial-fence.sh",
         "docs/site/scripts/registryctl-tutorial.mjs",
         "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+        "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
         "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
         "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",

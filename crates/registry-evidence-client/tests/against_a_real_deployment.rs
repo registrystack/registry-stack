@@ -675,6 +675,7 @@ fn spec(
         .definition(REQUIREMENT)
         .expect("the requester is entitled to the fixture requirement");
     EvidenceRequestSpec {
+        response_format: registry_evidence_client::EvidenceResponseFormat::SignedJws,
         requirement: definition.requirement.clone(),
         purpose: definition.purpose.clone(),
         audience: RELYING_AUDIENCE.to_owned(),

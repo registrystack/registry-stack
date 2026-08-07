@@ -15,6 +15,10 @@ in CI.
 ```js
 const client = new EvidenceClient({ baseUrl, trustedJwks, revokedKeyIds, token });
 
+const spec = {
+  responseFormat: 'signed-jws',
+  // requirement, subjects, and the remaining trusted procedure inputs
+};
 const prepared = client.prepare(spec);       // synchronous, no I/O
 const definitions = await client.discover();
 const jwks = await client.fetchJwks();
@@ -23,6 +27,14 @@ const verified = client.verify(prepared, response);        // synchronous
 const verified = await client.requestAndVerify(prepared);
 const verified = client.verifyAsOf(prepared, response, asOfMillis);
 ```
+
+`responseFormat` is required on every request specification. Use
+`"signed-jws"` for a flattened JWS JSON response or `"sd-jwt-vc"` for the
+keyless SD-JWT VC response. `prepare()` closes that choice before any I/O,
+`send()` uses its corresponding HTTP `Accept` value, and verification never
+guesses a format from the returned bytes. The exported
+`EvidenceResponseFormat` and `EvidenceRequestSpec` TypeScript types describe
+these inputs.
 
 ## Design notes
 

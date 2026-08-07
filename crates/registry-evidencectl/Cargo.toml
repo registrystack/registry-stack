@@ -22,6 +22,7 @@ chrono.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 inquire.workspace = true
+registry-evidence-client.workspace = true
 registry-platform-crypto.workspace = true
 p256.workspace = true
 rhai.workspace = true

@@ -31,9 +31,11 @@ The normative source set is:
 - `authority-context.schema.yaml` and `selector-contract.yaml`: normalized
   authority, one-decision authorization inputs, exact selector profiles, and
   value-origin rules;
-- `audit-event.schema.yaml`: the protected native audit record, including the
-  closed `responseProtection` mode carried by every event and the `signingKeyId`
-  required exactly for signed release;
+- `audit-event.schema.yaml`: the protected native audit-record union, with
+  distinct discriminators for mutually exclusive complete authorized-material
+  and minimal authenticated authorization-refusal shapes. Complete events carry
+  the closed `responseProtection` mode and require `signingKeyId` exactly for
+  cryptographically protected release; the refusal shape omits both;
 - `bundle.schema.yaml` and `runtime.schema.yaml`: the immutable governed bundle,
   its bundle-level and grant-level `responseFormats` permission, closed
   process-local runtime bindings, and their non-override boundary;

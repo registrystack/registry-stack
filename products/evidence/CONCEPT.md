@@ -1,7 +1,7 @@
 # Evidence: Minimum-Disclosure Assertion Service
 
 Status: Approved Version 1 product contract
-Date: 2026-08-02
+Date: 2026-08-06
 Audience: Product, architecture, privacy, interoperability, and implementation stakeholders
 
 Companion implementation note: [IMPLEMENTATION.md](IMPLEMENTATION.md)
@@ -297,7 +297,9 @@ flowchart LR
     A["Requester"] --> B["JSON boundary"]
     B --> C["Authenticate and resolve authority context"]
     C --> D["Resolve and authorize selector profiles and values"]
-    D --> E["Write access-attempt audit"]
+    D -->|"authorized"| E["Write access-attempt audit"]
+    D -->|"refused after authentication"| R["Write minimal authorization-refusal audit"]
+    R --> S["Return generic 403"]
     E --> F["Rhai renders bounded request parts"]
     F --> G["Rust validates request parts and resolves credentials"]
     G --> H["Rust executes one fixed-authority source request"]
@@ -1083,7 +1085,7 @@ inputs.
 
 Audit records establish accountable access. Reusable platform primitives may provide tamper-evident envelopes, keyed pseudonymization, redaction helpers, sinks, and chain verification.
 
-The audit event contains only reviewed fields:
+Authorized-material audit events contain only reviewed fields:
 
 - operation identifier and phase;
 - requirement and bundle revision;
@@ -1094,9 +1096,25 @@ The audit event contains only reviewed fields:
 - authority type and optional pseudonymized grant reference;
 - source and adapter identifiers;
 - decision code;
+- response-protection mode;
 - disclosed concept identifiers, never values;
-- evidence identifier and signing key identifier on release;
+- evidence identifier on release and signing key identifier only on
+  cryptographically protected release;
 - timing and safe error category.
+
+After successful authentication, an authorization refusal produces a separate
+minimal native event with the
+`registry.evidence.audit.authorization-refusal/v1` discriminator before
+Evidence returns the generic `403`. That event contains only the operation and
+event identifiers, assurance profile, bundle revision, a scoped requester
+pseudonym, an optional actor pseudonym, the closed `not-authorized` decision and
+safe error category, and timestamp and duration.
+It omits the untrusted requested requirement, purpose, subjects, unmatched
+authority, selector information, response protection, source, and evaluation
+material. The requester pseudonym remains keyed and domain-separated; none of
+its scope inputs is stored in the refusal event. Its scope binds the operator
+trust domain, requested purpose, and authenticated audience so refusals do not
+create a cross-purpose or cross-audience identifier.
 
 Audit pseudonyms use keyed, domain-separated hashing with separate requester,
 actor, authority, and subject domains. A subject pseudonym covers the canonical
@@ -1115,13 +1133,23 @@ archive the old runtime, master, segments, and head, then increment
 `hashKeyVersion`, select a fresh audit path, and restart only after the complete
 check. A new master is never appended to an existing chain.
 
-Two writes are fail-closed:
+Three audit gates are fail-closed:
 
-1. The access-attempt event must be durably accepted before the first source read.
-2. The disclosure-release event must be durably accepted after final response
+1. An authenticated authorization-refusal event must be durably accepted
+   before the generic `403` is returned.
+2. The access-attempt event must be durably accepted before the first source
+   read.
+3. The disclosure-release event must be durably accepted after final response
    serialization and before those exact bytes are released.
 
-Denial and transient-failure events are attempted without reflecting protected inputs once authorization has produced the privacy-safe audit material required by the native schema. Authentication failures, unmatched-authority failures, and invalid-selector failures happen before a complete authorized authority and selector bundle exist; the core does not fabricate a native event from that untrusted or protected request material. A deployment-specific compliance profile may require separate edge telemetry, more reviewed metadata, or retention, but it cannot silently change the native privacy contract.
+Failure to append any required event changes the outward result to the generic
+`503` service-unavailable problem. Denial and transient-failure events after
+authorization are attempted without reflecting protected inputs once
+authorization has produced the privacy-safe material required by their native
+schema. Authentication, malformed-request, and invalid-selector failures remain
+operational-only. A deployment-specific compliance profile may require separate
+edge telemetry, more reviewed metadata, or retention, but it cannot silently
+change the native privacy contract.
 
 ## 13. Trust and privacy invariants
 
@@ -1165,6 +1193,10 @@ Version one must preserve these invariants:
     cannot enter the signed-verification path or claim later verifiability.
 29. Final immutable response bytes exist before the disclosure-release audit
     is durably accepted and are the exact bytes released afterward.
+30. Every authorization refusal after successful authentication is durably
+    recorded as a standalone minimal native event before the generic `403` is
+    returned. Audit failure returns a generic `503`, and the event never records
+    untrusted request or unmatched-authority material.
 
 ## 14. Complementary deployment patterns
 
@@ -1416,7 +1448,9 @@ mandatory default and includes:
 - one active ES256/P-256 service signing key with RFC 7638 identity, explicit
   published and revoked key sets, default flattened JWS JSON responses, a
   governed explicitly selected unsigned envelope, and a public JWKS endpoint;
-- keyed JSONL audit on explicitly durable storage, fail-closed before source access and before release;
+- keyed JSONL audit on explicitly durable storage, including minimal
+  authenticated authorization refusals, fail-closed before a refusal response,
+  source access, and evidence release;
 - offline bundle checking and fixture evaluation;
 - adopter tooling that starts an incomplete local authoring project, compiles
   one explicit production target into a create-only candidate, and delegates
@@ -1517,6 +1551,8 @@ The complete Version 1 sequence is:
 
 - Add the selected authentication profile.
 - Add selector value-origin, subject-authority, and authorization enforcement.
+- Add a standalone minimal native audit event for every authorization refusal
+  after successful authentication, durably accepted before the generic `403`.
 - Add production signing-key resolution, fail-closed signing, and public JWKS publication.
 - Add durable audit before source access and before release.
 - Run all four cases through every trust boundary.
@@ -1575,6 +1611,8 @@ The concept succeeds if:
 - no raw selector, source, or disclosed value appears in logs, audit, or errors;
 - authorization binds requester, purpose, requirement revision, each role's
   selector profile and value origin, subject authority, and audience;
+- an authenticated authorization refusal is durably accountable without
+  recording the untrusted request tuple or fabricating a matched authority;
 - one process safely serves multiple definitions within one trust domain;
 - adding a code or relationship assertion requires no new subsystem;
 - flat REST, paged nested REST, and event-index source shapes require no
@@ -1712,6 +1750,10 @@ This concept fixes the following decisions:
 24. Strict verification also requires independently trusted expected subject
     bindings and output concepts. Copying expectations from the same response
     is not verification.
+25. Every authorization refusal after successful authentication is a
+    standalone minimal native audit event. Authentication, malformed-request,
+    and invalid-selector failures remain operational-only, and audit failure
+    changes the outward refusal result from `403` to `503`.
 
 ## 22. Production deployment decisions
 

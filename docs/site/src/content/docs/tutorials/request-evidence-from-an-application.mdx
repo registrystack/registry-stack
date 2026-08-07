@@ -306,6 +306,7 @@ REQUIREMENT = "urn:registrystack:evidence:local:requirement:adult-status"
 
 # Chosen by this application, not published by the deployment.
 AUDIENCE = "urn:registrystack:evidence:local:client:age-check-app"
+RESPONSE_FORMAT = "signed-jws"
 EXPECTED_OUTPUTS = [
     {
         "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
@@ -358,6 +359,7 @@ document = json.dumps(
         "configuration_revision": definition["configurationRevision"],
         "expected_assurance_profile": published["assuranceProfile"],
         "audience": AUDIENCE,
+        "response_format": RESPONSE_FORMAT,
         "expected_outputs": EXPECTED_OUTPUTS,
         "maximum_assertion_lifetime_seconds": MAXIMUM_LIFETIME_SECONDS,
         "clock_skew_seconds": CLOCK_SKEW_SECONDS,
@@ -409,7 +411,8 @@ PY
     }
   },
   "purpose": "age-check",
-  "requirement": "urn:registrystack:evidence:local:requirement:adult-status"
+  "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+  "response_format": "signed-jws"
 }
 ```
 
@@ -417,9 +420,10 @@ PY
 with the application. You do not regenerate it at startup: an application that refreshes its
 expectations from the deployment it is checking has no expectations of its own.
 
-Three of those values are the application's own judgement, and no deployment can supply them:
+Four of those settings are the application's own judgement, and no deployment can supply them:
 
 - `audience` is the identifier the client registration assigned this application.
+- `response_format` explicitly selects the signed JWS response and the matching offline verifier.
 - `maximum_assertion_lifetime_seconds` and `clock_skew_seconds` are its own bounds on how stale an
   answer it will accept.
 
@@ -568,8 +572,9 @@ Six properties of that code are the point of this tutorial:
 
 - Every expectation, and the request shape itself, comes from `procedure.json`. The program holds no
   discovery client and cannot learn what to expect from the deployment it is checking.
-- `prepare` performs no network call. It closes the request, generates a fresh nonce, and builds the
-  verification policy while the answer is still unknown. A prepared request is good for one send.
+- `prepare` performs no network call. It closes the request, retains the explicit response format,
+  generates a fresh nonce, and builds the verification policy while the answer is still unknown. A
+  prepared request is good for one send.
 - `request_and_verify` returns only after the response satisfied the policy. There is no object in
   this program that holds a decoded but unverified payload.
 - The answer is read from a mapping keyed by the concept identifier, never by position, so a

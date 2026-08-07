@@ -79,10 +79,12 @@ runtime.
 like `registryctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
 OpenAPI authoring workspaces, and drives fixture runs for complete deployment
-projects, but it shells out to the `evidence` binary for every Evidence semantic
-decision and never re-implements evaluation, signing, or verification. Its
-source is covered by the same source-product and domain neutrality checks as
-the runtime.
+projects. It delegates runtime evaluation, signing, bundle validation, and
+fixture evaluation to the `evidence` binary, and reuses
+`registry-evidence-client` and `registry-evidence-verifier` for relying-party
+request preparation and offline response verification. It adds no Evidence
+semantics of its own. Its source is covered by the same source-product and
+domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,

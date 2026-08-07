@@ -45,13 +45,12 @@ use crate::{
     config::{AssuranceProfile, ResponseFormat},
     contracts::evidence_contract_accepts,
     local_verification::{
-        prepare_local_verification_context, verify_local_response, verify_local_response_at,
-        LocalVerificationContext,
+        prepare_local_relying_procedure, LocalRelyingProcedure, LocalRelyingProcedureInput,
+        LocalResponseFormat, LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1,
     },
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
-        HolderPublicKey, PublicValue, RequestedSelector, RequestedSubject, SelectorValue,
-        UnsignedEvidenceEnvelope,
+        PublicValue, RequestedSelector, RequestedSubject, SelectorValue, UnsignedEvidenceEnvelope,
     },
     observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
@@ -1091,7 +1090,7 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
             .await
             .expect("overlapping runtime initializes for fail-closed request decisions"),
     );
-    let http = TestServer::new(build_app(runtime));
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
 
     let response = http
         .get("/v1/evidence-definitions")
@@ -1113,6 +1112,28 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
     assert!(fs::read_to_string(&prepared.audit_path)
         .expect("audit is readable")
         .is_empty());
+
+    let refused = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(refused.json::<Value>()["code"], json!("not_authorized"));
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"safeErrorCategory\":\"not-authorized\"")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1260,7 +1281,7 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
 }
 
 #[tokio::test]
-async fn local_runtime_without_fixture_references_keeps_the_real_security_path() {
+async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
     let local_issuer = prepared.server.uri();
     let auth_private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
@@ -1305,73 +1326,38 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     make_read_only(&prepared.bundle_root);
 
     // Close independent expectations before the source exists and before a
-    // response or audit record can exist. Preparation uses the deployed
-    // profile-aware authenticator, not the in-memory test override.
+    // response or audit record can exist. Preparation deliberately has no
+    // bearer and must not fetch the configured authentication JWKS.
     let request = adult_request();
-    let token = access_token_for_issuer(&local_issuer, "requester-principal-canary", None);
     let deployment = DeploymentInputs::load(&prepared.runtime_path)
         .expect("the immutable local deployment reloads");
-    let context = prepare_local_verification_context(&deployment, &request, &token)
+    let input = LocalRelyingProcedureInput {
+        schema: LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1.to_owned(),
+        response_format: LocalResponseFormat::SignedJws,
+        requirement: request.requirement.clone(),
+        purpose: request.purpose.clone(),
+        audience: EVIDENCE_AUDIENCE.to_owned(),
+        subjects: request.subjects.clone(),
+    };
+    let procedure = prepare_local_relying_procedure(&deployment, &input)
         .await
-        .expect("real local token closes the verification context");
+        .expect("trusted local procedure closes without a bearer");
     assert!(
         !prepared.audit_path.exists(),
-        "context preparation never opens audit storage"
+        "procedure preparation never opens audit storage"
     );
     let preparation_requests = prepared
         .server
         .received_requests()
         .await
-        .expect("authentication request journal is available");
+        .expect("request journal is available");
     assert!(
-        preparation_requests.iter().all(|request| {
-            request.method.as_str() == "GET" && request.url.path() == "/.well-known/jwks.json"
-        }),
-        "context preparation reaches only the configured authentication JWKS"
+        preparation_requests.is_empty(),
+        "procedure preparation reaches neither authentication nor source HTTP"
     );
 
-    let mut bad_token = token.clone();
-    let last = bad_token.pop().expect("token has a signature");
-    bad_token.push(if last == 'A' { 'B' } else { 'A' });
-    assert!(
-        prepare_local_verification_context(&deployment, &request, &bad_token)
-            .await
-            .is_err(),
-        "a token that fails real signature verification cannot create context"
-    );
-
-    let mut holder_request = request.clone();
-    holder_request.holder_key = Some(HolderPublicKey {
-        kty: "EC".to_owned(),
-        crv: "P-256".to_owned(),
-        x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_owned(),
-        y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_owned(),
-        alg: Some("ES256".to_owned()),
-        kid: Some("acceptable-holder-key".to_owned()),
-    });
-    assert!(
-        holder_request
-            .holder_key
-            .as_ref()
-            .is_some_and(HolderPublicKey::is_acceptable),
-        "the negative exercises an otherwise acceptable holder key"
-    );
-    assert!(
-        prepare_local_verification_context(&deployment, &holder_request, &token)
-            .await
-            .is_err(),
-        "the signed-JWS-only seam rejects even an acceptable holder key"
-    );
-
-    let mut wrong_request = request.clone();
-    wrong_request.request_nonce = URL_SAFE_NO_PAD.encode([0x22; 32]);
-    let wrong_request_context =
-        prepare_local_verification_context(&deployment, &wrong_request, &token)
-            .await
-            .expect("an independently valid request creates its own context");
-
-    let mut wrong_subject = request.clone();
-    wrong_subject.subjects[0]
+    let mut wrong_subject_input = input.clone();
+    wrong_subject_input.subjects[0]
         .selector
         .values
         .as_mut()
@@ -1380,10 +1366,10 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
             "family_name".to_owned(),
             SelectorValue::String("Different".to_owned()),
         );
-    let wrong_subject_context =
-        prepare_local_verification_context(&deployment, &wrong_subject, &token)
+    let wrong_subject_procedure =
+        prepare_local_relying_procedure(&deployment, &wrong_subject_input)
             .await
-            .expect("an authorized different subject creates a different binding");
+            .expect("a different request-origin subject creates a different binding");
 
     let runtime = Arc::new(
         EvidenceRuntime::initialize(&prepared.runtime_path)
@@ -1396,6 +1382,7 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     );
     assert!(runtime.bundle().fixtures.is_empty());
 
+    let token = access_token_for_issuer(&local_issuer, "requester-principal-canary", None);
     let http = TestServer::new(build_app(Arc::clone(&runtime)));
     let definitions_response = http
         .get("/v1/evidence-definitions")
@@ -1415,68 +1402,65 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert_eq!(response.header("content-type"), "application/jose+json");
     let jws = response.json::<FlattenedJws>();
     let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
-    let verified = verify_local_response(context.clone(), &serialized)
-        .expect("the response strictly verifies against pre-response state");
+    let policy = local_procedure_policy(&procedure, &request.request_nonce, Utc::now());
+    let verified = verify_flattened_jws(&serialized, &procedure.trusted_jwks, &policy)
+        .expect("the response strictly verifies against the prepared procedure");
     assert_eq!(verified.request_nonce, request.request_nonce);
     assert_eq!(
         verified.supported_values[0].value,
         PublicValue::Boolean(true)
     );
-    assert!(
-        verify_local_response(wrong_request_context, &serialized).is_err(),
-        "a response cannot verify against another retained request"
+    assert_eq!(
+        serde_json::to_value(&procedure.trusted_jwks).expect("procedure JWKS serializes"),
+        serde_json::to_value(runtime.jwks()).expect("runtime JWKS serializes"),
+        "the procedure pins the exact public signing JWKS"
     );
+
+    let wrong_nonce = URL_SAFE_NO_PAD.encode([0x22; 32]);
+    let wrong_nonce_policy = local_procedure_policy(&procedure, &wrong_nonce, Utc::now());
     assert!(
-        verify_local_response(wrong_subject_context, &serialized).is_err(),
+        verify_flattened_jws(&serialized, &procedure.trusted_jwks, &wrong_nonce_policy).is_err(),
+        "a response cannot verify against another retained request nonce"
+    );
+    let wrong_subject_policy =
+        local_procedure_policy(&wrong_subject_procedure, &request.request_nonce, Utc::now());
+    assert!(
+        verify_flattened_jws(
+            &serialized,
+            &wrong_subject_procedure.trusted_jwks,
+            &wrong_subject_policy,
+        )
+        .is_err(),
         "a response cannot verify against another subject binding"
     );
 
-    let context_json = serde_json::to_value(&context).expect("context serializes");
-    assert_eq!(
-        context_json["trustedJwks"],
-        serde_json::to_value(runtime.jwks()).expect("runtime JWKS serializes"),
-        "the closed context pins the exact public signing JWKS"
+    let mut wrong_revision = local_procedure_policy_document(&procedure, &request.request_nonce);
+    wrong_revision.configuration_revision = "sha256:wrong-bundle".to_owned();
+    let wrong_revision = wrong_revision
+        .try_into_policy(Utc::now())
+        .expect("changed revision remains a bounded policy");
+    assert!(
+        verify_flattened_jws(&serialized, &procedure.trusted_jwks, &wrong_revision).is_err(),
+        "a response cannot verify against another configuration revision"
     );
-    for (pointer, replacement, reason) in [
-        (
-            "/verificationPolicy/configurationRevision",
-            json!("sha256:wrong-bundle"),
-            "another bundle revision",
-        ),
-        (
-            "/verificationPolicy/expectedSubjects/0/binding",
-            json!(format!("urn:evidence:subject:v1_{}", "A".repeat(43))),
-            "a changed retained subject binding",
-        ),
-        (
-            "/verificationPolicy/expectedAssuranceProfile",
-            json!("production"),
-            "a production assurance expectation",
-        ),
-        (
-            "/trustedJwks/keys/0/x",
-            json!(URL_SAFE_NO_PAD.encode([0x44; 32])),
-            "a changed trust key",
-        ),
-    ] {
-        let mut changed = context_json.clone();
-        *changed
-            .pointer_mut(pointer)
-            .unwrap_or_else(|| panic!("context pointer {pointer} exists")) = replacement;
-        let changed: LocalVerificationContext =
-            serde_json::from_value(changed).expect("changed context remains structurally closed");
-        assert!(
-            verify_local_response(changed, &serialized).is_err(),
-            "response must fail against {reason}"
-        );
-    }
+
+    let mut wrong_assurance = local_procedure_policy_document(&procedure, &request.request_nonce);
+    wrong_assurance.expected_assurance_profile = AssuranceProfile::Production;
+    let wrong_assurance = wrong_assurance
+        .try_into_policy(Utc::now())
+        .expect("changed assurance remains a bounded policy");
+    assert!(
+        verify_flattened_jws(&serialized, &procedure.trusted_jwks, &wrong_assurance).is_err(),
+        "a response cannot verify as production evidence"
+    );
 
     let mut tampered_response = serde_json::to_value(&jws).expect("flattened response serializes");
     tampered_response["signature"] = json!("A".repeat(86));
     assert!(
-        verify_local_response(
-            context.clone(),
+        verify_flattened_jws(
             &serde_json::to_vec(&tampered_response).expect("tampered response serializes"),
+            &procedure.trusted_jwks,
+            &policy,
         )
         .is_err(),
         "response tampering fails closed"
@@ -1490,9 +1474,10 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
                 .expect("clock skew fits i64")
                 + 1,
         );
+    let expired_policy = local_procedure_policy(&procedure, &request.request_nonce, expired_at);
     assert!(
-        verify_local_response_at(context, &serialized, expired_at).is_err(),
-        "an expired response fails strict local verification"
+        verify_flattened_jws(&serialized, &procedure.trusted_jwks, &expired_policy).is_err(),
+        "an expired response fails strict portable verification"
     );
 
     let evidence = verify_flattened_jws(
@@ -1512,6 +1497,38 @@ async fn local_runtime_without_fixture_references_keeps_the_real_security_path()
     assert!(events
         .iter()
         .all(|event| event["record"]["assuranceProfile"] == json!("local")));
+}
+
+fn local_procedure_policy_document(
+    procedure: &LocalRelyingProcedure,
+    request_nonce: &str,
+) -> EvidenceVerificationPolicyDocument {
+    EvidenceVerificationPolicyDocument {
+        expected_assurance_profile: procedure.expected_assurance_profile,
+        issued_by: procedure.issued_by.clone(),
+        provided_by: procedure.provided_by.clone(),
+        requirement: procedure.requirement.clone(),
+        evidence_type: procedure.evidence_type.clone(),
+        purpose: procedure.purpose.clone(),
+        audience: procedure.audience.clone(),
+        configuration_revision: procedure.configuration_revision.clone(),
+        request_nonce: request_nonce.to_owned(),
+        expected_subjects: procedure.expected_subjects.clone(),
+        expected_outputs: procedure.expected_outputs.clone(),
+        revoked_key_ids: procedure.revoked_key_ids.clone(),
+        maximum_assertion_lifetime_seconds: procedure.maximum_assertion_lifetime_seconds,
+        clock_skew_seconds: procedure.clock_skew_seconds,
+    }
+}
+
+fn local_procedure_policy(
+    procedure: &LocalRelyingProcedure,
+    request_nonce: &str,
+    now: DateTime<Utc>,
+) -> EvidenceVerificationPolicy {
+    local_procedure_policy_document(procedure, request_nonce)
+        .try_into_policy(now)
+        .expect("the prepared local procedure states bounded policy inputs")
 }
 
 #[tokio::test]
@@ -1773,6 +1790,201 @@ async fn access_audit_failure_blocks_credentials_and_source_access() {
 }
 
 #[tokio::test]
+async fn authorization_refusal_is_minimally_audited() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(
+            &prepared.runtime_path,
+            authenticator_with_actor_claim("evidence_actor"),
+        )
+        .await
+        .expect("runtime initializes with an actor claim"),
+    );
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let principal = "refused-requester-principal-canary";
+    let actor = "refused-actor-canary";
+    let mut request = adult_request();
+    request.purpose = "refused-purpose-canary".to_owned();
+    let response = http
+        .post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!(
+                "Bearer {}",
+                access_token_for(principal, Some(json!({"evidence_actor": actor})))
+            ),
+        )
+        .json(&serde_json::to_value(&request).expect("request serializes"))
+        .await;
+
+    assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let mut lines = audit.lines();
+    let event =
+        serde_json::from_str::<Value>(lines.next().expect("one authorization refusal is durable"))
+            .expect("audit line is JSON");
+    assert!(lines.next().is_none(), "only one refusal event is durable");
+    let record = event["record"]
+        .as_object()
+        .expect("the refusal record is an object");
+    assert_eq!(
+        record.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "actorPseudonym",
+            "assuranceProfile",
+            "bundleRevision",
+            "decision",
+            "durationMilliseconds",
+            "eventId",
+            "occurredAt",
+            "operation",
+            "phase",
+            "requesterPseudonym",
+            "safeErrorCategory",
+            "schema",
+        ])
+    );
+    assert_eq!(
+        record["schema"],
+        json!("registry.evidence.audit.authorization-refusal/v1")
+    );
+    assert_eq!(record["phase"], json!("denial"));
+    assert_eq!(record["decision"], json!("not-authorized"));
+    assert_eq!(record["safeErrorCategory"], json!("not-authorized"));
+    assert!(record["requesterPseudonym"].is_string());
+    assert!(record["actorPseudonym"].is_string());
+    for protected in [
+        principal,
+        actor,
+        request.requirement.as_str(),
+        request.purpose.as_str(),
+        request.subjects[0].selector.profile.as_str(),
+        "Amina",
+        "Diallo",
+        "2000-01-01",
+        AUTHORITY,
+        EVIDENCE_AUDIENCE,
+        "signed-jws",
+    ] {
+        assert!(
+            !audit.contains(protected),
+            "the refusal event must not retain protected request or authority material"
+        );
+    }
+}
+
+#[tokio::test]
+async fn authorization_refusal_requester_pseudonym_stays_scoped() {
+    let fixture = acceptance_runtime().await;
+    let principal = "scoped-refusal-principal-canary";
+    let token = access_token_for(principal, None);
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    for purpose in [
+        "refused-purpose-one",
+        "refused-purpose-one",
+        "refused-purpose-two",
+    ] {
+        let mut request = adult_request();
+        request.purpose = purpose.to_owned();
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&serde_json::to_value(request).expect("request serializes"))
+            .await;
+        assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    let pseudonyms = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .map(|event| {
+            event["record"]["requesterPseudonym"]
+                .as_str()
+                .expect("requester pseudonym is text")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pseudonyms.len(), 3);
+    assert_eq!(pseudonyms[0], pseudonyms[1]);
+    assert_ne!(pseudonyms[0], pseudonyms[2]);
+    for protected in [principal, "refused-purpose-one", "refused-purpose-two"] {
+        assert!(!audit.contains(protected));
+    }
+}
+
+#[tokio::test]
+async fn authorization_refusal_audit_failure_returns_service_unavailable() {
+    let fixture = acceptance_runtime().await;
+    fs::write(&fixture.audit_path, b"{}\n").expect("audit tamper writes");
+    let mut request = adult_request();
+    request.purpose = "refused-purpose-canary".to_owned();
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&serde_json::to_value(request).expect("request serializes"))
+        .await;
+
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        response.json::<Value>()["code"],
+        json!("service_unavailable")
+    );
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn invalid_selector_does_not_create_an_authorization_refusal() {
+    let fixture = acceptance_runtime().await;
+    let error = fixture
+        .runtime
+        .evaluate(
+            "operation-invalid-selector-no-audit",
+            &access_token(Some(parent_grant_claims())),
+            &parent_request_with_candidate_values(),
+        )
+        .await
+        .expect_err("caller substitution remains an invalid selector");
+
+    assert_eq!(error.problem(), ProblemCode::InvalidSelector);
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(
+        fs::read_to_string(&fixture.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "invalid selectors must not fabricate authorization refusals"
+    );
+}
+
+#[tokio::test]
 async fn missing_principal_never_falls_back_to_client_id_or_azp() {
     let fixture = acceptance_runtime().await;
     let now = Utc::now().timestamp();
@@ -1802,6 +2014,7 @@ async fn missing_principal_never_falls_back_to_client_id_or_azp() {
         "authentication failure cannot acquire source credentials"
     );
     let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    assert!(audit.is_empty(), "authentication failures are not audited");
     assert!(!audit.contains("fallback-client-canary"));
     assert!(!audit.contains("fallback-authorized-party-canary"));
 }
@@ -2209,6 +2422,14 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
         .await
         .expect("request journal is available")
         .is_empty());
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"safeErrorCategory\":\"not-authorized\"")
+            .count(),
+        1
+    );
 
     // The bundle enables unsigned but the matched grant withholds it. Another
     // grant's permission cannot be unioned in, and the denial is identical.
@@ -2247,6 +2468,14 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
     assert_eq!(bundle_denied_body["code"], grant_denied_body["code"]);
     assert_eq!(bundle_denied_body["title"], grant_denied_body["title"]);
     assert_eq!(bundle_denied_body["status"], grant_denied_body["status"]);
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"safeErrorCategory\":\"not-authorized\"")
+            .count(),
+        1
+    );
     // The signed default remains available under the restricted grant.
     mount_adult_source(&prepared.server, None).await;
     let signed = http
@@ -2557,9 +2786,14 @@ async fn sd_jwt_format_not_permitted_by_bundle() {
             .is_empty(),
         "an unenabled response format is denied before source access"
     );
-    assert!(fs::read_to_string(&fixture.audit_path)
-        .expect("audit is readable")
-        .is_empty());
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"safeErrorCategory\":\"not-authorized\"")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -2582,6 +2816,14 @@ async fn sd_jwt_format_not_permitted_by_grant() {
         .await
         .expect("request journal is available")
         .is_empty());
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 1);
+    assert_eq!(
+        audit
+            .matches("\"safeErrorCategory\":\"not-authorized\"")
+            .count(),
+        1
+    );
 
     // With both gates open the same assertion is released as an SD-JWT VC.
     let prepared = sd_jwt_vc_acceptance(true).await;
@@ -3275,6 +3517,7 @@ async fn security_contract_rejects_unknown_and_unauthorized_requests_before_sour
         .is_empty());
     let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
     assert!(!audit.contains("\"phase\":\"access-attempt\""));
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 4);
     for protected in [
         "unentitled-principal",
         "caller-selected-purpose",
@@ -3598,7 +3841,8 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
     let audit = fs::read_to_string(&fixture.audit_path).expect("durable audit is readable");
     assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 7);
     assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 5);
-    assert_eq!(audit.matches("\"phase\":\"denial\"").count(), 2);
+    assert_eq!(audit.matches("\"phase\":\"denial\"").count(), 4);
+    assert_eq!(audit.matches("\"decision\":\"not-authorized\"").count(), 2);
     let retained_failures = format!(
         "{swapped_error:?} {swapped_error}\n{error:?} {error}\n{unauthorized:?} {unauthorized}\n{audit}"
     );
@@ -4259,6 +4503,14 @@ fn prepare_fixture(
 }
 
 fn authenticator() -> Authenticator {
+    authenticator_with_optional_actor_claim(None)
+}
+
+fn authenticator_with_actor_claim(actor_claim: &str) -> Authenticator {
+    authenticator_with_optional_actor_claim(Some(actor_claim))
+}
+
+fn authenticator_with_optional_actor_claim(actor_claim: Option<&str>) -> Authenticator {
     let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
     let jwks: JwkSet = serde_json::from_value(json!({"keys": [private.public()]}))
         .expect("static auth JWKS parses");
@@ -4280,7 +4532,7 @@ fn authenticator() -> Authenticator {
             evidence_audience_claim: "evidence_audience".to_owned(),
             grant_id_claim: "evidence_grant_id".to_owned(),
             grant_authority_claim: "evidence_authority".to_owned(),
-            actor_claim: None,
+            actor_claim: actor_claim.map(str::to_owned),
         },
     )
 }

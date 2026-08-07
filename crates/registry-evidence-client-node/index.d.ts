@@ -17,7 +17,7 @@ export declare class EvidenceClient {
    * happens here. The returned request is good for exactly one exchange:
    * spend it with `send` or `requestAndVerify`.
    */
-  prepare(spec: any): PreparedEvidenceRequest
+  prepare(spec: { responseFormat: 'signed-jws' | 'sd-jwt-vc'; [key: string]: any }): PreparedEvidenceRequest
   /**
    * Read the request shapes this requester is entitled to send. Discovery
    * is authoring input, not a trust anchor: it never supplies verification
