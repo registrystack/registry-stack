@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-07
+
 ### Changed
 
 - Approved baseline sets now carry schema version `2.0`. Registry Notary is
@@ -14,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refuses such a document by name instead of honoring an approval whose
   integrity claim it no longer enforces. Re-approve the baseline to issue a
   schema version `2.0` approved set.
+- Registryctl releases publish a canonical installer at
+  `https://docs.registrystack.org/install.sh`. The installer is generated from
+  the released Registryctl installer and served from the exact promoted docs
+  archive.
 
 ## [0.16.3] - 2026-08-01
 

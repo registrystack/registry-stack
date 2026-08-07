@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.0 - 2026-08-07
+
 - SP DCI `response_schema_path` schemas compile under a schema compiler that
   carries JSON Schema drafts 4, 6, 7, and 2020-12 and resolves no remote or file
   references. A schema declaring 2020-12 in `$schema` is compiled as 2020-12,
