@@ -1159,6 +1159,9 @@ fn evaluate_fixture_acquisition(
                 )
                 .map(KernelOutcome::Match))
         }
+        AcquisitionConfig::SearchThenFetchSet { .. } => {
+            Err(CliError("fetch-set fixture evaluation is not implemented"))
+        }
     }
 }
 
@@ -1567,6 +1570,13 @@ async fn evaluate_reference_fixture(
                     .await?,
                     2,
                 )
+            }
+            // Reference fixtures replay one transport expectation per named
+            // call, and the fetch-set form has no reference-fixture shape.
+            AcquisitionConfig::SearchThenFetchSet { .. } => {
+                return Err(CliError(
+                    "fetch-set requirements have no reference fixture form",
+                ));
             }
         };
         if let Some(values) = values {
@@ -2292,6 +2302,11 @@ fn validate_reference_parameter_mutation(
     let (reference_field, fixture_field) = match &disposable_requirement.acquisition {
         AcquisitionConfig::Single { .. } => ("response", "source"),
         AcquisitionConfig::SearchThenFetch { .. } => ("responses", "sources"),
+        AcquisitionConfig::SearchThenFetchSet { .. } => {
+            return Err(CliError(
+                "fetch-set requirements have no reference fixture form",
+            ))
+        }
     };
     let response = positive
         .get(reference_field)

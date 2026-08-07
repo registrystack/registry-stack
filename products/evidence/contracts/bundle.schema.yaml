@@ -63,6 +63,15 @@ properties:
     maxProperties: 128
     propertyNames: {$ref: '#/$defs/local-id'}
     additionalProperties: {$ref: '#/$defs/authority-profile'}
+  acquisitionCapabilities:
+    # Acquisition kinds this bundle opts in to beyond the single fixed call.
+    # A kind absent from this list cannot be served, so a bundle written
+    # before a form existed keeps serving exactly what it served before.
+    type: array
+    minItems: 1
+    maxItems: 3
+    uniqueItems: true
+    items: {enum: [single, search-then-fetch, search-then-fetch-set]}
   requirements:
     type: array
     minItems: 1
@@ -511,6 +520,32 @@ $defs:
           kind: {const: search-then-fetch}
           search: {$ref: '#/$defs/local-id'}
           fetch: {$ref: '#/$defs/local-id'}
+      # One search followed by the declared fetch members, executed in the
+      # order they appear. Each member reads only the search facts it lists,
+      # and the budget covers the whole acquisition.
+      - type: object
+        additionalProperties: false
+        required: [kind, search, fetch, maximumAcquisitionMilliseconds]
+        properties:
+          kind: {const: search-then-fetch-set}
+          search: {$ref: '#/$defs/local-id'}
+          fetch:
+            type: array
+            minItems: 2
+            maxItems: 4
+            items:
+              type: object
+              additionalProperties: false
+              required: [source, factInputs]
+              properties:
+                source: {$ref: '#/$defs/local-id'}
+                factInputs:
+                  type: array
+                  minItems: 1
+                  maxItems: 16
+                  uniqueItems: true
+                  items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          maximumAcquisitionMilliseconds: {type: integer, minimum: 1, maximum: 30000}
   requirement:
     type: object
     additionalProperties: false
