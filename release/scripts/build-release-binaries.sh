@@ -53,6 +53,7 @@ docker run --rm \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
   --env RELEASE_TAG="${tag}" \
+  --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RELAY_FEATURES="${relay_release_features}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   "${release_builder_image}" \

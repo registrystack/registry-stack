@@ -33,6 +33,21 @@ The proof excludes native macOS and Linux arm64 Registryctl binaries,
 environment independence, generated SBOM or scan bytes, signatures,
 provenance envelopes, and documentation archives.
 
+## Release build marker
+
+`release/scripts/build-release-binaries.sh` sets `REGISTRY_RELEASE_TAG` to the
+exact release tag. That marker is what makes an executable report the bare
+released version, such as `registryctl 0.17.0`. A build without it reports a
+development version, such as `registryctl 0.17.0-dev`, so an executable built
+from the same source revision outside the release cannot be mistaken for the
+published one.
+
+A rebuild must therefore go through that script, as this workflow does.
+`cargo build --release` over the same source produces a development version and
+different bytes, which is a different build rather than a failed reproduction.
+`registry-release verify-registryctl-binary-version` rejects a payload built
+without the marker.
+
 ## OpenSSF Silver claim boundary
 
 The OpenSSF `build_repeatable` answer is supportable only while the latest
