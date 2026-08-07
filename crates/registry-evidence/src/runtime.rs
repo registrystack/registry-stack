@@ -1041,6 +1041,9 @@ impl EvidenceRuntime {
                     }
                 }
             }
+            AcquisitionConfig::SearchThenFetchSet { .. } => {
+                return Err(failure(ProblemCode::ServiceUnavailable, "requirement"));
+            }
         };
         let observed_at = evaluation_time.unwrap_or_else(Utc::now);
         let derivation_selectors =

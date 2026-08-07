@@ -355,6 +355,13 @@ pub struct EvidenceConfig {
     pub selector_profiles: OrderedMap<SelectorProfile>,
     pub sources: OrderedMap<SourceConfig>,
     pub authority_profiles: OrderedMap<AuthorityProfile>,
+    /// Acquisition kinds this bundle opts in to beyond the single fixed call.
+    /// A kind absent from this list cannot be served, so an existing bundle
+    /// keeps serving exactly what it served before. The list is omitted when
+    /// empty because the projected configuration is what a requirement's
+    /// `configurationRevision` digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acquisition_capabilities: Vec<String>,
     pub requirements: Vec<RequirementConfig>,
 }
 
@@ -476,7 +483,40 @@ impl EvidenceConfig {
             }
         }
 
+        self.validate_acquisition_capabilities()?;
         self.validate_cross_references()
+    }
+
+    /// A bundle serves the fetch-set acquisition only where it declared it, so
+    /// adding the form to the runtime cannot widen what an already-deployed
+    /// bundle does. The forms that predate the declaration keep serving
+    /// without one.
+    fn validate_acquisition_capabilities(&self) -> Result<(), ConfigError> {
+        validate_len(
+            self.acquisition_capabilities.len(),
+            0,
+            ACQUISITION_KINDS.len(),
+            "bundle acquisition capabilities",
+        )?;
+        let mut declared = BTreeSet::new();
+        for capability in &self.acquisition_capabilities {
+            if !ACQUISITION_KINDS.contains(&capability.as_str()) {
+                return invalid("bundle acquisition capabilities name an unknown acquisition kind");
+            }
+            if !declared.insert(capability.as_str()) {
+                return invalid("bundle acquisition capabilities must be unique");
+            }
+        }
+        for requirement in &self.requirements {
+            if matches!(
+                requirement.acquisition,
+                AcquisitionConfig::SearchThenFetchSet { .. }
+            ) && !declared.contains(requirement.acquisition.kind_name())
+            {
+                return invalid("requirement acquisition kind is not a declared bundle capability");
+            }
+        }
+        Ok(())
     }
 
     /// Return the complete selector tuple sets that an authorized request may
@@ -578,7 +618,7 @@ impl EvidenceConfig {
         let fetch_sources = self
             .requirements
             .iter()
-            .filter_map(|requirement| requirement.acquisition.fetch_source())
+            .flat_map(|requirement| requirement.acquisition.fetch_sources())
             .collect::<BTreeSet<_>>();
         for (source_id, source) in self.sources.iter() {
             if initial_sources.contains(source_id) && source.request.selector_inputs.is_empty() {
@@ -2291,16 +2331,40 @@ pub enum ValueOrigin {
     Request,
 }
 
+/// The closed set of acquisition kind names a bundle may declare as a
+/// capability, in the order the forms were added.
+const ACQUISITION_KINDS: [&str; 3] = ["single", "search-then-fetch", "search-then-fetch-set"];
+
+const MINIMUM_FETCH_SET_MEMBERS: usize = 2;
+const MAXIMUM_FETCH_SET_MEMBERS: usize = 4;
+const MAXIMUM_FETCH_SET_FACT_INPUTS: usize = 16;
+/// The ceiling on the whole fetch-set acquisition, matching the ceiling one
+/// source request already carries.
+const MAXIMUM_ACQUISITION_MILLISECONDS: u64 = 30_000;
+
 /// The complete bounded evidence-data acquisition profile for one requirement.
 ///
 /// Each named source remains one immutable HTTP request. `search-then-fetch`
-/// is the only multi-call form and therefore fixes the acquisition ceiling at
-/// two calls without introducing a general workflow or source-planning model.
+/// and `search-then-fetch-set` are the only multi-call forms, and each names
+/// every call it may make in configuration, so the acquisition ceiling stays
+/// fixed at read time without introducing a general workflow or
+/// source-planning model.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AcquisitionConfig {
-    Single { source: String },
-    SearchThenFetch { search: String, fetch: String },
+    Single {
+        source: String,
+    },
+    SearchThenFetch {
+        search: String,
+        fetch: String,
+    },
+    SearchThenFetchSet {
+        search: String,
+        fetch: Vec<FetchSetMember>,
+        #[serde(rename = "maximumAcquisitionMilliseconds")]
+        maximum_acquisition_milliseconds: u64,
+    },
 }
 
 impl AcquisitionConfig {
@@ -2316,6 +2380,40 @@ impl AcquisitionConfig {
                     return invalid("search-then-fetch source identifiers are invalid");
                 }
             }
+            Self::SearchThenFetchSet {
+                search,
+                fetch,
+                maximum_acquisition_milliseconds,
+            } => {
+                if fetch.len() < MINIMUM_FETCH_SET_MEMBERS {
+                    return invalid("requirement acquisition declares too few fetch members");
+                }
+                if fetch.len() > MAXIMUM_FETCH_SET_MEMBERS {
+                    return invalid("requirement acquisition declares too many fetch members");
+                }
+                if !valid_local_id(search)
+                    || fetch.iter().any(|member| !valid_local_id(&member.source))
+                {
+                    return invalid("search-then-fetch-set source identifiers are invalid");
+                }
+                let mut members = BTreeSet::new();
+                for member in fetch {
+                    if !members.insert(member.source.as_str()) {
+                        return invalid("requirement acquisition fetch members must be distinct");
+                    }
+                    if &member.source == search {
+                        return invalid(
+                            "requirement acquisition fetch member repeats the search source",
+                        );
+                    }
+                    member.validate()?;
+                }
+                if !(1..=MAXIMUM_ACQUISITION_MILLISECONDS)
+                    .contains(maximum_acquisition_milliseconds)
+                {
+                    return invalid("requirement acquisition budget is outside Version 1 bounds");
+                }
+            }
         }
         Ok(())
     }
@@ -2326,6 +2424,9 @@ impl AcquisitionConfig {
             Self::SearchThenFetch { search, fetch } => {
                 vec![search.as_str(), fetch.as_str()]
             }
+            Self::SearchThenFetchSet { search, fetch, .. } => std::iter::once(search.as_str())
+                .chain(fetch.iter().map(|member| member.source.as_str()))
+                .collect(),
         }
     }
 
@@ -2336,14 +2437,166 @@ impl AcquisitionConfig {
     pub fn initial_source(&self) -> &str {
         match self {
             Self::Single { source } => source,
-            Self::SearchThenFetch { search, .. } => search,
+            Self::SearchThenFetch { search, .. } | Self::SearchThenFetchSet { search, .. } => {
+                search
+            }
         }
     }
 
-    pub fn fetch_source(&self) -> Option<&str> {
+    /// The sources this acquisition reaches after its search has resolved, and
+    /// therefore the only sources that may bind a prior fact into a request.
+    pub fn fetch_sources(&self) -> Vec<&str> {
         match self {
-            Self::Single { .. } => None,
-            Self::SearchThenFetch { fetch, .. } => Some(fetch),
+            Self::Single { .. } => Vec::new(),
+            Self::SearchThenFetch { fetch, .. } => vec![fetch.as_str()],
+            Self::SearchThenFetchSet { fetch, .. } => {
+                fetch.iter().map(|member| member.source.as_str()).collect()
+            }
+        }
+    }
+
+    /// The ordered acquisition this requirement performs, read from
+    /// configuration alone: no request, no response, and no clock take part.
+    /// Every form describes itself the same way, so the runtime, the offline
+    /// fixture harness, and adopter tooling read one derivation of the order
+    /// and of what each stage may carry, rather than three that can drift.
+    pub fn plan(&self) -> AcquisitionPlan {
+        let stage = |source: &String, role, inputs| PlannedStage {
+            source: source.clone(),
+            role,
+            inputs,
+        };
+        match self {
+            Self::Single { source } => AcquisitionPlan {
+                stages: vec![stage(source, StageRole::Search, StageInputs::None)],
+                budget_milliseconds: None,
+            },
+            Self::SearchThenFetch { search, fetch } => AcquisitionPlan {
+                stages: vec![
+                    stage(search, StageRole::Search, StageInputs::None),
+                    stage(fetch, StageRole::Member, StageInputs::EveryPriorFact),
+                ],
+                budget_milliseconds: None,
+            },
+            Self::SearchThenFetchSet {
+                search,
+                fetch,
+                maximum_acquisition_milliseconds,
+            } => AcquisitionPlan {
+                stages: std::iter::once(stage(search, StageRole::Search, StageInputs::None))
+                    .chain(fetch.iter().map(|member| {
+                        stage(
+                            &member.source,
+                            StageRole::Member,
+                            StageInputs::Declared(member.fact_inputs.clone()),
+                        )
+                    }))
+                    .collect(),
+                budget_milliseconds: Some(*maximum_acquisition_milliseconds),
+            },
+        }
+    }
+
+    /// The configured kind name, which a bundle must declare as an acquisition
+    /// capability before a deployment may serve this requirement.
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Single { .. } => "single",
+            Self::SearchThenFetch { .. } => "search-then-fetch",
+            Self::SearchThenFetchSet { .. } => "search-then-fetch-set",
+        }
+    }
+}
+
+/// One declared member of a fetch set: a source, and the closed allowlist of
+/// search facts that member's request may read.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FetchSetMember {
+    pub source: String,
+    pub fact_inputs: Vec<String>,
+}
+
+impl FetchSetMember {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.fact_inputs.is_empty() {
+            return invalid("requirement acquisition fetch member declares no fact inputs");
+        }
+        if self.fact_inputs.len() > MAXIMUM_FETCH_SET_FACT_INPUTS {
+            return invalid("requirement acquisition fetch member declares too many fact inputs");
+        }
+        let mut names = BTreeSet::new();
+        for name in &self.fact_inputs {
+            if !valid_field_name(name) {
+                return invalid("requirement acquisition fetch member fact input is invalid");
+            }
+            if !names.insert(name.as_str()) {
+                return invalid("requirement acquisition fetch member fact inputs must be unique");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The complete ordered acquisition one requirement performs, as a value that
+/// can be printed, compared, and tested without executing anything.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct AcquisitionPlan {
+    pub stages: Vec<PlannedStage>,
+    /// The ceiling on the whole acquisition, where the form declares one. The
+    /// forms that predate the declaration bound each call on its own.
+    pub budget_milliseconds: Option<u64>,
+}
+
+/// One planned source call: which source, why it is called, and what an
+/// earlier stage's facts may contribute to its request.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PlannedStage {
+    pub source: String,
+    pub role: StageRole,
+    pub inputs: StageInputs,
+}
+
+/// Whether a stage resolves the subject or reads a resolved reference.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StageRole {
+    Search,
+    Member,
+}
+
+/// What an earlier stage's facts may contribute to one stage's request.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum StageInputs {
+    /// Nothing, because no stage has run yet.
+    None,
+    /// Every fact the preceding stage produced. This is `search-then-fetch` as
+    /// Version 1 froze it, and the reason that form stops at one fetch.
+    EveryPriorFact,
+    /// Only the named search facts, in the order the member declared them.
+    Declared(Vec<String>),
+}
+
+impl StageInputs {
+    /// Narrow the facts an earlier stage produced to what this stage declared.
+    /// For a declared allowlist every name is a required search fact, proven
+    /// when the bundle validated its fact schemas, so a missing name is
+    /// impossible here rather than tolerated: the projection carries no
+    /// failure mode of its own.
+    pub fn project(
+        &self,
+        prior_facts: &BTreeMap<String, serde_json::Value>,
+    ) -> BTreeMap<String, serde_json::Value> {
+        match self {
+            Self::None => BTreeMap::new(),
+            Self::EveryPriorFact => prior_facts.clone(),
+            Self::Declared(names) => names
+                .iter()
+                .filter_map(|name| {
+                    prior_facts
+                        .get(name)
+                        .map(|value| (name.clone(), value.clone()))
+                })
+                .collect(),
         }
     }
 }
@@ -5163,5 +5416,480 @@ outboundTls:
         let noncanonical = format!("{}B", "A".repeat(42));
         assert_eq!(noncanonical.len(), 43);
         assert!(validate_key_identifiers(&[noncanonical], 33, "revoked keys").is_err());
+    }
+
+    /// Two declared fetch members, each the ordinary fixed request every
+    /// Version 1 source already is, bound to the reference the search resolved.
+    const MEMBER_SOURCES: &str = r#"  source-e:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-e-token}
+    request:
+      method: GET
+      pathTemplate: /v1/first/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/first-member-prepare.rhai
+      adapterParameters: {profile: first}
+      adapterParametersSchema: schemas/first-member-adapter-parameters.schema.yaml
+      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+      projection: [/total]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/first-member-response.schema.yaml
+    extractScript: adapters/first-member-source.rhai
+    factSchema: schemas/first-member-facts.schema.yaml
+  source-f:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-f-token}
+    request:
+      method: GET
+      pathTemplate: /v1/second/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/second-member-prepare.rhai
+      adapterParameters: {profile: second}
+      adapterParametersSchema: schemas/second-member-adapter-parameters.schema.yaml
+      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+      projection: [/total]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/second-member-response.schema.yaml
+    extractScript: adapters/second-member-source.rhai
+    factSchema: schemas/second-member-facts.schema.yaml
+  source-b:
+"#;
+
+    const DECLARED_ACQUISITION: &str = "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n";
+
+    const DECLARED_MEMBERS: &str = "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n";
+
+    const FIRST_MEMBER: &str = "        - {source: source-e, factInputs: [record_id]}\n";
+
+    /// One acceptance bundle rewritten into the declared fetch-set profile: the
+    /// bundle declares the capability, and the first requirement resolves one
+    /// reference through its search and reads that reference through two
+    /// declared members.
+    fn fetch_set_bundle() -> String {
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let declared = yaml.replace(
+            "\nselectorProfiles:\n",
+            "\nacquisitionCapabilities: [search-then-fetch-set]\n\nselectorProfiles:\n",
+        );
+        assert_ne!(declared, yaml, "the capability declaration applies");
+        let acquired = declared.replace(
+            "    acquisition:\n      kind: single\n      source: source-a\n",
+            DECLARED_ACQUISITION,
+        );
+        assert_ne!(acquired, declared, "the fetch-set acquisition applies");
+        let members = acquired.replace("  source-b:\n", MEMBER_SOURCES);
+        assert_ne!(members, acquired, "the declared members apply");
+        members
+    }
+
+    #[test]
+    fn fetch_set_acquisition_requires_two_to_four_distinct_configured_members() {
+        let yaml = fetch_set_bundle();
+        let validator = bundle_contract_validator();
+        EvidenceConfig::parse_yaml(yaml.as_bytes()).expect("the declared fetch set validates");
+        assert!(
+            validator.is_valid(&bundle_contract_instance(yaml.as_bytes())),
+            "the contract rejects the declared fetch set"
+        );
+
+        // The contract closes the shape and the width; the identity relations
+        // between the declared members and the search belong to the parser,
+        // which is the only side that can read one identifier against another.
+        for (members, expected, contract_accepts) in [
+            (
+                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n",
+                "requirement acquisition declares too few fetch members",
+                false,
+            ),
+            (
+                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n        - {source: source-g, factInputs: [record_id]}\n        - {source: source-h, factInputs: [record_id]}\n        - {source: source-i, factInputs: [record_id]}\n",
+                "requirement acquisition declares too many fetch members",
+                false,
+            ),
+            (
+                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-e, factInputs: [record_namespace]}\n",
+                "requirement acquisition fetch members must be distinct",
+                true,
+            ),
+            (
+                "      fetch:\n        - {source: source-a, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
+                "requirement acquisition fetch member repeats the search source",
+                true,
+            ),
+            (
+                "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n        - {source: source-z, factInputs: [record_id]}\n",
+                "requirement acquisition references an unknown source",
+                true,
+            ),
+            (
+                "      fetch:\n        - {source: Source-E, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
+                "search-then-fetch-set source identifiers are invalid",
+                false,
+            ),
+        ] {
+            let mutated = yaml.replace(DECLARED_MEMBERS, members);
+            assert_ne!(mutated, yaml, "{expected}");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).err(),
+                Some(ConfigError::Invalid(expected)),
+                "{expected}"
+            );
+            assert_eq!(
+                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                contract_accepts,
+                "{expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn fetch_set_acquisition_requires_a_budget_inside_the_declared_range() {
+        let yaml = fetch_set_bundle();
+        let validator = bundle_contract_validator();
+        for (budget, accepted) in [(0, false), (1, true), (30_000, true), (30_001, false)] {
+            let mutated = yaml.replace(
+                "      maximumAcquisitionMilliseconds: 8000\n",
+                &format!("      maximumAcquisitionMilliseconds: {budget}\n"),
+            );
+            assert_ne!(mutated, yaml, "{budget}");
+            let parsed = EvidenceConfig::parse_yaml(mutated.as_bytes());
+            if accepted {
+                parsed.unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
+            } else {
+                assert_eq!(
+                    parsed.err(),
+                    Some(ConfigError::Invalid(
+                        "requirement acquisition budget is outside Version 1 bounds"
+                    )),
+                    "{budget}"
+                );
+            }
+            assert_eq!(
+                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                accepted,
+                "the contract disagrees with startup validation at {budget}"
+            );
+        }
+    }
+
+    #[test]
+    fn fetch_set_acquisition_requires_a_non_empty_fact_input_allowlist() {
+        let yaml = fetch_set_bundle();
+        let validator = bundle_contract_validator();
+        let excessive = (0..17)
+            .map(|index| format!("input_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for (member, expected) in [
+            (
+                "        - {source: source-e, factInputs: []}\n".to_owned(),
+                "requirement acquisition fetch member declares no fact inputs",
+            ),
+            (
+                format!("        - {{source: source-e, factInputs: [{excessive}]}}\n"),
+                "requirement acquisition fetch member declares too many fact inputs",
+            ),
+            (
+                "        - {source: source-e, factInputs: [record_id, record_id]}\n".to_owned(),
+                "requirement acquisition fetch member fact inputs must be unique",
+            ),
+            (
+                "        - {source: source-e, factInputs: [Record_Id]}\n".to_owned(),
+                "requirement acquisition fetch member fact input is invalid",
+            ),
+        ] {
+            let mutated = yaml.replace(FIRST_MEMBER, &member);
+            assert_ne!(mutated, yaml, "{expected}");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).err(),
+                Some(ConfigError::Invalid(expected)),
+                "{expected}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                "the contract accepted an allowlist startup validation refuses: {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn fetch_set_acquisition_must_be_declared_in_bundle_acquisition_capabilities() {
+        let yaml = fetch_set_bundle();
+        let validator = bundle_contract_validator();
+        for (capabilities, expected, contract_accepts) in [
+            (
+                "",
+                Some("requirement acquisition kind is not a declared bundle capability"),
+                true,
+            ),
+            (
+                "acquisitionCapabilities: [search-then-fetch-sets]\n",
+                Some("bundle acquisition capabilities name an unknown acquisition kind"),
+                false,
+            ),
+            (
+                "acquisitionCapabilities: [search-then-fetch-set, search-then-fetch-set]\n",
+                Some("bundle acquisition capabilities must be unique"),
+                false,
+            ),
+            (
+                "acquisitionCapabilities: [single, search-then-fetch, search-then-fetch-set]\n",
+                None,
+                true,
+            ),
+        ] {
+            let mutated = yaml.replace(
+                "acquisitionCapabilities: [search-then-fetch-set]\n",
+                capabilities,
+            );
+            assert_ne!(mutated, yaml, "{capabilities}");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes())
+                    .err()
+                    .map(|error| match error {
+                        ConfigError::Invalid(cause) => cause,
+                        other => panic!("{capabilities} failed for another reason: {other}"),
+                    }),
+                expected,
+                "{capabilities}"
+            );
+            assert_eq!(
+                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                contract_accepts,
+                "{capabilities}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_contract_closes_the_fetch_set_acquisition_form() {
+        let yaml = fetch_set_bundle();
+        let validator = bundle_contract_validator();
+        for (acquisition, reason) in [
+            (
+                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
+                "the budget is required",
+            ),
+            (
+                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id], order: 1}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
+                "a member declares only its source and its fact inputs",
+            ),
+            (
+                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n      concurrent: true\n",
+                "the acquisition form is closed",
+            ),
+            (
+                "    acquisition:\n      kind: search-then-fetch-sets\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
+                "the kind vocabulary is closed",
+            ),
+        ] {
+            let mutated = yaml.replace(DECLARED_ACQUISITION, acquisition);
+            assert_ne!(mutated, yaml, "{reason}");
+            assert!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
+                "{reason}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn fetch_set_members_are_the_acquisitions_fetch_sources() {
+        let yaml = fetch_set_bundle();
+        let config =
+            EvidenceConfig::parse_yaml(yaml.as_bytes()).expect("the declared fetch set validates");
+        let requirement = &config.requirements[0];
+        assert_eq!(requirement.acquisition.initial_source(), "source-a");
+        assert_eq!(
+            requirement.acquisition.source_ids(),
+            vec!["source-a", "source-e", "source-f"]
+        );
+        assert_eq!(
+            requirement.acquisition.fetch_sources(),
+            vec!["source-e", "source-f"]
+        );
+        assert!(requirement.acquisition.uses_source("source-f"));
+        assert!(!requirement.acquisition.uses_source("source-b"));
+        assert_eq!(
+            config.requirement_acquisition_posture(&requirement.id),
+            Some(AcquisitionPosture::FieldProjected)
+        );
+
+        // The members are the only sources this bundle fetches, so returning
+        // the requirement to one call leaves their prior-fact bindings on
+        // sources nothing fetches, which is the refusal that proves members
+        // carry the fetch-source rule rather than escaping it.
+        let unfetched = yaml.replace(
+            DECLARED_ACQUISITION,
+            "    acquisition:\n      kind: single\n      source: source-a\n",
+        );
+        assert_ne!(unfetched, yaml, "the single-call rewrite applies");
+        assert_eq!(
+            EvidenceConfig::parse_yaml(unfetched.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "prior-fact path bindings are permitted only on fetch sources"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_fetch_set_member_receives_only_its_declared_fact_inputs() {
+        let search_facts = BTreeMap::from([
+            (
+                "record_id".to_owned(),
+                serde_json::json!("urn:example:fixture:record:1"),
+            ),
+            (
+                "record_namespace".to_owned(),
+                serde_json::json!("urn:example:fixture:namespace"),
+            ),
+        ]);
+        let declared = StageInputs::Declared(vec!["record_id".to_owned()]);
+        assert_eq!(
+            declared.project(&search_facts),
+            BTreeMap::from([(
+                "record_id".to_owned(),
+                serde_json::json!("urn:example:fixture:record:1")
+            )])
+        );
+
+        // The forms that predate the allowlist keep the inputs they froze: one
+        // call reads no prior fact, and the single fetch reads all of them.
+        assert!(StageInputs::None.project(&search_facts).is_empty());
+        assert_eq!(
+            StageInputs::EveryPriorFact.project(&search_facts),
+            search_facts
+        );
+    }
+
+    /// Every acquisition form describes itself as the same ordered value, so
+    /// the runtime, the offline fixture harness, and adopter tooling read one
+    /// derivation of the call order rather than three that can drift.
+    #[test]
+    fn every_acquisition_form_plans_its_stages_in_declared_order() {
+        let single = AcquisitionConfig::Single {
+            source: "source-a".to_owned(),
+        };
+        assert_eq!(
+            single.plan(),
+            AcquisitionPlan {
+                stages: vec![PlannedStage {
+                    source: "source-a".to_owned(),
+                    role: StageRole::Search,
+                    inputs: StageInputs::None,
+                }],
+                budget_milliseconds: None,
+            }
+        );
+
+        let chained = AcquisitionConfig::SearchThenFetch {
+            search: "source-a".to_owned(),
+            fetch: "source-b".to_owned(),
+        };
+        assert_eq!(
+            chained.plan(),
+            AcquisitionPlan {
+                stages: vec![
+                    PlannedStage {
+                        source: "source-a".to_owned(),
+                        role: StageRole::Search,
+                        inputs: StageInputs::None,
+                    },
+                    PlannedStage {
+                        source: "source-b".to_owned(),
+                        role: StageRole::Member,
+                        inputs: StageInputs::EveryPriorFact,
+                    },
+                ],
+                budget_milliseconds: None,
+            }
+        );
+
+        let config = EvidenceConfig::parse_yaml(fetch_set_bundle().as_bytes())
+            .expect("the fetch set parses");
+        let plan = config.requirements[0].acquisition.plan();
+        assert_eq!(
+            plan,
+            AcquisitionPlan {
+                stages: vec![
+                    PlannedStage {
+                        source: "source-a".to_owned(),
+                        role: StageRole::Search,
+                        inputs: StageInputs::None,
+                    },
+                    PlannedStage {
+                        source: "source-e".to_owned(),
+                        role: StageRole::Member,
+                        inputs: StageInputs::Declared(vec!["record_id".to_owned()]),
+                    },
+                    PlannedStage {
+                        source: "source-f".to_owned(),
+                        role: StageRole::Member,
+                        inputs: StageInputs::Declared(vec!["record_id".to_owned()]),
+                    },
+                ],
+                budget_milliseconds: Some(8000),
+            }
+        );
+
+        // The planned sources are the configured sources, in the order the
+        // requirement declared them, for every form.
+        for acquisition in [&single, &chained, &config.requirements[0].acquisition] {
+            assert_eq!(
+                acquisition
+                    .plan()
+                    .stages
+                    .iter()
+                    .map(|stage| stage.source.as_str())
+                    .collect::<Vec<_>>(),
+                acquisition.source_ids()
+            );
+        }
+    }
+
+    /// A requirement's `configurationRevision` is a digest of the projected
+    /// configuration, so a member every bundle serialized would move every
+    /// revision an existing deployment has already published.
+    #[test]
+    fn an_undeclared_acquisition_capability_stays_out_of_the_projected_configuration() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("the acceptance bundle validates");
+        assert!(config.acquisition_capabilities.is_empty());
+        let projected = serde_json::to_value(&config).expect("the configuration projects");
+        assert!(
+            projected.get("acquisitionCapabilities").is_none(),
+            "an undeclared capability list moves every existing configuration revision"
+        );
+
+        let declared = EvidenceConfig::parse_yaml(fetch_set_bundle().as_bytes())
+            .expect("the declared fetch set validates");
+        assert_eq!(
+            serde_json::to_value(&declared).expect("the configuration projects")
+                ["acquisitionCapabilities"],
+            serde_json::json!(["search-then-fetch-set"])
+        );
     }
 }

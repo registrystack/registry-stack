@@ -1064,10 +1064,17 @@ fn validate_prior_fact_bindings(
     schemas: &BTreeMap<String, JsonValue>,
 ) -> Result<(), BundleError> {
     for requirement in &config.requirements {
-        let crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } =
-            &requirement.acquisition
-        else {
-            continue;
+        // Exhaustive on purpose: a new acquisition form must state how its
+        // prior-fact bindings are proven, and refusing the bundle is the only
+        // safe answer until it does.
+        let (search, fetch) = match &requirement.acquisition {
+            crate::config::AcquisitionConfig::Single { .. } => continue,
+            crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } => (search, fetch),
+            crate::config::AcquisitionConfig::SearchThenFetchSet { .. } => {
+                return Err(invalid_artifact(
+                    "fetch-set fact schema validation is not implemented",
+                ))
+            }
         };
         let search_source = config
             .sources
