@@ -715,7 +715,14 @@ fn remaining(limit: Duration, started: Instant) -> Option<Duration> {
 }
 
 fn runtime_failure_response(failure: RuntimeFailure, operation: &str) -> Response {
-    problem_response(failure.problem(), operation)
+    let mut response = problem_response(failure.problem(), operation);
+    // Stashed the same way `problem_response` stashes the public `ProblemCode`,
+    // so the observation layer can read the runtime's internal failure
+    // category back without reparsing public bytes.
+    response
+        .extensions_mut()
+        .insert(observability::FailureCategory(failure.category()));
+    response
 }
 
 fn problem_response(code: ProblemCode, operation: &str) -> Response {

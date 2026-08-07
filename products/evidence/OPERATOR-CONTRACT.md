@@ -547,7 +547,13 @@ invalid-selector failures remain operational-only and create no native audit
 event.
 
 Operational logs contain route templates, operation identifiers, duration,
-status category, and safe internal error categories only. Request bodies,
+status category, the public problem code, and safe internal error categories
+only. The internal category is narrower than the public problem code but is
+drawn from the same kind of fixed, closed set of service-chosen strings, and it
+collapses every unresolved outcome onto the one category the public contract
+also collapses them onto, so it is never a way to tell a record that was not
+found from one that matched more than once. A request that raises no failure
+logs a fixed placeholder in its place. Request bodies,
 selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
 excluded from logs, metrics, traces, snapshots, panics, and errors.
@@ -917,6 +923,11 @@ Before production exposure, the operator runs:
 evidence check
 evidence evaluate --fixture "<path>"
 ```
+
+`evaluate` also accepts `--explain`, which prints the stages each fixture case
+reached beside the unchanged result. It is offline-only, reports member names,
+counts, identifiers, and declared forms rather than any value, and alters no
+outcome, exit code, or message. See the fixture reference for what it prints.
 
 All commands accept `--runtime <absolute-path>`. The same path may be supplied
 through `REGISTRY_EVIDENCE_RUNTIME`; the reference default is

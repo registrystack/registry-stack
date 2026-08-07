@@ -90,6 +90,158 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
     );
 }
 
+/// The exact unexplained success output of the acceptance fixture.
+///
+/// It is pinned as one literal rather than a prefix and a suffix, because the
+/// property under test is that asking for no trace produces this and nothing
+/// else. A shape assertion would pass with a trace printed in the middle.
+const UNEXPLAINED_SUCCESS: &str = "Evidence fixture passed (13 evaluated cases)\n";
+
+/// The message the mutated acceptance fixture fails with, trace or no trace.
+const MUTATED_FIXTURE_FAILURE: &str =
+    "evidence: fixture kernel failure did not match its public problem\n";
+
+/// Turn one acceptance case into a case whose stated outcome cannot happen.
+///
+/// The record is absent, so the lookup can only be unresolved, while the case
+/// now claims a unique match. This is the ordinary authoring mistake `--explain`
+/// exists for: the fixed message names the contract that broke, and only the
+/// trace can say the extraction never found a record to begin with.
+fn state_an_impossible_lookup(deployment: &Deployment) {
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "{id: no-match, source: {total: 0}, expected_lookup: no_match,",
+        "{id: no-match, source: {total: 0}, expected_lookup: match,",
+    );
+}
+
+#[test]
+fn an_unexplained_fixture_run_prints_the_summary_line_and_nothing_else() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&[]);
+    assert!(output.status.success(), "fixture evaluation failed");
+    assert!(output.stderr.is_empty(), "fixture evaluation wrote stderr");
+    assert_eq!(
+        std::str::from_utf8(&output.stdout).expect("stdout is UTF-8"),
+        UNEXPLAINED_SUCCESS
+    );
+}
+
+#[test]
+fn explaining_a_passing_fixture_keeps_its_exit_code_and_keeps_its_summary_line() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain"]);
+    assert!(output.status.success(), "explained evaluation failed");
+    assert!(
+        output.stderr.is_empty(),
+        "explained evaluation wrote stderr"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.ends_with(UNEXPLAINED_SUCCESS),
+        "the summary line changed: {stdout}"
+    );
+    assert!(stdout.contains("case: positive\n"), "{stdout}");
+    assert!(stdout.contains("-> case passed\n"), "{stdout}");
+    for stage in [
+        "prepare", "acquire", "extract", "derive", "validate", "expect", "sign",
+    ] {
+        assert!(stdout.contains(stage), "the trace never named {stage}");
+    }
+}
+
+/// The trace names shapes, never values.
+///
+/// The acceptance fixture states the selector values its diagnostics may never
+/// disclose. They are synthetic, but a trace that reprints them is a trace that
+/// would reprint a real one from a bundle authored the same way.
+#[test]
+fn an_explained_fixture_run_discloses_no_protected_selector_value() {
+    let deployment = Deployment::stage("adult-status");
+    let passing = deployment.evaluate(&["--explain"]);
+    state_an_impossible_lookup(&deployment);
+    let failing = deployment.evaluate(&["--explain"]);
+    for output in [&passing, &failing] {
+        let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+        for protected in ["Amina", "Diallo", "2000-01-01", "fixture-source-canary"] {
+            assert!(
+                !stdout.contains(protected),
+                "the trace disclosed protected input {protected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn explaining_a_failing_fixture_shows_where_the_case_stopped_and_keeps_its_message() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("Evidence fixture passed"),
+        "a failed run announced success: {stdout}"
+    );
+    assert!(stdout.contains("case: no-match\n"), "{stdout}");
+    assert!(stdout.contains("extract    no-match"), "{stdout}");
+    assert!(
+        stdout.contains("response keys available [\"total\"]"),
+        "the trace never named the response shape the script saw: {stdout}"
+    );
+    assert!(
+        stdout
+            .contains("-> case failed: fixture kernel failure did not match its public problem\n"),
+        "{stdout}"
+    );
+    // The cases before the mutated one are reported as reached and passed, so
+    // the trace says how far the run got and not only where it stopped.
+    assert!(stdout.contains("case: positive\n"), "{stdout}");
+}
+
+#[test]
+fn a_failing_fixture_run_is_unchanged_when_no_trace_is_asked_for() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&[]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "an unexplained failure wrote stdout"
+    );
+}
+
+/// The trace is an offline fixture diagnostic and reaches nothing else.
+///
+/// `serve` is the case that matters: a running service must have no way to be
+/// asked for a per-case breakdown of an evaluation.
+#[test]
+fn the_fixture_trace_is_offline_only_and_no_other_subcommand_accepts_it() {
+    let deployment = Deployment::stage("adult-status");
+    for command in ["serve", "check", "verify-audit"] {
+        let output = invoke(&deployment.path("runtime.yaml"), &[command, "--explain"]);
+        assert!(
+            !output.status.success(),
+            "{command} accepted the fixture trace flag"
+        );
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert!(
+            stderr.contains("unexpected argument '--explain'"),
+            "{command} did not reject the flag during parsing: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn local_relying_procedure_is_bearer_free_closed_and_selector_private() {
     let deployment = Deployment::stage("adult-status");
@@ -1425,6 +1577,16 @@ outboundTls:
     fn check(&self) -> Output {
         self.seal();
         let output = invoke(&self.path("runtime.yaml"), &["check"]);
+        self.unseal();
+        output
+    }
+
+    /// Evaluate the staged bundle's own fixture, with any extra arguments.
+    fn evaluate(&self, arguments: &[&str]) -> Output {
+        let mut invocation = vec!["evaluate", "--fixture", "fixtures/cases.yaml"];
+        invocation.extend_from_slice(arguments);
+        self.seal();
+        let output = invoke(&self.path("runtime.yaml"), &invocation);
         self.unseal();
         output
     }

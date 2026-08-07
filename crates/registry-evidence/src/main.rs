@@ -51,6 +51,7 @@ use registry_evidence::{
     source::{
         project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
     },
+    trace::{json_type, name_list, object_keys, FixtureTrace, Stage, StageStatus},
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
         EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
@@ -99,6 +100,16 @@ enum Command {
         /// Bundle-relative fixture path referenced by exactly one requirement.
         #[arg(long)]
         fixture: PathBuf,
+        /// Print the per-stage trace of what each case actually did.
+        ///
+        /// A failure names the contract that broke and nothing else, which says
+        /// that a case failed but never why. The trace says how far each case
+        /// got, what shape the response and facts had, and which declared
+        /// concept the output gate was checking. It reports shapes, counts, and
+        /// identifiers, never document values, and it never changes an outcome,
+        /// an exit code, or a message.
+        #[arg(long)]
+        explain: bool,
     },
     /// Internal Evidencectl seam for bundle-only semantic validation.
     #[command(hide = true)]
@@ -256,17 +267,30 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::Evaluate { fixture } => {
+        Command::Evaluate { fixture, explain } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|_| CliError("fixture bundle compilation failed"))?;
             let source_plans = compile_source_plans(&bundle.config, &runtime)?;
-            let summary = evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true).await?;
+            let mut trace = FixtureTrace::default();
+            let summary =
+                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true, &mut trace).await;
+            // The trace is printed before the failure is returned. The failure
+            // is a fixed message that says a case failed but never which one or
+            // why; `CliError` carries no dynamic payload and does not gain one
+            // here. Attributing that message to the case that was still running
+            // is what joins the two without changing either.
+            if explain {
+                if let Err(error) = &summary {
+                    trace.fail(error.0);
+                }
+                print!("{}", trace.render());
+            }
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
-                summary.evaluated_cases
+                summary?.evaluated_cases
             );
             Ok(ExitCode::SUCCESS)
         }
@@ -287,8 +311,18 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let kernel = OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|_| CliError("fixture bundle compilation failed"))?;
             let source_plans = compile_bundle_source_plans(&bundle.config)?;
-            let summary =
-                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false).await?;
+            // This hidden seam is driven by Evidencectl, which reports the
+            // command's own output. It records a trace and discards it rather
+            // than growing a second explained surface.
+            let summary = evaluate_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                &fixture,
+                false,
+                &mut FixtureTrace::default(),
+            )
+            .await?;
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
                 summary.evaluated_cases
@@ -861,6 +895,7 @@ async fn evaluate_fixture(
     source_plans: &BTreeMap<String, SourceExecutor>,
     fixture_path: &Path,
     exercise_signing: bool,
+    trace: &mut FixtureTrace,
 ) -> Result<FixtureSummary, CliError> {
     let signer = if exercise_signing {
         Some(offline_fixture_signer().await?)
@@ -910,6 +945,7 @@ async fn evaluate_fixture(
                 signer.as_ref(),
                 requirement,
                 object,
+                trace,
             )
             .await;
         }
@@ -937,6 +973,7 @@ async fn evaluate_fixture(
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && value.len() <= 128)
             .ok_or(CliError("fixture case identifier is invalid"))?;
+        trace.begin_case(id);
 
         if case.get("subjects").is_some() {
             require_expected(case, "pre-source-selector-rejection")?;
@@ -953,7 +990,13 @@ async fn evaluate_fixture(
                 }
                 Err(OfflineFixtureError::Authorization(_)) => {}
             }
+            trace.record(
+                Stage::Prepare,
+                StageStatus::Ok,
+                "the selector was refused before any source, as the case states",
+            );
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
         if let Some(expected_roles) = case.get("expected_subject_roles") {
@@ -993,6 +1036,21 @@ async fn evaluate_fixture(
             .map_err(|error| fixture_failure(error, "fixture subjects did not resolve"))?;
             let derivation_selectors =
                 fixture_selector_value(&resolved, &requirement.derivation.selector_inputs)?;
+            trace.record(
+                Stage::Prepare,
+                StageStatus::Ok,
+                format!(
+                    "selector roles {}, derivation selector roles {}",
+                    name_list(
+                        &resolved
+                            .subjects
+                            .iter()
+                            .map(|subject| subject.role.clone())
+                            .collect::<Vec<_>>()
+                    ),
+                    name_list(&object_keys(&derivation_selectors))
+                ),
+            );
             if let Some(expected) = case
                 .get("derivationSelectorInputs")
                 .or_else(|| common.and_then(|common| common.get("derivationSelectorInputs")))
@@ -1010,8 +1068,9 @@ async fn evaluate_fixture(
                 case,
                 &derivation_selectors,
                 observed_at,
+                trace,
             )?;
-            if let Some(values) = validate_case_outcome(id, case, outcome)? {
+            if let Some(values) = validate_case_outcome(case, outcome, trace)? {
                 successful_values.push(
                     sign_and_verify_fixture_evidence(
                         bundle,
@@ -1024,27 +1083,56 @@ async fn evaluate_fixture(
                     )
                     .await?,
                 );
+                trace.record(
+                    Stage::Sign,
+                    StageStatus::Ok,
+                    if signer.is_some() {
+                        "the payload was constructed, signed, and verified offline"
+                    } else {
+                        "the payload was constructed; this seam does not sign"
+                    },
+                );
             }
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
         if let Some(injected) = case.get("injected_derivation") {
-            validate_injected_rejection(kernel, &requirement.id, injected)?;
+            validate_injected_rejection(kernel, requirement, injected, trace)?;
             require_expected(case, "output-gate-rejection")?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
         if let Some(source_failure) = case.get("source_failure") {
             validate_source_failure(case, source_failure)?;
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Failed,
+                format!(
+                    "the source failed as {}, which the case states",
+                    source_failure.as_str().unwrap_or("an unnamed category")
+                ),
+            );
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
         if let Some(companion) = case.get("companion_bundle") {
             validate_companion_rejection(bundle, requirement, case, companion)?;
+            trace.record(
+                Stage::Prepare,
+                StageStatus::Ok,
+                format!(
+                    "the companion bundle {:?} was refused, as the case states",
+                    companion.as_str().unwrap_or_default()
+                ),
+            );
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
@@ -1056,6 +1144,13 @@ async fn evaluate_fixture(
     Ok(summary)
 }
 
+/// Run one case's acquisition, recording each stage it reaches.
+///
+/// The single-source branch runs extraction and derivation as two calls rather
+/// than the one `evaluate_with_selectors` that composes them. That composition
+/// is exactly extraction then derivation, so both the outcome and every error
+/// value are unchanged; splitting it is what lets the lookup result and the
+/// fact shape be recorded between the two.
 fn evaluate_fixture_acquisition(
     bundle: &Bundle,
     kernel: &OfflineKernel,
@@ -1063,6 +1158,7 @@ fn evaluate_fixture_acquisition(
     case: &JsonMap<String, Value>,
     derivation_selectors: &Value,
     observed_at: DateTime<Utc>,
+    trace: &mut FixtureTrace,
 ) -> Result<Result<KernelOutcome, KernelError>, CliError> {
     let projection = || ValueProjection {
         audience: OFFLINE_AUDIENCE,
@@ -1082,16 +1178,44 @@ fn evaluate_fixture_acquisition(
                 .sources
                 .get(source)
                 .ok_or(CliError("fixture source is unavailable"))?;
-            Ok(match project_fixture_response(source_config, response) {
-                Ok(projected) => kernel.evaluate_with_selectors(
+            let projected = match project_fixture_response(source_config, response) {
+                Ok(projected) => projected,
+                Err(_) => {
+                    trace.record(
+                        Stage::Acquire,
+                        StageStatus::Failed,
+                        format!("source {source:?} response failed its declared projection"),
+                    );
+                    return Ok(Err(KernelError::SourceProtocol));
+                }
+            };
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Ok,
+                format!(
+                    "1 response from source {source:?}, projected keys {}",
+                    name_list(&object_keys(&projected))
+                ),
+            );
+            let facts = match record_lookup(
+                trace,
+                kernel.extract(&requirement.id, &projected),
+                &projected,
+            ) {
+                Ok(facts) => facts,
+                Err(outcome) => return Ok(outcome),
+            };
+            Ok(record_derivation(
+                trace,
+                kernel.derive_and_validate_with_selectors(
                     &requirement.id,
-                    &projected,
+                    &facts,
                     derivation_selectors,
                     observed_at,
                     projection(),
                 ),
-                Err(_) => Err(KernelError::SourceProtocol),
-            })
+                requirement,
+            ))
         }
         AcquisitionConfig::SearchThenFetch { search, fetch } => {
             if case.contains_key("source") {
@@ -1119,15 +1243,31 @@ fn evaluate_fixture_acquisition(
                     .ok_or(CliError("fixture search response is unavailable"))?,
             ) {
                 Ok(response) => response,
-                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+                Err(_) => {
+                    trace.record(
+                        Stage::Acquire,
+                        StageStatus::Failed,
+                        format!("search source {search:?} response failed its declared projection"),
+                    );
+                    return Ok(Err(KernelError::SourceProtocol));
+                }
             };
-            let search_facts =
-                match kernel.extract_source(search, &search_response, &BTreeMap::new()) {
-                    Ok(LookupResult::Match(facts)) => facts,
-                    Ok(LookupResult::NoMatch) => return Ok(Ok(KernelOutcome::NoMatch)),
-                    Ok(LookupResult::Ambiguous) => return Ok(Ok(KernelOutcome::Ambiguous)),
-                    Err(error) => return Ok(Err(error)),
-                };
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Ok,
+                format!(
+                    "search response from {search:?}, projected keys {}",
+                    name_list(&object_keys(&search_response))
+                ),
+            );
+            let search_facts = match record_lookup(
+                trace,
+                kernel.extract_source(search, &search_response, &BTreeMap::new()),
+                &search_response,
+            ) {
+                Ok(facts) => facts,
+                Err(outcome) => return Ok(outcome),
+            };
             let fetch_config = bundle
                 .config
                 .sources
@@ -1140,24 +1280,64 @@ fn evaluate_fixture_acquisition(
                     .ok_or(CliError("fixture fetch response is unavailable"))?,
             ) {
                 Ok(response) => response,
-                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
-            };
-            let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
-                Ok(LookupResult::Match(facts)) => facts,
-                Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
+                Err(_) => {
+                    trace.record(
+                        Stage::Acquire,
+                        StageStatus::Failed,
+                        format!("fetch source {fetch:?} response failed its declared projection"),
+                    );
                     return Ok(Err(KernelError::SourceProtocol));
                 }
-                Err(error) => return Ok(Err(error)),
             };
-            Ok(kernel
-                .derive_and_validate_with_selectors(
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Ok,
+                format!(
+                    "fetch response from {fetch:?}, projected keys {}",
+                    name_list(&object_keys(&fetch_response))
+                ),
+            );
+            let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
+                Ok(LookupResult::Match(facts)) => {
+                    trace.record(
+                        Stage::Extract,
+                        StageStatus::Ok,
+                        format!("fact keys {}", name_list(&fact_keys(&facts))),
+                    );
+                    facts
+                }
+                Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
+                    trace.record_with(
+                        Stage::Extract,
+                        StageStatus::Failed,
+                        "a fetch may only resolve uniquely, and this one did not",
+                        vec![format!(
+                            "fetch response keys available {}",
+                            name_list(&object_keys(&fetch_response))
+                        )],
+                    );
+                    return Ok(Err(KernelError::SourceProtocol));
+                }
+                Err(error) => {
+                    trace.record(
+                        Stage::Extract,
+                        StageStatus::Failed,
+                        format!("the fetch extraction failed: {error}"),
+                    );
+                    return Ok(Err(error));
+                }
+            };
+            Ok(record_derivation(
+                trace,
+                kernel.derive_and_validate_with_selectors(
                     &requirement.id,
                     &facts,
                     derivation_selectors,
                     observed_at,
                     projection(),
-                )
-                .map(KernelOutcome::Match))
+                ),
+                requirement,
+            ))
         }
         AcquisitionConfig::SearchThenFetchSet { .. } => {
             // The two frozen forms above read their sources from the config
@@ -1245,6 +1425,149 @@ fn evaluate_fixture_acquisition(
     }
 }
 
+/// Record one lookup, yielding either facts to carry on with or a settled
+/// outcome for the caller to return unchanged.
+///
+/// On an unresolved lookup the response members are the whole diagnosis: the
+/// script saw that shape and recognized nothing in it. `no_match` has no
+/// Rust-side cause to report, because it is only ever what the script returned.
+fn record_lookup(
+    trace: &mut FixtureTrace,
+    lookup: Result<LookupResult, KernelError>,
+    response: &Value,
+) -> Result<BTreeMap<String, Value>, Result<KernelOutcome, KernelError>> {
+    let available = vec![format!(
+        "response keys available {}",
+        name_list(&object_keys(response))
+    )];
+    match lookup {
+        Ok(LookupResult::Match(facts)) => {
+            trace.record(
+                Stage::Extract,
+                StageStatus::Ok,
+                format!("fact keys {}", name_list(&fact_keys(&facts))),
+            );
+            Ok(facts)
+        }
+        Ok(LookupResult::NoMatch) => {
+            trace.record_with(
+                Stage::Extract,
+                StageStatus::NoMatch,
+                "the extraction script reported no match",
+                available,
+            );
+            Err(Ok(KernelOutcome::NoMatch))
+        }
+        Ok(LookupResult::Ambiguous) => {
+            trace.record_with(
+                Stage::Extract,
+                StageStatus::Ambiguous,
+                "the extraction script reported more than one candidate",
+                available,
+            );
+            Err(Ok(KernelOutcome::Ambiguous))
+        }
+        Err(error) => {
+            trace.record_with(
+                Stage::Extract,
+                StageStatus::Failed,
+                format!("the extraction failed: {error}"),
+                available,
+            );
+            Err(Err(error))
+        }
+    }
+}
+
+/// Record derivation and the output gate, which share one collapsed error.
+///
+/// `KernelError::Output` is every output-gate rejection at once, so the gate's
+/// own reason cannot be recovered here. What can be said is which side failed
+/// and what the gate was checking against: the declared concepts, their forms,
+/// and whether each is required. That is where an author has to look.
+fn record_derivation(
+    trace: &mut FixtureTrace,
+    derived: Result<ValidatedValues, KernelError>,
+    requirement: &registry_evidence::config::RequirementConfig,
+) -> Result<KernelOutcome, KernelError> {
+    match derived {
+        Ok(values) => {
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                format!(
+                    "the derivation script produced {} value(s)",
+                    values.as_slice().len()
+                ),
+            );
+            trace.record(
+                Stage::Validate,
+                StageStatus::Ok,
+                format!(
+                    "the output gate accepted concepts {}",
+                    name_list(
+                        &values
+                            .as_slice()
+                            .iter()
+                            .map(|value| value.provides_value_for.clone())
+                            .collect::<Vec<_>>()
+                    )
+                ),
+            );
+            Ok(KernelOutcome::Match(values))
+        }
+        Err(KernelError::Output) => {
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                "the derivation script ran and returned values",
+            );
+            trace.record_with(
+                Stage::Validate,
+                StageStatus::Failed,
+                "the output gate rejected the derived values",
+                declared_concept_lines(requirement),
+            );
+            Err(KernelError::Output)
+        }
+        Err(error) => {
+            trace.record(
+                Stage::Derive,
+                StageStatus::Failed,
+                format!("the derivation failed: {error}"),
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Describe what the output gate checks each derived value against.
+fn declared_concept_lines(
+    requirement: &registry_evidence::config::RequirementConfig,
+) -> Vec<String> {
+    requirement
+        .concepts
+        .iter()
+        .map(|concept| {
+            format!(
+                "the gate requires concept {:?} in declared form {:?}{}",
+                concept.id,
+                concept.form,
+                if concept.required {
+                    ", and it is required"
+                } else {
+                    ", and it is optional"
+                }
+            )
+        })
+        .collect()
+}
+
+/// Name the members of an extracted fact set, never their values.
+fn fact_keys(facts: &BTreeMap<String, Value>) -> Vec<String> {
+    facts.keys().cloned().collect()
+}
+
 async fn evaluate_reference_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1252,6 +1575,7 @@ async fn evaluate_reference_fixture(
     signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
     fixture: &JsonMap<String, Value>,
+    trace: &mut FixtureTrace,
 ) -> Result<FixtureSummary, CliError> {
     require_exact_keys(
         fixture,
@@ -1333,6 +1657,7 @@ async fn evaluate_reference_fixture(
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty() && id.len() <= 128 && identifiers.insert(*id))
             .ok_or(CliError("reference fixture case identifier is invalid"))?;
+        trace.begin_case(id);
         let expected = case
             .get("expected")
             .and_then(Value::as_object)
@@ -1381,6 +1706,11 @@ async fn evaluate_reference_fixture(
             return Err(CliError("reference fixture case form is not closed"));
         }
         validate_reference_expectation_keys(selected_forms[0], expected)?;
+        trace.record(
+            Stage::Prepare,
+            StageStatus::Ok,
+            format!("the case is stated in the {:?} form", selected_forms[0]),
+        );
 
         if let Some(mutation) = case.get("bundleMutation").and_then(Value::as_str) {
             if mutation != "duplicate-disclosure-family"
@@ -1390,6 +1720,7 @@ async fn evaluate_reference_fixture(
             }
             validate_reference_bundle_mutation(bundle, requirement)?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
         if let Some(mutation) = case.get("requestMutation").and_then(Value::as_str) {
@@ -1402,6 +1733,7 @@ async fn evaluate_reference_fixture(
                 mutation,
             )?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
@@ -1434,6 +1766,7 @@ async fn evaluate_reference_fixture(
                 }
                 require_reference_request_count(expected, 0)?;
                 summary.evaluated_cases += 1;
+                trace.pass_case();
                 continue;
             }
             Err(_) => return Err(CliError("reference fixture request preparation failed")),
@@ -1473,6 +1806,7 @@ async fn evaluate_reference_fixture(
             }
             require_reference_request_count(expected, 1)?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
         let derivation_selectors =
@@ -1489,6 +1823,7 @@ async fn evaluate_reference_fixture(
         if let Some(failure) = case.get("sourceFailure").and_then(Value::as_str) {
             validate_reference_source_failure(failure, expected)?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
@@ -1500,6 +1835,7 @@ async fn evaluate_reference_fixture(
         if let Some(mutation) = case.get("derivationMutation").and_then(Value::as_str) {
             validate_reference_derivation_mutation(kernel, requirement, expected, mutation)?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
         if let Some(mutation) = case
@@ -1516,6 +1852,7 @@ async fn evaluate_reference_fixture(
                 expected,
             )?;
             summary.evaluated_cases += 1;
+            trace.pass_case();
             continue;
         }
 
@@ -1568,6 +1905,7 @@ async fn evaluate_reference_fixture(
                             validate_reference_error(expected, error, false)?;
                             require_reference_request_count(expected, 1)?;
                             summary.evaluated_cases += 1;
+                            trace.pass_case();
                             continue;
                         }
                     };
@@ -1576,12 +1914,14 @@ async fn evaluate_reference_fixture(
                         validate_reference_unresolved(expected, "no_match")?;
                         require_reference_request_count(expected, 1)?;
                         summary.evaluated_cases += 1;
+                        trace.pass_case();
                         continue;
                     }
                     LookupResult::Ambiguous => {
                         validate_reference_unresolved(expected, "ambiguous")?;
                         require_reference_request_count(expected, 1)?;
                         summary.evaluated_cases += 1;
+                        trace.pass_case();
                         continue;
                     }
                     LookupResult::Match(facts) => facts,
@@ -1628,6 +1968,7 @@ async fn evaluate_reference_fixture(
                             validate_reference_error(expected, KernelError::SourceProtocol, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
+                            trace.pass_case();
                             continue;
                         }
                         Ok(lookup) => lookup,
@@ -1635,6 +1976,7 @@ async fn evaluate_reference_fixture(
                             validate_reference_error(expected, error, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
+                            trace.pass_case();
                             continue;
                         }
                     };
@@ -1664,7 +2006,7 @@ async fn evaluate_reference_fixture(
         }
         require_reference_request_count(expected, source_request_count)?;
         summary.evaluated_cases += 1;
-        let _ = id;
+        trace.pass_case();
     }
 
     validate_reference_privacy(fixture, requirement, &successful_values)?;
@@ -2392,6 +2734,8 @@ fn validate_reference_parameter_mutation(
         .get(reference_field)
         .ok_or(CliError("reference positive response is unavailable"))?;
     let acquisition_case = JsonMap::from_iter([(fixture_field.to_owned(), response.clone())]);
+    // The stages here belong to a deliberately broken copy of the bundle, not
+    // to the case, so they are recorded and dropped rather than attributed.
     let outcome = evaluate_fixture_acquisition(
         &disposable,
         &kernel,
@@ -2399,6 +2743,7 @@ fn validate_reference_parameter_mutation(
         &acquisition_case,
         selectors,
         observed_at,
+        &mut FixtureTrace::default(),
     )?;
     match outcome {
         Err(error) => validate_reference_error(expected, error, true),
@@ -2531,14 +2876,37 @@ fn fixture_selector_value(
     Ok(Value::Object(selectors))
 }
 
+/// Say what a case declared for an optional boolean, including saying nothing.
+fn stated_flag(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unstated",
+    }
+}
+
 fn validate_case_outcome(
-    _case_id: &str,
     case: &serde_json::Map<String, Value>,
     outcome: Result<KernelOutcome, registry_evidence::kernel::KernelError>,
+    trace: &mut FixtureTrace,
 ) -> Result<Option<ValidatedValues>, CliError> {
     let derivation_runs = optional_boolean(case, "derivation_runs")?;
     let signed_success = optional_boolean(case, "signed_success")?;
     let expected_problem = optional_string(case, "expected_public_problem")?;
+    // What the case says it expects, beside what the pipeline just did. A
+    // mismatch between these two is the failure the fixed message reports, and
+    // the pipeline half of it is already recorded above this line.
+    trace.record(
+        Stage::Expect,
+        StageStatus::Ok,
+        format!(
+            "the case expects lookup {:?}, public problem {:?}, derivation run {}, signed success {}",
+            optional_string(case, "expected_lookup")?.unwrap_or("match"),
+            expected_problem.unwrap_or("none"),
+            stated_flag(derivation_runs),
+            stated_flag(signed_success)
+        ),
+    );
 
     if let Some(expected_lookup @ ("no_match" | "ambiguous")) =
         optional_string(case, "expected_lookup")?
@@ -2899,15 +3267,24 @@ fn collect_strings<'a>(value: &'a Value, output: &mut Vec<&'a str>) {
     }
 }
 
+/// Drive the output gate directly with values the case supplies, and record
+/// what the gate was given against what the bundle declared.
+///
+/// This is the one offline seam where the gate's own subject is fully in hand
+/// before the call: the value being judged and the form declared for it. The
+/// collapsed `KernelError::Output` hides the reason everywhere else, so the
+/// comparison is written down here rather than inferred from the error.
 fn validate_injected_rejection(
     kernel: &OfflineKernel,
-    requirement_id: &str,
+    requirement: &registry_evidence::config::RequirementConfig,
     injected: &Value,
+    trace: &mut FixtureTrace,
 ) -> Result<(), CliError> {
     let injected = injected
         .as_array()
         .ok_or(CliError("injected derivation fixture must be an array"))?;
     let mut derived = Vec::with_capacity(injected.len());
+    let mut compared = Vec::with_capacity(injected.len());
     for value in injected {
         let object = value
             .as_object()
@@ -2923,6 +3300,16 @@ fn validate_injected_rejection(
             .get("value")
             .cloned()
             .ok_or(CliError("injected derivation value is missing"))?;
+        let declared = requirement
+            .concepts
+            .iter()
+            .find(|concept| concept.id == concept_id)
+            .map(|concept| format!("declares form {:?}", concept.form))
+            .unwrap_or_else(|| "is not declared by this requirement".to_owned());
+        compared.push(format!(
+            "concept {concept_id:?} {declared}, and the injected value is a JSON {}",
+            json_type(&value)
+        ));
         derived.push(DerivedConceptValue {
             concept_id: concept_id.to_owned(),
             value: DerivedValue::Json(value),
@@ -2930,7 +3317,7 @@ fn validate_injected_rejection(
     }
     if kernel
         .validate_values(
-            requirement_id,
+            &requirement.id,
             derived,
             ValueProjection {
                 audience: OFFLINE_AUDIENCE,
@@ -2940,8 +3327,20 @@ fn validate_injected_rejection(
         )
         .is_ok()
     {
+        trace.record_with(
+            Stage::Validate,
+            StageStatus::Failed,
+            "the output gate accepted the injected values, which the case forbids",
+            compared,
+        );
         return Err(CliError("injected derivation was not rejected"));
     }
+    trace.record_with(
+        Stage::Validate,
+        StageStatus::Ok,
+        "the output gate refused the injected values, as the case states",
+        compared,
+    );
     Ok(())
 }
 
@@ -3223,18 +3622,23 @@ mod tests {
             "signed_success": false
         });
         let case = case.as_object().expect("object");
-        assert!(validate_case_outcome("case", case, Ok(KernelOutcome::NoMatch)).is_err());
         assert!(validate_case_outcome(
-            "case",
+            case,
+            Ok(KernelOutcome::NoMatch),
+            &mut FixtureTrace::default()
+        )
+        .is_err());
+        assert!(validate_case_outcome(
             case,
             Err(registry_evidence::kernel::KernelError::Script),
+            &mut FixtureTrace::default(),
         )
         .is_err());
         assert_eq!(
             validate_case_outcome(
-                "case",
                 case,
                 Err(registry_evidence::kernel::KernelError::Extraction),
+                &mut FixtureTrace::default(),
             ),
             Ok(None)
         );
@@ -3250,16 +3654,16 @@ mod tests {
         let case = case.as_object().expect("object");
         assert_eq!(
             validate_case_outcome(
-                "case",
                 case,
                 Err(registry_evidence::kernel::KernelError::Script),
+                &mut FixtureTrace::default(),
             ),
             Ok(None)
         );
         assert!(validate_case_outcome(
-            "case",
             case,
             Err(registry_evidence::kernel::KernelError::Extraction),
+            &mut FixtureTrace::default(),
         )
         .is_err());
     }
@@ -3279,9 +3683,9 @@ mod tests {
             }),
         ] {
             assert!(validate_case_outcome(
-                "case",
                 declaration.as_object().expect("object"),
                 Ok(KernelOutcome::NoMatch),
+                &mut FixtureTrace::default(),
             )
             .is_err());
         }
@@ -3471,6 +3875,7 @@ mod tests {
                     case.as_object().expect("case is an object"),
                     selectors,
                     observed_at,
+                    &mut FixtureTrace::default(),
                 ),
                 Ok(Err(KernelError::SourceProtocol))
             );
@@ -3950,7 +4355,15 @@ mod tests {
                 .expect("cases")
                 .len();
             assert_eq!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
+                evaluate_fixture(
+                    &bundle,
+                    &kernel,
+                    &source_plans,
+                    fixture,
+                    true,
+                    &mut FixtureTrace::default()
+                )
+                .await,
                 Ok(FixtureSummary {
                     evaluated_cases: expected_cases,
                 }),
@@ -3991,9 +4404,16 @@ mod tests {
                     .as_str(),
             );
             assert!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true)
-                    .await
-                    .is_ok(),
+                evaluate_fixture(
+                    &bundle,
+                    &kernel,
+                    &source_plans,
+                    fixture,
+                    true,
+                    &mut FixtureTrace::default()
+                )
+                .await
+                .is_ok(),
                 "combined acceptance fixture failed"
             );
         }
@@ -4060,7 +4480,15 @@ mod tests {
                     .expect("cases")
                     .len();
                 assert_eq!(
-                    evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
+                    evaluate_fixture(
+                        &bundle,
+                        &kernel,
+                        &source_plans,
+                        fixture,
+                        true,
+                        &mut FixtureTrace::default()
+                    )
+                    .await,
                     Ok(FixtureSummary {
                         evaluated_cases: expected_cases,
                     }),

@@ -226,3 +226,24 @@ under `expected`:
 
 The harness may report the case id, stage, expected type, actual type, and a
 value-free mismatch code. It must not print the mismatching protected value.
+
+## Explaining a failing run
+
+A fixture failure names the contract that broke and nothing else, which says
+that a case failed but never which one or why. `evidence evaluate --fixture
+<path> --explain` additionally prints, for every case, the stages it reached
+and how each one ended.
+
+The trace reports shapes only, within the value-free allowance above: response
+and fact member names, response and value counts, source and concept
+identifiers, and the declared form a concept requires. It never prints a
+response value, a fact value, a derived value, or a selector value. It is
+offline-only and no other subcommand accepts the flag; `serve` cannot reach
+it. It changes no outcome, exit code, or message, and without the flag the
+command's output is unchanged.
+
+The line that ends a case is the one to read first. An unresolved lookup lists
+the response members the extraction script actually saw, which is the whole
+diagnosis when a script recognized nothing in a response it was given. An
+output-gate rejection lists each declared concept, its form, and whether it is
+required, which is what the gate checked the derived values against.

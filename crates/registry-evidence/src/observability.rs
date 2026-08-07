@@ -2,11 +2,20 @@
 //!
 //! Operational records describe service health and performance only. The
 //! reviewed field set is route template, operation identifier, duration,
-//! status category, and safe internal error category; request bodies, selector
-//! profiles or values, source responses, Supported Values, credentials,
-//! tokens, authority grants, and script inputs are outside it. Both the log
-//! record and the metric series below are built from that same closed set, so
-//! neither can widen without a review of this module.
+//! status category, the public problem code, and the runtime's internal
+//! failure category; request bodies, selector profiles or values, source
+//! responses, Supported Values, credentials, tokens, authority grants, and
+//! script inputs are outside it. The internal failure category is safe to log
+//! alongside the public problem code: it is drawn from a fixed, closed set of
+//! static strings chosen by Rust, carries no request content, and collapses
+//! every unresolved outcome (for example a record that was never found and a
+//! record that matched more than once) into the single category the public
+//! problem contract also collapses them into. A request that raises no
+//! failure logs a fixed placeholder in its place, so the field is always
+//! present. It is a log field only: the metric series below stays keyed by
+//! route, method, status category, and public problem code, and neither the
+//! log record's field set nor the metric series' label set can widen without
+//! a review of this module.
 
 use std::{
     collections::BTreeMap,
@@ -50,6 +59,9 @@ const UNMATCHED_ROUTE: &str = "unmatched";
 /// Error label used when a response carries no problem code.
 const NO_ERROR: &str = "none";
 
+/// Category label used when a response carries no runtime failure.
+const NO_CATEGORY: &str = "none";
+
 const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 
 /// Upper bounds, in seconds, of the request duration histogram.
@@ -72,6 +84,13 @@ impl OperationId {
         &self.0
     }
 }
+
+/// The runtime's internal failure category, stashed in response extensions by
+/// [`crate::server::runtime_failure_response`] the same way the public
+/// [`ProblemCode`] is, so the observation layer can read it back without
+/// reparsing the response body.
+#[derive(Clone, Copy)]
+pub(crate) struct FailureCategory(pub(crate) &'static str);
 
 /// Read the boundary-minted identifier for this request.
 ///
@@ -137,6 +156,13 @@ pub(crate) async fn observe(
         .extensions()
         .get::<ProblemCode>()
         .map_or(NO_ERROR, |code| code.code());
+    // Log-only: never fold into `metrics.record` below. The metric label set
+    // is bounded by the route table under security invariant V1-I33, and this
+    // per-failure category would multiply it unboundedly.
+    let category = response
+        .extensions()
+        .get::<FailureCategory>()
+        .map_or(NO_CATEGORY, |category| category.0);
     response.headers_mut().insert(
         HeaderName::from_static(CORRELATION_HEADER),
         HeaderValue::from_str(operation.as_str())
@@ -151,6 +177,7 @@ pub(crate) async fn observe(
         duration_ms = duration_milliseconds(elapsed),
         status = status.as_str(),
         error,
+        category,
         "evidence request served"
     );
     response
