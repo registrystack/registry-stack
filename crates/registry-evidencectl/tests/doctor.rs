@@ -18,6 +18,34 @@ use std::{
 
 const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
 
+/// A value planted inside the very requirement whose acquisition is rendered,
+/// in a member the rendering does not read. A report that ever grows into
+/// echoing document values fails loudly here instead of quietly.
+const CANARY: &str = "s3cr3t-canary-value";
+
+/// The three acquisition forms a bundle can declare, one requirement each.
+///
+/// Source names and the fact names a member is allowed to read are
+/// configuration an adopter writes and a report may state. The derivation
+/// parameter beside them is not part of the acquisition, and carries the
+/// canary that proves the projection stays narrow.
+const DECLARED_ACQUISITIONS: &str = r#"requirements:
+  - id: urn:example:doctor:requirement:one-call:v1
+    acquisition: {kind: single, source: registry-lookup}
+  - id: urn:example:doctor:requirement:two-call:v1
+    acquisition: {kind: search-then-fetch, search: person-search, fetch: person-record}
+  - id: urn:example:doctor:requirement:fetch-set:v1
+    acquisition:
+      kind: search-then-fetch-set
+      search: civil-record-search
+      fetch:
+        - {source: union-register, factInputs: [civil_record_reference]}
+        - {source: death-register, factInputs: [civil_record_reference]}
+      maximumAcquisitionMilliseconds: 8000
+    derivation:
+      parameters: {survivorship_policy: s3cr3t-canary-value}
+"#;
+
 const MATCHING_MINT_CONFIG: &str = r#"version: 1
 issuer: https://identity.invalid
 signing:
@@ -734,6 +762,151 @@ fn doctor_help_exposes_the_explicit_mint_config_option() {
     );
 }
 
+/// A bundle declaring a gated acquisition kind states what it needs; the
+/// deployment that will serve it decides separately, in a file the bundle
+/// author does not write. Evidence refuses the pair with a value-free sentence
+/// that names no file, which is correct for a refusal and useless as
+/// instructions, so doctor names the file and the entry to add.
+#[test]
+fn doctor_reports_a_gated_acquisition_kind_the_deployment_did_not_enable() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a project the runtime would refuse:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "runtime.yaml: does not enable the search-then-fetch-set acquisition capability"
+        ) && stdout.contains("acquisitionCapabilities: [search-then-fetch-set]"),
+        "doctor did not name the file and the entry to add:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains(CANARY),
+        "doctor echoed a document value:\n{stdout}"
+    );
+}
+
+/// The same project, once the operator has made the decision. The frozen
+/// Version 1 forms beside it never needed one.
+#[test]
+fn doctor_passes_once_the_deployment_enables_the_kind_the_bundle_requires() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions(&project);
+    enable_acquisition_capability(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        output.status.success(),
+        "doctor failed a project the runtime would accept:\n{stdout}{}",
+        stderr_of(&output)
+    );
+    assert!(
+        stdout.contains("0 failed"),
+        "unexpected doctor summary: {stdout}"
+    );
+}
+
+/// An adopter reading a bundle needs to know what it will call before anything
+/// is running: which sources, in what order, and which facts one call hands to
+/// the next. All of that is configuration. A fact value is not: it is acquired
+/// at request time, and doctor neither holds one nor asks for one.
+#[test]
+fn doctor_renders_every_call_each_declared_acquisition_will_make() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions(&project);
+    enable_acquisition_capability(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &["--json"]);
+    unfreeze(&project);
+
+    let stderr = stderr_of(&output);
+    assert!(
+        output.status.success(),
+        "doctor --json failed on an enabled project:\n{stderr}"
+    );
+    for line in [
+        "PLAN: urn:example:doctor:requirement:one-call:v1 (single)",
+        "    1. registry-lookup (search) reads no prior fact",
+        "PLAN: urn:example:doctor:requirement:two-call:v1 (search-then-fetch)",
+        "    1. person-search (search) reads no prior fact",
+        "    2. person-record (member) reads every fact the search produced",
+        "PLAN: urn:example:doctor:requirement:fetch-set:v1 (search-then-fetch-set)",
+        "    1. civil-record-search (search) reads no prior fact",
+        "    2. union-register (member) reads civil_record_reference",
+        "    3. death-register (member) reads civil_record_reference",
+    ] {
+        assert!(
+            stderr.contains(line),
+            "doctor did not render {line:?}:\n{stderr}"
+        );
+    }
+
+    let stdout = stdout_of(&output);
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).expect("the JSON report");
+    assert_eq!(
+        report["acquisitionPlans"],
+        serde_json::json!([
+            {
+                "requirement": "urn:example:doctor:requirement:one-call:v1",
+                "kind": "single",
+                "stages": [
+                    {"source": "registry-lookup", "role": "search", "inputs": "none"}
+                ]
+            },
+            {
+                "requirement": "urn:example:doctor:requirement:two-call:v1",
+                "kind": "search-then-fetch",
+                "stages": [
+                    {"source": "person-search", "role": "search", "inputs": "none"},
+                    {"source": "person-record", "role": "member", "inputs": "every-prior-fact"}
+                ]
+            },
+            {
+                "requirement": "urn:example:doctor:requirement:fetch-set:v1",
+                "kind": "search-then-fetch-set",
+                "stages": [
+                    {"source": "civil-record-search", "role": "search", "inputs": "none"},
+                    {
+                        "source": "union-register",
+                        "role": "member",
+                        "inputs": {"declared": ["civil_record_reference"]}
+                    },
+                    {
+                        "source": "death-register",
+                        "role": "member",
+                        "inputs": {"declared": ["civil_record_reference"]}
+                    }
+                ]
+            }
+        ])
+    );
+    assert!(
+        !stdout.contains(CANARY) && !stderr.contains(CANARY),
+        "doctor echoed a document value"
+    );
+}
+
 /// Assemble the smallest filesystem fixture that names every kind of artifact
 /// doctor checks, then generate the private material through the public CLI.
 fn provision(project: &Path) {
@@ -777,6 +950,22 @@ sourceToken: secret:file/source-bearer-token
         let out = secrets.join(name);
         run_ok(&["keygen", "secret", "--out", out.to_str().expect("secret")]);
     }
+}
+
+/// Give the fixture bundle one requirement per acquisition form.
+fn declare_acquisitions(project: &Path) {
+    let path = project.join("bundle/evidence.yaml");
+    let mut document = fs::read_to_string(&path).expect("Evidence configuration");
+    document.push_str(DECLARED_ACQUISITIONS);
+    fs::write(&path, document).expect("declare the acquisitions");
+}
+
+/// Record the operator's half of the acquisition gate in the runtime file.
+fn enable_acquisition_capability(project: &Path) {
+    let path = project.join("runtime.yaml");
+    let mut document = fs::read_to_string(&path).expect("runtime configuration");
+    document.push_str("acquisitionCapabilities:\n  - search-then-fetch-set\n");
+    fs::write(&path, document).expect("enable the acquisition capability");
 }
 
 fn write_mint(path: &Path, document: &str) {

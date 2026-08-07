@@ -2,7 +2,8 @@ contract: registry.evidence.fixed-http-json-source/v1
 status: frozen
 ownership:
   governed_bundle:
-    - requirement acquisition kind and its one fixed source, or fixed search and fetch sources
+    - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
+    - the gated acquisition kinds the bundle declares it uses
     - each source's fixed origin, acquisition posture, authentication kind, and logical secret references
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
@@ -10,6 +11,7 @@ ownership:
     - optional logical TLS trust-profile name
   runtime_yaml:
     - bundle directory, listener and process bounds
+    - the gated acquisition kinds this deployment enables; a bundle needing one absent from that list is refused before serving
     - file-secret root and audit-storage path
     - exact private-CA file binding for each governed logical TLS trust profile
   runtime_override: prohibited

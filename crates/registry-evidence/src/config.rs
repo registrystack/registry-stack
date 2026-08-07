@@ -492,22 +492,10 @@ impl EvidenceConfig {
     /// bundle does. The forms that predate the declaration keep serving
     /// without one.
     fn validate_acquisition_capabilities(&self) -> Result<(), ConfigError> {
-        // Entry by entry before the collection bound: with one gated kind the
-        // bound would otherwise answer a duplicate with generic cardinality
-        // where a naming sentence says what to change.
-        let mut declared = BTreeSet::new();
-        for capability in &self.acquisition_capabilities {
-            if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
-                return invalid("bundle acquisition capabilities name an unknown acquisition kind");
-            }
-            if !declared.insert(capability.as_str()) {
-                return invalid("bundle acquisition capabilities must be unique");
-            }
-        }
-        validate_len(
-            self.acquisition_capabilities.len(),
-            0,
-            GATED_ACQUISITION_KINDS.len(),
+        let declared = declared_acquisition_capabilities(
+            &self.acquisition_capabilities,
+            "bundle acquisition capabilities name an unknown acquisition kind",
+            "bundle acquisition capabilities must be unique",
             "bundle acquisition capabilities",
         )?;
         for requirement in &self.requirements {
@@ -853,6 +841,14 @@ pub struct RuntimeConfig {
     pub signer: RuntimeSignerConfig,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
+    /// Acquisition kinds this deployment enables beyond the frozen Version 1
+    /// forms. Absent enables none of them, which is what every runtime file
+    /// written before a gated form existed says, so adopting a form is a
+    /// deliberate operator decision rather than a consequence of the bundle
+    /// that arrived. A bundle requiring a kind absent here is refused before
+    /// the deployment serves anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acquisition_capabilities: Vec<String>,
 }
 
 impl RuntimeConfig {
@@ -879,7 +875,23 @@ impl RuntimeConfig {
         self.secret_providers.validate()?;
         self.signer.validate()?;
         self.audit_storage.validate()?;
-        self.outbound_tls.validate()
+        self.outbound_tls.validate()?;
+        declared_acquisition_capabilities(
+            &self.acquisition_capabilities,
+            "runtime acquisition capabilities name an unknown acquisition kind",
+            "runtime acquisition capabilities must be unique",
+            "runtime acquisition capabilities",
+        )?;
+        Ok(())
+    }
+
+    /// Whether the operator enabled one gated acquisition kind on this
+    /// deployment. The answer is read only through the enabled list, so a
+    /// deployment that says nothing enables nothing.
+    pub fn enables_acquisition_capability(&self, capability: &str) -> bool {
+        self.acquisition_capabilities
+            .iter()
+            .any(|enabled| enabled == capability)
     }
 }
 
@@ -2344,6 +2356,36 @@ pub enum ValueOrigin {
 /// froze, and a bundle written before any of them existed keeps serving exactly
 /// what it served before without carrying a list at all.
 const GATED_ACQUISITION_KINDS: [&str; 1] = ["search-then-fetch-set"];
+
+/// The gated acquisition kinds one document declares, as a set.
+///
+/// The gate has two halves written by two people in two files: the bundle
+/// author names the kinds the bundle needs, and the operator names the kinds
+/// this deployment may serve. Both halves read the same closed vocabulary
+/// through this one derivation, so neither can drift into naming a kind the
+/// other cannot. Each half supplies its own sentences, because an operator
+/// fixes a runtime file and a bundle author fixes a bundle.
+fn declared_acquisition_capabilities<'a>(
+    capabilities: &'a [String],
+    unknown: &'static str,
+    duplicate: &'static str,
+    field: &'static str,
+) -> Result<BTreeSet<&'a str>, ConfigError> {
+    // Entry by entry before the collection bound: with one gated kind the
+    // bound would otherwise answer a duplicate with generic cardinality
+    // where a naming sentence says what to change.
+    let mut declared = BTreeSet::new();
+    for capability in capabilities {
+        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
+            return invalid(unknown);
+        }
+        if !declared.insert(capability.as_str()) {
+            return invalid(duplicate);
+        }
+    }
+    validate_len(capabilities.len(), 0, GATED_ACQUISITION_KINDS.len(), field)?;
+    Ok(declared)
+}
 
 const MINIMUM_FETCH_SET_MEMBERS: usize = 2;
 const MAXIMUM_FETCH_SET_MEMBERS: usize = 4;
@@ -5288,6 +5330,142 @@ outboundTls:
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
     }
 
+    /// The operator half of the acquisition gate. A capability list a bundle
+    /// author writes beside the requirement that uses it gates nothing, so the
+    /// deployment states separately which gated kinds it may serve. Absent
+    /// enables none of them, which is what every runtime file written before a
+    /// gated form existed says.
+    #[test]
+    fn the_optional_operator_acquisition_capabilities_enable_nothing_by_default() {
+        let base = r#"
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+"#;
+        let validator = runtime_contract_validator();
+        let default = RuntimeConfig::parse_yaml(base.as_bytes()).expect("closed runtime parses");
+        assert!(
+            default.acquisition_capabilities.is_empty(),
+            "a deployment that enabled no gated acquisition kind must not get one"
+        );
+        assert!(!default.enables_acquisition_capability("search-then-fetch-set"));
+        assert!(
+            !serde_json::to_string(&default)
+                .expect("the runtime configuration projects")
+                .contains("acquisitionCapabilities"),
+            "an absent capability list must serialize to nothing at all"
+        );
+
+        // Writing the list out and enabling nothing says what silence says, so
+        // both halves of the closed surface have to read it the same way. The
+        // loader accepts it, so the published contract must too: a schema
+        // stricter than the loader refuses a file the deployment would load.
+        let empty = format!("{base}acquisitionCapabilities: []\n");
+        assert!(
+            validator.is_valid(&bundle_contract_instance(empty.as_bytes())),
+            "the contract refused an empty list startup accepts"
+        );
+        let parsed = RuntimeConfig::parse_yaml(empty.as_bytes()).expect("an empty list parses");
+        assert!(!parsed.enables_acquisition_capability("search-then-fetch-set"));
+        assert!(
+            !serde_json::to_string(&parsed)
+                .expect("the runtime configuration projects")
+                .contains("acquisitionCapabilities"),
+            "an empty capability list must project as the absent one does"
+        );
+
+        for declaration in [
+            "acquisitionCapabilities: [search-then-fetch-set]\n",
+            // The same declaration in block form, which is what an operator
+            // editing the file by hand is most likely to write.
+            "acquisitionCapabilities:\n  - search-then-fetch-set\n",
+        ] {
+            let enabled = format!("{base}{declaration}");
+            assert!(
+                validator.is_valid(&bundle_contract_instance(enabled.as_bytes())),
+                "the contract refused a declaration startup accepts: {declaration}"
+            );
+            let parsed = RuntimeConfig::parse_yaml(enabled.as_bytes())
+                .expect("the enabled capability parses");
+            assert_eq!(parsed.acquisition_capabilities, ["search-then-fetch-set"]);
+            assert!(parsed.enables_acquisition_capability("search-then-fetch-set"));
+            assert!(!parsed.enables_acquisition_capability("search-then-fetch"));
+        }
+
+        for (declaration, expected) in [
+            (
+                "acquisitionCapabilities: [search-then-fetch-sets]\n",
+                "runtime acquisition capabilities name an unknown acquisition kind",
+            ),
+            // The frozen Version 1 forms are not nameable here. Every
+            // deployment already serves them, so naming one would say nothing
+            // and leaving one out would have to mean something.
+            (
+                "acquisitionCapabilities: [single]\n",
+                "runtime acquisition capabilities name an unknown acquisition kind",
+            ),
+            (
+                "acquisitionCapabilities: [search-then-fetch]\n",
+                "runtime acquisition capabilities name an unknown acquisition kind",
+            ),
+            (
+                "acquisitionCapabilities: [search-then-fetch-set, search-then-fetch-set]\n",
+                "runtime acquisition capabilities must be unique",
+            ),
+        ] {
+            let candidate = format!("{base}{declaration}");
+            assert_eq!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).err(),
+                Some(ConfigError::Invalid(expected)),
+                "{declaration}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
+                "the contract accepted a declaration startup refuses: {declaration}"
+            );
+        }
+
+        // The list is a list of names, and the document stays closed around it.
+        for malformed in [
+            "acquisitionCapabilities: search-then-fetch-set\n",
+            "acquisitionCapabilities: {searchThenFetchSet: true}\n",
+            "acquisitionCapabilitie: [search-then-fetch-set]\n",
+        ] {
+            let candidate = format!("{base}{malformed}");
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "{malformed}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
+                "{malformed}"
+            );
+        }
+    }
+
     /// Port 0 is not a port. The kernel picks an arbitrary one, so the socket an
     /// operator firewalls, health-checks, and puts behind their TLS terminator
     /// is not the socket the service opens, and it changes on every restart.
@@ -5647,6 +5825,15 @@ outboundTls:
         for (capabilities, expected, contract_accepts) in [
             (
                 "",
+                Some("requirement acquisition kind is not a declared bundle capability"),
+                true,
+            ),
+            // Writing the list out and declaring nothing says what silence
+            // says. The loader refuses the requirement for the same reason and
+            // the published contract accepts the document, so neither half of
+            // the closed surface is stricter than the other.
+            (
+                "acquisitionCapabilities: []\n",
                 Some("requirement acquisition kind is not a declared bundle capability"),
                 true,
             ),

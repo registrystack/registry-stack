@@ -2135,6 +2135,23 @@ fn validate_runtime_bindings(
             "runtime TLS trust profiles must exactly bind bundle source profiles",
         ));
     }
+    // The operator half of the acquisition gate, and the half that gates.
+    // A bundle declaring the kinds it needs states an intent beside the
+    // requirement that uses it; the deployment decides separately whether it
+    // may serve them. Silence means no, so a deployment that never heard of a
+    // gated form refuses the bundle here, before it serves anything, rather
+    // than acquiring from sources nobody enabled it to reach.
+    for requirement in &bundle.requirements {
+        if requirement
+            .acquisition
+            .required_capability()
+            .is_some_and(|capability| !runtime.enables_acquisition_capability(capability))
+        {
+            return Err(invalid_artifact(
+                "the runtime configuration does not enable an acquisition capability the bundle requires",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -3693,6 +3710,118 @@ mod tests {
         assert_eq!(
             fault.fault().cause(),
             "the secret root directory the runtime file names is reachable by group or other"
+        );
+    }
+
+    /// One operator runtime document, written the way a deployment that
+    /// predates the acquisition gate is written: it says nothing about
+    /// acquisition capabilities, because there was nothing to say.
+    const OPERATOR_RUNTIME_DOCUMENT: &str = "version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+";
+
+    /// Both halves of the acquisition gate, from inside the loader.
+    ///
+    /// The bundle declaring the kind it needs states that intent beside the
+    /// requirement that uses it, which gates nothing: the same person wrote
+    /// both lines in the same file. The deployment that will serve it decides
+    /// separately, in a file the bundle author does not write, and silence
+    /// there means no.
+    #[test]
+    fn a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it() {
+        let declared = fetch_set_config("record_id", "record_id");
+        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        assert_eq!(
+            refusal_cause(
+                validate_runtime_bindings(&declared, &silent)
+                    .expect_err("a silent deployment refuses the bundle")
+            ),
+            "the runtime configuration does not enable an acquisition capability the bundle requires"
+        );
+
+        let enabled = RuntimeConfig::parse_yaml(
+            format!(
+                "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
+            )
+            .as_bytes(),
+        )
+        .expect("the enabled operator runtime document parses");
+        validate_runtime_bindings(&declared, &enabled)
+            .expect("the deployment that enabled the kind binds the bundle");
+
+        // A bundle acquiring through the frozen Version 1 forms asks the
+        // operator for nothing, so every deployment that predates the gate
+        // keeps binding exactly the bundles it already bound.
+        let frozen = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("the acceptance bundle validates");
+        validate_runtime_bindings(&frozen, &silent)
+            .expect("a Version 1 bundle needs no operator capability");
+    }
+
+    /// New operator surface must not move the revision of a deployment that did
+    /// not ask for it. The runtime revision digests the exact runtime.yaml
+    /// bytes, so a file written before the acquisition gate existed keeps the
+    /// revision it already published; the pinned digest is what proves the
+    /// digest is still taken over those bytes and not over a serialization that
+    /// grew a member. The absent list also projects to nothing, so the same
+    /// deployment would keep its revision either way.
+    #[test]
+    fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
+        let revision =
+            compute_runtime_revision(OPERATOR_RUNTIME_DOCUMENT.as_bytes(), &BTreeMap::new())
+                .expect("the runtime revision computes");
+        assert_eq!(
+            revision, "sha256:1693e61df2bdad3835fefb03ca6a3990045d77e8f8468e84f68e547596039fe3",
+            "an operator who adopted nothing must keep the revision they published"
+        );
+
+        let config = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        assert!(config.acquisition_capabilities.is_empty());
+        assert!(
+            !serde_json::to_string(&config)
+                .expect("the runtime configuration projects")
+                .contains("acquisitionCapabilities"),
+            "an absent capability list must serialize to nothing at all"
+        );
+
+        // Recording the operator's decision is an edit to the file the digest
+        // covers, so the deployment that adopted the kind says so in its
+        // revision.
+        let adopted = format!(
+            "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
+        );
+        assert_ne!(
+            compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new())
+                .expect("the runtime revision computes"),
+            revision
         );
     }
 }

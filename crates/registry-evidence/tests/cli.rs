@@ -262,9 +262,12 @@ fn stage_reference_secrets(secret_root: &Path) {
 ///
 /// The expected text is split into a prefix and a suffix so a case that
 /// reports a text location can pin the cause and the location shape without
-/// pinning a line number that ordinary fixture edits would move.
+/// pinning a line number that ordinary fixture edits would move. The acceptance
+/// bundle is named per case because a failure class can be reachable only from
+/// the bundle that declares the configuration it is about.
 struct FailureCase {
     label: &'static str,
+    bundle: &'static str,
     break_deployment: fn(&Deployment),
     prefix: &'static str,
     suffix: &'static str,
@@ -275,6 +278,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
     let cases = [
         FailureCase {
             label: "malformed bundle YAML",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.append("bundle/evidence.yaml", &format!("trailing: [{CANARY}\n"));
             },
@@ -283,6 +287,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "unknown bundle field",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
@@ -295,6 +300,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "wrong bundle field type",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
@@ -307,6 +313,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "unaccepted bundle field variant",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
@@ -319,6 +326,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "configuration cross-reference",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
@@ -331,6 +339,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "artifact closure references a missing file",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.remove("bundle/derivations/adult-status.rhai");
             },
@@ -339,6 +348,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "artifact closure carries an unreferenced file",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.write("bundle/schemas/orphan.schema.yaml", &format!("x: {CANARY}\n"));
             },
@@ -347,6 +357,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "unsafe artifact name is never echoed",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.write(
                     &format!("bundle/fixtures/orphan {CANARY}.yaml"),
@@ -358,6 +369,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "script",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.append(
                     "bundle/derivations/adult-status.rhai",
@@ -369,6 +381,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "fact schema",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/schemas/adult-status-facts.schema.yaml",
@@ -380,6 +393,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "codelist",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/codelists/residence-region-map.yaml",
@@ -391,6 +405,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "fixture",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/fixtures/adult-status-cases.yaml",
@@ -402,6 +417,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "unknown runtime field",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.append("runtime.yaml", &format!("unknownField: {CANARY}\n"));
             },
@@ -410,6 +426,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "wrong runtime field type",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace(
                     "runtime.yaml",
@@ -422,6 +439,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         },
         FailureCase {
             label: "runtime operator path",
+            bundle: "all-definitions",
             break_deployment: |deployment| {
                 deployment.replace_line(
                     "runtime.yaml",
@@ -432,10 +450,21 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: absolute operator path is invalid\n",
             suffix: "",
         },
+        // Nothing is broken here: an operator runtime file that says nothing
+        // about acquisition capabilities enables nothing beyond the frozen
+        // Version 1 acquisition forms, so a bundle that requires a gated kind
+        // is refused before the deployment serves anything.
+        FailureCase {
+            label: "gated acquisition kind the operator did not enable",
+            bundle: "surviving-spouse-status",
+            break_deployment: |_| {},
+            prefix: "evidence: deployment artifact is invalid: the runtime configuration does not enable an acquisition capability the bundle requires\n",
+            suffix: "",
+        },
     ];
 
     for case in cases {
-        let deployment = Deployment::stage("all-definitions");
+        let deployment = Deployment::stage(case.bundle);
         (case.break_deployment)(&deployment);
         let output = deployment.check();
 
@@ -458,6 +487,38 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             case.label
         );
     }
+}
+
+/// The operator half of the acquisition gate, from the other side.
+///
+/// The bundle author declares which acquisition kinds the bundle needs; the
+/// operator who deploys it decides, in a file the bundle author does not write,
+/// which of them this deployment may serve. The same bundle the failure classes
+/// above refuse passes check once the runtime file names the capability, which
+/// is what makes the refusal a deployment decision rather than a spelling
+/// accident.
+#[test]
+fn check_accepts_a_gated_acquisition_kind_the_operator_enabled() {
+    let deployment = Deployment::stage("surviving-spouse-status");
+    deployment.append(
+        "runtime.yaml",
+        "acquisitionCapabilities: [search-then-fetch-set]\n",
+    );
+    deployment.write_secret("audit-hash-key", "audit-hash-secret-32-bytes-minimum-value");
+    deployment.write_secret(
+        "subject-binding-key",
+        "subject-binding-secret-32-bytes-minimum-value",
+    );
+    deployment.write_secret("signing-key", VERIFY_PRIVATE_JWK);
+    deployment.write_secret("civil-record-search-token", "synthetic-source-token");
+    deployment.write_secret("union-register-token", "synthetic-source-token");
+    deployment.write_secret("death-register-token", "synthetic-source-token");
+
+    assert_success(
+        &deployment.check(),
+        "Evidence deployment ",
+        " passed check (1 requirements)\n",
+    );
 }
 
 /// Secret material the server would refuse at startup must already fail
