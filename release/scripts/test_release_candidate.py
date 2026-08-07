@@ -972,6 +972,7 @@ class ReleaseCandidateTest(TestCase):
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         files = {
             "registryctl-v1.2.3-linux-amd64": b"registryctl",
+            "evidence-client-node-v1.2.3-linux-amd64.tgz": b"node-client",
             "registry-docs-v1.2.3.tar.gz": b"docs",
             "registry-stack-v1.2.3.sbom.spdx.json": b"sbom",
             "security/registry-relay.grype.json": evidence_members[
@@ -1024,6 +1025,10 @@ class ReleaseCandidateTest(TestCase):
                 }
                 for name, kind in (
                     ("registryctl-v1.2.3-linux-amd64", "binary"),
+                    (
+                        "evidence-client-node-v1.2.3-linux-amd64.tgz",
+                        "client-package",
+                    ),
                     ("registry-docs-v1.2.3.tar.gz", "docs"),
                     ("registry-stack-v1.2.3.sbom.spdx.json", "sbom"),
                     (evidence_name, "security-evidence"),

@@ -105,6 +105,7 @@
           "kind": {
             "enum": [
               "binary",
+              "client-package",
               "installer",
               "image-lock",
               "docs",

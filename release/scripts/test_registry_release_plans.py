@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
 CROSSWALK_REF = "1" * 40
 EXACT_ARTIFACT_INVENTORY = (
+    "evidence",
+    "evidence-client-node",
+    "evidence-client-python",
+    "evidencectl",
+    "evidencectl-installer",
+    "mint",
     "registry-docs",
     "registry-manifest-cli",
     "registry-relay",

@@ -40,6 +40,7 @@ IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
 EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
 NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
+EVIDENCE_RELEASE_MINIMUM_VERSION = (0, 17, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
@@ -55,15 +56,19 @@ POST_NOTARY_ARTIFACT_INVENTORY = EXACT_ARTIFACT_INVENTORY - {
     "registry-notary",
     "registry-notary-cel-worker",
 }
-OPTIONAL_EXACT_ARTIFACTS = {
-    "registryctl-installer",
-    # The Evidence toolset joins the release channel as optional artifacts
-    # until the first release ships it end to end; then these move into the
-    # exact inventory at a minimum version, like registryctl-installer did.
+EVIDENCE_RELEASE_ARTIFACTS = {
     "evidence",
     "evidencectl",
     "mint",
     "evidencectl-installer",
+    "evidence-client-node",
+    "evidence-client-python",
+}
+OPTIONAL_EXACT_ARTIFACTS = {
+    "registryctl-installer",
+    # Keep historical manifests valid if they declared the Evidence toolset
+    # before its first stable release. From v0.17.0 onward these are required.
+    *EVIDENCE_RELEASE_ARTIFACTS,
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CURRENT_DOCS_VERSION = "main source (unreleased)"
@@ -141,11 +146,13 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
         and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
     ):
         artifact_names = set(artifacts)
-        expected_inventory = (
+        expected_inventory = set(
             POST_NOTARY_ARTIFACT_INVENTORY
             if parsed_version >= NOTARY_RETIREMENT_MINIMUM_VERSION
             else EXACT_ARTIFACT_INVENTORY
         )
+        if parsed_version >= EVIDENCE_RELEASE_MINIMUM_VERSION:
+            expected_inventory.update(EVIDENCE_RELEASE_ARTIFACTS)
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(
             artifact_names - expected_inventory - OPTIONAL_EXACT_ARTIFACTS

@@ -94,6 +94,7 @@ V2_TOP_LEVEL_FIELDS = {
 }
 PAYLOAD_KINDS = {
     "binary",
+    "client-package",
     "installer",
     "image-lock",
     "docs",

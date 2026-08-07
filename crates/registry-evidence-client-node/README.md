@@ -7,8 +7,13 @@ own; this crate is a thin `#[napi]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
 Publishing this binding as `@registrystack/evidence-client` on npm is out of
-scope for this crate; it currently exists to be built and tested locally and
-in CI.
+scope for this crate. Registry Stack GitHub releases starting at v0.17.0 carry
+one native tarball per supported platform, named
+`evidence-client-node-<tag>-<platform>.tgz`. Download the package matching the
+target platform, verify it through the release's signed `SHA256SUMS`, then
+install the local file with `npm install <path-to-tarball>`. The supported
+labels are `linux-amd64-glibc`, `linux-arm64-glibc`, and `macos-arm64`; the
+Linux packages do not support musl-based distributions such as Alpine.
 
 ## JS surface
 

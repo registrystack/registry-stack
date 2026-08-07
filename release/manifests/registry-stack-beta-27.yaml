@@ -16,6 +16,8 @@ artifacts:
   evidencectl: 0.17.0
   mint: 0.17.0
   evidencectl-installer: 0.17.0
+  evidence-client-node: 0.17.0
+  evidence-client-python: 0.17.0
 
 external:
   crosswalk:

@@ -1,0 +1,6 @@
+# Reviewed PyPI wheel digests for the three release-candidate runner targets.
+# --require-hashes rejects any file added to or substituted in the index later.
+maturin==1.9.6 \
+    --hash=sha256:0246202377c49449315305209f45c8ecef6e2d6bd27a04b5b6f1ab3e4ea47238 \
+    --hash=sha256:f5bac167700fbb6f8c8ed1a97b494522554b4432d7578e11403b894b6a91d99f \
+    --hash=sha256:5263dda3f71feef2e4122baf5c4620e4b3710dbb7f2121f85a337182de214369
