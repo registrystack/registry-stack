@@ -64,14 +64,17 @@ properties:
     propertyNames: {$ref: '#/$defs/local-id'}
     additionalProperties: {$ref: '#/$defs/authority-profile'}
   acquisitionCapabilities:
-    # Acquisition kinds this bundle opts in to beyond the single fixed call.
-    # A kind absent from this list cannot be served, so a bundle written
-    # before a form existed keeps serving exactly what it served before.
+    # Acquisition kinds this bundle opts in to beyond the frozen Version 1
+    # forms. A gated kind absent from this list cannot be served, so a bundle
+    # written before a form existed keeps serving exactly what it served
+    # before. The Version 1 forms are absent from the enumeration on purpose:
+    # every bundle already had them, so declaring one would say nothing and
+    # omitting one would have to mean something.
     type: array
     minItems: 1
-    maxItems: 3
+    maxItems: 1
     uniqueItems: true
-    items: {enum: [single, search-then-fetch, search-then-fetch-set]}
+    items: {enum: [search-then-fetch-set]}
   requirements:
     type: array
     minItems: 1

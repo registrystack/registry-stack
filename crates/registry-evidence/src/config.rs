@@ -492,26 +492,29 @@ impl EvidenceConfig {
     /// bundle does. The forms that predate the declaration keep serving
     /// without one.
     fn validate_acquisition_capabilities(&self) -> Result<(), ConfigError> {
-        validate_len(
-            self.acquisition_capabilities.len(),
-            0,
-            ACQUISITION_KINDS.len(),
-            "bundle acquisition capabilities",
-        )?;
+        // Entry by entry before the collection bound: with one gated kind the
+        // bound would otherwise answer a duplicate with generic cardinality
+        // where a naming sentence says what to change.
         let mut declared = BTreeSet::new();
         for capability in &self.acquisition_capabilities {
-            if !ACQUISITION_KINDS.contains(&capability.as_str()) {
+            if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
                 return invalid("bundle acquisition capabilities name an unknown acquisition kind");
             }
             if !declared.insert(capability.as_str()) {
                 return invalid("bundle acquisition capabilities must be unique");
             }
         }
+        validate_len(
+            self.acquisition_capabilities.len(),
+            0,
+            GATED_ACQUISITION_KINDS.len(),
+            "bundle acquisition capabilities",
+        )?;
         for requirement in &self.requirements {
-            if matches!(
-                requirement.acquisition,
-                AcquisitionConfig::SearchThenFetchSet { .. }
-            ) && !declared.contains(requirement.acquisition.kind_name())
+            if requirement
+                .acquisition
+                .required_capability()
+                .is_some_and(|capability| !declared.contains(capability))
             {
                 return invalid("requirement acquisition kind is not a declared bundle capability");
             }
@@ -2331,9 +2334,16 @@ pub enum ValueOrigin {
     Request,
 }
 
-/// The closed set of acquisition kind names a bundle may declare as a
-/// capability, in the order the forms were added.
-const ACQUISITION_KINDS: [&str; 3] = ["single", "search-then-fetch", "search-then-fetch-set"];
+/// The closed set of acquisition kinds a bundle must opt in to before a
+/// deployment serves them, in the order the forms were added.
+///
+/// The Version 1 forms are deliberately absent: `single` and `search-then-fetch`
+/// are the frozen acquisition surface every bundle already had, so declaring
+/// them would say nothing, and omitting them would have to mean something. A
+/// capability list therefore names only the forms added after that surface
+/// froze, and a bundle written before any of them existed keeps serving exactly
+/// what it served before without carrying a list at all.
+const GATED_ACQUISITION_KINDS: [&str; 1] = ["search-then-fetch-set"];
 
 const MINIMUM_FETCH_SET_MEMBERS: usize = 2;
 const MAXIMUM_FETCH_SET_MEMBERS: usize = 4;
@@ -2497,13 +2507,13 @@ impl AcquisitionConfig {
         }
     }
 
-    /// The configured kind name, which a bundle must declare as an acquisition
-    /// capability before a deployment may serve this requirement.
-    fn kind_name(&self) -> &'static str {
+    /// The acquisition capability a bundle must declare before a deployment
+    /// may serve this requirement, or `None` for the frozen Version 1 forms,
+    /// which every bundle already carried and so declare nothing.
+    pub fn required_capability(&self) -> Option<&'static str> {
         match self {
-            Self::Single { .. } => "single",
-            Self::SearchThenFetch { .. } => "search-then-fetch",
-            Self::SearchThenFetchSet { .. } => "search-then-fetch-set",
+            Self::Single { .. } | Self::SearchThenFetch { .. } => None,
+            Self::SearchThenFetchSet { .. } => Some("search-then-fetch-set"),
         }
     }
 }
@@ -5651,7 +5661,14 @@ outboundTls:
                 false,
             ),
             (
-                "acquisitionCapabilities: [single, search-then-fetch, search-then-fetch-set]\n",
+                "acquisitionCapabilities: [single, search-then-fetch-set]\n",
+                Some("bundle acquisition capabilities name an unknown acquisition kind"),
+                false,
+            ),
+            // The same declaration in block form: valid, and textually
+            // distinct from the bundle's own flow-sequence spelling.
+            (
+                "acquisitionCapabilities:\n  - search-then-fetch-set\n",
                 None,
                 true,
             ),
