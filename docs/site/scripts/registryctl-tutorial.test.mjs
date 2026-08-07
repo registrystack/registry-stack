@@ -488,11 +488,13 @@ test('current reader pages keep public starters and current command roots', () =
     read('src/content/docs/tutorials/verify-opencrvs-claims.mdx'),
   ];
   const currentText = pages.join('\n');
+  const installerCommand = read('src/components/RegistryctlInstallCommand.astro');
 
-  assert.match(
-    currentText,
-    /curl -fsSL https:\/\/docs\.registrystack\.org\/install\.sh \| bash/,
-  );
+  assert.match(currentText, /RegistryctlInstallCommand/);
+  assert.match(installerCommand, /import\.meta\.env\.BASE_URL/);
+  assert.match(installerCommand, /curl -fsSLo registryctl-install\.sh/);
+  assert.match(currentText, /bash registryctl-install\.sh/);
+  assert.doesNotMatch(installerCommand, /\| bash/);
   assert.match(currentText, /release\/VERIFY\.md/);
   assert.match(currentText, /quick installation path trusts Registry Docs hosting, GitHub, and TLS/);
   assert.match(currentText, /--template http/);

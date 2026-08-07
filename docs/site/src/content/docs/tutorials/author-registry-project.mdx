@@ -14,6 +14,7 @@ standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import RegistryctlInstallCommand from '../../../components/RegistryctlInstallCommand.astro';
 
 Use the released HTTP starter to model one bounded lookup against a registry API.
 First test and run the contract with synthetic observations. Then bind the reviewed source in the
@@ -36,15 +37,21 @@ Do not add production endpoints, source credentials, or personal data.
 
 Install the latest released Registryctl:
 
-```sh
-curl -fsSL https://docs.registrystack.org/install.sh | bash
-```
+<RegistryctlInstallCommand />
 
 This quick installation path trusts Registry Docs hosting, GitHub, and TLS.
 The installer then verifies the downloaded Registryctl binary and matching signed release lock
 against the release checksums.
-When your acceptance process requires publisher authentication, use the tag-frozen
-`release/VERIFY.md` linked by the installer instead of this quick path.
+The download and execution are separate so a failed download cannot look like a
+successful installation. When your acceptance process requires publisher
+authentication, inspect the downloaded installer's tag-frozen `verify_url` and
+complete its `release/VERIFY.md` procedure before running the installer.
+
+Run the installer after applying the verification policy you need:
+
+```sh
+bash registryctl-install.sh
+```
 
 A successful 1.0 installer ends with the installed binary and signed release lock paths, then
 prints the spreadsheet and HTTP `Try it` commands. If your shell cannot find `registryctl`, add
