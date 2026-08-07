@@ -143,9 +143,11 @@ impl PrivateKeyJwtConfig {
     /// Authenticate as `client_id` at `token_endpoint`, signing with
     /// `client_key`.
     ///
-    /// `client_key` must be an Ed25519 key carrying a key identifier: the
-    /// identifier is how the authorization server selects the registered public
-    /// key to check the assertion against.
+    /// `client_key` may sign with EdDSA, ES256, or RS256, and must carry a key
+    /// identifier: the identifier is how the authorization server selects the
+    /// registered public key to check the assertion against. The assertion
+    /// header names whichever of the three the key states, so the server needs
+    /// that algorithm among the ones it accepts.
     #[must_use]
     pub fn new(token_endpoint: Url, client_id: impl Into<String>, client_key: PrivateJwk) -> Self {
         Self {
@@ -261,6 +263,9 @@ pub struct PrivateKeyJwt {
     refresh_margin_seconds: i64,
     client_key: PrivateJwk,
     key_id: String,
+    /// The JOSE name of what `client_key` signs with, resolved once at
+    /// construction so the header cannot disagree with the key.
+    algorithm: &'static str,
     clock: Arc<dyn Clock>,
     /// The credential in hand, if it is still worth presenting.
     cached: RwLock<Option<CachedToken>>,
@@ -304,9 +309,24 @@ impl PrivateKeyJwt {
                 "the token endpoint must use HTTPS, or HTTP with a loopback host",
             ));
         }
-        if !matches!(config.client_key.algorithm(), Ok(SigningAlgorithm::EdDsa)) {
-            return Err(refuse("the client key must sign with EdDSA"));
-        }
+        // The header names the algorithm so the server can verify without
+        // guessing, which means it must state what this key actually signs with
+        // rather than one fixed name. Restricting the client to a single
+        // algorithm would refuse keys a conforming authorization server accepts:
+        // `token_endpoint_auth_signing_alg_values_supported` is the server's
+        // choice to publish, not this client's to narrow. Parsing a `PrivateJwk`
+        // already refuses anything outside these three, so the last arm is a
+        // floor rather than a path a caller can reach.
+        let algorithm = match config.client_key.algorithm() {
+            Ok(SigningAlgorithm::EdDsa) => "EdDSA",
+            Ok(SigningAlgorithm::Es256) => "ES256",
+            Ok(SigningAlgorithm::Rs256) => "RS256",
+            Err(_) => {
+                return Err(refuse(
+                    "the client key must state a supported signing algorithm",
+                ))
+            }
+        };
         let key_id = config
             .client_key
             .kid
@@ -350,6 +370,7 @@ impl PrivateKeyJwt {
             refresh_margin_seconds: config.refresh_margin_seconds,
             client_key: config.client_key,
             key_id,
+            algorithm,
             clock,
             cached: RwLock::new(None),
             refresh_lock: Mutex::new(()),
@@ -375,7 +396,7 @@ impl PrivateKeyJwt {
     /// One client assertion, valid from `now` for the configured lifetime.
     fn sign_assertion(&self, now: i64) -> Result<Zeroizing<String>, TokenError> {
         let header = json!({
-            "alg": "EdDSA",
+            "alg": self.algorithm,
             "typ": "JWT",
             // The server selects the registered public key by this identifier.
             "kid": self.key_id,
@@ -400,9 +421,10 @@ impl PrivateKeyJwt {
                 })
         };
         let signing_input = format!("{}.{}", encode(&header)?, encode(&claims)?);
-        // The algorithm was checked at construction, so this reports a key that
-        // parsed and named EdDSA yet cannot sign. It stays an explicit failure
-        // rather than a retry, because no later request would sign either.
+        // The algorithm was resolved at construction, so this reports a key that
+        // parsed and named an algorithm yet cannot sign with it. It stays an
+        // explicit failure rather than a retry, because no later request would
+        // sign either.
         let signature = registry_platform_crypto::sign(signing_input.as_bytes(), &self.client_key)
             .map_err(|_| TokenError::Configuration {
                 reason: "the client key cannot sign a client assertion",
@@ -685,8 +707,8 @@ mod tests {
         }
     }
 
-    /// A fresh client key. Every key is generated here, so no test carries key
-    /// material in the tree.
+    /// A fresh EdDSA client key, generated here so no test carries key material
+    /// in the tree.
     fn client_key(key_id: Option<&str>) -> PrivateJwk {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("the test host supplies randomness");
@@ -702,6 +724,37 @@ mod tests {
             document["kid"] = json!(key_id);
         }
         PrivateJwk::parse(&document.to_string()).expect("the test key parses")
+    }
+
+    /// A fresh ES256 client key, in the shape `evidencectl access client add
+    /// --generate-local-key` writes, which is what an adopter following the
+    /// tutorial actually holds.
+    fn es256_client_key(key_id: Option<&str>) -> PrivateJwk {
+        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let point = key.verifying_key().to_encoded_point(false);
+        let mut document = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("an uncompressed P-256 point has x")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("an uncompressed P-256 point has y")),
+            "d": URL_SAFE_NO_PAD.encode(key.to_bytes()),
+        });
+        if let Some(key_id) = key_id {
+            document["kid"] = json!(key_id);
+        }
+        PrivateJwk::parse(&document.to_string()).expect("the test key parses")
+    }
+
+    /// A test-only 2048-bit RSA client key. RSA keys are too slow to generate per
+    /// test and the workspace carries no RSA generator, so unlike the EdDSA and
+    /// ES256 keys above this one is a constant. It is the same test-only key
+    /// `registry-platform-crypto` already pins for its RS256 tests, so it puts no
+    /// new key material in the tree. It authenticates nothing.
+    const RSA_CLIENT_JWK: &str = r#"{"kty":"RSA","kid":"registry-evidence-client-rs256-test","alg":"RS256","n":"yIgEn3IXWI3CRyUY0gvZ-kJ55EC36MRFvj-ICsitN1-50phRS4CKMBRwbHwjgeTkbMDndOCmVfIbyKhJjOMIPxAzIHeMn9oWj5i-s8nlSgjHZpvCTnRbwZhbq6mEVoHJliX36IfV_iUopcwSL5lPd2wZmJ-msUmZFs6CTRExu0JGUJScOwFO5dqxBwiKyh7yGEPXI3u4tc3_47SZYxyde7fb-o3wl2RBJ28upa2jVRP9r-WjOGjE6tbZ35HnVUY4ECdYWzsiotg_XA9QVWa-pAKXV2Flr-gocCQ9E2qrSYjEbNXuFjPtMnuL6AHi0o5PiwT1dllcl925hpKd7Xt60w","e":"AQAB","d":"ATDtMhpe_z1-GTUV7NLO3V_Z0kb8W1YXkC7JbJTAdcE-FdKJrtu84Q87WpxG0tPcutFPLqW12QAQp2fbmxhZ6VrfVYneeOlEjO14ukqM_g35Z-eRDmYhwoFYrEWGqlH9XrZysHhKFZyKHW_G0lJV-Ks8Na_RFNNIXeVedVMQiytAFXibTHvdAdIrBGtt0M4tlQOCeRwnuoAQU-a5VB7rKGpxnJtUA7F_jjeX6jQPnUhkOXs20pPRey-i-jxwBbsF4XijHgTnGwAo5uOoY9b0kOmOb3Hs5TVqZCb3a4JoYAqZBbWrkKxccJTGMqLHCe0MBgQzKqP5KyrHRgQdzlmTnQ","p":"5xhkHe5lD7tUYJAFffHiRpy4unHfKDvTEASu8RBgWvHP2Hu5XLQU5n6DvI47LsW42swTcT6Ce1pWB2LK3SjKcw9FPEEGg8m5-tmfixaRq4DBaK0hj17763HmnYR0eQC0n_5y-My8WSC1y80T-AhKHJ_3xTtLXQd5Z9bf9MEiKS8","q":"3iRoiwbnn8oRJMjZUZhqKB-GVa7AJV0SUqXiUsBAJnqtbhuIESbkJKpt5eULeUQgdNkoG65KD-jXFUipWX1zlentc1FliCaB46jntqtxUsui8LNwKw_eb3nujQO7H1He4NJ5pfaLfRcmBOLwB-u2Z1cxrRDWhIgiHtGaAdQ7F50","dp":"j4h9vn1wNbozaRpq3tPap-L1dY_-e93UdPGDuuRiBHqGjr4h3itXg-X2aqmopp9V9kekl8SshHMSVdoNiBmqzJYieY8lvbsQkXaTem8VIQGCn0JRQtxK-eyvwQwgz3sZtPn0bQW0wmLnp2KD0Z1McsUEvnLalzhqNo2mYj2Guy8","dq":"0T6ySuLCIz2PUHrwWW-b7xdizirBS3CT5c3jldcJljVQT7sXPDDKDc-LnVVWrW-Csw4qPYi6sqm8j4vWGTmWOswSouE1Jj4_c1aSjPqI0FiIrvoW2jkkaRUNoz60cBgKPPOFKtNFKRs48LljJ9LcChOT81U8-7HPkgAVdUuYLfE","qi":"PnMeCE0dvWDLp2Dn1wsxtl-a0qjpkT9cp8EkvHYjCvVqqWqrVv84CoEo-1wA9j_VDvCG6T4n0UO9K0jfBf5yvPnahSQCLJk2nw-2uZ9YzBZKwkm21wU6hTknPst5Vk5ZbYJmzqXsCqEB5T2Bn5vqeXMe3SOB5hD2CbTFFfp3TC4"}"#;
+
+    fn rs256_client_key() -> PrivateJwk {
+        PrivateJwk::parse(RSA_CLIENT_JWK).expect("the test key parses")
     }
 
     fn endpoint(base: &str) -> Url {
@@ -834,6 +887,48 @@ mod tests {
             !assertion.contains(&secret),
             "the assertion carries the private key"
         );
+    }
+
+    /// The header must name the algorithm the key actually signs with, for every
+    /// algorithm the stack registers. A server selects the verification algorithm
+    /// from this header, so a fixed `alg` would either refuse the key outright or
+    /// present a signature under a name that does not describe it.
+    ///
+    /// ES256 is the case an adopter meets first: it is what `evidencectl` writes
+    /// for a locally generated client key.
+    #[test]
+    fn an_assertion_names_the_algorithm_the_client_key_states() {
+        for (expected_alg, key) in [
+            ("EdDSA", client_key(Some(KEY_ID))),
+            ("ES256", es256_client_key(Some(KEY_ID))),
+            ("RS256", rs256_client_key()),
+        ] {
+            let key_id = key.kid.clone().expect("the test key carries a kid");
+            let public: PublicJwk = key.public();
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = PrivateKeyJwt::with_clock(
+                config(endpoint("https://tokens.example.org"), key),
+                clock,
+            )
+            .unwrap_or_else(|error| {
+                panic!("a {expected_alg} client key is usable as configured: {error}")
+            });
+
+            let assertion = provider
+                .sign_assertion(NOW)
+                .unwrap_or_else(|error| panic!("the {expected_alg} assertion is signed: {error}"));
+            let (header, _, signature) = parts(&assertion);
+
+            assert_eq!(
+                header,
+                json!({"alg": expected_alg, "typ": "JWT", "kid": key_id})
+            );
+            verify(signing_input(&assertion).as_bytes(), &signature, &public).unwrap_or_else(
+                |error| {
+                    panic!("the {expected_alg} assertion verifies under the client key: {error}")
+                },
+            );
+        }
     }
 
     /// A replay-checking token endpoint refuses a repeated `jti`, so a fresh one
@@ -1355,23 +1450,12 @@ mod tests {
                 config(endpoint("https://tokens.example.org"), client_key(None)),
             ),
             (
-                "the client key must sign with EdDSA",
-                config(
-                    endpoint("https://tokens.example.org"),
-                    PrivateJwk::parse(
-                        &json!({
-                            "kty": "EC",
-                            "crv": "P-256",
-                            "alg": "ES256",
-                            "kid": KEY_ID,
-                            "x": URL_SAFE_NO_PAD.encode([1u8; 32]),
-                            "y": URL_SAFE_NO_PAD.encode([2u8; 32]),
-                            "d": URL_SAFE_NO_PAD.encode([3u8; 32]),
-                        })
-                        .to_string(),
-                    )
-                    .expect("the key parses"),
-                ),
+                "the client key must carry a key identifier",
+                config(endpoint("https://tokens.example.org"), {
+                    let mut key = es256_client_key(None);
+                    key.kid = None;
+                    key
+                }),
             ),
             (
                 "the assertion lifetime must be within 1..=300 seconds",

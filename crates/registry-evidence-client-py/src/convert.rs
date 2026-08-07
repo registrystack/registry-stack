@@ -822,6 +822,23 @@ mod tests {
         })
     }
 
+    /// The shape `evidencectl access client add --generate-local-key` writes,
+    /// which is the file the published tutorial hands to this binding.
+    fn generated_es256_private_jwk_json() -> Value {
+        let signing_key =
+            p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "kid": "convert-test-key-es256",
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("the public point has x")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("the public point has y")),
+            "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        })
+    }
+
     fn valid_spec_json() -> Value {
         serde_json::json!({
             "response_format": "signed-jws",
@@ -1149,6 +1166,33 @@ mod tests {
             Some(2048),
         )
         .expect("the configuration is well-shaped");
+    }
+
+    /// The tutorial reads `.evidence/clients/<id>/private.jwk` and passes it
+    /// here unchanged, and that file is ES256. A binding that took only EdDSA
+    /// would refuse every client `evidencectl` creates.
+    #[test]
+    fn config_from_parts_accepts_an_es256_client_key() {
+        let token = serde_json::json!({
+            "private_key_jwt": {
+                "token_endpoint": "https://issuer.example/token",
+                "client_id": "test-client",
+                "client_key": generated_es256_private_jwk_json(),
+            }
+        });
+        config_from_parts(
+            "https://evidence.example/",
+            &serde_json::json!({ "keys": [] }),
+            Vec::new(),
+            &token,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("an ES256 client key is well-shaped");
     }
 
     #[test]
