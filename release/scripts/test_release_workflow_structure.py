@@ -196,8 +196,10 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
 
         python_smoke = step_run(document, "clients", "Smoke the Python client wheel")
         self.assertIn('JWKS, [], "placeholder-not-a-credential"', python_smoke)
+        self.assertIn('"response_format": "signed-jws"', python_smoke)
         node_smoke = step_run(document, "clients", "Smoke the Node client package")
         self.assertIn("revokedKeyIds: []", node_smoke)
+        self.assertIn("responseFormat: 'signed-jws'", node_smoke)
 
         roster = step_run(
             document,
