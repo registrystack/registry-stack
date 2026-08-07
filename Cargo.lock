@@ -5570,6 +5570,7 @@ dependencies = [
  "rcgen",
  "registry-evidence-verifier",
  "registry-platform-audit",
+ "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
@@ -5706,6 +5707,7 @@ dependencies = [
  "inquire",
  "p256",
  "registry-evidence-client",
+ "registry-platform-buildinfo",
  "registry-platform-crypto",
  "rhai",
  "rustix",
@@ -5773,6 +5775,7 @@ dependencies = [
  "p256",
  "registry-evidence",
  "registry-platform-audit",
+ "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -5829,6 +5832,10 @@ dependencies = [
  "thiserror 2.0.18",
  "zeroize",
 ]
+
+[[package]]
+name = "registry-platform-buildinfo"
+version = "0.17.0"
 
 [[package]]
 name = "registry-platform-canonical-json"
@@ -6047,6 +6054,7 @@ dependencies = [
  "registry-manifest-core",
  "registry-platform-audit",
  "registry-platform-authcommon",
+ "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
@@ -6105,6 +6113,7 @@ dependencies = [
  "registry-config-report",
  "registry-language-server",
  "registry-platform-authcommon",
+ "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-ops",

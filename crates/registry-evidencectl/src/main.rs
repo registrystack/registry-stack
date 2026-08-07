@@ -24,7 +24,7 @@ mod verify;
 #[derive(Debug, Parser)]
 #[command(
     name = "evidencectl",
-    version,
+    version = registry_platform_buildinfo::DISPLAY_VERSION,
     about = "Evidence adopter tooling: keys, OpenAPI authoring, fixture runs"
 )]
 struct Cli {
