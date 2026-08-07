@@ -1108,13 +1108,15 @@ fn evaluate_fixture_acquisition(
                 .sources
                 .get(search)
                 .ok_or(CliError("fixture search source is unavailable"))?;
-            let search_response = project_fixture_response(
+            let search_response = match project_fixture_response(
                 search_config,
                 responses
                     .get(search)
                     .ok_or(CliError("fixture search response is unavailable"))?,
-            )
-            .map_err(|_| CliError("fixture search response projection failed"))?;
+            ) {
+                Ok(response) => response,
+                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+            };
             let search_facts =
                 match kernel.extract_source(search, &search_response, &BTreeMap::new()) {
                     Ok(LookupResult::Match(facts)) => facts,
@@ -1127,13 +1129,15 @@ fn evaluate_fixture_acquisition(
                 .sources
                 .get(fetch)
                 .ok_or(CliError("fixture fetch source is unavailable"))?;
-            let fetch_response = project_fixture_response(
+            let fetch_response = match project_fixture_response(
                 fetch_config,
                 responses
                     .get(fetch)
                     .ok_or(CliError("fixture fetch response is unavailable"))?,
-            )
-            .map_err(|_| CliError("fixture fetch response projection failed"))?;
+            ) {
+                Ok(response) => response,
+                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+            };
             let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
                 Ok(LookupResult::Match(facts)) => facts,
                 Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
@@ -2270,29 +2274,33 @@ fn validate_reference_parameter_mutation(
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
         .map_err(|_| CliError("reference disposable kernel did not compile"))?;
+    let disposable_requirement = disposable
+        .config
+        .requirements
+        .iter()
+        .find(|candidate| candidate.id == requirement.id)
+        .ok_or(CliError("reference disposable requirement is unavailable"))?;
     let positive = cases
         .iter()
         .find(|case| case.get("id").and_then(Value::as_str) == Some("positive"))
-        .and_then(|case| case.get("response"))
+        .and_then(Value::as_object)
+        .ok_or(CliError("reference positive case is unavailable"))?;
+    let (reference_field, fixture_field) = match &disposable_requirement.acquisition {
+        AcquisitionConfig::Single { .. } => ("response", "source"),
+        AcquisitionConfig::SearchThenFetch { .. } => ("responses", "sources"),
+    };
+    let response = positive
+        .get(reference_field)
         .ok_or(CliError("reference positive response is unavailable"))?;
-    let source = disposable
-        .config
-        .sources
-        .get(requirement.initial_source())
-        .ok_or(CliError("reference disposable source is unavailable"))?;
-    let projected = project_fixture_response(source, positive)
-        .map_err(|_| CliError("reference positive response projection failed"))?;
-    let outcome = kernel.evaluate_with_selectors(
-        &requirement.id,
-        &projected,
+    let acquisition_case = JsonMap::from_iter([(fixture_field.to_owned(), response.clone())]);
+    let outcome = evaluate_fixture_acquisition(
+        &disposable,
+        &kernel,
+        disposable_requirement,
+        &acquisition_case,
         selectors,
         observed_at,
-        ValueProjection {
-            audience: OFFLINE_AUDIENCE,
-            binding_key: &OFFLINE_BINDING_KEY,
-            binding_key_version: 1,
-        },
-    );
+    )?;
     match outcome {
         Err(error) => validate_reference_error(expected, error, true),
         Ok(_) => Err(CliError("reference parameter mutation did not fail")),
@@ -3260,6 +3268,158 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chained_reference_parameter_mutation_uses_final_fetch_facts() {
+        let (bundle, fixture) = chained_reference_fixture_bundle();
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("chained reference requirement is captured");
+        let fixture = fixture.as_object().expect("fixture is an object");
+        let common = fixture["common"].as_object().expect("common is an object");
+        let selectors = &common["derivationSelectorInputs"];
+        let observed_at = fixture_observed_at(&JsonMap::new(), Some(common), None)
+            .expect("observation time resolves");
+        let mut cases = fixture["cases"]
+            .as_array()
+            .expect("cases are an array")
+            .clone();
+        let positive = cases
+            .iter_mut()
+            .find(|case| case["id"] == "positive")
+            .and_then(Value::as_object_mut)
+            .expect("positive case is an object");
+        let response = positive
+            .remove("response")
+            .expect("positive response is available");
+        positive.insert(
+            "responses".to_owned(),
+            serde_json::json!({
+                REFERENCE_CHAINED_SEARCH: response,
+                REFERENCE_CHAINED_FETCH: response,
+            }),
+        );
+        let mutation_case = cases
+            .iter()
+            .find(|case| case["id"] == "namespace-mismatch")
+            .and_then(Value::as_object)
+            .expect("parameter mutation case is an object");
+
+        assert_eq!(
+            validate_reference_parameter_mutation(
+                &bundle,
+                requirement,
+                &cases,
+                mutation_case["derivationParameterMutation"]
+                    .as_object()
+                    .expect("mutation is an object"),
+                selectors,
+                observed_at,
+                mutation_case["expected"]
+                    .as_object()
+                    .expect("expectation is an object"),
+            ),
+            Ok(())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chained_fixture_projection_failures_are_source_protocol_outcomes() {
+        let (bundle, fixture) = chained_reference_fixture_bundle();
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("chained reference requirement is captured");
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let fixture = fixture.as_object().expect("fixture is an object");
+        let common = fixture["common"].as_object().expect("common is an object");
+        let selectors = &common["derivationSelectorInputs"];
+        let positive = fixture["cases"]
+            .as_array()
+            .expect("cases are an array")
+            .iter()
+            .find(|case| case["id"] == "positive")
+            .and_then(|case| case.get("response"))
+            .expect("positive response is available")
+            .clone();
+        let rejected = serde_json::json!({"errors": []});
+        let observed_at = DateTime::parse_from_rfc3339("2026-08-02T00:00:00Z")
+            .expect("fixed time parses")
+            .with_timezone(&Utc);
+
+        for (search_response, fetch_response) in
+            [(rejected.clone(), positive.clone()), (positive, rejected)]
+        {
+            let case = serde_json::json!({
+                "sources": {
+                    REFERENCE_CHAINED_SEARCH: search_response,
+                    REFERENCE_CHAINED_FETCH: fetch_response,
+                }
+            });
+            assert_eq!(
+                evaluate_fixture_acquisition(
+                    &bundle,
+                    &kernel,
+                    requirement,
+                    case.as_object().expect("case is an object"),
+                    selectors,
+                    observed_at,
+                ),
+                Ok(Err(KernelError::SourceProtocol))
+            );
+        }
+    }
+
+    const REFERENCE_CHAINED_REQUIREMENT: &str =
+        "urn:gov:example:requirement:registered-parent-relationship:v1";
+    const REFERENCE_CHAINED_SEARCH: &str = "registered-birth-parents";
+    const REFERENCE_CHAINED_FETCH: &str = "registered-birth-parents-fetch";
+
+    #[cfg(unix)]
+    fn chained_reference_fixture_bundle() -> (Arc<Bundle>, Value) {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle",
+        );
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let mut bundle = Bundle::load(directory.path()).expect("reference bundle loads");
+        let fixture = serde_json::to_value(
+            bundle
+                .fixtures
+                .get("fixtures/registered-parent-relationship-cases.yaml")
+                .expect("reference fixture is captured"),
+        )
+        .expect("reference fixture is representable");
+        let mut config = serde_json::to_value(&bundle.config).expect("config is representable");
+        let fetch = config["sources"][REFERENCE_CHAINED_SEARCH].clone();
+        config["sources"]
+            .as_object_mut()
+            .expect("sources are an object")
+            .insert(REFERENCE_CHAINED_FETCH.to_owned(), fetch);
+        let requirement = config["requirements"]
+            .as_array_mut()
+            .expect("requirements are an array")
+            .iter_mut()
+            .find(|requirement| requirement["id"] == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("reference requirement is available");
+        requirement["acquisition"] = serde_json::json!({
+            "kind": "search-then-fetch",
+            "search": REFERENCE_CHAINED_SEARCH,
+            "fetch": REFERENCE_CHAINED_FETCH,
+        });
+        bundle.config = serde_json::from_value(config).expect("chained config parses");
+        bundle.config.validate().expect("chained config validates");
+        set_tree_mode(directory.path(), 0o755, 0o444);
+        (Arc::new(bundle), fixture)
     }
 
     #[test]
