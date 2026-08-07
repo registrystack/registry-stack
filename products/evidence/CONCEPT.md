@@ -1294,9 +1294,9 @@ the refusal below is what it preserves, and every count it raises stays a
 property of the bundle rather than of a response.
 
 Script-selected sources, URLs, methods, headers, credentials, retries,
-pagination traversal, response-led routing, a third call, general workflow
-orchestration, and a richer policy language remain separate proposals. None is
-added merely as an extension seam.
+pagination traversal, response-led routing, a call no bundle declared, general
+workflow orchestration, and a richer policy language remain separate proposals.
+None is added merely as an extension seam.
 
 ### 15.6 Audience-scoped SD-JWT VC response format
 

@@ -253,7 +253,7 @@ cross_cutting:
     negative_test: sec-secret-file-identity
   transport_pinning:
     threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the per-stage request ceiling and TLS contracts.
-    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt for that configured stage and never creates a third evidence-data request.
+    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt for that configured stage and never creates an evidence-data request the requirement's acquisition kind did not declare.
     negative_test: sec-transport-backend-and-single-attempt
   jwks_route_parity:
     threat: The configured JWKS path and the served discovery route drift apart.
