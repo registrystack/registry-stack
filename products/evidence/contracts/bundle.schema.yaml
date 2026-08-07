@@ -70,8 +70,10 @@ properties:
     # before. The Version 1 forms are absent from the enumeration on purpose:
     # every bundle already had them, so declaring one would say nothing and
     # omitting one would have to mean something.
+    # An explicit empty list is accepted and says exactly what absence says.
+    # The loader treats the two as one document, so refusing it here would
+    # refuse a bundle startup loads.
     type: array
-    minItems: 1
     maxItems: 1
     uniqueItems: true
     items: {enum: [search-then-fetch-set]}
