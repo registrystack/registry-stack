@@ -11,7 +11,7 @@
 # Usage:
 #   scripts/check-evidence-tutorials.sh                 replay every tutorial
 #   scripts/check-evidence-tutorials.sh --dry-run       drift-check only
-#   scripts/check-evidence-tutorials.sh --only <slug>   one tutorial
+#   scripts/check-evidence-tutorials.sh --only <slug>   one tutorial and its prerequisites
 #
 # Registering a tutorial means adding its slug to EVIDENCE_TUTORIALS and a
 # branch to load_spec. Each spec pins:
@@ -49,6 +49,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
+	request-evidence-as-sd-jwt-vc
 	return-a-governed-value
 	assert-a-role-bound-relationship
 	refuse-unsafe-evidence-requests
@@ -64,7 +65,7 @@ load_spec() {
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=14
+		SPEC_FENCES=18
 		SPEC_STEPS=(
 			"run:2"
 			"save:Start a small registry|python|1|registry.py"
@@ -73,7 +74,7 @@ load_spec() {
 			"run:4-5"
 			"save:Create the Evidence Gateway project|yaml|1|questions/adult-status.yaml"
 			"save:Create the Evidence Gateway project|rhai|1|derivations/adult-status.rhai"
-			"run:6-13"
+			"run:6-17"
 		)
 		SPEC_LITERALS=(
 			"releases/latest/download/evidencectl-install.sh | bash"
@@ -81,6 +82,9 @@ load_spec() {
 			"evidencectl request prepare adult-status"
 			"--config .evidence/requests/first-assertion/authorization.curl"
 			"evidencectl verify assertion.jws.json"
+			"--format sd-jwt-vc"
+			"--config .evidence/requests/first-vc/authorization.curl"
+			"evidencectl verify assertion.sd-jwt"
 			"evidencectl audit show --last-operation"
 			"evidencectl dev clean"
 		)
@@ -88,10 +92,45 @@ load_spec() {
 			"Created an editable OpenAPI authoring project in adult-status"
 			"Evidence ready at http://127.0.0.1:8080"
 			"Prepared request: .evidence/requests/first-assertion/request.json"
+			"Prepared request: .evidence/requests/first-vc/request.json"
 			"VERIFIED"
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED adult-status age-check requester="
 			"DISCLOSURE RELEASED is_adult"
+			"Removed stopped local Evidence state"
+		)
+		;;
+	request-evidence-as-sd-jwt-vc)
+		SPEC_FENCES=16
+		SPEC_STEPS=(
+			"background:1"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:2-10"
+			"save:Model independently disclosed fields|yaml|1|schemas/adult-assessment.yaml"
+			"save:Model independently disclosed fields|yaml|2|questions/adult-assessment.yaml"
+			"save:Model independently disclosed fields|rhai|1|derivations/adult-assessment.rhai"
+			"run:11-16"
+		)
+		SPEC_LITERALS=(
+			"responseFormats: [signed-jws, sd-jwt-vc]"
+			"--format sd-jwt-vc"
+			"--header 'Accept: application/dc+sd-jwt'"
+			"/.well-known/jwt-vc-issuer"
+			"scalar-tampered.sd-jwt"
+			"type: reviewed-structured-value"
+			"sdJwtVc:"
+			"evidencectl verify structured.sd-jwt"
+		)
+		SPEC_OUTPUTS=(
+			"Evidence ready at http://127.0.0.1:8080"
+			"Prepared request: .evidence/requests/scalar-vc/request.json"
+			"disclosure: urn:registrystack:evidence:local:concept:adult-status:is_adult"
+			"Tampered credential refused"
+			"Prepared request: .evidence/requests/structured-vc/request.json"
+			"disclosure: criterion"
+			"disclosure: isAdult"
+			"ACCESS AUTHORIZED adult-assessment age-assessment-review requester="
+			"DISCLOSURE RELEASED adult_assessment"
 			"Removed stopped local Evidence state"
 		)
 		;;
@@ -267,7 +306,12 @@ done
 if [[ -n "$ONLY" ]]; then
 	# load_spec exits on an unregistered slug, which is the check we want here.
 	load_spec "$ONLY"
-	EVIDENCE_TUTORIALS=("$ONLY")
+	case "$ONLY" in
+	request-evidence-as-sd-jwt-vc)
+		EVIDENCE_TUTORIALS=(first-evidence-assertion "$ONLY")
+		;;
+	*) EVIDENCE_TUTORIALS=("$ONLY") ;;
+	esac
 fi
 
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/evidence-tutorial.XXXXXX")"
@@ -539,6 +583,9 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	case "$slug" in
 	first-evidence-assertion)
 		reader_dir="$WORK_ROOT/reader/evidence-start"
+		;;
+	request-evidence-as-sd-jwt-vc)
+		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
 	return-a-governed-value)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"

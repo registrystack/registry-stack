@@ -26,13 +26,14 @@ async function runGate(env = {}, args = ['--dry-run']) {
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 14 sh fences, 12 executed/u);
+  assert.match(output, /first-evidence-assertion: 18 sh fences, 16 executed/u);
+  assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
   assert.match(output, /return-a-governed-value: 10 sh fences, 10 executed/u);
   assert.match(output, /assert-a-role-bound-relationship: 9 sh fences, 9 executed/u);
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
   assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
   assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
-  assert.match(output, /Checked 6 tutorials\./u);
+  assert.match(output, /Checked 7 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -53,6 +54,20 @@ test('--only accepts the governed-value follow-up', async () => {
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('--only includes the local SD-JWT VC prerequisite', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'request-evidence-as-sd-jwt-vc',
+  ]);
+  assert.equal(code, 0, output);
+  const prerequisite = output.indexOf('first-evidence-assertion:');
+  const followUp = output.indexOf('request-evidence-as-sd-jwt-vc:');
+  assert.notEqual(prerequisite, -1, output);
+  assert.ok(followUp > prerequisite, output);
+  assert.match(output, /Checked 2 tutorials\./u);
 });
 
 test('--only accepts the role-bound relationship follow-up', async () => {

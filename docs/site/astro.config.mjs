@@ -298,6 +298,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
+                { label: 'Explore SD-JWT VC locally', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
                 { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
                 { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
                 { label: 'See safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
@@ -340,7 +341,7 @@ export default defineConfig({
               items: [
                 { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
-                { label: 'Enable SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
+                { label: 'Enable SD-JWT VC in a deployment', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },

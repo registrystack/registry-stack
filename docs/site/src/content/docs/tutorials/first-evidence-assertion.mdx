@@ -1,6 +1,6 @@
 ---
 title: Get your first Evidence Gateway assertion
-description: Run a local registry and verify a signed adult-status answer without copying the source record.
+description: Run a local registry and verify one adult-status answer as signed JWS and SD-JWT VC without copying the source record.
 status: current
 owner: registry-docs
 source_repos:
@@ -20,8 +20,8 @@ governed answer. In this tutorial, you will ask "Is this person an adult?" witho
 person's name or date of birth.
 
 <QuickstartMeta
-  outcome="A verified assertion containing an adult-status answer, but not the source record."
-  time="About 15 minutes"
+  outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
+  time="About 20 minutes"
   level="Local development with synthetic data"
   prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
 />
@@ -232,6 +232,7 @@ source:
 answers:
   - concept: is_adult
     type: boolean
+responseFormats: [signed-jws, sd-jwt-vc]
 derivation: derivations/adult-status.rhai
 disclosure:
   allow: [is_adult]
@@ -243,6 +244,8 @@ The definition closes four decisions:
 - `source` selects `getPerson` and allows only `date_of_birth` to reach the derivation. It does not
   change the complete record returned by the registry.
 - `answers` declares one permitted result, a boolean named `is_adult`.
+- `responseFormats` keeps signed JWS as the default and also permits the same answer to be returned
+  as SD-JWT VC.
 - `disclosure` is the explicit release boundary. It must name exactly the answers returned by the
   derivation.
 
@@ -395,6 +398,68 @@ files with the signed response when you need to [verify Evidence Gateway later a
 consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
 assertion alone.
 
+## Try the SD-JWT VC serialization
+
+Prepare a second request for the same governed question, this time recording SD-JWT VC as the
+expected response format:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --format sd-jwt-vc \
+  --name first-vc
+```
+
+```text
+Prepared request: .evidence/requests/first-vc/request.json
+Prepared verification context: .evidence/requests/first-vc/verification.json
+Prepared authorization: .evidence/requests/first-vc/authorization.curl
+```
+
+Send the request with the exact SD-JWT VC media type:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/first-vc/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @.evidence/requests/first-vc/request.json \
+  --output assertion.sd-jwt \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 200
+```
+
+Treat the compact credential as opaque until verification succeeds:
+
+```sh
+evidencectl verify assertion.sd-jwt \
+  --context .evidence/requests/first-vc/verification.json \
+  --output verified-vc.json
+```
+
+```text
+VERIFIED
+```
+
+Now inspect the verified Evidence payload:
+
+```sh
+python3 -m json.tool verified-vc.json
+```
+
+It has the same governed `is_adult: true` answer and minimum-disclosure boundary as the signed JWS
+response. Only the serialization changed. This is a stateless credential response, not a wallet
+issuance, revocation, or presentation workflow.
+
+Continue with [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/) to inspect disclosures,
+issuer metadata, tamper refusal, and structured-field projection.
+
 ## Stop the local services
 
 Stop Evidence Gateway and Mint before reading the completed audit chain:
@@ -465,6 +530,7 @@ loopback.
 
 ## Next
 
+- [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
 - [Return a governed value](../return-a-governed-value/)
 - [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
 - [Review the Evidence Gateway overview](../../start/evidence-quickstart/)

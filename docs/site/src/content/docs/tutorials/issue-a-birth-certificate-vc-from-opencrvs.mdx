@@ -357,6 +357,7 @@ answers:
     sdJwtVc:
       claim: birthCertificate
       disclosure: top-level
+responseFormats: [signed-jws, sd-jwt-vc]
 derivation: derivations/birth-certificate.rhai
 disclosure:
   allow: [birth_certificate]
@@ -364,7 +365,8 @@ disclosure:
 
 `birthCertificate` is a configured JSON claim name. Evidence Gateway has no built-in birth-certificate
 type. The same mechanism can project any reviewed structured value under another non-reserved
-claim name.
+claim name. `responseFormats` explicitly permits the local bundle and this question's local grant
+to return that projection as SD-JWT VC while retaining signed JWS.
 
 Create `derivations/birth-certificate.rhai`:
 
