@@ -182,9 +182,19 @@ contract, and hands every judgement about the response to
 `registry-evidence-client-node` binds that crate for Node.js callers through
 napi-rs and `registry-evidence-client-py` binds it for Python callers through
 PyO3; each is a thin surface plus a JSON conversion layer over the same Rust
-decisions. Neither binding is published: the npm package is private and PyPI
-publishing is out of scope for the crate, so both are built and tested from
-source here.
+decisions. Neither binding is published to a package registry: the npm package
+is private and PyPI publishing is out of scope for the crate. Registry Stack
+releases starting at v0.17.0 carry platform-specific Node tarballs and Python wheels as GitHub
+Release assets for Linux amd64, Linux arm64, and macOS arm64. The release
+candidate builds and runs an offline smoke against every package before the
+packages enter the signed release checksum closure.
+
+Install the Node package from the matching
+`evidence-client-node-<tag>-<platform>.tgz` asset with `npm install <path>`.
+Install the matching `registry_evidence_client-<version>-<wheel-tag>.whl`
+asset with `python -m pip install <path>`. Linux wheels use the build runner's
+glibc baseline or newer. Registry Stack does not publish these packages to npm
+or PyPI.
 
 Each crate documents its own surface and test commands:
 [`registry-evidence-client`](../../crates/registry-evidence-client/README.md),

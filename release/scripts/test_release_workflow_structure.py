@@ -287,9 +287,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("release-candidate.yml")
         self.assertEqual(
             list(document["jobs"]),
-            ["validate", "build-canonical", "build-platforms", "assemble", "attest"],
+            [
+                "validate",
+                "build-canonical",
+                "build-platforms",
+                "clients",
+                "assemble",
+                "attest",
+            ],
         )
-        for job in ("build-canonical", "build-platforms"):
+        for job in ("build-canonical", "build-platforms", "clients"):
             permissions = document["jobs"][job]["permissions"]
             self.assertNotEqual(permissions.get("packages"), "write")
             self.assertNotEqual(permissions.get("id-token"), "write")
@@ -345,6 +352,47 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "chmod 0755 candidate/bundle-root/evidencectl-install.sh",
             assemble,
         )
+
+    def test_builds_and_smokes_stable_evidence_client_packages(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        clients = document["jobs"]["clients"]
+        matrix = clients["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {
+                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                for entry in matrix
+            },
+            {
+                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
+                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
+                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+            },
+        )
+        self.assertEqual(
+            clients["env"]["CLIENT_VERSION"],
+            "${{ needs.validate.outputs.version }}",
+        )
+        wheel = step_run(document, "clients", "Build the Python client wheel")
+        self.assertIn("--compatibility linux", wheel)
+        self.assertIn("expected exactly one wheel", wheel)
+        node = step_run(document, "clients", "Build the Node client package")
+        self.assertIn(
+            "package/evidence-client.${{ matrix.napi_platform }}.node",
+            node,
+        )
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        self.assertIn("candidate-clients-${platform}", assemble)
+        self.assertIn('"${client_root}"/* candidate/bundle-root/', assemble)
+        self.assertIn("expected-client-assets", assemble)
+        self.assertIn("actual-client-assets", assemble)
+        self.assertIn("diff -u", assemble)
+        self.assertIn("kind=client-package", text)
+        for forbidden in ("npm publish", "maturin publish", "twine upload"):
+            self.assertNotIn(forbidden, text)
 
     def test_reuses_cache_with_seven_day_validity_and_storage_margin(self) -> None:
         text, document = workflow("release-candidate.yml")

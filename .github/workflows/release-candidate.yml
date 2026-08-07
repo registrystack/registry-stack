@@ -396,12 +396,153 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+  clients:
+    name: Build Evidence client packages for ${{ matrix.asset }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CLIENT_VERSION: ${{ needs.validate.outputs.version }}
+      CLIENT_TAG: ${{ needs.validate.outputs.tag }}
+      RUSTUP_TOOLCHAIN: "1.95.0"
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-amd64
+            wheel_tag: cp310-abi3-linux_x86_64
+            napi_platform: linux-x64-gnu
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64
+            wheel_tag: cp310-abi3-linux_aarch64
+            napi_platform: linux-arm64-gnu
+          - runner: macos-14
+            asset: macos-arm64
+            wheel_tag: cp310-abi3-macosx_11_0_arm64
+            napi_platform: darwin-arm64
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
+
+      - name: Restore Evidence client Cargo cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: registry-evidence-release-clients-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            registry-evidence-release-clients-${{ matrix.asset }}-
+
+      - name: Build the Python client wheel
+        working-directory: crates/registry-evidence-client-py
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          configured_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${configured_version}" = "${CLIENT_VERSION}"
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet maturin==1.9.6
+          wheel_dir="${GITHUB_WORKSPACE}/candidate-client-package/clients"
+          mkdir -p "${wheel_dir}"
+          if [[ "${RUNNER_OS}" == Linux ]]; then
+            "${RUNNER_TEMP}/maturin/bin/maturin" build \
+              --release --locked --compatibility linux --out "${wheel_dir}"
+          else
+            "${RUNNER_TEMP}/maturin/bin/maturin" build \
+              --release --locked --out "${wheel_dir}"
+          fi
+          wheel="registry_evidence_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
+          if [[ ! -f "${wheel_dir}/${wheel}" ]]; then
+            echo "maturin did not produce ${wheel}" >&2
+            find "${wheel_dir}" -maxdepth 1 -name '*.whl' >&2
+            exit 1
+          fi
+          if [[ "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -ne 1 ]]; then
+            echo "expected exactly one wheel for ${{ matrix.asset }}" >&2
+            exit 1
+          fi
+
+      - name: Smoke the Python client wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="registry_evidence_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
+          python3 -m venv "${RUNNER_TEMP}/wheel-smoke"
+          "${RUNNER_TEMP}/wheel-smoke/bin/pip" install --quiet \
+            "${GITHUB_WORKSPACE}/candidate-client-package/clients/${wheel}"
+          "${RUNNER_TEMP}/wheel-smoke/bin/python" \
+            release/scripts/smoke-evidence-client-package.py
+
+      - name: Build the Node client package
+        working-directory: crates/registry-evidence-client-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          test "$(node -p "require('./package.json').version")" = "${CLIENT_VERSION}"
+          npm run build
+          npm pack --pack-destination "${RUNNER_TEMP}"
+          packed="${RUNNER_TEMP}/registrystack-evidence-client-${CLIENT_VERSION}.tgz"
+          if [[ ! -f "${packed}" ]]; then
+            echo "npm pack did not produce ${packed}" >&2
+            exit 1
+          fi
+          entries="$(tar -tzf "${packed}")"
+          if ! grep -Fxq "package/evidence-client.${{ matrix.napi_platform }}.node" \
+              <<<"${entries}"; then
+            echo "the packed tarball has no evidence-client.${{ matrix.napi_platform }}.node" >&2
+            printf '%s\n' "${entries}" >&2
+            exit 1
+          fi
+          cp "${packed}" \
+            "${GITHUB_WORKSPACE}/candidate-client-package/clients/evidence-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
+
+      - name: Smoke the Node client package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="${GITHUB_WORKSPACE}/candidate-client-package/clients/evidence-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
+          smoke="${RUNNER_TEMP}/node-smoke"
+          mkdir -p "${smoke}"
+          cd "${smoke}"
+          npm init --yes >/dev/null
+          npm install --no-audit --no-fund "${tarball}"
+          cp "${GITHUB_WORKSPACE}/release/scripts/smoke-evidence-client-package.js" .
+          node smoke-evidence-client-package.js
+
+      - name: Upload Evidence client packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: candidate-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-client-package
+          if-no-files-found: error
+          retention-days: 2
+
   assemble:
     name: Smoke, scan, and assemble one candidate bundle
     needs:
       - validate
       - build-canonical
       - build-platforms
+      - clients
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -675,6 +816,26 @@ jobs:
           rm -f candidate/bundle-root/SHA256SUMS
           cp "${macos}"/platform/* candidate/bundle-root/
           cp "${linux_arm}"/platform/* candidate/bundle-root/
+          for platform in linux-amd64 linux-arm64 macos-arm64; do
+            client_root="inputs/candidate-clients-${platform}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/clients"
+            test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq 2
+            cp "${client_root}"/* candidate/bundle-root/
+          done
+          {
+            for platform in linux-amd64 linux-arm64 macos-arm64; do
+              echo "evidence-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
+            done
+            for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64; do
+              echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+            done
+          } | sort > "${RUNNER_TEMP}/expected-client-assets"
+          find candidate/bundle-root -maxdepth 1 -type f \
+            \( -name 'evidence-client-node-*.tgz' \
+               -o -name 'registry_evidence_client-*.whl' \) \
+            -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-client-assets"
+          diff -u \
+            "${RUNNER_TEMP}/expected-client-assets" \
+            "${RUNNER_TEMP}/actual-client-assets"
           cp "${canonical}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
             candidate/bundle-root/
           installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
@@ -774,6 +935,7 @@ jobs:
                     *-image-lock.json) kind=image-lock ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
+                    evidence-client-node-*.tgz|registry_evidence_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

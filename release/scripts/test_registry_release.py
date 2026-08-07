@@ -2297,6 +2297,18 @@ class RegistryReleaseTest(TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_validate_requires_evidence_client_packages_for_v0_17(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.17.0")
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            del data["artifacts"]["evidence-client-python"]
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("missing evidence-client-python", rejected.stderr)
+
     def test_validate_accepts_post_notary_v0_17_artifact_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = write_manifest(
@@ -2327,7 +2339,14 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("registry-notary", data["artifacts"])
         self.assertNotIn("registry-notary-cel-worker", data["artifacts"])
         self.assertLessEqual(
-            {"registry-relay", "evidence", "evidencectl", "mint"},
+            {
+                "registry-relay",
+                "evidence",
+                "evidencectl",
+                "mint",
+                "evidence-client-node",
+                "evidence-client-python",
+            },
             set(data["artifacts"]),
         )
 
@@ -4036,7 +4055,8 @@ def write_manifest(
     version: str = "0.8.0",
     include_registryctl_image_lock: bool | None = None,
     include_registryctl_installer: bool | None = None,
-    include_evidence_toolset: bool = False,
+    include_evidence_toolset: bool | None = None,
+    include_evidence_clients: bool | None = None,
     include_retired_notary: bool | None = None,
 ) -> Path:
     if source_tag is None:
@@ -4068,11 +4088,18 @@ def write_manifest(
         include_registryctl_installer = version_tuple >= (0, 14, 0)
     if include_registryctl_installer:
         artifacts["registryctl-installer"] = version
+    if include_evidence_toolset is None:
+        include_evidence_toolset = version_tuple >= (0, 17, 0)
     if include_evidence_toolset:
         artifacts["evidence"] = version
         artifacts["evidencectl"] = version
         artifacts["mint"] = version
         artifacts["evidencectl-installer"] = version
+    if include_evidence_clients is None:
+        include_evidence_clients = version_tuple >= (0, 17, 0)
+    if include_evidence_clients:
+        artifacts["evidence-client-node"] = version
+        artifacts["evidence-client-python"] = version
     if include_retired_notary is None:
         include_retired_notary = version_tuple < (0, 17, 0)
     if not include_retired_notary:
