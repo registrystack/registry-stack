@@ -625,6 +625,16 @@ block, stable concept identifiers, and exactly one project-relative
 invents requirement, framework, Evidence Type, concept, or disclosure-family
 URIs.
 
+The compact question may also declare `responseFormats: [signed-jws,
+sd-jwt-vc]`. Omission means `[signed-jws]`; signed JWS is mandatory, entries are
+unique, and no other format is accepted in this authoring surface. Local
+development compiles the list into both the bundle ceiling and that question's
+local grant. A reviewed structured answer with an `sdJwtVc` projection must
+declare `sd-jwt-vc`; scalar and unprojected answers may declare it to use the
+profile's one root disclosure. Production response-format authority still
+comes only from the complete deployment-target governance and its exact
+authority grants.
+
 Create explicit `deployment-targets/<environment>/` directories containing
 complete `governance.yaml` and `runtime.yaml` documents plus every governed
 public JWK referenced by governance under `public-keys/`. `governance.yaml` is

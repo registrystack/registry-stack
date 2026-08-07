@@ -51,6 +51,12 @@ compiles the authoring objects into a private local runtime and delegates valida
 Evidence Gateway loader. Each development session also scaffolds disposable P-256 keys for Registry
 Mint, its caller, and the optional SD-JWT VC holder.
 
+A compact question may set `responseFormats: [signed-jws, sd-jwt-vc]` to permit both signed
+serializations during local development. Omission means signed JWS only. Signed JWS is mandatory,
+and `sdJwtVc` on a reviewed structured answer also requires the explicit `sd-jwt-vc` permission.
+Production format authority comes from the deployment target's bundle-wide ceiling and exact
+authority grants, not from this local compiler convenience.
+
 ## The runtime file
 
 `runtime.yaml` binds one governed bundle to one process: where the bundle lives, what the

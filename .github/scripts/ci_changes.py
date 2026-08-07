@@ -74,6 +74,7 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
         "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+        "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
         "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
         "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     }
