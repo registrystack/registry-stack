@@ -1288,7 +1288,10 @@ source. `search-then-fetch` executes one fixed search and, only after a unique
 schema-valid match, one fixed fetch. The fetch receives the validated search
 FactSet as transient `prior_facts`; Rust may bind a declared scalar fact to a
 complete fetch path segment. The response cannot select a source, origin,
-method, credential, or additional call.
+method, credential, or additional call. Section 15.7 adds one further closed
+kind, gated by an operator, that widens the fixed fetch into a declared set;
+the refusal below is what it preserves, and every count it raises stays a
+property of the bundle rather than of a response.
 
 Script-selected sources, URLs, methods, headers, credentials, retries,
 pagination traversal, response-led routing, a third call, general workflow
@@ -1392,6 +1395,157 @@ identity, grant identifiers, and requester identity never appear in the
 credential, in a disclosure, or in credential-visible metadata. The disclosure
 set is exactly the assertion's supported values. Everything the payload of the
 signed-JWS format withholds, this format withholds identically.
+
+### 15.7 Fixed multi-source acquisition
+
+Section 15.5 stops a chained acquisition at two calls. Some questions cannot be
+answered inside that ceiling, because the facts they need are held by more than
+one register and no single one of them returns the others. This profile adds
+one closed acquisition kind for exactly that shape and adds nothing else.
+
+Unlike the other profiles in this section, this one is implemented. It was
+originally written with an adopter gate ahead of it, and that gate was waived
+by a deliberate product decision rather than met. Its Version 1 non-goals and
+the refusals below are unaffected by that decision and remain in force.
+
+#### What the kind adds
+
+`search-then-fetch-set` executes one fixed search and then, only after a unique
+schema-valid match, between two and four declared fetch members, sequentially,
+in the order the bundle declares them. The ceiling is one plus the declared
+member count, at most five evidence-data requests, and it is a property of the
+bundle rather than of any response.
+
+Each member declares `factInputs`, a closed allowlist of search fact names, and
+receives only that projection of the validated search FactSet. The derivation
+receives the union of the search FactSet and every member FactSet. Bundle load
+proves the fact names pairwise disjoint across all stages, so the union is a
+merge that can never overwrite a stage's fact with another's.
+
+Everything outside acquisition is unchanged: the same authentication, the same
+single authorization decision, the same fixed request execution, the same
+bounded derivation, the same output validation, the same minimum-disclosure
+assertion, the same signing, the same audit ordering.
+
+#### The acquisition plan is a value
+
+The ordered acquisition is a pure function of the bundle: no request input, no
+response, and no clock takes part in deriving it. The runtime executes that
+value, the offline fixture harness iterates the same value, and adopter tooling
+prints it, so what an adopter inspects before deployment and what serves in
+production cannot drift apart.
+
+This shape is well-understood prior art rather than a novel invention. GraphQL
+federation compiles a static plan of fetch nodes before executing anything, and
+each node declares the exact fields it needs from earlier fetches; that
+declaration is `factInputs` under another name. Two halves of that prior art
+are deliberately refused. Federation compiles its plan from the client's
+operation, while this plan is compiled from the bundle alone, because a
+request-shaped plan is a client-controlled source sequence and scripts are
+already forbidden one. Federation also fans a fetch out once per entity in a
+result array, which is response-led width and is precisely what section 15.5
+refuses.
+
+Members are structurally independent: their inputs come only from the search,
+and their outputs are disjoint by construction. Executing them concurrently
+would therefore need no contract change. Sequential execution in declared order
+is nonetheless the decision, because it keeps audit ordering, budget
+accounting, and stop-at-first-failure deterministic. Parallel execution is not
+implemented and is not a seam.
+
+#### Enabling the kind is a deployment decision
+
+The kind is gated twice. A bundle declares the gated acquisition kinds it uses,
+and an operator separately enables them in the runtime configuration. A bundle
+that uses the kind while the operator has not enabled it is refused before the
+deployment serves anything. Absent means enabled nothing, so a deployment that
+never made this decision keeps serving exactly what it served before.
+
+The declaration gates one requirement at a time. A requirement acquiring
+through a frozen Version 1 form is unaffected by a sibling requirement adopting
+a gated form, including in the configuration revision a relying party pinned.
+
+#### Four rules an adopter has to know
+
+Zero results stay `no_match`. The kind introduces no absence-as-fact rule. A
+member that must answer a negative gets it from a register that positively
+attests set completeness, and the derivation refuses when the attestation is
+not present and true. An empty response is meaningful because of the
+attestation, never because it was empty. This is the easiest thing to get wrong
+here, because the kind hands the derivation a far richer fact union than a
+single call ever did, which makes reading a missing record as a negative look
+reasonable.
+
+The allowlist is the only control on the request-body channel. A prior fact can
+leave the process through a declared path or query binding, which bundle load
+inspects statically, or through the JSON body a member's request preparation
+builds, which it cannot. For the body channel the projection is the whole
+control, and it is sufficient because preparation is handed the projected map
+and nothing else, so it cannot name a fact outside its allowlist. An
+implementer reading the startup checks will otherwise assume the binding check
+guards the body. It does not, which is why the property is proven against
+outbound request bytes.
+
+Member distinctness is over source identifiers. Two members may name two
+configured sources that share a base URL and path and differ only in
+preparation, extraction, and fact schema, which is the correct expression when
+one register answers two questions about two different references. Distinctness
+is therefore declaration hygiene and audit legibility, not an amplification
+bound. The width ceiling and the acquisition budget are the amplification
+bounds.
+
+The budget must cover credential acquisition. A source credential cache is per
+configured source, so a cold acquisition can pay one credential exchange per
+stage in addition to the stage's own request.
+
+#### The budget and what it does not cover
+
+One required `maximumAcquisitionMilliseconds`, between one and thirty seconds,
+covers the whole acquisition. Exhaustion fails the request as an unavailable
+dependency under its own safe category, and the audit event names the last
+stage the process actually executed. An audit event asserting an access attempt
+against a source that was never contacted would itself be an audit-integrity
+defect.
+
+The budget deliberately bounds the source exchanges and the transitions between
+stages, and never crosses a durable audit append. The audit chain hashes a
+record before the write it belongs to completes, so cancelling a task inside
+that write drops already-hashed lines and leaves a chain that no longer matches
+its own tail, while the process keeps serving. A refusal is recoverable and a
+silently broken chain is not, so the budget yields to the audit trail rather
+than the reverse. Per-source timeouts stay independently enforced; whichever
+bound fires first wins, and the two are reported as distinct categories.
+
+#### Accepted limitations
+
+Response time still varies with how far an acquisition got before it stopped.
+Stopping at the first unresolved member is observable to an adversary in a
+network position as a shorter response, and no mitigation exists at this layer.
+The alternative, always executing every declared member, would multiply
+disclosure to sources for no gain to the relying party. The limitation is
+stated rather than mitigated.
+
+The bound on what one derivation accepts is enforced offline as a count of
+declared fact names and at runtime as a byte size. Only the first is a property
+of the bundle. A union of individually valid stage extractions can exceed the
+byte bound, which fails the request after every stage has already executed. No
+offline rule can predict it, because it is a property of the responses.
+
+An assertion that consumes a provider's own aggregate as a value, rather than
+as a cardinality guard, reaches a minimum-disclosure rule that predates this
+profile and is not resolved by it. The existing rule forbids a count beyond a
+closed outcome in a derivation or a public surface. Whether an attested
+aggregate consumed as a declared concept input is distinguishable from a
+candidate count used for cardinality control is a separate decision with its
+own privacy analysis. This profile does not make it, and an adopter should not
+read the wider fact union as having made it.
+
+#### Profile non-goals
+
+None of the following is added, stubbed, flagged, or left as a seam: a member
+count chosen by a response, pagination or result traversal, a member that
+selects the next source, retries, parallel member execution, a third chained
+shape inside one requirement, or any reading of absence as a fact.
 
 ## 16. Initial assertion cases
 
@@ -1500,7 +1654,10 @@ It does not include:
 - a policy engine;
 - document evidence;
 - OOTS runtime types;
-- multi-source fulfillment;
+- response-led multi-source fulfillment, where a response chooses how many
+  sources are called or which one comes next. A fixed set of declared members,
+  bounded and ordered by the bundle and enabled by the operator, is included
+  under section 15.7;
 - source-planning scripts;
 - conversion of `.evidence/dev` local state into production inputs;
 - generated production secrets, callers, approval, promotion, deployment, or
