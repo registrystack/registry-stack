@@ -30,6 +30,13 @@ rejected_bundles:
       - {concept: urn:example:fixture:concept:relationship-b, roles: [subject-b, subject-c]}
     threat: Combinations reconstruct an unapproved family or association graph.
     expected: reject unsafe relationship combination
+  - id: survivorship-graph
+    shared_disclosure_family: urn:example:fixture:disclosure-family:protected-survivorship-a
+    definitions:
+      - {concept: urn:example:fixture:concept:survivorship-a, registers: [union, death], requester: requester-a}
+      - {concept: urn:example:fixture:concept:survivorship-b, registers: [union], requester: requester-a}
+    threat: Answers drawn from overlapping register sets separate a partner's death from an ended union.
+    expected: reject unsafe multi-register combination
 allowed_control:
   id: unrelated-minimized-concepts
   definitions:

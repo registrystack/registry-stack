@@ -122,7 +122,7 @@ source_shapes:
     outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality]
   common_failures: [401, 403, 429, 5xx, timeout, redirect, invalid-json, wrong-media-type, oversized-response]
   common_invariants:
-    - only the configured single or fixed search-then-fetch acquisition and no page traversal
+    - only the acquisition kind the bundle configures, from the closed set the operator enabled, and no page traversal
     - maximum two bounded results solely for cardinality; profiles that cannot field-project declare record-transformed
     - no candidates, count beyond closed outcome, score, hint, or comparison in derivation or public surfaces
     - raw selectors, credentials, token flows, source values, and bodies absent from diagnostics and audit

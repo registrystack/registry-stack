@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+# The search FactSet is the only FactSet a fetch member can be fed from, and
+# only the fields a member declares in factInputs reach it. Every name here is
+# disjoint from every name in the two member fact schemas.
+required: [civil_record_reference, reference_namespace]
+properties:
+  civil_record_reference: {type: string, minLength: 1, maxLength: 96}
+  reference_namespace: {const: urn:example:fixture:civil-record}

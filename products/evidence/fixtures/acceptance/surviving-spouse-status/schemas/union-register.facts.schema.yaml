@@ -1,0 +1,21 @@
+type: object
+additionalProperties: false
+required: [union_events, union_set_contract, union_set_complete]
+properties:
+  union_events:
+    type: array
+    minItems: 0
+    maxItems: 8
+    items:
+      type: object
+      additionalProperties: false
+      required: [union_start_date, union_end_reason, union_recognized]
+      properties:
+        union_start_date: {type: string, format: date}
+        union_end_reason: {type: string, enum: [death-of-other-party, dissolution, annulment, ongoing]}
+        union_recognized: {type: boolean}
+  union_set_contract: {const: urn:example:fixture:union-set:v1}
+  # A register that reports an incomplete set has not answered. The derivation
+  # refuses on false rather than reading the events it did send, so this stays
+  # a boolean fact instead of a const the extraction would have to enforce.
+  union_set_complete: {type: boolean}
