@@ -1,14 +1,14 @@
 use std::process::Command;
 
 fn version_output(flag: &str) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .arg(flag)
         .output()
-        .unwrap_or_else(|err| panic!("registryctl {flag} runs: {err}"));
+        .unwrap_or_else(|err| panic!("evidencectl {flag} runs: {err}"));
 
     assert!(
         output.status.success(),
-        "registryctl {flag} failed: {}",
+        "evidencectl {flag} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -20,7 +20,7 @@ fn version_output_uses_user_facing_command_name() {
         assert_eq!(
             version_output(flag),
             format!(
-                "registryctl {}\n",
+                "evidencectl {}\n",
                 registry_platform_buildinfo::DISPLAY_VERSION
             )
         );
@@ -37,6 +37,6 @@ fn version_output_marks_a_build_that_is_not_a_release() {
 
     assert_eq!(
         version_output("--version"),
-        format!("registryctl {expected}\n")
+        format!("evidencectl {expected}\n")
     );
 }

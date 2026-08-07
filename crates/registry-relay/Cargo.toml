@@ -95,6 +95,7 @@ registry-manifest-core = { workspace = true }
 
 # ─── auth / crypto ───────────────────────────────────────────────────────────
 registry-platform-authcommon = { workspace = true }
+registry-platform-buildinfo = { workspace = true }
 registry-platform-audit = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true }
