@@ -649,9 +649,12 @@ class RegistryReleaseTest(TestCase):
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
 
         self.assertIn(
-            "curl -fsSL https://docs.registrystack.org/install.sh | bash",
+            "curl -fsSLo registryctl-install.sh "
+            "https://docs.registrystack.org/install.sh",
             text,
         )
+        self.assertIn("bash registryctl-install.sh", text)
+        self.assertNotIn("| bash", text)
         self.assertNotIn("raw.githubusercontent.com", text)
 
     def test_release_image_packaging_uses_release_dockerfiles(self) -> None:
