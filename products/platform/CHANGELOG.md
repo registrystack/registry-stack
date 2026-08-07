@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Executables report a development version, such as `0.17.0-dev`, unless they
+  were produced by the release build. `registry-relay`, `registryctl`,
+  `evidence`, `evidencectl`, and `mint` all take their `--version` text from
+  the new `registry-platform-buildinfo` primitive. Released binaries and the
+  published Relay image are unchanged and still report the bare released
+  version. Cargo package versions are unchanged.
+
 ## v0.17.0 - 2026-08-07
 
 - Registry Platform carries the shared audit, HTTP security, OpenID Connect,
