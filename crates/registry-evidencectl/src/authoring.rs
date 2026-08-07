@@ -259,8 +259,30 @@ struct Question {
     answers: Vec<QuestionAnswer>,
     derivation: String,
     disclosure: QuestionDisclosure,
+    #[serde(rename = "responseFormats", default = "default_response_formats")]
+    response_formats: Vec<QuestionResponseFormat>,
     #[serde(default)]
     governance: Option<QuestionGovernance>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+enum QuestionResponseFormat {
+    SignedJws,
+    SdJwtVc,
+}
+
+impl QuestionResponseFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedJws => "signed-jws",
+            Self::SdJwtVc => "sd-jwt-vc",
+        }
+    }
+}
+
+fn default_response_formats() -> Vec<QuestionResponseFormat> {
+    vec![QuestionResponseFormat::SignedJws]
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,6 +446,7 @@ struct QuestionPlan {
     fixture_artifact: Option<String>,
     purpose: String,
     requirement_uri: String,
+    response_formats: Vec<QuestionResponseFormat>,
     concepts: Vec<ConceptPlan>,
     subjects: Vec<SubjectPlan>,
     source_id: String,
@@ -1039,6 +1062,16 @@ fn validate_question(question: &Question) -> Result<()> {
     if !(1..=MAX_CONCEPTS).contains(&question.answers.len()) {
         bail!("answers must contain 1..={MAX_CONCEPTS} governed concepts");
     }
+    let response_formats = question
+        .response_formats
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if response_formats.len() != question.response_formats.len()
+        || !response_formats.contains(&QuestionResponseFormat::SignedJws)
+    {
+        bail!("responseFormats must contain signed-jws exactly once and may add sd-jwt-vc once");
+    }
     let mut concepts = BTreeSet::new();
     let mut sd_jwt_claims = BTreeSet::new();
     for answer in &question.answers {
@@ -1050,6 +1083,9 @@ fn validate_question(question: &Question) -> Result<()> {
         }
         validate_answer(answer)?;
         if let Some(projection) = &answer.sd_jwt_vc {
+            if !response_formats.contains(&QuestionResponseFormat::SdJwtVc) {
+                bail!("an sdJwtVc projection requires responseFormats to include sd-jwt-vc");
+            }
             if !sd_jwt_claims.insert(projection.claim.as_str()) {
                 bail!("sdJwtVc.claim names must be unique within a question");
             }
@@ -1505,6 +1541,7 @@ fn compile_question_plan(
             .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
+        response_formats: question.response_formats.clone(),
         concepts,
         subjects,
         source_id,
@@ -1584,6 +1621,7 @@ fn compile_referenced_question(
             .map(|governance| governance.fixtures.clone()),
         purpose: question.purpose.clone(),
         requirement_uri,
+        response_formats: question.response_formats.clone(),
         concepts,
         subjects,
         source_id: source_id.to_owned(),
@@ -2634,15 +2672,11 @@ fn render_governance_parts(
             })
         })
         .collect::<Vec<_>>();
-    let response_formats = if requirement
-        .concepts
+    let response_formats = question
+        .response_formats
         .iter()
-        .any(|concept| concept.sd_jwt_vc.is_some())
-    {
-        json!(["signed-jws", "sd-jwt-vc"])
-    } else {
-        json!(["signed-jws"])
-    };
+        .map(|format| format.as_str())
+        .collect::<Vec<_>>();
     let grant = json!({
         "requirement": requirement.requirement_uri,
         "purpose": question.purpose,
@@ -2790,15 +2824,13 @@ fn render_local_bundle(
         .iter()
         .map(|question| question.requirement.clone())
         .collect::<Vec<_>>();
-    let response_formats = if questions
+    let response_formats = questions
         .iter()
-        .flat_map(|question| &question.concepts)
-        .any(|concept| concept.sd_jwt_vc.is_some())
-    {
-        json!(["signed-jws", "sd-jwt-vc"])
-    } else {
-        json!(["signed-jws"])
-    };
+        .flat_map(|question| question.response_formats.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(QuestionResponseFormat::as_str)
+        .collect::<Vec<_>>();
     json!({
         "version": 1,
         "assuranceProfile": "local",
@@ -3588,6 +3620,7 @@ answers:
     sdJwtVc:
       claim: birthCertificate
       disclosure: top-level
+responseFormats: [signed-jws, sd-jwt-vc]
 derivation: derivations/birth-certificate.rhai
 disclosure:
   allow: [birth_certificate]
@@ -3689,6 +3722,7 @@ properties:
         )
         .expect("bundle parses");
         assert_eq!(bundle["assuranceProfile"], "local");
+        assert_eq!(bundle["responseFormats"], json!(["signed-jws"]));
         let source_id = local_source_id("adult-status");
         let selector_profile = local_selector_profile_id("adult-status");
         assert_eq!(
@@ -3723,6 +3757,82 @@ properties:
             .contains("let governed_answers = answer(facts, selectors, evaluation_context)"));
         assert!(derivation.contains("value: governed_answers[\"is_adult\"]"));
         assert!(!derivation.contains("concept_id: \"is_adult\""));
+    }
+
+    #[test]
+    fn compiles_explicit_sd_jwt_vc_for_a_scalar_answer() {
+        let question = QUESTION.replace(
+            "derivation: derivations/adult-status.rhai",
+            "responseFormats: [signed-jws, sd-jwt-vc]\nderivation: derivations/adult-status.rhai",
+        );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("scalar SD-JWT VC format compiles");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+
+        assert_eq!(
+            bundle["responseFormats"],
+            json!(["signed-jws", "sd-jwt-vc"])
+        );
+        assert_eq!(
+            bundle["authorityProfiles"][AUTHORITY_PROFILE_ID]["grants"][0]["responseFormats"],
+            json!(["signed-jws", "sd-jwt-vc"])
+        );
+        assert!(bundle["requirements"][0]["concepts"][0]
+            .get("sdJwtVc")
+            .is_none());
+    }
+
+    #[test]
+    fn refuses_response_formats_without_signed_jws() {
+        let question = QUESTION.replace(
+            "derivation: derivations/adult-status.rhai",
+            "responseFormats: [sd-jwt-vc]\nderivation: derivations/adult-status.rhai",
+        );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("signed JWS remains mandatory");
+
+        assert!(error
+            .to_string()
+            .contains("responseFormats must contain signed-jws exactly once"));
+    }
+
+    #[test]
+    fn refuses_duplicate_or_unknown_response_formats() {
+        let duplicate = QUESTION.replace(
+            "derivation: derivations/adult-status.rhai",
+            "responseFormats: [signed-jws, signed-jws]\nderivation: derivations/adult-status.rhai",
+        );
+        let fixture = Fixture::new(OPENAPI, &duplicate, ANSWER, true);
+        assert!(
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence).is_err()
+        );
+
+        let unknown = QUESTION.replace(
+            "derivation: derivations/adult-status.rhai",
+            "responseFormats: [signed-jws, unsigned-json]\nderivation: derivations/adult-status.rhai",
+        );
+        assert!(serde_norway::from_str::<Question>(&unknown).is_err());
+    }
+
+    #[test]
+    fn refuses_structured_projection_without_sd_jwt_vc_format() {
+        let question =
+            BIRTH_CERTIFICATE_QUESTION.replace("responseFormats: [signed-jws, sd-jwt-vc]\n", "");
+        let fixture = Fixture::new(OPENAPI, &question, BIRTH_CERTIFICATE_ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a projection cannot silently enable SD-JWT VC");
+
+        assert!(error
+            .to_string()
+            .contains("an sdJwtVc projection requires responseFormats to include sd-jwt-vc"));
     }
 
     #[test]
