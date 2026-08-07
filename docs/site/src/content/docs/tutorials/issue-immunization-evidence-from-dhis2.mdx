@@ -61,8 +61,12 @@ gives an event the `ACTIVE` status by default, and states that only a super user
 holding the `F_UNCOMPLETE_EVENT` authority can modify a completed event.
 `COMPLETED` therefore marks an event closed to further editing, not an event whose data values
 are the only recorded ones.
-In the public demo, the Child Programme's immunization readings sit almost entirely on `ACTIVE`
-events, so a `COMPLETED`-only rule returns no assertion for effectively every child.
+The distinction decides whether this tutorial returns anything at all.
+A sample of 2000 Child Programme tracked entities taken from the public demo on 2026-08-07 held
+3885 `ACTIVE` events against 7 `COMPLETED` ones, and no record carried all five immunization
+readings on `COMPLETED` events alone.
+The demo maintainers can reset that data at any time, so treat the counts as one dated
+observation rather than a standing property of the dataset.
 The source adapter accepts Birth and Baby Postnatal events in both statuses.
 Each assertion describes the record at the time of the request, and a later correction to an
 event changes what the next assertion says.
