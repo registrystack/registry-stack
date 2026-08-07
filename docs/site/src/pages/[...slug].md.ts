@@ -28,6 +28,7 @@ export async function GET({ props }: { props: { entry: Awaited<ReturnType<typeof
     entry.data.title,
     entry.data.description,
     entry.body ?? '',
+    import.meta.env.BASE_URL,
   );
   return new Response(body, {
     headers: { 'content-type': 'text/markdown; charset=utf-8' },
