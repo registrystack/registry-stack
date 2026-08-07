@@ -44,7 +44,8 @@ use tokio_rustls::TlsAcceptor;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const SHAPE_EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"source-shape-evidence-key"}"#;
+const SHAPE_EVIDENCE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+const SHAPE_EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
 fn source_config(
     base_url: &str,
@@ -62,7 +63,7 @@ fn source_config(
             "method": "POST",
             "pathTemplate": "/v1/records/{record}",
             "pathBindings": {
-                "record": {"role": "subject", "profile": "record-v1", "field": "record_id"}
+                "record": {"from": "selector", "role": "subject", "profile": "record-v1", "field": "record_id"}
             },
             "fixedHeaders": fixed_headers,
             "selectorInputs": [{
@@ -1226,7 +1227,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
     let private = PrivateJwk::parse(SHAPE_EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
     let provider: Arc<dyn SigningProvider> =
         Arc::new(LocalJwkSigner::new(private).expect("test signing provider builds"));
-    let signer = EvidenceSigner::initialize(provider, "source-shape-evidence-key")
+    let signer = EvidenceSigner::initialize(provider, SHAPE_EVIDENCE_KEY_ID)
         .await
         .expect("test signer passes its self-test");
     let jwks =
@@ -1281,17 +1282,22 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
             &evidence,
             registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-            Duration::from_secs(31_536_000),
+            31_536_000,
             observed_at,
-            Duration::from_secs(0),
-        );
+            0,
+        )
+        .expect("the fixture policy states bounds the contract allows");
         policy.issued_by = "urn:example:fixture:issuer:authority".to_owned();
         policy.provided_by = "urn:example:fixture:provider:evidence".to_owned();
         policy.requirement = requirement.to_owned();
         policy.evidence_type = "urn:example:fixture:evidence-type:residence-region:v1".to_owned();
         policy.purpose = "fixture-routing".to_owned();
         policy.audience = "https://relying.invalid/residence-procedure".to_owned();
-        policy.configuration_revision = kernel.bundle().revision().to_owned();
+        policy.configuration_revision = kernel
+            .bundle()
+            .configuration_revision(requirement)
+            .expect("the requirement has a configuration revision")
+            .to_owned();
         let verified = verify_flattened_jws(&serialized, &jwks, &policy)
             .expect("signed residence Evidence verifies under the exact relying policy");
         assert_eq!(
@@ -2421,7 +2427,7 @@ fn runtime_ca_capture_rejects_symlink_malformed_and_mutable_files() {
         fs::write(
             &runtime_path,
             format!(
-                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    private-pki: {{caBundleFile: {}}}\n",
+                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    private-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),

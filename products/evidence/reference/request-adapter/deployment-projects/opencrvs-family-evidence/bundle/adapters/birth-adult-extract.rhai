@@ -1,7 +1,8 @@
 // The response schema has already refused anything outside the declared shape,
 // so what remains here is what a shape cannot state: how total relates to the
 // records returned, and which values must agree with the adapter parameters.
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
     if results.len > parameters["resultLimit"] { throw("source_protocol_error"); }

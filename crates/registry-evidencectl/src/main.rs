@@ -44,7 +44,7 @@ enum Command {
     Jwks(jwks::JwksArgs),
     /// Start an editable Evidence authoring project from OpenAPI.
     New(scaffold::NewArgs),
-    /// Compile an editable project into a reviewed production candidate.
+    /// Compile an editable project into a reviewed deployment candidate.
     Build(build::BuildArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]

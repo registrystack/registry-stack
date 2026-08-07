@@ -59,14 +59,17 @@ $defs:
   holder-key:
     type: object
     additionalProperties: false
-    required: [kty, crv, x]
+    required: [kty, crv, x, y]
     properties:
-      kty: {type: string, enum: [OKP]}
-      crv: {type: string, enum: [Ed25519]}
+      kty: {type: string, enum: [EC]}
+      crv: {type: string, enum: [P-256]}
       x:
         type: string
         pattern: '^[A-Za-z0-9_-]{43}$'
-      alg: {type: string, enum: [EdDSA]}
+      y:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{43}$'
+      alg: {type: string, enum: [ES256]}
       kid: {type: string, minLength: 1, maxLength: 256}
   scalar-selector-value:
     oneOf:
@@ -91,6 +94,6 @@ $comment: >-
   never uniqueness-checked, and never reaches authorization, rate limits,
   Rhai, source requests, logs, metrics, traces, or native audit. Callers must
   not encode identifiers, selectors, secrets, or document digests into it.
-  holderKey is an Ed25519 public JWK. A key carrying any private member, a
+  holderKey is an EC P-256 public JWK. A key carrying any private member, a
   non-allowlisted algorithm, or an unparseable body fails before credential
   acquisition or source access.

@@ -7,24 +7,26 @@ authentication:
   issuer: https://identity.invalid
   audiences: [evidence-fixture]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: fixture-key-2026-01
-  activeKeyRef: secret:file/signing-key
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 responseFormats: [signed-jws]
 
@@ -74,13 +76,15 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
-    source: source-a
+    acquisition:
+      kind: single
+      source: source-a
     purposes: [fixture-eligibility]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}]
     referenceFrameworks: [urn:example:fixture:framework:adult-status:v1]
     evidenceType: urn:example:fixture:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation: {script: derivations/adult-status.rhai, parameters: {minimum_age_years: 18}}
     concepts: [{id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml

@@ -22,7 +22,7 @@ use registry_mint::{
     server::{build_app, serve, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use serde_json::{json, Value};
 
@@ -30,8 +30,8 @@ use serde_json::{json, Value};
 // written inline so a secret scanner does not read the write call as an
 // assignment of a live credential.
 const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
-const ISSUER: &str = "https://mint.example.org";
-const ASSERTION_AUDIENCE: &str = "https://mint.example.org/token";
+const ISSUER: &str = "http://127.0.0.1:18082";
+const ASSERTION_AUDIENCE: &str = "http://127.0.0.1:18082/token";
 const LOCAL_ISSUER: &str = "http://127.0.0.1:18081";
 const LOCAL_ASSERTION_AUDIENCE: &str = "http://127.0.0.1:18081/token";
 const EVIDENCE_AUDIENCE: &str = "evidence.example.org";
@@ -59,6 +59,23 @@ fn key_pair(seed: u8) -> (PrivateJwk, Value, Value) {
     (private, public, private_document)
 }
 
+fn service_key_pair(seed: u8) -> (Value, Value) {
+    let scalar = [seed; 32];
+    let signing = p256::ecdsa::SigningKey::from_slice(&scalar).expect("valid P-256 scalar");
+    let encoded = signing.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("uncompressed x"));
+    let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("uncompressed y"));
+    let bare = PublicJwk::parse(
+        &json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y}).to_string(),
+    )
+    .expect("public JWK parses");
+    let kid = bare.jkt().expect("thumbprint computes");
+    (
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y}),
+        json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y, "d":URL_SAFE_NO_PAD.encode(scalar)}),
+    )
+}
+
 struct Deployment {
     /// Held so the directory outlives the service that reads from it.
     _directory: tempfile::TempDir,
@@ -68,7 +85,13 @@ struct Deployment {
 /// Write a complete Mint deployment to disk and load it exactly as the binary
 /// would, including the owner-only permission requirement on the signing key.
 async fn deployment() -> Deployment {
-    deployment_with_transport(None, ISSUER, 0, ASSERTION_AUDIENCE).await
+    deployment_with_transport(
+        Some("supervised-local-development"),
+        ISSUER,
+        18082,
+        ASSERTION_AUDIENCE,
+    )
+    .await
 }
 
 async fn supervised_local_development_deployment() -> Deployment {
@@ -91,8 +114,18 @@ async fn deployment_with_transport(
     let root = directory.path();
     fs::create_dir(root.join("secrets")).expect("create secrets directory");
     fs::create_dir(root.join("clients")).expect("create clients directory");
+    fs::create_dir(root.join("public-keys")).expect("create public key directory");
 
-    let (_, _, signing_document) = key_pair(9);
+    let (signing_public, signing_document) = service_key_pair(9);
+    let public_file = format!(
+        "{}.jwk.json",
+        signing_public["kid"].as_str().expect("service key id")
+    );
+    fs::write(
+        root.join("public-keys").join(&public_file),
+        signing_public.to_string(),
+    )
+    .expect("write governed public key");
     let signing_path = root.join("secrets/signing.jwk");
     fs::write(&signing_path, signing_document.to_string()).expect("write signing key");
     fs::set_permissions(&signing_path, fs::Permissions::from_mode(0o600))
@@ -124,13 +157,19 @@ version: 1
 {validation_mode}issuer: {issuer}
 listener: {{address: 127.0.0.1, port: {listener_port}}}
 signing:
-  algorithm: EdDSA
-  activeKeyId: key-9
-  activeKeyFile: secrets/signing.jwk
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{public_file}
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing.jwk
+secretProviders:
+  file: {{root: {}}}
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [{EVIDENCE_AUDIENCE}]
@@ -146,7 +185,8 @@ clientAssertion:
   algorithms: [EdDSA]
 clients:
   directory: clients
-"#
+"#,
+            root.join("secrets").display()
         ),
     )
     .expect("write config");
@@ -228,7 +268,7 @@ fn evidence_authenticator_for_issuer(jwks: &Value, issuer: &str) -> Authenticato
     let verifier_config = TokenVerifierConfig::access_token_profile(
         issuer.to_owned(),
         vec![EVIDENCE_AUDIENCE.to_owned()],
-        vec![jsonwebtoken::Algorithm::EdDSA],
+        vec![jsonwebtoken::Algorithm::ES256],
         vec!["at+jwt".to_owned()],
     );
     let fetcher = Arc::new(JwksFetcher::new_static(
@@ -404,7 +444,9 @@ async fn evidence_fetches_keys_from_a_real_supervised_local_mint() {
             issuer: issuer.clone(),
             audiences: vec![EVIDENCE_AUDIENCE.to_owned()],
             token_types: vec![AccessTokenType::AtJwt],
-            algorithms: vec![AccessTokenAlgorithm::EdDSA],
+            algorithms: vec![AccessTokenAlgorithm::ES256],
+            maximum_token_lifetime_seconds: 300,
+            revoked_key_ids: Vec::new(),
             jwks_uri,
             principal_claim: PRINCIPAL_CLAIM.to_owned(),
             requester_tags_claim: REQUESTER_TAGS_CLAIM.to_owned(),

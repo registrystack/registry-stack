@@ -1,5 +1,5 @@
 ---
-title: Verify Evidence as a consumer
+title: Verify Evidence Gateway as a consumer
 description: Separate a stored response from independently retained trust and request expectations, then re-verify the decision offline.
 status: current
 owner: registry-docs
@@ -15,17 +15,17 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence assertion](../first-evidence-assertion/) before starting this
-tutorial. You will reuse that assertion to show why an application must not trust an Evidence
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting this
+tutorial. You will reuse that assertion to show why an application must not trust an Evidence Gateway
 payload because it arrived over HTTPS or because it can be decoded, and how independently retained
 trust and request expectations support later offline review.
 
 <QuickstartMeta
-  outcome="An Evidence response re-verified offline at the recorded decision time."
+  outcome="An Evidence Gateway response re-verified offline at the recorded decision time."
   time="About 10 minutes"
   level="Local verification with synthetic data"
   prerequisites={[
-    'The completed first Evidence assertion tutorial',
+    'The completed first Evidence Gateway assertion tutorial',
     'The retained assertion.jws.json, verified.json, and first-assertion request artifacts',
     'Python 3 and the evidence binary',
   ]}
@@ -94,7 +94,7 @@ authentic: yes
 currently-valid: yes
 ```
 
-The command then prints the verified Evidence payload. It opens no listener, contacts no issuer,
+The command then prints the verified Evidence Gateway payload. It opens no listener, contacts no issuer,
 fetches no discovery document, and calls no source. The named JWKS file is the complete trust set
 for this verification.
 
@@ -145,4 +145,4 @@ produced it. The same subject produces an unrelated binding for another audience
 
 - [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)
 - [Request SD-JWT VC serialization](../request-evidence-as-sd-jwt-vc/)
-- [Review the Evidence API](../../reference/apis/registry-evidence/)
+- [Review the Evidence Gateway API](../../reference/apis/registry-evidence/)

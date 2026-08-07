@@ -27,6 +27,17 @@ secretProviders:
   file:
     root: /run/secrets/registry-evidence
 
+# The workload-local proxy creates this socket in the separately mounted
+# /run/registry-evidence directory. Replace the key name and version with the
+# exact values that match the governed active public JWK.
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 1
+  timeoutMilliseconds: 2000
+
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824

@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry family map</title>
-  <desc>The four formal Registry Stack products, arranged left to right by structural role, followed by Registry Mint as a supporting service and the external Solmara Lab adopter demo. Registry Platform provides shared primitives; Registry Manifest defines portable metadata contracts; Registry Relay and Evidence are the runtime services, Relay serving protected read-only APIs over sensitive registry sources and Evidence answering one bounded question about one subject with a signed assertion. Registry Mint issues the short-lived access tokens Evidence verifies, for deployments with no identity provider. Solmara Lab runs Relay, Evidence, and Mint together in a demo topology.</desc>
+  <desc>The four formal Registry Stack products, arranged left to right by structural role, followed by Registry Mint as a supporting service and the external Solmara Lab adopter demo. Registry Platform provides shared primitives; Registry Manifest defines portable metadata contracts; Registry Relay and Evidence Gateway are independent runtime services, Relay serving protected read-only APIs over sensitive registry sources and Evidence Gateway answering one bounded question about one subject with a signed assertion. Registry Mint issues the short-lived access tokens Evidence Gateway verifies, for deployments with no identity provider. Solmara Lab provides synthetic registry data and demo configuration.</desc>
 
   <g stroke="#e5e5e5" stroke-width="1">
     <line x1="180" y1="16" x2="180" y2="232"/>
@@ -35,7 +35,7 @@
     <text x="16" y="100">Registry Platform</text>
     <text x="196" y="100">Registry Manifest</text>
     <text x="376" y="100">Registry Relay</text>
-    <text x="556" y="100">Evidence</text>
+    <text x="556" y="100">Evidence Gateway</text>
   </g>
 
   <g fill="#6a6a6a" font-size="11.5"
@@ -91,9 +91,9 @@
 
   <g fill="#3a3a3a" font-size="12.5">
     <text x="16" y="360">Issues the short-lived access tokens</text>
-    <text x="16" y="378">Evidence verifies.</text>
+    <text x="16" y="378">Evidence Gateway verifies.</text>
 
-    <text x="376" y="360">External adopter demo running Relay,</text>
-    <text x="376" y="378">Evidence, and Mint together.</text>
+    <text x="376" y="360">External adopter demo with synthetic</text>
+    <text x="376" y="378">registry data and configuration.</text>
   </g>
 </svg>

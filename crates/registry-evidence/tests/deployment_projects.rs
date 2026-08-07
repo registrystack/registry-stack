@@ -7,12 +7,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
-use ed25519_dalek::SigningKey;
-use rand_core::OsRng;
 use registry_evidence::bundle::{Bundle, DeploymentInputs};
 use registry_evidence::config::{ConfigError, SelectorInput};
 use registry_evidence::kernel::{
@@ -32,7 +28,6 @@ use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value};
 use tempfile::TempDir;
-use zeroize::Zeroizing;
 
 const AUDIENCE: &str = "urn:registry-evidence:reference-project-fixtures";
 const BINDING_KEY: &[u8] = b"reference-project-binding-key-v1";
@@ -385,7 +380,7 @@ async fn execute_fixture(
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .unwrap_or_else(|| panic!("{label}: requirement source is absent"));
         let preparation_selectors = selector_projection(&resolved, &source.request.selector_inputs)
             .unwrap_or_else(|| panic!("{label}: preparation selector projection failed"));
@@ -590,17 +585,21 @@ async fn execute_response(
             let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
                 registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-                Duration::from_secs(31_536_000),
+                31_536_000,
                 issued_at,
-                Duration::from_secs(0),
-            );
+                0,
+            )
+            .expect("the fixture policy states bounds the contract allows");
             policy.issued_by = bundle.config.issuer.id.clone();
             policy.provided_by = bundle.config.service.provider_id.clone();
             policy.requirement = requirement.id.clone();
             policy.evidence_type = requirement.evidence_type.clone();
             policy.purpose = resolved.purpose.clone();
             policy.audience = AUDIENCE.to_owned();
-            policy.configuration_revision = bundle.revision().to_owned();
+            policy.configuration_revision = bundle
+                .configuration_revision(&requirement.id)
+                .unwrap_or_else(|| panic!("{label}: the requirement has no configuration revision"))
+                .to_owned();
             let verified = verify_flattened_jws(
                 &serde_json::to_vec(&signed)
                     .unwrap_or_else(|_| panic!("{label}: signed evidence encoding failed")),
@@ -761,7 +760,7 @@ fn execute_derivation_mutation(
     let source = disposable
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .unwrap_or_else(|| panic!("{label}: source is absent"));
     let projected = project_fixture_response(source, response)
         .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));
@@ -827,7 +826,7 @@ fn execute_parameter_mutation(
     let source = disposable
         .config
         .sources
-        .get(&requirement.source)
+        .get(requirement.initial_source())
         .unwrap_or_else(|| panic!("{label}: source is absent"));
     let projected = project_fixture_response(source, positive_response(label, fixture))
         .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));
@@ -1219,26 +1218,9 @@ fn require_name(label: &str, actual: &str, expected: &str) {
 }
 
 async fn fixture_signer() -> EvidenceSigner {
-    const KEY_ID: &str = "evidence-signing-2026-01";
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public_bytes = signing_key.verifying_key().to_bytes();
-    let private = PrivateJwk {
-        kty: "OKP".to_owned(),
-        kid: Some(KEY_ID.to_owned()),
-        alg: Some("EdDSA".to_owned()),
-        crv: Some("Ed25519".to_owned()),
-        d: Some(URL_SAFE_NO_PAD.encode(private_bytes.as_slice())),
-        x: Some(URL_SAFE_NO_PAD.encode(public_bytes)),
-        y: None,
-        n: None,
-        e: None,
-        p: None,
-        q: None,
-        dp: None,
-        dq: None,
-        qi: None,
-    };
+    const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("fixture key parses");
     let provider = Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
     EvidenceSigner::initialize(provider, KEY_ID)
         .await

@@ -1,13 +1,13 @@
 ---
 title: Issue registered-parent evidence from OpenCRVS
 description: >-
-  Connect Evidence to the public OpenCRVS demo, verify a registered-parent relationship, and
+  Connect Evidence Gateway to the public OpenCRVS demo, verify a registered-parent relationship, and
   return governed parent identifiers when the use case requires them.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -29,7 +29,7 @@ receive them.
   level="Institution source with synthetic data"
   prerequisites={[
     'The completed role-bound relationship tutorial',
-    'The Evidence toolset',
+    'The Evidence Gateway toolset',
     'Access to the public OpenCRVS demo',
     'curl and an editor',
   ]}
@@ -120,13 +120,12 @@ OpenCRVS does not publish this bounded subset at a stable URL. Registry Stack ma
 the tutorial and records its upstream review revision in the file. Review it against the target
 deployment before production use.
 
-Create an editable Evidence project and disposable local keys:
+Create an editable Evidence Gateway project and disposable local keys:
 
 ```sh
 evidencectl new registered-parent \
   --openapi opencrvs-events.openapi.yaml \
-  --profile local \
-  --generate-keys
+  --profile local
 cd registered-parent
 ```
 
@@ -239,7 +238,7 @@ extractScript: adapters/opencrvs-birth-parents-extract.rhai
 factSchema: schemas/opencrvs-birth-parents-facts.schema.yaml
 ```
 
-`record-transformed` states that OpenCRVS returns a bounded birth record and Evidence reduces it
+`record-transformed` states that OpenCRVS returns a bounded birth record and Evidence Gateway reduces it
 before disclosure. The fixed event type and status prevent the caller from turning this source
 into a general search proxy. A two-result ceiling lets extraction distinguish one match from an
 ambiguous national ID without paging through the registry.
@@ -269,7 +268,7 @@ unset OPENCRVS_CLIENT_SECRET
 Paste each value copied from OpenCRVS at its prompt and press Enter. The generated `.gitignore`
 excludes the `secrets` directory.
 
-Evidence resolves these logical secret references beneath that directory. It does not read the
+Evidence Gateway resolves these logical secret references beneath that directory. It does not read the
 credentials from source YAML, requests, command arguments, or logs.
 
 ## Prepare the fixed birth search
@@ -277,7 +276,8 @@ credentials from source YAML, requests, command arguments, or logs.
 Replace `adapters/opencrvs-birth-parents-prepare.rhai` with:
 
 ```rhai
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let child = selectors[parameters["childSelectorRole"]];
     let data = #{};
     data[parameters["childNationalIdField"]] = #{
@@ -349,7 +349,8 @@ The generated response schema closes the projected response around `total`, at m
 and the selected declaration fields. Replace `adapters/opencrvs-birth-parents-extract.rhai` with:
 
 ```rhai
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
     if results.len > parameters["resultLimit"] {
@@ -593,12 +594,12 @@ fn answer(facts, selectors, context) {
 }
 ```
 
-Evidence validates the returned object against the reviewed schema before signing it. The
+Evidence Gateway validates the returned object against the reviewed schema before signing it. The
 derivation cannot add names, dates, addresses, or any other birth-registration field.
 
 ## Start the project
 
-Compile the editable artifacts into a private local generation and start Evidence with Registry
+Compile the editable artifacts into a private local generation and start Evidence Gateway with Registry
 Mint:
 
 ```sh
@@ -606,14 +607,14 @@ evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-`dev` runs the real Evidence configuration check before either service becomes ready. Unresolved
+`dev` runs the real Evidence Gateway configuration check before either service becomes ready. Unresolved
 draft markers, invalid schemas, inconsistent roles, or missing credentials stop the start.
 
-## Send a real Evidence request
+## Send a real Evidence Gateway request
 
 Read the mother's national ID without leaving its value in shell history:
 
@@ -640,7 +641,7 @@ path that does not expose identifiers in shell history or process arguments.
 Preparation obtains short-lived local authorization and records verification expectations before
 a response exists. It does not contact OpenCRVS.
 
-Send the request across the Evidence HTTP boundary:
+Send the request across the Evidence Gateway HTTP boundary:
 
 ```sh
 curl -fsS \
@@ -653,7 +654,7 @@ curl -fsS \
   --output opencrvs-parent.jws.json
 ```
 
-Evidence exchanges its client credentials for an OpenCRVS token, performs the fixed child search,
+Evidence Gateway exchanges its client credentials for an OpenCRVS token, performs the fixed child search,
 projects the bounded parent fields, derives the relationship, and returns a signed flattened JWS.
 The caller cannot alter the event type, status, projection, or parent verification rule.
 
@@ -785,5 +786,5 @@ files when you finish.
 - [Request a birth certificate SD-JWT VC from OpenCRVS](../issue-a-birth-certificate-vc-from-opencrvs/)
 - [Issue an immunization summary from DHIS2](../issue-immunization-evidence-from-dhis2/)
 - [Draft another institution source from OpenAPI](../connect-an-institution-source/)
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

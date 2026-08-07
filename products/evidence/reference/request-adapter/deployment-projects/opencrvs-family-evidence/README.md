@@ -106,7 +106,6 @@ Required secret files beneath `/run/secrets/registry-evidence`, each owned by
 the service identity with mode `0600`, are:
 
 ```text
-signing-ed25519-private-jwk
 audit-hmac-key
 subject-binding-hmac-key
 opencrvs-client-id
@@ -114,13 +113,15 @@ opencrvs-client-secret
 ```
 
 The audit and subject-binding files must contain independently generated raw
-key material of at least 32 bytes each; they are not base64-decoded. The
-signing file contains one private Ed25519 JWK. No credential or live subject
-identifier is stored in this project.
+key material of at least 32 bytes each; they are not base64-decoded. Production
+signing uses the pinned P-256 version in Transit through the workload-local
+Unix-socket proxy. Evidence receives no provider token or private signing key.
+No credential or live subject identifier is stored in this project.
 
 Author with synthetic fixtures first, then promote the same reviewed `bundle/`
 bytes through staging and production. Bind environment-specific runtime paths,
-credentials, private CA, and signing key in each environment. Staging must
+credentials, private CA, public signing key, and pinned Transit version in each
+environment. Staging must
 verify the configured `at+jwt` header and claims, OAuth bootstrap, readiness,
 one approved synthetic source lookup, audit durability, and JWS verification.
 See the [authoring and production-build workflow](../CONFIG.md#authoring-and-production-build-workflow).

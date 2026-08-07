@@ -1,4 +1,5 @@
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let subject = selectors["subject"];
     #{
         query: [],

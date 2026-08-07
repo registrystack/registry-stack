@@ -90,7 +90,7 @@ pub struct ClientAddArgs {
     /// Access policy assigned to this client. Repeat for more than one.
     #[arg(long, required = true)]
     policy: Vec<String>,
-    /// Generate an owner-only Ed25519 key for local client authentication.
+    /// Generate an owner-only P-256 key for local client authentication.
     #[arg(long, required = true)]
     generate_local_key: bool,
     /// Project root. Defaults to the current directory.
@@ -138,6 +138,7 @@ struct ClientDocument {
 pub(crate) struct ActiveClient {
     pub(crate) client_id: String,
     pub(crate) private_key_path: PathBuf,
+    pub(crate) evidence_audience: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -251,12 +252,8 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
         fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
     )?;
     let public_key_path = staging.path().join("public.jwk");
-    let (_, generated_public) = keygen::generate_dev_keypair(
-        staging.path(),
-        &format!("local-client-{}-key-1", args.client),
-        PRIVATE_KEY_FILENAME,
-        "public.jwk",
-    )?;
+    let (_, generated_public) =
+        keygen::generate_dev_keypair(staging.path(), PRIVATE_KEY_FILENAME, "public.jwk")?;
     debug_assert_eq!(generated_public, public_key_path);
     let public_key = read_public_jwk(&public_key_path)?;
     fs::remove_file(&public_key_path).context("removing staged public-key copy")?;
@@ -381,6 +378,7 @@ pub(crate) fn resolve_ready_client(
     Ok(ActiveClient {
         client_id: registration.client_id,
         private_key_path,
+        evidence_audience: document.evidence_audience,
     })
 }
 

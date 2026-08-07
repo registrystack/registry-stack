@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -35,7 +35,7 @@ minimized typed outputs one protected read route may return.
 *Minimized evidence* means a response shaped by data minimization or selective disclosure; a
 *purpose-bound request* is a request that carries or is evaluated against a stated purpose.
 
-Two runtime patterns carry these principles, Registry Relay and Evidence, and each enforces them
+Two runtime patterns carry these principles, Registry Relay and Evidence Gateway, and each enforces them
 at its own boundary rather than in one chain.
 
 ## How the requirement model limits collection at the source
@@ -47,9 +47,9 @@ asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
 That principle is enforced at two separate boundaries. A Relay integration declares closed
-request inputs and minimized typed outputs. An Evidence requirement reads a fixed, bounded source
-request whose origin, method, path, headers, and client-side response projection are all set by
-reviewed configuration, and it discloses only the concepts it declares.
+request inputs and minimized typed outputs. An Evidence Gateway requirement uses a closed single or
+search-then-fetch acquisition whose sources, origins, methods, paths, headers, and client-side response
+projections are all set by reviewed configuration, and it discloses only the concepts it declares.
 Callers cannot choose a source destination, credential, selector field, adapter capability, or
 undeclared output at request time in either product.
 
@@ -59,7 +59,7 @@ from the question it was asked.
 
 ## Purpose limitation as an enforced gate, not a label
 
-Purpose limitation in this design is more than a field written into a log. In Evidence, the
+Purpose limitation in this design is more than a field written into a log. In Evidence Gateway, the
 purpose a caller states is one dimension of a single authorization decision that also binds the
 requester, the requirement revision, every subject role and selector profile, the subject
 authority, and the audience. The match must be exact and complete, and it happens before audit,
@@ -79,7 +79,7 @@ lists them.
 
 ## Minimization at the output: closed value forms
 
-Minimization also applies to what leaves the boundary. Evidence has no caller-selectable
+Minimization also applies to what leaves the boundary. Evidence Gateway has no caller-selectable
 disclosure at all, so there is no request-time negotiation to review.
 
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
@@ -103,9 +103,9 @@ present a subset. A value uses one disclosure by default. A governed structured 
 place each direct field in a separate disclosure while keeping nested field values atomic. Two
 limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
 receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
-Evidence also performs no presentation-side verification, no key-binding JWT validation, and no
+Evidence Gateway also performs no presentation-side verification, no key-binding JWT validation, and no
 wallet interaction, and the profile excludes OID4VCI in every part. A caller may supply a holder
-public key that Evidence echoes into the `cnf` claim for a relying party to check itself.
+public key that Evidence Gateway echoes into the `cnf` claim for a relying party to check itself.
 
 A further minimization detail guards against a subtler leak.
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
@@ -145,7 +145,7 @@ Every request that returns person-level records or an assertion must be recorded
 the caller principal, the scopes exercised, a request identifier, and the purpose value where one
 was supplied, and a deployment can run audit fail-closed so that a request whose audit record
 cannot be written does not succeed.
-Evidence takes that further and is fail-closed by construction rather than by configuration: it
+Evidence Gateway takes that further and is fail-closed by construction rather than by configuration: it
 writes an access record before it contacts any source and a release record after signing and
 before release, and an audit failure fails the request. Selector, source, and disclosed values
 never appear in those records or in logs, and raw source responses are never persisted.
@@ -185,7 +185,7 @@ design, for each one.
 The main conditional control is the authored projection. A runtime can stop a caller from reaching
 past the reviewed contract, but it cannot decide which values an institution has a lawful reason to
 expose. Project reviewers must confirm the source authority, selector inputs, output projection,
-purpose, requirements, and declared value forms together, and Evidence expects the complete
+purpose, requirements, and declared value forms together, and Evidence Gateway expects the complete
 simultaneously enabled configuration to be reviewed as one disclosure surface, since two answers
 that are each defensible alone can reconstruct a protected value between them. Operators must then
 bind only the reviewed source and workload credentials to the generated product inputs.

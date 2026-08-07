@@ -153,10 +153,15 @@ enum SourcePath {
     },
 }
 
-struct PathBindingPlan {
-    role: String,
-    profile: String,
-    field: String,
+enum PathBindingPlan {
+    Selector {
+        role: String,
+        profile: String,
+        field: String,
+    },
+    PriorFact {
+        field: String,
+    },
 }
 
 enum AuthenticationPlan {
@@ -239,7 +244,7 @@ impl SourceExecutor {
         if source.tls_trust_profile.is_some() {
             return Err(SourceError::InvalidPlan);
         }
-        Self::compile(source, allowed_selector_sets, None, secrets)
+        Self::compile(source, allowed_selector_sets, None, false, secrets)
     }
 
     /// Compile a source against runtime-owned TLS trust bindings. System roots
@@ -255,14 +260,27 @@ impl SourceExecutor {
             source,
             allowed_selector_sets,
             Some((outbound_tls, captured_ca_bundles)),
+            false,
             secrets,
         )
+    }
+
+    /// Compile the non-credential request material used only by the hidden
+    /// bundle fixture evaluator. Runtime-owned private CA bytes are not needed
+    /// because this executor can materialize requests but is never executed.
+    pub fn new_for_offline_fixture(
+        source: &SourceConfig,
+        allowed_selector_sets: &[SourceSelectorSet],
+        secrets: Arc<SecretResolver>,
+    ) -> Result<Self, SourceError> {
+        Self::compile(source, allowed_selector_sets, None, true, secrets)
     }
 
     fn compile(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
         outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
+        offline_fixture: bool,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
         if matches!(source.authentication, SourceAuthentication::None {})
@@ -290,7 +308,7 @@ impl SourceExecutor {
             base_url,
             &authentication,
         )?;
-        let client = build_client(timeout, source, outbound_tls)?;
+        let client = build_client(timeout, source, outbound_tls, offline_fixture)?;
         Ok(Self {
             client,
             request,
@@ -308,7 +326,18 @@ impl SourceExecutor {
         selectors: &[ResolvedSourceSelector],
         request_parts: &RequestParts,
     ) -> Result<JsonValue, SourceError> {
-        let materialized = self.materialize_request(selectors, request_parts)?;
+        self.execute_with_prior_facts(selectors, &BTreeMap::new(), request_parts)
+            .await
+    }
+
+    pub async fn execute_with_prior_facts(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prior_facts: &BTreeMap<String, JsonValue>,
+        request_parts: &RequestParts,
+    ) -> Result<JsonValue, SourceError> {
+        let materialized =
+            self.materialize_request_with_prior_facts(selectors, prior_facts, request_parts)?;
         let _permit =
             acquire_source_slot(&self.concurrency, self.concurrency_admission_timeout).await?;
         let method = match self.request.method {
@@ -349,11 +378,22 @@ impl SourceExecutor {
         selectors: &[ResolvedSourceSelector],
         request_parts: &RequestParts,
     ) -> Result<MaterializedSourceRequest, SourceError> {
+        self.materialize_request_with_prior_facts(selectors, &BTreeMap::new(), request_parts)
+    }
+
+    pub fn materialize_request_with_prior_facts(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prior_facts: &BTreeMap<String, JsonValue>,
+        request_parts: &RequestParts,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
         if matches!(self.request.method, HttpMethod::GET) && request_parts.body.is_some() {
             return Err(SourceError::InvalidPlan);
         }
         let selectors = self.request.validate_selectors(selectors)?;
-        let url = self.request.materialize_url(&selectors, request_parts)?;
+        let url = self
+            .request
+            .materialize_url(&selectors, prior_facts, request_parts)?;
         Ok(MaterializedSourceRequest {
             url,
             body: request_parts.body.clone(),
@@ -437,6 +477,7 @@ fn build_client(
     timeout: Duration,
     source: &SourceConfig,
     outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
+    offline_fixture: bool,
 ) -> Result<reqwest::Client, SourceError> {
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
@@ -454,6 +495,9 @@ fn build_client(
         // contract.
         .retry(reqwest::retry::never());
     if let Some(profile_name) = source.tls_trust_profile.as_deref() {
+        if offline_fixture && outbound_tls.is_none() {
+            return builder.build().map_err(|_| SourceError::InvalidPlan);
+        }
         let (tls, captured_ca_bundles) = outbound_tls.ok_or(SourceError::InvalidPlan)?;
         if !tls.system_roots {
             return Err(SourceError::InvalidPlan);
@@ -500,9 +544,6 @@ fn conservative_selector_sets(
             }
         }
         sets = next;
-    }
-    if sets.is_empty() {
-        return Err(SourceError::InvalidPlan);
     }
     Ok(sets)
 }
@@ -571,9 +612,6 @@ fn compile_selector_inputs(
             return Err(SourceError::InvalidPlan);
         }
     }
-    if output.is_empty() {
-        return Err(SourceError::InvalidPlan);
-    }
     Ok(output)
 }
 
@@ -583,7 +621,8 @@ fn compile_allowed_selector_sets(
 ) -> Result<Vec<SourceSelectorSet>, SourceError> {
     let mut unique = BTreeSet::new();
     for configured_set in configured {
-        if configured_set.is_empty() || configured_set.len() > inputs.len() {
+        if configured_set.len() > inputs.len() || (configured_set.is_empty() && !inputs.is_empty())
+        {
             return Err(SourceError::InvalidPlan);
         }
         let mut set = configured_set.clone();
@@ -602,7 +641,7 @@ fn compile_allowed_selector_sets(
             return Err(SourceError::InvalidPlan);
         }
     }
-    if unique.is_empty() {
+    if unique.is_empty() || (inputs.is_empty() && !unique.contains(&Vec::new())) {
         return Err(SourceError::InvalidPlan);
     }
     Ok(unique.into_iter().collect())
@@ -627,10 +666,13 @@ fn validate_bindings_are_reachable(
             .iter()
             .map(|(role, profile)| (role.as_str(), profile.as_str()))
             .collect::<BTreeSet<_>>();
-        if bindings
-            .values()
-            .any(|binding| !activated.contains(&(binding.role.as_str(), binding.profile.as_str())))
-        {
+        if bindings.values().any(|binding| {
+            matches!(
+                binding,
+                PathBindingPlan::Selector { role, profile, .. }
+                    if !activated.contains(&(role.as_str(), profile.as_str()))
+            )
+        }) {
             return Err(SourceError::InvalidPlan);
         }
     }
@@ -651,14 +693,21 @@ fn compile_source_path(
             let mut bindings = BTreeMap::new();
             for (name, binding) in request.path_bindings.iter() {
                 validate_path_binding(binding, inputs)?;
-                bindings.insert(
-                    name.to_owned(),
-                    PathBindingPlan {
-                        role: binding.role.clone(),
-                        profile: binding.profile.clone(),
-                        field: binding.field.clone(),
+                let plan = match binding {
+                    PathBindingConfig::Selector {
+                        role,
+                        profile,
+                        field,
+                    } => PathBindingPlan::Selector {
+                        role: role.clone(),
+                        profile: profile.clone(),
+                        field: field.clone(),
                     },
-                );
+                    PathBindingConfig::PriorFact { field } => PathBindingPlan::PriorFact {
+                        field: field.clone(),
+                    },
+                };
+                bindings.insert(name.to_owned(), plan);
             }
             Ok(SourcePath::Template {
                 template: template.clone(),
@@ -673,14 +722,20 @@ fn validate_path_binding(
     binding: &PathBindingConfig,
     inputs: &BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
 ) -> Result<(), SourceError> {
-    if inputs
-        .get(&binding.role)
-        .and_then(|profiles| profiles.get(&binding.profile))
-        .is_some_and(|fields| fields.contains(&binding.field))
-    {
-        Ok(())
-    } else {
-        Err(SourceError::InvalidPlan)
+    match binding {
+        PathBindingConfig::Selector {
+            role,
+            profile,
+            field,
+        } if inputs
+            .get(role)
+            .and_then(|profiles| profiles.get(profile))
+            .is_some_and(|fields| fields.contains(field)) =>
+        {
+            Ok(())
+        }
+        PathBindingConfig::PriorFact { field } if !field.is_empty() => Ok(()),
+        _ => Err(SourceError::InvalidPlan),
     }
 }
 
@@ -850,6 +905,7 @@ impl RequestPlan {
     fn materialize_url(
         &self,
         selectors: &BTreeMap<(&str, &str), &ResolvedSourceSelector>,
+        prior_facts: &BTreeMap<String, JsonValue>,
         parts: &RequestParts,
     ) -> Result<Url, SourceError> {
         let path = match &self.path {
@@ -863,14 +919,27 @@ impl RequestPlan {
                         .and_then(|value| value.strip_suffix('}'))
                     {
                         let binding = bindings.get(name).ok_or(SourceError::InvalidPlan)?;
-                        let selector = selectors
-                            .get(&(binding.role.as_str(), binding.profile.as_str()))
-                            .ok_or(SourceError::InvalidSelectors)?;
-                        let value = selector
-                            .values
-                            .get(&binding.field)
-                            .ok_or(SourceError::InvalidSelectors)?;
-                        rendered.push_str(&encode_path_selector(value)?);
+                        match binding {
+                            PathBindingPlan::Selector {
+                                role,
+                                profile,
+                                field,
+                            } => {
+                                let selector = selectors
+                                    .get(&(role.as_str(), profile.as_str()))
+                                    .ok_or(SourceError::InvalidSelectors)?;
+                                let value = selector
+                                    .values
+                                    .get(field)
+                                    .ok_or(SourceError::InvalidSelectors)?;
+                                rendered.push_str(&encode_path_selector(value)?);
+                            }
+                            PathBindingPlan::PriorFact { field } => {
+                                let value =
+                                    prior_facts.get(field).ok_or(SourceError::InvalidPlan)?;
+                                rendered.push_str(&encode_path_prior_fact(value)?);
+                            }
+                        }
                     } else {
                         rendered.push_str(segment);
                     }
@@ -920,12 +989,36 @@ fn encode_path_selector(value: &SelectorValue) -> Result<String, SourceError> {
         SelectorValue::Integer(value) => value.to_string(),
         SelectorValue::Boolean(value) => value.to_string(),
     };
+    encode_path_text(&text, true)
+}
+
+fn encode_path_prior_fact(value: &JsonValue) -> Result<String, SourceError> {
+    let text = match value {
+        JsonValue::String(value) => value.clone(),
+        JsonValue::Number(value) => value
+            .as_i64()
+            .map(|value| value.to_string())
+            .ok_or(SourceError::InvalidPlan)?,
+        JsonValue::Bool(value) => value.to_string(),
+        _ => return Err(SourceError::InvalidPlan),
+    };
+    encode_path_text(&text, false)
+}
+
+fn encode_path_text(text: &str, invalid_selectors: bool) -> Result<String, SourceError> {
+    let error = || {
+        if invalid_selectors {
+            SourceError::InvalidSelectors
+        } else {
+            SourceError::InvalidPlan
+        }
+    };
     if text.is_empty()
-        || matches!(text.as_str(), "." | "..")
+        || matches!(text, "." | "..")
         || text.chars().any(char::is_control)
         || text.contains(['/', '\\', '%'])
     {
-        return Err(SourceError::InvalidSelectors);
+        return Err(error());
     }
     let mut encoded = String::with_capacity(text.len());
     for byte in text.bytes() {
@@ -933,7 +1026,7 @@ fn encode_path_selector(value: &SelectorValue) -> Result<String, SourceError> {
             encoded.push(char::from(byte));
         } else {
             use std::fmt::Write as _;
-            write!(&mut encoded, "%{byte:02X}").map_err(|_| SourceError::InvalidSelectors)?;
+            write!(&mut encoded, "%{byte:02X}").map_err(|_| error())?;
         }
     }
     Ok(encoded)
@@ -1522,6 +1615,16 @@ mod tests {
                 Err(SourceError::InvalidSelectors)
             );
         }
+        assert_eq!(
+            encode_path_prior_fact(&json!("record 1")),
+            Ok("record%201".into())
+        );
+        for value in [json!(".."), json!("a/b"), json!(["record-1"]), json!(null)] {
+            assert_eq!(
+                encode_path_prior_fact(&value),
+                Err(SourceError::InvalidPlan)
+            );
+        }
     }
 
     #[test]
@@ -1702,7 +1805,8 @@ mod tests {
             "factSchema": "schemas/facts.schema.yaml"
         }))
         .expect("source config deserializes");
-        let client = build_client(Duration::from_secs(5), &source, None).expect("client builds");
+        let client =
+            build_client(Duration::from_secs(5), &source, None, false).expect("client builds");
         let error = client
             .get(format!("https://{address}/"))
             .send()

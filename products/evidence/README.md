@@ -10,11 +10,16 @@ the smallest sufficient JSON assertion in an authorized response format.
 
 The approved Version 1 product boundary is one `registry-evidence` crate, one
 `evidence` binary, one serving process, and one operator-controlled trust domain.
-A process may host multiple evidence definitions only when they share that trust
-domain. Governed configuration, Rhai scripts, schemas, codelists, and fixtures
-are one trusted, immutable, startup-only evidence bundle. A separate closed
-runtime file owns only process-local listener, filesystem, audit-storage,
-secret-mount, and TLS-trust bindings and cannot override governed semantics.
+The runtime depends on one portable library beside it,
+`registry-evidence-verifier`, which owns the response formats, the Evidence
+payload contract, and relying-party verification, so client tooling can verify a
+signed response without the runtime. A process may host multiple evidence
+definitions only when they share that trust domain. Governed configuration, Rhai
+scripts, schemas, codelists, and fixtures are one trusted, immutable,
+startup-only evidence bundle. A separate closed runtime file owns only
+process-local listener, filesystem, audit-storage, secret-mount, signer
+transport and pinned version, and TLS-trust bindings. It cannot override
+governed semantics or the governed active public key.
 
 The following contracts define and verify the implemented Version 1 boundary:
 
@@ -78,17 +83,22 @@ neutral.
 beside the runtime, like `registryctl` for the rest of the stack. It sits
 outside the frozen Version 1 runtime contract: it generates key material,
 starts incomplete OpenAPI-assisted authoring workspaces, compiles a reviewed
-production candidate, and drives fixture runs for complete projects. It shells
-out to the `evidence` binary for every Evidence semantic decision and never
-re-implements evaluation, signing, or verification. Its source remains covered
-by the same source-product and domain-neutrality checks as the runtime.
+production candidate, and drives fixture runs for complete projects. It
+delegates runtime evaluation, signing, bundle validation, and fixture evaluation
+to the `evidence` binary, and reuses `registry-evidence-client` and
+`registry-evidence-verifier` for relying-party request preparation and offline
+response verification. It adds no Evidence semantics of its own. Its source
+remains covered by the same source-product and domain-neutrality checks as the
+runtime.
 
 `evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
 OpenAPI document exactly as `source.openapi.yaml` and creates empty
-`questions/`, `derivations/`, and `fixtures/` directories. `--generate-keys`
-adds owner-only disposable local key material that is not bound to a runtime.
-The command does not select an API operation, invent a question, fixture,
-policy, production target, Mint configuration, or deployable bundle.
+`questions/`, `derivations/`, and `fixtures/` directories. It always creates
+owner-only disposable local P-256 Evidence signing material plus distinct audit
+and subject-binding masters. The command does not select an API operation,
+invent a question, fixture, policy, production target, Mint configuration, or
+deployable bundle. `evidencectl dev` additionally creates session-scoped P-256
+Mint, caller, and holder keys so the local happy path needs no key ceremony.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema
@@ -116,27 +126,31 @@ that metadata, stable concept identifiers, and one project-relative fixture.
 It never invents requirement, framework, Evidence Type, concept, or
 disclosure-family URIs.
 
-The explicit production target contains only `governance.yaml` and
-`runtime.yaml`. The former contributes the bundle-owned service,
-authentication, audit, signing, rate-limit, response-format, and authority
-values; it may not override compiler-owned selectors, sources, or requirements.
-The latter is copied unchanged and binds the completed candidate to one target
-host. Secret values and absolute secret paths do not belong in either authored
-governance input.
+Each explicit `deployment-targets/<environment>/` target contains a complete
+`governance.yaml`, `runtime.yaml`, and every governed public JWK referenced by
+that governance document under `public-keys/`. Governance contributes the
+bundle-owned service, authentication, audit, signing, rate-limit,
+response-format, and authority values; it may not override compiler-owned
+selectors, sources, or requirements. Runtime is copied unchanged and binds the
+completed candidate to one target host. Targets are independent complete
+inputs, not overlays. Secret values and absolute secret paths do not belong in
+authored governance input.
 
-`evidencectl build --project <editable-project> --target <production-target>
+`evidencectl build --project <editable-project> --target <environment-target>
 --output <new-candidate-directory>` is create-only. It reads regular files
-without following symlinks, compiles one closed bundle, uses private temporary
-validation material, runs `evidence check` and every referenced fixture through
-the real `evidence` binary, and publishes atomically only on success. It makes
-no network request, opens no listener, writes no production audit event, and
-never copies local `.evidence` state, credentials, tokens, responses, or
-private keys into the candidate.
+without following symlinks, compiles one closed bundle, and delegates its
+internal bundle-only check and every referenced fixture to the real `evidence`
+binary. No temporary signing key or other validation secret is generated. The
+candidate is published atomically only on success. The build makes no network
+request, opens no listener, writes no production audit event, and never copies
+local `.evidence` state, credentials, tokens, responses, or private keys into
+the candidate.
 
 The candidate contains `runtime.yaml` and `bundle/`; the bundle may contain
 adapters, derivations, schemas, codelists, fixtures, and public keys where
-referenced. The operator independently provisions the signing, audit,
-subject-binding, and source secrets, then runs one grouped handoff:
+referenced. The operator independently provisions the Transit key and
+workload-local proxy, plus audit, subject-binding, and source secrets, then
+runs one grouped handoff:
 
 ```sh
 evidencectl doctor --project '<candidate>'
@@ -157,6 +171,26 @@ uses a separate container runtime file and secret mounts, preserves audit
 storage, and keeps Evidence private behind operator TLS. Container, Helm,
 Kubernetes, Terraform, cloud packaging, approval, promotion, and deployment
 commands remain outside this build command.
+
+### Relying-party client library
+
+`registry-evidence-client` is the Rust SDK for the application side of the
+contract. It generates the request nonce and closes the verification policy
+before any byte leaves the process, sends the request over the public HTTP
+contract, and hands every judgement about the response to
+`registry-evidence-verifier`, so it adds no Evidence semantics of its own.
+`registry-evidence-client-node` binds that crate for Node.js callers through
+napi-rs and `registry-evidence-client-py` binds it for Python callers through
+PyO3; each is a thin surface plus a JSON conversion layer over the same Rust
+decisions. Neither binding is published: the npm package is private and PyPI
+publishing is out of scope for the crate, so both are built and tested from
+source here.
+
+Each crate documents its own surface and test commands:
+[`registry-evidence-client`](../../crates/registry-evidence-client/README.md),
+[`registry-evidence-client-node`](../../crates/registry-evidence-client-node/README.md),
+and
+[`registry-evidence-client-py`](../../crates/registry-evidence-client-py/README.md).
 
 ## Installing the toolset
 
@@ -191,10 +225,31 @@ tag, then rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at that
 verified directory.
 
 Three environment variables configure the installer: `EVIDENCECTL_VERSION`
-names a `vMAJOR.MINOR.PATCH` release for a copy that carries none,
+names a `vMAJOR.MINOR.PATCH` release or workflow-produced development tag for
+a copy that carries none,
 `EVIDENCECTL_INSTALL_DIR` sets the install directory (default `~/.local/bin`),
 and `EVIDENCECTL_ASSET_DIR` installs from a locally verified asset directory
 instead of downloading.
+
+### Manual development build
+
+To test the current protected `main` revision before the next release, run the
+**Registry Evidence Development Build** workflow manually from the `main`
+branch. It requires successful protected-main CI, builds the same three-binary
+toolset for Linux amd64, Linux arm64, and macOS arm64, and creates a unique
+prerelease named `v<workspace-version>-dev.<run>.<attempt>`.
+
+The workflow summary and prerelease notes contain the exact install command:
+
+```sh
+curl -fsSL "https://github.com/registrystack/registry-stack/releases/download/<development-tag>/evidencectl-install.sh" | bash
+```
+
+Development prereleases use unique source-bound tags, and the workflow never
+overwrites them. They are unsupported. Their installer checks each binary
+against the included `SHA256SUMS`; those checksums are not signed, and the
+prerelease is not a Registry Stack release. Use a normal released version for
+production or release verification.
 
 To build the toolset from source instead:
 
@@ -260,7 +315,7 @@ cannot process JWS. It is never later-verifiable evidence and never a fallback
 when signing fails.
 
 The SD-JWT VC format is a second encoding of the one stateless assertion the
-signed default carries, under the frozen profile in
+signed default carries, under the frozen RFC 9901 and SD-JWT VC draft 18 profile in
 [the SD-JWT VC profile](contracts/sd-jwt-vc-profile.yaml). It is not a
 credential lifecycle: no issuance session, no holder binding ceremony, no
 status list, no revocation, and no presentation or key-binding verification. The
@@ -276,12 +331,32 @@ From the monorepo root, the Evidence-specific reproducible gate is:
 
 ```sh
 cargo fmt --check
-cargo check --locked -p registry-evidence -p registry-evidencectl --all-targets
-cargo test --locked -p registry-evidence -p registry-evidencectl
-cargo clippy --locked -p registry-evidence -p registry-evidencectl --all-targets -- -D warnings
+cargo check --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl \
+  --all-targets
+cargo test --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl
+cargo clippy --locked \
+  -p registry-evidence -p registry-evidence-verifier \
+  -p registry-evidence-client -p registry-evidence-client-node \
+  -p registry-evidence-client-py -p registry-evidencectl \
+  --all-targets -- -D warnings
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
+
+The two bindings also carry their own JavaScript and Python suites, which this
+gate does not run; each binding's README states the commands, and root CI runs
+them in its client-bindings job. On macOS, `cargo test` for
+`registry-evidence-client-py` needs the interpreter's library directory on the
+dynamic linker path, as
+[the Python binding README](../../crates/registry-evidence-client-py/README.md)
+describes.
 
 Generated JSON Schema and OpenAPI artifacts are under `generated/`. The
 contract gate recreates them from Rust in a temporary directory and requires an

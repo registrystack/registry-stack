@@ -7,7 +7,8 @@ Evidence starts from two closed, startup-only inputs:
 1. `bundle/evidence.yaml` and its referenced bundle files define governed
    evidence semantics and source authority.
 2. `runtime.yaml` binds that bundle to one process, filesystem, listener, audit
-   destination, secret mount, and local TLS trust files.
+   destination, secret mount, signer transport and pinned version, and local
+   TLS trust files.
 
 Both inputs are reviewed, validated completely before readiness, mounted
 read-only, and immutable for the process lifetime. Evidence computes stable
@@ -31,7 +32,8 @@ Most adopters should need to edit only:
 - one derivation script per requirement;
 - the closed parameter and fact schemas beside those scripts;
 - sanitized fixtures;
-- process-local paths and listener settings in `runtime.yaml`; and
+- process-local paths, listener settings, and signer bindings in `runtime.yaml`;
+  and
 - secret and private-CA files outside the project.
 
 Changing Rust, defining a source-product plugin, or adding a product-specific
@@ -41,15 +43,16 @@ configuration variant is not part of ordinary adoption.
 
 Decide compatibility before authoring scripts. A Version 1 provider must:
 
-- expose one bounded lookup at one fixed origin over HTTPS, except numeric
-  loopback HTTP used only by deterministic local tests;
+- expose a bounded lookup at a fixed origin over HTTPS, except numeric loopback
+  HTTP used only by deterministic local tests;
 - accept one fixed `GET` or `POST` and return JSON with media type
   `application/json` or `application/graphql-response+json`;
 - let one response distinguish zero, one, and multiple matches, either through
   a trustworthy total count plus at most one minimized result, or through a
   caller-controlled hard result limit of at least two;
-- not require page traversal, a response-provided next URL, a retry, or a
-  second evidence-data request to establish uniqueness;
+- not require page traversal, a response-provided next URL, or a retry. A
+  provider may require the closed search-then-fetch profile, but both endpoints
+  and the scalar fact binding must be reviewable and fixed before startup;
 - support a query/body/path lookup narrow enough that Evidence does not fetch
   a broad candidate set; and
 - provide the complete facts and relationship-set completeness needed by the
@@ -63,8 +66,9 @@ outside Evidence rather than weakening the one-request and no-matcher boundary.
 The hard result limit itself is governed adapter policy. Its value, such as
 `resultLimit: 2` in the source's `adapterParameters`, is declared by the
 reviewed source configuration and rendered into the request by that source's
-preparation script. Rust enforces the generic one-request, projection, and
-response bounds around it and holds no domain rule about a two-result ceiling.
+preparation script. Rust enforces the generic one-request-per-stage,
+projection, and response bounds around it and holds no domain rule about a
+two-result ceiling.
 The number is not a property of any source product; a different reviewed
 configuration may declare a different limit as long as one response still
 distinguishes zero, one, and multiple matches.
@@ -122,16 +126,18 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.requesterTagsClaim` | yes | Claim containing the requester tags matched against an authority profile. |
 | `authentication.evidenceAudienceClaim` | yes | Claim containing the exact evidence audience. The public request cannot choose another audience. |
 | `authentication.grantIdClaim`, `authentication.grantAuthorityClaim` | yes | Claims used only when an `authenticated-grant` origin is selected. The authority must equal the matched authority-profile id. |
+| `authentication.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
+| `authentication.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
 | `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
 
 ### Audit, subject binding, rates, and signing
 
 | Section | Required fields and rule |
 |---|---|
-| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced file contains at least 32 raw secret bytes. The runtime file owns storage location. |
-| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced file contains at least 32 raw secret bytes. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
+| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
+| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
-| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: EdDSA`, `activeKeyId`, file-only `activeKeyRef`, `retiredPublicJwkFiles`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Missing signing material fails readiness; there is no unsigned fallback. |
+| `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
 
 ### Selector profiles
@@ -199,7 +205,7 @@ Each requirement declares these fields:
 | Key | Required | Meaning |
 |---|---|---|
 | `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
-| `source` | yes | One configured source id. Version 1 does not perform multi-source fulfillment. |
+| `acquisition` | yes | Exactly `{kind: single, source: <id>}` or `{kind: search-then-fetch, search: <id>, fetch: <id>}`. The latter has a hard two-call ceiling and no response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
 | `subjectRoles` | yes | Complete role set, `cardinality: one`, and permitted selector profile ids. Public subject array order is not semantic; roles are resolved uniquely and canonicalized to declaration order. |
 | `referenceFrameworks`, `evidenceType` | yes | Governed legal/procedural framework URIs and the exact Evidence Type URI. |
@@ -354,8 +360,8 @@ header with `typ: at+jwt`; `application/at+jwt` requires that exact alternative.
 A sanitized shape for the reference projects is:
 
 ```json
-{"alg":"EdDSA","kid":"deployment-key-id","typ":"at+jwt"}
-{"iss":"https://identity.example","aud":"registry-evidence","exp":2000000000,"sub":"service-client","evidence_tags":["approved-requester"],"evidence_audience":"https://consumer.example"}
+{"alg":"ES256","kid":"issuer-owned-key-id","typ":"at+jwt"}
+{"iss":"https://identity.example","aud":"registry-evidence","iat":1999999700,"exp":2000000000,"sub":"service-client","evidence_tags":["approved-requester"],"evidence_audience":"https://consumer.example"}
 ```
 
 These are decoded shapes, not usable tokens. The configured issuer, audience,
@@ -400,9 +406,9 @@ request:
 | `method` | yes | Fixed `GET` or `POST`. |
 | `path` | conditional | Fixed absolute path. Exactly one of `path` or `pathTemplate` is required. |
 | `pathTemplate` | conditional | Fixed absolute path with complete-segment placeholders resolved by Rust. |
-| `pathBindings` | with template | Closed placeholder-to-selector bindings. |
+| `pathBindings` | with template | Closed tagged placeholder bindings from an authorized selector, or on fetch only from a scalar prior fact. |
 | `fixedHeaders` | no | Ordered non-secret constants. Names are unique after ASCII case folding. |
-| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare`. |
+| `selectorInputs` | yes | Exact minimized authorized selector alternatives visible to `prepare`; an empty array is valid only for a fetch source. |
 | `prepareScript` | yes | Bundle-relative Rhai script implementing `prepare/2`. |
 | `adapterParameters` | yes | Closed non-secret JSON parameters shared by preparation and extraction. `{}` is valid. |
 | `adapterParametersSchema` | yes | Closed bundle-relative JSON Schema for those parameters. |
@@ -433,14 +439,17 @@ request:
   pathTemplate: /api/records/{record_reference}
   pathBindings:
     record_reference:
+      from: selector
       role: subject
       profile: record-reference-v1
       field: record_reference
 ```
 
-Each placeholder occupies one complete path segment and has exactly one closed
-binding. Rust reads the value directly from an already validated and authorized
-selector. Scripts do not return path values. A value must be non-empty bounded
+Each placeholder occupies one complete path segment and has exactly one tagged
+binding. Rust reads `from: selector` directly from an already validated and
+authorized selector. On a fetch source, `from: prior-fact` may instead name a
+scalar property required by the search fact schema. Scripts do not choose path
+binding origins or return path values. A value must be non-empty bounded
 UTF-8 and cannot contain `/`, `\`, `%`, controls, `.` or `..`. Rust
 percent-encodes it exactly once. Templates cannot contain a scheme, authority,
 query, fragment, empty segment, or dot segment. Exact expanded-path fixtures
@@ -500,9 +509,9 @@ allowed_outputs: [REGION-NORTH, REGION-SOUTH]
 
 Each document has 1 through 4,096 unique bounded codes. A mapping output must
 appear in `allowed_outputs`. Referencing configuration repeats the exact
-artifact version and startup rejects a mismatch. Retired public keys live only
-under `public-keys/` as public JWK JSON files; active private key material is a
-secret and never a bundle artifact.
+artifact version and startup rejects a mismatch. Active and temporarily
+published service keys live under `public-keys/` as exact public P-256 JWK JSON
+files. Private signing material is never a bundle artifact.
 
 ## Runtime configuration
 
@@ -523,6 +532,13 @@ listener:
 secretProviders:
   file:
     root: /run/secrets/registry-evidence
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -546,6 +562,7 @@ outboundTls:
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
 | `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, owner-only files below this root are accepted. |
+| `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
 | `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the closed bound fails audit writes and therefore fails closed. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
@@ -580,8 +597,8 @@ credentials to another authority.
 - Prefer literal map/array traversal. Dots in provider keys are literal. If a
   deployment must parameterize a nested path, pass a bounded array of literal
   segments and implement a bounded same-file helper.
-- Keep one governed bundle per evidence policy revision and one runtime file per
-  environment. Never use environment variables or command arguments to
+- Keep one complete governed bundle and runtime target per environment. Never
+  use overlays, symlinks, environment variables, or command arguments to
   override governed fields.
 - Run every fixture before accepting either input and again before deploying a
   changed bundle, runtime file, script, schema, codelist, CA file, or secret
@@ -591,7 +608,10 @@ credentials to another authority.
 
 Treat an editable project like reviewed source code. `evidencectl new` creates
 empty `selectors/`, `sources/`, `adapters/`, `schemas/`, `questions/`,
-`derivations/`, and `fixtures/` directories. It creates no deployment input.
+`derivations/`, and `fixtures/` directories plus owner-only disposable local
+P-256 Evidence signing material and distinct audit and subject-binding masters.
+It creates no deployment input. `evidencectl dev` creates session-scoped P-256
+Mint, caller, and holder keys automatically.
 While authoring, use only synthetic responses and selectors. Add the smallest
 provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
 then add exact positive, legitimate-false, boundary, unresolved,
@@ -605,36 +625,51 @@ block, stable concept identifiers, and exactly one project-relative
 invents requirement, framework, Evidence Type, concept, or disclosure-family
 URIs.
 
-Create one explicit `deployment-targets/production/` directory containing
-`governance.yaml` and `runtime.yaml`. `governance.yaml` is closed, has
-`version: 1` and `assuranceProfile: production`, and supplies the existing
-bundle-shaped service, issuer, authentication, audit, subject-binding,
-rate-limit, signing, response-format, and authority-profile values. It may not
-contain selectors, sources, or requirements, which the compiler obtains from
-the editable project. It permits logical `secret:file/<name>` references only,
-never secret values or absolute secret paths. `runtime.yaml` is the ordinary
-closed runtime document; the build copies its bytes unchanged and the target
-host remains authoritative for path, owner, permission, secret, and private-CA
-validation.
+The compact question may also declare `responseFormats: [signed-jws,
+sd-jwt-vc]`. Omission means `[signed-jws]`; signed JWS is mandatory, entries are
+unique, and no other format is accepted in this authoring surface. Local
+development compiles the list into both the bundle ceiling and that question's
+local grant. A reviewed structured answer with an `sdJwtVc` projection must
+declare `sd-jwt-vc`; scalar and unprojected answers may declare it to use the
+profile's one root disclosure. Production response-format authority still
+comes only from the complete deployment-target governance and its exact
+authority grants.
+
+Create explicit `deployment-targets/<environment>/` directories containing
+complete `governance.yaml` and `runtime.yaml` documents plus every governed
+public JWK referenced by governance under `public-keys/`. `governance.yaml` is
+closed, has `version: 1`, and supplies the existing bundle-shaped service,
+issuer, authentication, audit, subject-binding, rate-limit, signing,
+response-format, and authority-profile values. It may not contain selectors,
+sources, or requirements, which the compiler obtains from the editable
+project. It permits logical `secret:file/<name>` references only, never secret
+values or absolute secret paths. `runtime.yaml` is the ordinary closed runtime
+document; the build copies its bytes unchanged and the target host remains
+authoritative for path, owner, permission, secret, private-CA, and Transit
+validation. Staging and production are separate complete targets built from
+the same reviewed source revision. They are not overlays and do not inherit
+from each other. Ready-to-copy layouts and Transit proxy-policy examples are
+under [`../../deployment-targets/`](../../deployment-targets/).
 
 Run the create-only compiler with explicit target and output paths:
 
 ```sh
 evidencectl build \
   --project <editable-project> \
-  --target <editable-project>/deployment-targets/production \
+  --target <editable-project>/deployment-targets/<environment> \
   --output <new-candidate-directory>
 ```
 
 The compiler follows no authored symlink, accepts no reference outside allowed
 project directories, rejects unreferenced generated artifacts, and removes only
 its own failed private staging. It requires authenticated HTTPS sources,
-complete authority, resolved review markers, complete governance, and complete
-fixtures. It validates the unpublished bundle with private temporary secrets
-through the real `evidence` binary, runs every fixture, and publishes nothing
-on failure. It makes no identity-provider, source-data, or Mint call; opens no
-listener; and writes no production audit event. The editable project and
-`.evidence` local state remain unchanged.
+complete authority, resolved review markers, complete governance, governed
+public keys, and complete fixtures. It delegates its internal bundle-only check
+and every fixture to the real `evidence` binary without generating a temporary
+signing key or other validation secret, and publishes nothing on failure. It
+makes no identity-provider, source-data, or Mint call; opens no listener; and
+writes no production audit event. The editable project and `.evidence` local
+state remain unchanged.
 
 The candidate contains `runtime.yaml` and `bundle/`, including only referenced
 adapters, derivations, schemas, codelists, fixtures, and public keys. Given
@@ -642,6 +677,16 @@ identical authoring files, target governance, runtime bytes, and toolset
 release, bundle bytes and revision are identical. The copied runtime is
 environment-specific and has its own revision; it is not part of the bundle
 revision or signed `configurationRevision`.
+
+The bundle revision identifies the whole reviewed bundle and is what an operator
+records at approval. A signed `configurationRevision` is narrower: it covers
+only the configuration and artifacts one requirement depends on. Editing a
+requirement, its source, one of its selector profiles, an authority grant naming
+it, or any script, schema, codelist, or fixture file those reach changes that
+requirement's revision. Retired public verification keys stay in every
+requirement's closure, so key rollover still changes every revision. An edit
+outside a requirement's closure leaves its revision unchanged, so it does not
+force every relying party to re-review.
 
 After approval, transfer the exact candidate, provision independent owner-only
 secrets under the configured secret root, make bundle and runtime non-writable
@@ -674,7 +719,8 @@ Docker Compose is a documented adapter rather than build output. It mounts the
 candidate bundle unchanged and read-only; mounts a distinct container runtime,
 secrets, and persistent audit storage separately; binds Evidence privately; and
 keeps TLS and public routing operator-controlled. The Compose runtime has its
-own revision while assertions continue to carry the unchanged bundle revision.
+own revision while assertions continue to carry their unchanged per-requirement
+configuration revisions.
 When Mint shares that network, retain its public HTTPS issuer and JWKS URI;
 internal plain-HTTP service names do not replace them.
 
@@ -686,5 +732,7 @@ The consumer then calls authenticated `GET /v1/evidence-definitions` and uses
 one returned complete requirement, purpose, concept, role, selector, and value
 origin shape. The endpoint does not publish the whole bundle, source internals,
 authority tags, secrets, selector values, or unrelated definitions. A change
-to an offered contract changes the returned `configurationRevision` and needs
-a coordinated rollout; clients do not infer alternatives from runtime errors.
+to an offered contract changes that definition's returned
+`configurationRevision` and needs a coordinated rollout with the relying parties
+consuming that requirement; clients do not infer alternatives from runtime
+errors.

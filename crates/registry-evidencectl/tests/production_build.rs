@@ -137,6 +137,9 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
             PathBuf::from("bundle/derivations/answer.rhai"),
             PathBuf::from("bundle/evidence.yaml"),
             PathBuf::from("bundle/fixtures/answer.yaml"),
+            PathBuf::from(
+                "bundle/public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",
+            ),
             PathBuf::from("bundle/schemas/facts.schema.yaml"),
             PathBuf::from("bundle/schemas/parameters.schema.yaml"),
             PathBuf::from("bundle/schemas/response.schema.yaml"),
@@ -153,6 +156,27 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
         );
         assert!(!path.to_string_lossy().contains("validation"));
     }
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn governed_public_keys_are_owned_by_the_complete_deployment_target() {
+    let fixture = Fixture::new();
+    let relative = Path::new("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json");
+    let target_key = fixture.target.join(relative);
+    let bytes = fs::read(&target_key).expect("target public key");
+    fs::remove_file(&target_key).expect("remove target public key");
+    fs::create_dir(fixture.project.join("public-keys")).expect("project public key directory");
+    fs::write(fixture.project.join(relative), bytes).expect("misplaced project public key");
+
+    let output = fixture.build();
+
+    assert_failed(&output, "a public key outside the deployment target");
+    assert!(!fixture.output.exists());
+    assert!(
+        fixture.invocations().is_empty(),
+        "missing target-owned key must fail before Evidence delegation"
+    );
     fixture.assert_no_staging_residue();
 }
 
@@ -412,7 +436,7 @@ impl Fixture {
         ] {
             fs::create_dir_all(project.join(directory)).expect("project directory");
         }
-        fs::create_dir_all(&target).expect("target directory");
+        fs::create_dir_all(target.join("public-keys")).expect("target directory");
 
         fs::write(
             project.join("source.openapi.yaml"),
@@ -426,13 +450,20 @@ impl Fixture {
         .expect("selector profile");
         fs::write(project.join("sources/registry.yaml"), SOURCE).expect("source");
         fs::write(
+            target.join(
+                "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",
+            ),
+            r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#,
+        )
+        .expect("governed public key");
+        fs::write(
             project.join("adapters/source-prepare.rhai"),
-            "fn prepare(selectors, parameters) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n",
+            "fn prepare(selectors, context) { #{query: [], body: #{reference: selectors[\"subject\"][\"values\"][\"reference\"]}} }\n",
         )
         .expect("prepare script");
         fs::write(
             project.join("adapters/source-extract.rhai"),
-            "fn extract(source_response, parameters) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n",
+            "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"allowed\"]}} }\n",
         )
         .expect("extract script");
         fs::write(
@@ -684,7 +715,7 @@ fn assert_report(output: &Output, candidate: &Path) {
     assert_eq!(
         stdout,
         format!(
-            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/signing-private-jwk\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and production secret material remain unverified until `evidencectl doctor --project {}` and the target-host Evidence check.\n",
+            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --project {}` and the target-host Evidence check.\n",
             candidate.display(),
             candidate.display(),
         )
@@ -767,22 +798,24 @@ authentication:
   issuer: https://issuer.invalid
   audiences: [evidence]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://issuer.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit: {format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: production-key-1
-  activeKeyRef: secret:file/signing-private-jwk
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
@@ -812,6 +845,13 @@ listener:
   shutdownGraceMilliseconds: 10000
 secretProviders:
   file: {root: /run/secrets/evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage: {path: /var/lib/evidence/audit.jsonl, maximumFileBytes: 1048576}
 outboundTls: {systemRoots: true, trustProfiles: {}}
 "#;

@@ -3,12 +3,15 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write as _,
     net::TcpStream,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
+
+use serde_json::{json, Value};
 
 /// A value planted in every mutated artifact so a diagnostic that leaks a
 /// document value fails loudly instead of quietly.
@@ -21,6 +24,17 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
     );
     copy_tree(&project.join("bundle"), &staged.path().join("bundle"));
+    let bundle_configuration = staged.path().join("bundle/evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replacen(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+            1,
+        ),
+    )
+    .expect("select local assurance for the isolated CLI test");
     let secret_root = staged.path().join("secrets");
     fs::create_dir(&secret_root).expect("create private secret root");
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
@@ -42,6 +56,11 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         .replacen(
             "/var/lib/registry-evidence/audit/evidence.jsonl",
             audit_path.to_str().expect("temporary path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
             1,
         );
     let runtime_path = staged.path().join("runtime.yaml");
@@ -71,30 +90,172 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
     );
 }
 
+#[test]
+fn local_relying_procedure_is_bearer_free_closed_and_selector_private() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.stage_acceptance_secrets();
+    deployment.seal();
+    let input_path = deployment.path("relying-procedure-input.json");
+    let draft = json!({
+        "schema": "registry.evidence.local-relying-procedure-input/v1",
+        "responseFormat": "signed-jws",
+        "requirement": "urn:example:fixture:requirement:adult-status:v1",
+        "purpose": "fixture-eligibility",
+        "audience": "urn:example:local-client:age-checker",
+        "subjects": [{
+            "role": "subject",
+            "selector": {
+                "profile": "person-demographics-v1",
+                "values": {
+                    "given_name": "Amina",
+                    "family_name": "Diallo",
+                    "birth_date": "2000-01-01"
+                }
+            }
+        }]
+    });
+    write_private_json(&input_path, &draft);
+
+    // Non-token stdin is deliberately present. Success proves this seam does
+    // not authenticate, parse, or otherwise depend on bearer input.
+    let output = invoke_local_relying_procedure(
+        &deployment.path("runtime.yaml"),
+        &input_path,
+        b"this-is-not-a-bearer-token\n",
+    );
+    assert!(
+        output.status.success(),
+        "procedure preparation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let procedure: Value =
+        serde_json::from_slice(&output.stdout).expect("procedure output is one JSON document");
+    assert_eq!(
+        procedure["schema"],
+        json!("registry.evidence.local-relying-procedure/v1")
+    );
+    assert_eq!(procedure["responseFormat"], json!("signed-jws"));
+    assert_eq!(procedure["expectedAssuranceProfile"], json!("local"));
+    assert_eq!(
+        procedure["requirement"],
+        json!("urn:example:fixture:requirement:adult-status:v1")
+    );
+    assert_eq!(procedure["purpose"], json!("fixture-eligibility"));
+    assert_eq!(
+        procedure["audience"],
+        json!("urn:example:local-client:age-checker")
+    );
+    assert!(procedure["configurationRevision"]
+        .as_str()
+        .is_some_and(|revision| revision.starts_with("sha256:") && revision.len() == 71));
+    assert!(procedure["trustedJwks"]["keys"]
+        .as_array()
+        .is_some_and(|keys| keys.len() == 1));
+    assert!(procedure["expectedSubjects"][0]["binding"]
+        .as_str()
+        .is_some_and(|binding| binding.starts_with("urn:evidence:subject:v1_")));
+    assert_eq!(
+        procedure["expectedOutputs"],
+        json!([{
+            "concept": "urn:example:fixture:concept:adult-status",
+            "form": "boolean"
+        }])
+    );
+    assert_eq!(procedure["maximumAssertionLifetimeSeconds"], json!(300));
+    assert_eq!(procedure["clockSkewSeconds"], json!(30));
+    assert!(procedure.get("requestNonce").is_none());
+    let serialized = std::str::from_utf8(&output.stdout).expect("procedure output is UTF-8");
+    for protected in [
+        "Amina",
+        "Diallo",
+        "2000-01-01",
+        "person-demographics-v1",
+        "subject-binding-secret-32-bytes-minimum-value",
+        "fixture-agency",
+    ] {
+        assert!(
+            !serialized.contains(protected),
+            "procedure output disclosed protected input {protected:?}"
+        );
+    }
+    assert!(
+        !deployment.path("audit.jsonl").exists(),
+        "procedure preparation never opens audit storage"
+    );
+
+    let mut wrong_purpose = draft.clone();
+    wrong_purpose["purpose"] = json!("not-configured");
+    let mut wrong_profile = draft.clone();
+    wrong_profile["subjects"][0]["selector"]["profile"] = json!("not-configured-v1");
+    let mut missing_value = draft.clone();
+    missing_value["subjects"][0]["selector"]["values"]
+        .as_object_mut()
+        .expect("selector values are an object")
+        .remove("birth_date");
+    let mut absent_values = draft.clone();
+    absent_values["subjects"][0]["selector"]
+        .as_object_mut()
+        .expect("selector is an object")
+        .remove("values");
+    let mut unsupported_format = draft.clone();
+    unsupported_format["responseFormat"] = json!("sd-jwt-vc");
+    for (label, invalid) in [
+        ("purpose", wrong_purpose),
+        ("profile", wrong_profile),
+        ("missing selector value", missing_value),
+        ("absent selector values", absent_values),
+        ("response format", unsupported_format),
+    ] {
+        write_private_json(&input_path, &invalid);
+        let refused = invoke_local_relying_procedure(
+            &deployment.path("runtime.yaml"),
+            &input_path,
+            b"ignored-stdin\n",
+        );
+        assert!(!refused.status.success(), "an invalid {label} was accepted");
+        assert!(refused.stdout.is_empty(), "an invalid {label} wrote output");
+        assert_eq!(
+            std::str::from_utf8(&refused.stderr).expect("diagnostic is UTF-8"),
+            "evidence: local relying procedure preparation failed\n"
+        );
+    }
+
+    write_private_json(&input_path, &draft);
+    fs::set_permissions(&input_path, fs::Permissions::from_mode(0o644)).expect("widen draft mode");
+    let public_input = invoke_local_relying_procedure(
+        &deployment.path("runtime.yaml"),
+        &input_path,
+        b"ignored-stdin\n",
+    );
+    assert!(
+        !public_input.status.success(),
+        "a non-private selector draft was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&public_input.stderr).expect("diagnostic is UTF-8"),
+        "evidence: local relying procedure preparation failed\n"
+    );
+
+    deployment.unseal();
+}
+
 /// Stage the platform secrets the reference project's bundle names, with a
-/// signing key generated for this run under the bundle's `activeKeyId`.
+/// signing key matching the bundle's governed active public JWK.
 /// Source credentials stay absent: `check` must not resolve them.
 fn stage_reference_secrets(secret_root: &Path) {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
     let write = |name: &str, value: &str| {
         let path = secret_root.join(name);
         fs::write(&path, value).expect("write reference secret");
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .expect("set owner-only secret mode");
     };
-    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-    let private_jwk = format!(
-        r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"evidence-signing-2026-01","d":"{}","x":"{}"}}"#,
-        URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-        URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-    );
     write("audit-hmac-key", "audit-hash-secret-32-bytes-minimum-value");
     write(
         "subject-binding-hmac-key",
         "subject-binding-secret-32-bytes-minimum-value",
     );
-    write("signing-ed25519-private-jwk", &private_jwk);
+    write("evidence-signing", VERIFY_PRIVATE_JWK);
 }
 
 /// One deployment failure class, with the exact operator text it must produce.
@@ -161,11 +322,11 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    "    source: source-a\n",
-                    &format!("    source: {CANARY}\n"),
+                    "      source: source-a\n",
+                    &format!("      source: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement references an unknown source\n",
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement acquisition references an unknown source\n",
             suffix: "",
         },
         FailureCase {
@@ -312,7 +473,7 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
     }
     let cases = [
         SecretFailureCase {
-            label: "signing key kid differs from the bundle's activeKeyId",
+            label: "signing key differs from the governed active public JWK",
             break_secrets: |deployment| deployment.write_mismatched_signing_key(),
             expected: "evidence: runtime signing initialization failed\n",
         },
@@ -480,11 +641,14 @@ fn serve_stops_on_sigterm_and_restarts_on_an_archived_audit_chain() {
 }
 
 /// The staged verification key identifier, echoed by the protected header.
-const VERIFY_KEY_ID: &str = "verify-fixture-key";
+const VERIFY_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 
-/// A staged Ed25519 test key. It signs fixture assertions in this test binary
+/// A staged P-256 test key. It signs fixture assertions in this test binary
 /// only and is not a deployment key.
-const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"verify-fixture-key"}"#;
+const VERIFY_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+
+/// A different valid P-256 key used to prove exact public-key matching.
+const MISMATCHED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
 
 /// A staged request nonce, of the exact 43-character request-nonce shape.
 const FIXTURE_NONCE: &str = "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I";
@@ -576,6 +740,73 @@ fn verify_rejects_a_policy_document_with_an_unknown_field() {
         "",
         "evidence: stored response verification failed (malformed)\n",
     );
+}
+
+/// A policy stating a time bound the verification policy contract forbids is an
+/// unusable input document, not a verification outcome: honouring it would make
+/// the verifier accept assertions a conformant relying party must refuse, and
+/// the failure-class vocabulary is frozen, so there is no class to report it
+/// under. The command therefore refuses it before verifying anything, exactly as
+/// it refuses a policy with an unknown field.
+#[test]
+fn verify_rejects_a_policy_document_outside_the_contract_time_bounds() {
+    for (label, replaced, with) in [
+        (
+            "a lifetime past the contract ceiling",
+            "maximumAssertionLifetimeSeconds: 172800",
+            "maximumAssertionLifetimeSeconds: 31536001",
+        ),
+        (
+            "a zero lifetime",
+            "maximumAssertionLifetimeSeconds: 172800",
+            "maximumAssertionLifetimeSeconds: 0",
+        ),
+        (
+            "a skew past the contract ceiling",
+            "clockSkewSeconds: 30",
+            "clockSkewSeconds: 301",
+        ),
+    ] {
+        let policy = fixture_policy().replacen(replaced, with, 1);
+        assert!(policy.contains(with), "{label} did not reach the policy");
+        let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &policy);
+        let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+        assert_verification_failure(
+            &output,
+            "2026-08-02T12:00:00Z",
+            "",
+            "evidence: stored response verification failed (malformed)\n",
+        );
+    }
+}
+
+#[test]
+fn verify_rejects_a_policy_document_outside_the_contract_list_bounds() {
+    for (label, minimum_items, maximum_items) in [
+        ("a zero minimum", 0, 1),
+        ("a minimum past the ceiling", 65, 64),
+        ("a zero maximum", 1, 0),
+        ("a maximum past the ceiling", 1, 65),
+    ] {
+        let policy = fixture_policy().replacen(
+            "form: boolean",
+            &format!(
+                "form:\n      list:\n        minimumItems: {minimum_items}\n        maximumItems: {maximum_items}"
+            ),
+            1,
+        );
+        let stored = StoredResponse::stage(&fixture_evidence(), &fixture_evidence(), &policy);
+        let output = stored.verify(Some("2026-08-02T12:00:00Z"));
+
+        assert_verification_failure(
+            &output,
+            "2026-08-02T12:00:00Z",
+            "",
+            "evidence: stored response verification failed (malformed)\n",
+        );
+        assert_eq!(output.status.code(), Some(1), "{label} was accepted");
+    }
 }
 
 #[test]
@@ -757,6 +988,7 @@ expectedOutputs:
     form: boolean
 maximumAssertionLifetimeSeconds: 172800
 clockSkewSeconds: 30
+revokedKeyIds: []
 ",
         revision = "0".repeat(64),
         binding = "A".repeat(43),
@@ -775,18 +1007,18 @@ impl StoredResponse {
     /// signature no longer covers the stored bytes.
     fn stage(signed: &serde_json::Value, stored: &serde_json::Value, policy: &str) -> Self {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-        use ed25519_dalek::Signer as _;
+        use registry_platform_crypto::{sign, PrivateJwk};
 
         let root = tempfile::tempdir().expect("temporary verification inputs");
-        let key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let key = PrivateJwk::parse(VERIFY_PRIVATE_JWK).expect("fixture key parses");
         let protected = URL_SAFE_NO_PAD.encode(format!(
-            r#"{{"alg":"EdDSA","kid":"{VERIFY_KEY_ID}","typ":"evidence+jws","cty":"application/evidence+json"}}"#
+            r#"{{"alg":"ES256","kid":"{VERIFY_KEY_ID}","typ":"evidence+jws","cty":"application/evidence+json"}}"#
         ));
         let signed_payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(signed).expect("Evidence payload serializes"));
         let signature = URL_SAFE_NO_PAD.encode(
-            key.sign(format!("{protected}.{signed_payload}").as_bytes())
-                .to_bytes(),
+            sign(format!("{protected}.{signed_payload}").as_bytes(), &key)
+                .expect("fixture payload signs"),
         );
         let stored_payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(stored).expect("Evidence payload serializes"));
@@ -800,10 +1032,8 @@ impl StoredResponse {
         .expect("stage the stored response");
         fs::write(
             root.path().join("trusted.jwks.json"),
-            format!(
-                r#"{{"keys":[{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"{VERIFY_KEY_ID}","x":"{}"}}]}}"#,
-                URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes())
-            ),
+            serde_json::to_vec(&serde_json::json!({"keys": [key.public()]}))
+                .expect("trusted JWKS serializes"),
         )
         .expect("stage the pinned key set");
         fs::write(root.path().join("policy.yaml"), policy).expect("stage the policy");
@@ -983,6 +1213,11 @@ impl Deployment {
             .join("../../products/evidence/fixtures/acceptance")
             .join(case);
         copy_tree(&source, &deployment.path("bundle"));
+        deployment.replace(
+            "bundle/evidence.yaml",
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+        );
         let secrets = deployment.path("secrets");
         fs::create_dir(&secrets).expect("create private secret root");
         fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700))
@@ -1015,6 +1250,9 @@ listener:
 secretProviders:
   file:
     root: {secrets}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
 auditStorage:
   path: {audit}
   maximumFileBytes: 1073741824
@@ -1077,24 +1315,16 @@ outboundTls:
 
     /// Stage every logical secret the acceptance bundle references.
     ///
-    /// The signing key is generated for this run so no private key material is
-    /// tracked, and the source credentials are synthetic constants that never
-    /// reach a network because the test performs no evidence request.
+    /// The signing key matches the governed public fixture key, and the source
+    /// credentials are synthetic constants that never reach a network because
+    /// the test performs no evidence request.
     fn stage_acceptance_secrets(&self) {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let private_jwk = format!(
-            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"fixture-key-2026-01","d":"{}","x":"{}"}}"#,
-            URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-        );
         self.write_secret("audit-hash-key", "audit-hash-secret-32-bytes-minimum-value");
         self.write_secret(
             "subject-binding-key",
             "subject-binding-secret-32-bytes-minimum-value",
         );
-        self.write_secret("signing-key", &private_jwk);
+        self.write_secret("signing-key", VERIFY_PRIVATE_JWK);
         self.write_secret("source-a-token", "synthetic-source-token");
         self.write_secret("source-b-token", "synthetic-source-token");
         self.write_secret("source-c-username", "synthetic-source-user");
@@ -1111,18 +1341,9 @@ outboundTls:
             .expect("set owner-only audit chain mode");
     }
 
-    /// Overwrite the staged signing key with a fresh key whose kid is not
-    /// the bundle's `signing.activeKeyId`.
+    /// Overwrite the staged signing key with a different valid P-256 key.
     fn write_mismatched_signing_key(&self) {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-        let private_jwk = format!(
-            r#"{{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"not-the-active-key","d":"{}","x":"{}"}}"#,
-            URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())
-        );
-        self.write_secret("signing-key", &private_jwk);
+        self.write_secret("signing-key", MISMATCHED_PRIVATE_JWK);
     }
 
     /// Start `serve` against the sealed deployment.
@@ -1166,6 +1387,37 @@ impl Drop for Deployment {
             set_tree_mode(&self.path("bundle"), 0o755, 0o644);
         }
     }
+}
+
+fn write_private_json(path: &Path, value: &Value) {
+    fs::write(
+        path,
+        serde_json::to_vec(value).expect("local relying procedure draft serializes"),
+    )
+    .expect("write local relying procedure draft");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .expect("make local relying procedure draft owner-only");
+}
+
+fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .arg("--runtime")
+        .arg(runtime)
+        .arg("prepare-local-relying-procedure")
+        .arg("--input")
+        .arg(input)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("evidence binary starts");
+    let mut child_stdin = child.stdin.take().expect("command stdin is piped");
+    child_stdin
+        .write_all(stdin)
+        .expect("write deliberately irrelevant stdin");
+    drop(child_stdin);
+    child.wait_with_output().expect("evidence command exits")
 }
 
 fn invoke(runtime: &Path, arguments: &[&str]) -> Output {

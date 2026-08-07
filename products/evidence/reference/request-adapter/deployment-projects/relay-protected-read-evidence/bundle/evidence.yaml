@@ -15,13 +15,15 @@ authentication:
   issuer: https://tokens.gov.example
   audiences: [registry-evidence]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://tokens.gov.example/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit:
   format: keyed-jsonl
   hashSecretRef: secret:file/audit-hmac-key
@@ -36,12 +38,12 @@ rateLimits:
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: evidence-signing-2026-01
-  activeKeyRef: secret:file/signing-ed25519-private-jwk
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 responseFormats: [signed-jws]
 
@@ -124,7 +126,9 @@ authorityProfiles:
 requirements:
   - id: urn:gov:example:requirement:residence-region:v1
     kind: information-requirement
-    source: residence-register
+    acquisition:
+      kind: single
+      source: residence-register
     purposes: [residence-verification]
     subjectRoles:
       - role: subject
@@ -132,7 +136,7 @@ requirements:
         selectorProfiles: [residence-record-v1]
     referenceFrameworks: [urn:gov:example:framework:residence-region:v1]
     evidenceType: urn:gov:example:evidence-type:residence-region:v1
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/residence-region.rhai
       selectorInputs:

@@ -48,6 +48,207 @@ def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subproce
         )
 
 
+class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
+    def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual(
+            list(document["jobs"]),
+            ["validate", "build", "clients", "assemble", "publish"],
+        )
+        self.assertEqual(
+            document["jobs"]["validate"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["clients"]["permissions"],
+            {"contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["assemble"]["permissions"],
+            {"actions": "read", "contents": "read"},
+        )
+        self.assertEqual(
+            document["jobs"]["publish"]["permissions"],
+            {"actions": "read", "contents": "write"},
+        )
+        self.assertEqual(text.count("contents: write"), 1)
+        publish_uses = {
+            step.get("uses", "") for step in document["jobs"]["publish"]["steps"]
+        }
+        self.assertFalse(
+            any(action.startswith("actions/checkout@") for action in publish_uses)
+        )
+
+    def test_binds_a_unique_dev_tag_to_successful_protected_main(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        validation = step_run(
+            document,
+            "validate",
+            "Validate manual source and successful CI",
+        )
+        self.assertIn('"${GITHUB_REF}" != refs/heads/main', validation)
+        self.assertIn(
+            '"$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}"',
+            validation,
+        )
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}", validation)
+        self.assertIn('.event == "push"', validation)
+        self.assertIn(
+            'tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"',
+            validation,
+        )
+        self.assertIn("Cannot prove development tag ${tag} is absent", validation)
+        for job_name in ("build", "assemble"):
+            checkout = next(
+                step
+                for step in document["jobs"][job_name]["steps"]
+                if step.get("uses", "").startswith("actions/checkout@")
+            )
+            self.assertEqual(
+                checkout["with"]["ref"],
+                "${{ needs.validate.outputs.source_sha }}",
+            )
+            self.assertFalse(checkout["with"]["persist-credentials"])
+
+    def test_builds_and_smokes_the_released_toolset_shape(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        matrix = document["jobs"]["build"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["target"], entry["asset"]) for entry in matrix},
+            {
+                ("x86_64-unknown-linux-gnu", "linux-amd64"),
+                ("aarch64-unknown-linux-gnu", "linux-arm64"),
+                ("aarch64-apple-darwin", "macos-arm64"),
+            },
+        )
+        build = step_run(
+            document,
+            "build",
+            "Build native Evidence development binaries",
+        )
+        for package in ("registry-evidence", "registry-evidencectl", "registry-mint"):
+            self.assertIn(f"-p {package}", build)
+        self.assertIn("cargo build --release --locked", build)
+        self.assertIn("for binary in evidence evidencectl mint", build)
+
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble development assets and checksums",
+        )
+        smoke = step_run(
+            document,
+            "assemble",
+            "Smoke the development installer before publication",
+        )
+        self.assertIn('$0 == "default_version=\\\"\\\""', assemble)
+        self.assertIn("registry.evidence-development-build/v1", assemble)
+        self.assertIn("sha256sum --", assemble)
+        self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
+        self.assertIn("bash development-assets/evidencectl-install.sh", smoke)
+
+    def test_builds_and_smokes_the_relying_party_client_packages(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        clients = document["jobs"]["clients"]
+        matrix = clients["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {
+                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                for entry in matrix
+            },
+            {
+                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
+                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
+                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+            },
+        )
+        self.assertEqual(clients["env"]["RUSTUP_TOOLCHAIN"], "1.95.0")
+
+        wheel = step_run(document, "clients", "Build the Python client wheel")
+        # The published wheel name has to be predictable from the source, since
+        # the roster below names it exactly: hence a stated Linux platform tag
+        # instead of maturin's symbol-derived manylinux audit, and exactly one
+        # wheel per platform rather than one per interpreter version.
+        self.assertIn("--compatibility linux", wheel)
+        self.assertIn("expected exactly one wheel", wheel)
+        node = step_run(document, "clients", "Build the Node client package")
+        self.assertIn(
+            "package/evidence-client.${{ matrix.napi_platform }}.node",
+            node,
+        )
+
+        # Both smokes load a prebuilt native artifact and exercise it offline.
+        # Neither may carry a credential, and each addresses a reserved host
+        # that cannot resolve, so a request would fail rather than leave.
+        for name in ("Smoke the Python client wheel", "Smoke the Node client package"):
+            smoke = step_run(document, "clients", name)
+            self.assertIn("placeholder-not-a-credential", smoke)
+            self.assertIn("https://evidence.invalid", smoke)
+            self.assertIn("P-256", smoke)
+            self.assertIn("ES256", smoke)
+            self.assertNotIn("Ed25519", smoke)
+            self.assertNotIn("EdDSA", smoke)
+
+        python_smoke = step_run(document, "clients", "Smoke the Python client wheel")
+        self.assertIn('JWKS, [], "placeholder-not-a-credential"', python_smoke)
+        self.assertIn('"response_format": "signed-jws"', python_smoke)
+        node_smoke = step_run(document, "clients", "Smoke the Node client package")
+        self.assertIn("revokedKeyIds: []", node_smoke)
+        self.assertIn("responseFormat: 'signed-jws'", node_smoke)
+
+        roster = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        self.assertIn('echo "evidence-client-node-${tag}-${platform}.tgz"', roster)
+        self.assertIn(
+            'echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"',
+            roster,
+        )
+        self.assertIn(
+            "for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64",
+            roster,
+        )
+
+    def test_publishes_one_unique_prerelease_and_prints_its_curl_command(self) -> None:
+        text, document = workflow("evidence-dev.yml")
+        verify = step_run(
+            document,
+            "publish",
+            "Reverify the closed development asset roster",
+        )
+        publish = step_run(
+            document,
+            "publish",
+            "Publish unique development prerelease",
+        )
+        self.assertIn("diff -u", verify)
+        self.assertIn("sha256sum --check --strict SHA256SUMS", verify)
+        self.assertIn("gh release create", publish)
+        self.assertIn('--target "${source_sha}"', publish)
+        self.assertIn("--prerelease", publish)
+        self.assertIn("--latest=false", publish)
+        self.assertIn(
+            'download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"',
+            publish,
+        )
+        self.assertIn('install_url="${download_url}/evidencectl-install.sh"', publish)
+        for forbidden in (
+            "gh release upload",
+            "gh release delete",
+            "--clobber",
+            "git push",
+            "git update-ref",
+        ):
+            self.assertNotIn(forbidden, text)
+
+
 class CandidateWorkflowStructureTest(unittest.TestCase):
     def test_current_release_pipeline_has_no_retired_notary_surface(self) -> None:
         paths = (
@@ -412,6 +613,37 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Deploy to GitHub Pages"
         )
         self.assertEqual(recheck + 1, deployment)
+        self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
+
+        build_steps = document["jobs"]["build"]["steps"]
+        cache = next(
+            step
+            for step in build_steps
+            if step.get("name") == "Cache Registryctl authoring-reference build"
+        )
+        self.assertEqual(
+            cache["uses"],
+            "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+        )
+        self.assertEqual(cache["with"]["shared-key"], "docs-authoring-reference")
+        self.assertTrue(cache["with"]["save-if"])
+
+        _, ci = workflow("ci.yml")
+        docs_steps = ci["jobs"]["docs"]["steps"]
+        ci_cache = next(
+            step
+            for step in docs_steps
+            if step.get("name") == "Cache Registryctl authoring-reference build"
+        )
+        self.assertEqual(ci_cache["uses"], cache["uses"])
+        self.assertEqual(
+            ci_cache["with"]["shared-key"],
+            cache["with"]["shared-key"],
+        )
+        self.assertEqual(
+            ci_cache["with"]["save-if"],
+            "${{ github.ref == 'refs/heads/main' }}",
+        )
 
     def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,

@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Component, Path};
 use std::str::FromStr;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -357,35 +358,30 @@ pub struct EvidenceConfig {
     pub requirements: Vec<RequirementConfig>,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Deserialize,
-    Serialize,
-    schemars::JsonSchema,
-    utoipa::ToSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum AssuranceProfile {
-    Local,
-    Production,
-    EvidenceGrade,
-}
-
-impl AssuranceProfile {
-    /// Only the explicit local profile may be authored before fixture
-    /// coverage exists. Deployable profiles retain the complete fixture gate.
-    pub fn requires_fixtures(self) -> bool {
-        matches!(self, Self::Production | Self::EvidenceGrade)
-    }
-}
+/// The declared assurance boundary travels with every response, so the
+/// portable `registry-evidence-verifier` crate owns it and configuration serves
+/// it at the runtime's own path.
+pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
 
 impl EvidenceConfig {
+    pub fn requirement_acquisition_posture(
+        &self,
+        requirement_id: &str,
+    ) -> Option<AcquisitionPosture> {
+        let requirement = self
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == requirement_id)?;
+        requirement
+            .acquisition
+            .source_ids()
+            .into_iter()
+            .filter_map(|source_id| self.sources.get(source_id).map(|source| source.posture))
+            .reduce(AcquisitionPosture::weakest)
+    }
+
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
@@ -407,9 +403,17 @@ impl EvidenceConfig {
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
+        if self.audit.hash_secret_ref == self.subject_binding.secret_ref {
+            return invalid("audit and subject-binding secret references must be distinct");
+        }
         self.rate_limits.validate()?;
         self.signing.validate()?;
         validate_response_formats(&self.response_formats, "bundle response formats")?;
+        if self.assurance_profile != AssuranceProfile::Local
+            && self.response_formats.contains(&ResponseFormat::SdJwtVc)
+        {
+            validate_https_origin(&self.service.provider_id)?;
+        }
         validate_named_map(&self.selector_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
@@ -485,12 +489,13 @@ impl EvidenceConfig {
         let requirement_sources = self
             .requirements
             .iter()
-            .map(|requirement| (requirement.id.as_str(), requirement.source.as_str()))
-            .collect::<BTreeMap<_, _>>();
+            .filter(|requirement| requirement.acquisition.uses_source(source_id))
+            .map(|requirement| requirement.id.as_str())
+            .collect::<BTreeSet<_>>();
         let mut sets = BTreeSet::new();
         for (_, authority) in self.authority_profiles.iter() {
             for grant in &authority.grants {
-                if requirement_sources.get(grant.requirement.as_str()) != Some(&source_id) {
+                if !requirement_sources.contains(grant.requirement.as_str()) {
                     continue;
                 }
                 let mut set = grant
@@ -506,7 +511,7 @@ impl EvidenceConfig {
                     })
                     .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
                     .collect::<SourceSelectorSet>();
-                if set.is_empty() {
+                if set.is_empty() && !source.request.selector_inputs.is_empty() {
                     continue;
                 }
                 set.sort();
@@ -537,30 +542,65 @@ impl EvidenceConfig {
                 }
             }
             for (_, binding) in source.request.path_bindings.iter() {
-                let profile =
-                    self.selector_profiles
-                        .get(&binding.profile)
-                        .ok_or(ConfigError::Invalid(
-                            "source path binding references an unknown selector profile",
-                        ))?;
-                if !profile.fields.contains_key(&binding.field) {
-                    return invalid("source path binding references an unknown selector field");
-                }
-                if !source.request.selector_inputs.iter().any(|input| {
-                    input.role == binding.role
-                        && input.alternatives.iter().any(|alternative| {
-                            alternative.profile == binding.profile
-                                && alternative.fields.contains(&binding.field)
-                        })
-                }) {
-                    return invalid("source path binding is not declared as a selector input");
+                if let PathBindingConfig::Selector {
+                    role,
+                    profile,
+                    field,
+                } = binding
+                {
+                    let profile_config =
+                        self.selector_profiles
+                            .get(profile)
+                            .ok_or(ConfigError::Invalid(
+                                "source path binding references an unknown selector profile",
+                            ))?;
+                    if !profile_config.fields.contains_key(field) {
+                        return invalid("source path binding references an unknown selector field");
+                    }
+                    if !source.request.selector_inputs.iter().any(|input| {
+                        input.role == *role
+                            && input.alternatives.iter().any(|alternative| {
+                                alternative.profile == *profile
+                                    && alternative.fields.contains(field)
+                            })
+                    }) {
+                        return invalid("source path binding is not declared as a selector input");
+                    }
                 }
             }
         }
 
+        let initial_sources = self
+            .requirements
+            .iter()
+            .map(|requirement| requirement.acquisition.initial_source())
+            .collect::<BTreeSet<_>>();
+        let fetch_sources = self
+            .requirements
+            .iter()
+            .filter_map(|requirement| requirement.acquisition.fetch_source())
+            .collect::<BTreeSet<_>>();
+        for (source_id, source) in self.sources.iter() {
+            if initial_sources.contains(source_id) && source.request.selector_inputs.is_empty() {
+                return invalid("single and search sources must declare selector inputs");
+            }
+            if source
+                .request
+                .path_bindings
+                .iter()
+                .map(|(_, binding)| binding)
+                .any(PathBindingConfig::is_prior_fact)
+                && (!fetch_sources.contains(source_id) || initial_sources.contains(source_id))
+            {
+                return invalid("prior-fact path bindings are permitted only on fetch sources");
+            }
+        }
+
         for requirement in &self.requirements {
-            if !self.sources.contains_key(&requirement.source) {
-                return invalid("requirement references an unknown source");
+            for source_id in requirement.acquisition.source_ids() {
+                if !self.sources.contains_key(source_id) {
+                    return invalid("requirement acquisition references an unknown source");
+                }
             }
             if requirement.validity_seconds > self.signing.maximum_assertion_validity_seconds {
                 return invalid("requirement validity exceeds signing maximum validity");
@@ -603,14 +643,7 @@ impl EvidenceConfig {
                 if grant.subjects.len() != requirement.subject_roles.len() {
                     return invalid("authority grant must bind the complete subject-role set");
                 }
-                let source = self
-                    .sources
-                    .get(&requirement.source)
-                    .ok_or(ConfigError::Invalid(
-                        "requirement references an unknown source",
-                    ))?;
                 let mut seen_roles = BTreeSet::new();
-                let mut source_selector_set = Vec::with_capacity(grant.subjects.len());
                 for subject in &grant.subjects {
                     if !seen_roles.insert(subject.role.as_str()) {
                         return invalid("authority grant subject roles must be unique");
@@ -642,16 +675,6 @@ impl EvidenceConfig {
                         subject.role.as_str(),
                         subject.selector_profile.as_str(),
                     ));
-                    if source.request.selector_inputs.iter().any(|input| {
-                        input.role == subject.role
-                            && input
-                                .alternatives
-                                .iter()
-                                .any(|alternative| alternative.profile == subject.selector_profile)
-                    }) {
-                        source_selector_set
-                            .push((subject.role.clone(), subject.selector_profile.clone()));
-                    }
                 }
                 if requirement
                     .subject_roles
@@ -660,16 +683,35 @@ impl EvidenceConfig {
                 {
                     return invalid("authority grant omits a required subject role");
                 }
-                if source_selector_set.is_empty() {
-                    return invalid(
-                        "authority path does not activate any declared source selector input",
-                    );
+                for source_id in requirement.acquisition.source_ids() {
+                    let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
+                        "requirement acquisition references an unknown source",
+                    ))?;
+                    let mut source_selector_set = grant
+                        .subjects
+                        .iter()
+                        .filter(|subject| {
+                            source.request.selector_inputs.iter().any(|input| {
+                                input.role == subject.role
+                                    && input.alternatives.iter().any(|alternative| {
+                                        alternative.profile == subject.selector_profile
+                                    })
+                            })
+                        })
+                        .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
+                        .collect::<SourceSelectorSet>();
+                    if source_selector_set.is_empty() && !source.request.selector_inputs.is_empty()
+                    {
+                        return invalid(
+                            "authority path does not activate any declared source selector input",
+                        );
+                    }
+                    source_selector_set.sort();
+                    source_selector_sets
+                        .entry(source_id.to_owned())
+                        .or_default()
+                        .insert(source_selector_set);
                 }
-                source_selector_set.sort();
-                source_selector_sets
-                    .entry(requirement.source.clone())
-                    .or_default()
-                    .insert(source_selector_set);
             }
         }
 
@@ -722,6 +764,23 @@ impl EvidenceConfig {
     }
 }
 
+fn validate_https_origin(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value)
+        .map_err(|_| ConfigError::Invalid("service providerId is not a stable HTTPS origin"))?;
+    if url.scheme() != "https"
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || value.ends_with('/')
+    {
+        return invalid("SD-JWT VC requires service.providerId to be a stable HTTPS origin");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceConfig {
@@ -746,6 +805,9 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: RuntimeSecretProviders,
+    /// Process-local binding to the signer that controls the governed active
+    /// public key. This cannot change the governed key set or algorithm.
+    pub signer: RuntimeSignerConfig,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
 }
@@ -772,8 +834,75 @@ impl RuntimeConfig {
             metrics.validate(&self.listener)?;
         }
         self.secret_providers.validate()?;
+        self.signer.validate()?;
         self.audit_storage.validate()?;
         self.outbound_tls.validate()
+    }
+}
+
+/// Closed process-local signer binding. Production deployments reach Transit
+/// only over a workload-local Unix socket and never receive a provider token.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RuntimeSignerConfig {
+    LocalJwk {
+        #[serde(rename = "privateKeyRef")]
+        private_key_ref: SecretRef,
+    },
+    Transit {
+        #[serde(rename = "unixSocketPath")]
+        unix_socket_path: String,
+        mount: String,
+        #[serde(rename = "keyName")]
+        key_name: String,
+        #[serde(rename = "keyVersion")]
+        key_version: u32,
+        #[serde(rename = "timeoutMilliseconds")]
+        timeout_milliseconds: u64,
+    },
+}
+
+impl RuntimeSignerConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::LocalJwk { .. } => Ok(()),
+            Self::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                key_version,
+                timeout_milliseconds,
+            } => {
+                validate_absolute_path(unix_socket_path)?;
+                if !valid_local_id(mount) || !valid_local_id(key_name) {
+                    return invalid("Transit signer mount and keyName must be local identifiers");
+                }
+                if *key_version == 0 {
+                    return invalid("Transit signer keyVersion must be positive");
+                }
+                validate_range(
+                    *timeout_milliseconds,
+                    1,
+                    30_000,
+                    "Transit signer timeoutMilliseconds",
+                )
+            }
+        }
+    }
+
+    pub fn is_local_jwk(&self) -> bool {
+        matches!(self, Self::LocalJwk { .. })
+    }
+
+    pub fn is_transit(&self) -> bool {
+        matches!(self, Self::Transit { .. })
+    }
+
+    pub fn private_key_ref(&self) -> Option<&SecretRef> {
+        match self {
+            Self::LocalJwk { private_key_ref } => Some(private_key_ref),
+            Self::Transit { .. } => None,
+        }
     }
 }
 
@@ -978,6 +1107,11 @@ pub struct AuthenticationConfig {
     pub evidence_audience_claim: String,
     pub grant_id_claim: String,
     pub grant_authority_claim: String,
+    /// Maximum lifetime accepted for inbound access tokens. The verifier
+    /// requires `iat`, requires `exp > iat`, and applies this bound.
+    pub maximum_token_lifetime_seconds: u64,
+    /// Emergency denylist applied before JWKS cache selection.
+    pub revoked_key_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
 }
@@ -1005,6 +1139,27 @@ impl AuthenticationConfig {
         validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
+        validate_range(
+            self.maximum_token_lifetime_seconds,
+            1,
+            86_400,
+            "authentication maximumTokenLifetimeSeconds",
+        )?;
+        validate_unique_strings(
+            &self.revoked_key_ids,
+            0,
+            32,
+            1,
+            256,
+            "authentication revokedKeyIds",
+        )?;
+        if self
+            .revoked_key_ids
+            .iter()
+            .any(|kid| kid.chars().any(char::is_control))
+        {
+            return invalid("authentication revokedKeyIds contain a control character");
+        }
         // Ordered principal first, because `sub` is legitimate for that claim
         // alone and the shadowing check below reads the rest of the list.
         let claims = [
@@ -1241,9 +1396,9 @@ impl RateLimitConfig {
 pub struct SigningConfig {
     pub format: SigningFormat,
     pub algorithm: SigningAlgorithm,
-    pub active_key_id: String,
-    pub active_key_ref: SecretRef,
-    pub retired_public_jwk_files: Vec<PublicJwkPath>,
+    pub active_public_jwk_file: PublicJwkPath,
+    pub published_public_jwk_files: Vec<PublicJwkPath>,
+    pub revoked_key_ids: Vec<String>,
     pub jwks_path: String,
     pub maximum_assertion_validity_seconds: u64,
     pub verifier_clock_skew_seconds: u64,
@@ -1251,16 +1406,20 @@ pub struct SigningConfig {
 
 impl SigningConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_string(&self.active_key_id, 1, 256, "active signing key id")?;
-        if self.active_key_id.chars().any(char::is_control) {
-            return invalid("active signing key id contains a control character");
-        }
         validate_unique(
-            &self.retired_public_jwk_files,
+            &self.published_public_jwk_files,
             0,
             32,
-            "retired public JWK paths",
+            "published public JWK paths",
         )?;
+        if self
+            .published_public_jwk_files
+            .iter()
+            .any(|path| path == &self.active_public_jwk_file)
+        {
+            return invalid("the active public JWK file must not also be published");
+        }
+        validate_key_identifiers(&self.revoked_key_ids, 33, "signing revokedKeyIds")?;
         if self.jwks_path != "/.well-known/evidence/jwks.json" {
             return invalid("JWKS path is not the Version 1 discovery path");
         }
@@ -1270,10 +1429,13 @@ impl SigningConfig {
             31_536_000,
             "maximum assertion validity",
         )?;
+        // The same bound the relying party's `clockSkewSeconds` carries: an
+        // advertised skew a conformant verification policy cannot express would
+        // be unusable advice. Widening either one alone is a contract change.
         validate_range(
             self.verifier_clock_skew_seconds,
             0,
-            600,
+            300,
             "verifier clock skew",
         )
     }
@@ -1287,7 +1449,27 @@ pub enum SigningFormat {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
 pub enum SigningAlgorithm {
-    EdDSA,
+    ES256,
+}
+
+fn validate_key_identifiers(
+    identifiers: &[String],
+    maximum: usize,
+    label: &'static str,
+) -> Result<(), ConfigError> {
+    validate_unique_strings(identifiers, 0, maximum, 43, 43, label)?;
+    if identifiers.iter().any(|identifier| {
+        let alphabet_is_valid = identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+        let encoding_is_canonical = URL_SAFE_NO_PAD.decode(identifier).is_ok_and(|decoded| {
+            decoded.len() == 32 && URL_SAFE_NO_PAD.encode(&decoded) == *identifier
+        });
+        !alphabet_is_valid || !encoding_is_canonical
+    }) {
+        return invalid("key identifiers must be RFC 7638 SHA-256 thumbprints");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -1577,6 +1759,19 @@ pub enum AcquisitionPosture {
     RecordTransformed,
 }
 
+impl AcquisitionPosture {
+    /// Return the least-minimized posture in a bounded acquisition. A chained
+    /// requirement may claim no stronger posture than either of its sources.
+    pub fn weakest(self, other: Self) -> Self {
+        use AcquisitionPosture::{FieldProjected, RecordTransformed, SourceDerived};
+        match (self, other) {
+            (RecordTransformed, _) | (_, RecordTransformed) => RecordTransformed,
+            (FieldProjected, _) | (_, FieldProjected) => FieldProjected,
+            (SourceDerived, SourceDerived) => SourceDerived,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceAuthentication {
@@ -1815,22 +2010,41 @@ pub struct SelectorInputAlternative {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PathBindingConfig {
-    pub role: String,
-    pub profile: String,
-    pub field: String,
+#[serde(tag = "from", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PathBindingConfig {
+    Selector {
+        role: String,
+        profile: String,
+        field: String,
+    },
+    PriorFact {
+        field: String,
+    },
 }
 
 impl PathBindingConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if !valid_local_id(&self.role)
-            || !valid_local_id(&self.profile)
-            || !valid_field_name(&self.field)
-        {
-            return invalid("source selector binding identifier is invalid");
+        match self {
+            Self::Selector {
+                role,
+                profile,
+                field,
+            } => {
+                if !valid_local_id(role) || !valid_local_id(profile) || !valid_field_name(field) {
+                    return invalid("source selector binding identifier is invalid");
+                }
+            }
+            Self::PriorFact { field } => {
+                if !valid_field_name(field) {
+                    return invalid("source prior-fact binding identifier is invalid");
+                }
+            }
         }
         Ok(())
+    }
+
+    pub fn is_prior_fact(&self) -> bool {
+        matches!(self, Self::PriorFact { .. })
     }
 }
 
@@ -2077,12 +2291,69 @@ pub enum ValueOrigin {
     Request,
 }
 
+/// The complete bounded evidence-data acquisition profile for one requirement.
+///
+/// Each named source remains one immutable HTTP request. `search-then-fetch`
+/// is the only multi-call form and therefore fixes the acquisition ceiling at
+/// two calls without introducing a general workflow or source-planning model.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum AcquisitionConfig {
+    Single { source: String },
+    SearchThenFetch { search: String, fetch: String },
+}
+
+impl AcquisitionConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::Single { source } => {
+                if !valid_local_id(source) {
+                    return invalid("requirement acquisition source identifier is invalid");
+                }
+            }
+            Self::SearchThenFetch { search, fetch } => {
+                if !valid_local_id(search) || !valid_local_id(fetch) || search == fetch {
+                    return invalid("search-then-fetch source identifiers are invalid");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn source_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Single { source } => vec![source.as_str()],
+            Self::SearchThenFetch { search, fetch } => {
+                vec![search.as_str(), fetch.as_str()]
+            }
+        }
+    }
+
+    pub fn uses_source(&self, source_id: &str) -> bool {
+        self.source_ids().contains(&source_id)
+    }
+
+    pub fn initial_source(&self) -> &str {
+        match self {
+            Self::Single { source } => source,
+            Self::SearchThenFetch { search, .. } => search,
+        }
+    }
+
+    pub fn fetch_source(&self) -> Option<&str> {
+        match self {
+            Self::Single { .. } => None,
+            Self::SearchThenFetch { fetch, .. } => Some(fetch),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementConfig {
     pub id: String,
     pub kind: RequirementKind,
-    pub source: String,
+    pub acquisition: AcquisitionConfig,
     pub purposes: Vec<String>,
     pub subject_roles: Vec<SubjectRole>,
     pub reference_frameworks: Vec<String>,
@@ -2099,11 +2370,13 @@ pub struct RequirementConfig {
 }
 
 impl RequirementConfig {
+    pub fn initial_source(&self) -> &str {
+        self.acquisition.initial_source()
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         validate_uri(&self.id)?;
-        if !valid_local_id(&self.source) {
-            return invalid("requirement source identifier is invalid");
-        }
+        self.acquisition.validate()?;
         validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
         for purpose in &self.purposes {
             validate_purpose(purpose)?;
@@ -2398,7 +2671,7 @@ fn require_artifact_prefix(path: &ArtifactPath, prefix: &'static str) -> Result<
 }
 
 fn validate_selector_inputs(inputs: &[SelectorInput]) -> Result<(), ConfigError> {
-    validate_len(inputs.len(), 1, 8, "source selector inputs")?;
+    validate_len(inputs.len(), 0, 8, "source selector inputs")?;
     validate_derivation_input_shape(inputs)
 }
 
@@ -3919,8 +4192,12 @@ mod tests {
         );
         assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
         let shrunk_maximum = yaml.replace(
-            "maximumAssertionValiditySeconds: 86400",
-            "maximumAssertionValiditySeconds: 3600",
+            "maximumAssertionValiditySeconds: 300",
+            "maximumAssertionValiditySeconds: 299",
+        );
+        assert_ne!(
+            shrunk_maximum, yaml,
+            "fixture mutation must remain effective"
         );
         assert!(matches!(
             EvidenceConfig::parse_yaml(shrunk_maximum.as_bytes()),
@@ -3928,6 +4205,68 @@ mod tests {
                 "requirement validity exceeds signing maximum validity"
             ))
         ));
+    }
+
+    #[test]
+    fn the_advertised_verifier_skew_stays_within_what_a_policy_may_express() {
+        // A deployment advertises `verifierClockSkewSeconds` so a relying party
+        // can adopt it, and a relying party expresses what it adopted as
+        // `clockSkewSeconds`. An advertised value no conformant policy can hold
+        // would be unusable advice, so the two bounds are one bound. Both are
+        // read from the contracts here rather than restated, so moving either
+        // one alone fails.
+        let bundle: serde_json::Value = serde_json::to_value(
+            serde_norway::from_slice::<serde_norway::Value>(include_bytes!(
+                "../../../products/evidence/contracts/bundle.schema.yaml"
+            ))
+            .expect("bundle contract is YAML"),
+        )
+        .expect("bundle contract converts to JSON");
+        let policy: serde_json::Value = serde_json::to_value(
+            serde_norway::from_slice::<serde_norway::Value>(include_bytes!(
+                "../../../products/evidence/contracts/verification-policy.schema.yaml"
+            ))
+            .expect("verification policy contract is YAML"),
+        )
+        .expect("verification policy contract converts to JSON");
+        let advertised = bundle["properties"]["signing"]["properties"]["verifierClockSkewSeconds"]
+            ["maximum"]
+            .as_u64()
+            .expect("the advertised skew declares an integer maximum");
+        let expressible = policy["properties"]["clockSkewSeconds"]["maximum"]
+            .as_u64()
+            .expect("the expressible skew declares an integer maximum");
+        assert_eq!(
+            advertised, expressible,
+            "a deployment may advertise a skew no conformant verification policy can express"
+        );
+
+        // Startup validation is the enforcement point, and it must agree with
+        // the contract rather than carry its own bound.
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        assert!(EvidenceConfig::parse_yaml(yaml.as_bytes()).is_ok());
+        let validator = bundle_contract_validator();
+        for (skew, accepted) in [(expressible, true), (expressible + 1, false)] {
+            let mutated = yaml.replace(
+                "verifierClockSkewSeconds: 30",
+                &format!("verifierClockSkewSeconds: {skew}"),
+            );
+            assert_ne!(mutated, yaml, "{skew}");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_ok(),
+                accepted,
+                "startup validation disagrees with the contract at {skew}"
+            );
+            assert_eq!(
+                validator
+                    .validate(&bundle_contract_instance(mutated.as_bytes()))
+                    .is_ok(),
+                accepted,
+                "the bundle contract disagrees with startup validation at {skew}"
+            );
+        }
     }
 
     #[test]
@@ -4167,8 +4506,8 @@ mod tests {
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
         assert!(EvidenceConfig::parse_yaml(unexpected.as_bytes()).is_err());
         let literal_secret = valid.replacen(
-            "activeKeyRef: secret:file/signing-key",
-            "activeKeyRef: literal-private-key",
+            "hashSecretRef: secret:file/audit-hash-key",
+            "hashSecretRef: literal-audit-key",
             1,
         );
         assert_ne!(
@@ -4176,15 +4515,27 @@ mod tests {
             "fixture mutation must remain effective"
         );
         assert!(EvidenceConfig::parse_yaml(literal_secret.as_bytes(),).is_err());
-        assert!(EvidenceConfig::parse_yaml(
-            valid
-                .replace(
-                    "activeKeyId: fixture-key-2026-01",
-                    "activeKeyId: \"fixture-key\\u000A2026-01\"",
-                )
-                .as_bytes(),
-        )
-        .is_err());
+        let invalid_revocation = valid.replacen(
+            "revokedKeyIds: []",
+            "revokedKeyIds: [\"invalid\\u000Akey\"]",
+            1,
+        );
+        assert_ne!(
+            invalid_revocation, valid,
+            "fixture mutation must remain effective"
+        );
+        assert!(EvidenceConfig::parse_yaml(invalid_revocation.as_bytes()).is_err());
+
+        let external_revocation = valid.replacen(
+            "revokedKeyIds: []",
+            "revokedKeyIds: [external-issuer-key-v7]",
+            1,
+        );
+        assert_ne!(
+            external_revocation, valid,
+            "fixture mutation must remain effective"
+        );
+        assert!(EvidenceConfig::parse_yaml(external_revocation.as_bytes()).is_ok());
     }
 
     #[test]
@@ -4526,6 +4877,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4609,6 +4967,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4684,6 +5049,13 @@ listener:
   shutdownGraceMilliseconds: 30000
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
 auditStorage:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   maximumFileBytes: 1073741824
@@ -4724,7 +5096,7 @@ outboundTls:
     #[test]
     fn path_templates_headers_and_projection_fail_closed() {
         let bindings: OrderedMap<PathBindingConfig> = serde_norway::from_str(
-            "record_reference: {role: subject, profile: record-reference-v1, field: record_reference}\n",
+            "record_reference: {from: selector, role: subject, profile: record-reference-v1, field: record_reference}\n",
         )
         .expect("path binding parses");
         assert!(validate_path_template("/records/{record_reference}", &bindings).is_ok());
@@ -4781,5 +5153,15 @@ outboundTls:
         assert!(SecretRef::parse("secret:file/source-token").is_ok());
         assert!(SecretRef::parse("secret:env/SOURCE_TOKEN").is_err());
         assert!(SecretRef::parse("literal-token").is_err());
+    }
+
+    #[test]
+    fn service_revoked_key_ids_require_canonical_sha256_thumbprints() {
+        let canonical = "A".repeat(43);
+        assert!(validate_key_identifiers(&[canonical], 33, "revoked keys").is_ok());
+
+        let noncanonical = format!("{}B", "A".repeat(42));
+        assert_eq!(noncanonical.len(), 43);
+        assert!(validate_key_identifiers(&[noncanonical], 33, "revoked keys").is_err());
     }
 }

@@ -31,7 +31,7 @@ against that public guide.
 Registry Stack helps operators publish governed registry-facing services over
 data they already hold. The two main runtime patterns are protected registry
 APIs through Registry Relay and signed minimum-disclosure assertions through
-Evidence.
+Evidence Gateway.
 
 The public architecture, boundary model, and product roles are documented in
 [Architecture](../../explanation/architecture/) and
@@ -57,8 +57,8 @@ Software guarantees include:
   governed evidence evaluation.
 - Disclosure controls that can return narrower evidence instead of source
   records.
-- Signed, stateless Evidence assertions, serialized as a flattened JWS or, under
-  Evidence's frozen profile, as an SD-JWT VC response.
+- Signed, stateless Evidence Gateway assertions, serialized as a flattened JWS or, under
+  Evidence Gateway's frozen profile, as an SD-JWT VC response.
 - Hash-chained audit records emitted by runtime services.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
@@ -120,7 +120,7 @@ Primary public evidence:
 - [RS-SEC-G](../../spec/rs-sec-g/)
 - [Contracts](../../reference/contracts/)
 - [OpenSSF evidence](../openssf-evidence/)
-- [Evidence API reference](../../reference/apis/registry-evidence/)
+- [Evidence Gateway API reference](../../reference/apis/registry-evidence/)
 - [Registry Relay API reference](../../reference/apis/registry-relay/)
 - GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
   security evidence, image lock, release manifest, and candidate attestations

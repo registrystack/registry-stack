@@ -25,7 +25,7 @@ invariants:
   - id: V1-I05
     rule: One authorization decision binds requester, optional actor, requirement revision, purpose, all role/profile/origin tuples, authority, and audience.
     threat: Permission splicing or confused-deputy access across partially authorized dimensions.
-    enforcement: Exact complete-entitlement match before audit, credential resolution, or source access.
+    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A refusal after successful authentication follows the separate minimal denial-audit invariant.
     negative_test: sec-no-entitlement-union
   - id: V1-I06
     rule: Selector profiles and values are provider-lookup inputs, never proof of authority.
@@ -45,7 +45,7 @@ invariants:
   - id: V1-I09
     rule: Source calls are fixed by trusted configuration and executed only by the core.
     threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
-    enforcement: Generic fixed HTTPS executor owns origin, method, fixed or selector-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one-request ceiling. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    enforcement: Generic fixed HTTPS executor owns the closed single or search-then-fetch source sequence, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
     negative_test: sec-source-request-immutable
   - id: V1-I10
     rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
@@ -65,7 +65,7 @@ invariants:
   - id: V1-I13
     rule: Missing facts, undefined decisions, script failures, audit failures, and evaluation failures fail closed.
     threat: Partial, stale, fabricated, or unaudited evidence is released.
-    enforcement: Typed error boundaries; access audit before source; release audit after signing and before release.
+    enforcement: Typed error boundaries; refusal audit before an authenticated authorization 403; access audit before source; release audit after signing and before release.
     negative_test: sec-evaluation-and-audit-fail-closed
   - id: V1-I14
     rule: Raw source responses are never persisted or logged.
@@ -148,9 +148,9 @@ invariants:
     enforcement: The runtime serializes the signed JWS or unsigned envelope to its final bytes, durably appends the release event, then returns those bytes unchanged through the HTTP boundary.
     negative_test: sec-release-bytes-pre-audited
   - id: V1-I30
-    rule: Audit records the closed response-protection mode on every native event and a signing key identity exactly for signed disclosure release.
-    threat: An unsigned release is indistinguishable from a signed one in accountability records, or a fabricated signing-key claim appears on unsigned output.
-    enforcement: A mandatory closed responseProtection field with schema-conditional signingKeyId validation in the native audit event.
+    rule: Every authorized-material native audit event records the closed response-protection mode and a signing key identity exactly for cryptographically protected disclosure release. The minimal authorization-refusal event records neither unresolved field.
+    threat: An unsigned release is indistinguishable from a signed one in accountability records, a fabricated signing-key claim appears on unsigned output, or a refusal fabricates a response format that authorization never resolved.
+    enforcement: A mandatory closed responseProtection field with schema-conditional signingKeyId validation in the authorized-material event branch, and a mutually exclusive minimal refusal branch that prohibits both fields.
     negative_test: sec-audit-response-protection-mode
   - id: V1-I31
     rule: Strict signed verification requires the independently retained expected nonce, the exact expected unordered set of unique role-bound subject bindings, and the expected concept identifiers, forms, and cardinalities, returns one generic policy mismatch, and reports cryptographic authenticity separately from current validity.
@@ -192,14 +192,24 @@ invariants:
     threat: An authority path that cannot fill the template compiles and reports ready, then fails every request it serves as a source dependency failure, hiding an authorization-shaped configuration fault behind an availability symptom.
     enforcement: Source plan compilation checks each derived set against the bindings rather than their union, on the same path the check command exercises, so the mismatch is refused before a deployment serves.
     negative_test: sec-path-binding-unreachable-selector-set
+  - id: V1-I39
+    rule: Every authorization refusal after successful authentication is durably recorded as one standalone minimal native event before the generic 403 is returned; an audit failure returns the generic 503 instead.
+    threat: An authenticated caller can probe denied operations without an accountable record, or the refusal record leaks untrusted request, unmatched-authority, selector, or response-format material.
+    enforcement: The core derives requester and optional actor pseudonyms scoped by operator trust domain, requested purpose, and authenticated audience, while request-rate accounting remains principal-scoped. It constructs the closed refusal branch under its distinct registry.evidence.audit.authorization-refusal/v1 discriminator with operation, assurance profile, bundle revision, denial category and decision, timestamp and duration, durably appends it before the response, and omits every request-derived, authority, selector, response-protection, source, and evaluation field. Authentication, malformed-request, and invalid-selector failures remain operational-only.
+    negative_test: sec-authenticated-authorization-refusal-audited
+  - id: V1-I40
+    rule: A chained acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
+    threat: Provider-controlled response data becomes a workflow plan, redirects credentials to an unreviewed endpoint, expands one authorized evaluation into unbounded reads, or leaks an intermediate record identifier through audit.
+    enforcement: The closed requirement acquisition enum contains only single and search-then-fetch with distinct startup-validated source ids. Rust owns the two-stage state machine, validates search facts before fetch preparation or path materialization, permits prior-fact bindings only on fetch sources and only for scalar properties required by the search fact schema, rate-limits once, durably audits every actual source call, and records no prior fact or path value.
+    negative_test: sec-search-then-fetch-bounded
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.
     enforcement: Version 1 has no in-bundle trust override; the operator must supply exactly one reviewed read-only bundle, and absence or failed immutability checks fail readiness.
     negative_test: sec-missing-or-writable-bundle-fails
   audit_order:
-    threat: Source read or evidence release occurs without a durable accountability record.
-    enforcement: Access-attempt audit precedes credentials/source; disclosure-release audit follows signing and precedes release; both fail closed. The shared registry-platform-audit DurableSegmentedAuditLog verifies the active segment at startup against a chain head recovered from the newest sealed segment's last record, so restart cost is bounded by one segment rather than by all retained history; sealed history is proven out of band by the `verify-audit` command, which replays every segment from the same closed runtime file the service uses and reports a gap in the sealed sequence as archived-or-missing history rather than as corruption. Steady-state readiness and append use pinned identity, modification fingerprint, expected length, and verified tail so audit cost does not grow quadratically. Rotation seals the active segment and starts a new one online, and the in-memory head carries across the seam so the chain is continuous. Concurrent appends claim chain positions in enqueue order under one short lock that performs no input or output, then share one durable write, so a batch never forks the chain and no record is reported durable before its own bytes are synced. A failed durable write leaves the in-memory head ahead of the disk, so the sink refuses every later append for the life of the process rather than chaining onto a record the disk never received. Readiness checks the pinned active and lock identities under the same low-level sink lock that advances the active fingerprint, so the service's own traffic is never mistaken for external mutation.
+    threat: An authenticated authorization refusal, source read, or evidence release occurs without a durable accountability record.
+    enforcement: Minimal authorization-refusal audit precedes its generic 403; access-attempt audit precedes credentials and source access for every actual acquisition stage; disclosure-release audit follows signing and precedes release; all fail closed. The shared registry-platform-audit DurableSegmentedAuditLog verifies the active segment at startup against a chain head recovered from the newest sealed segment's last record, so restart cost is bounded by one segment rather than by all retained history; sealed history is proven out of band by the `verify-audit` command, which replays every segment from the same closed runtime file the service uses and reports a gap in the sealed sequence as archived-or-missing history rather than as corruption. Steady-state appends and readiness use pinned identity, modification fingerprint, expected length, verified tail, and lock-file identity so audit cost does not grow quadratically. Rotation seals the active segment and starts a new one online, and the in-memory head carries across the seam so the chain is continuous. Concurrent appends claim chain positions in enqueue order under one short lock that performs no input or output, then share one durable write, so a batch never forks the chain and no record is reported durable before its own bytes are synced. A failed durable write leaves the in-memory head ahead of the disk, so the sink refuses every later append for the life of the process rather than chaining onto a record the disk never received. Readiness checks the pinned active and lock identities under the same low-level sink lock that advances the active fingerprint, so the service's own traffic is never mistaken for external mutation.
     negative_test: sec-audit-order-and-failure
   secret_parsing:
     threat: YAML substitution or bundle values inject credential or key material.
@@ -219,11 +229,11 @@ cross_cutting:
     negative_test: sec-entity-reference-seed-protected
   request_preparation:
     threat: A trusted mapping mistake gains transport authority, smuggles an unbounded request, or acquires credentials before its output is validated.
-    enforcement: prepare/2 receives only minimized authorized selectors and closed parameters; Rust validates exact RequestParts, channel policy, sizes, path, headers, and encoding before bounded source-concurrency admission or credential resolution. GET plans close the JSON-body channel at startup and reject a defensive body before credential access.
+    enforcement: prepare/2 receives only minimized authorized selectors and the exact context of closed parameters plus empty or schema-validated prior facts; Rust validates exact RequestParts, channel policy, sizes, path, headers, and encoding before bounded source-concurrency admission or credential resolution. GET plans close the JSON-body channel at startup and reject a defensive body before credential access.
     negative_test: sec-request-preparation-closed
   runtime_ownership_split:
     threat: An environment-specific runtime file silently changes governed authorization, disclosure, source authority, signing, or audit policy.
-    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit-storage, and logical private-CA bindings and has an independent immutable digest.
+    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit-storage, signer transport and pinned version, and logical private-CA bindings; the signer must exactly match the governed active public JWK and the runtime has an independent immutable digest.
     negative_test: sec-runtime-cannot-override-governed-bundle
   outbound_tls_and_proxy:
     threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.
@@ -242,8 +252,8 @@ cross_cutting:
     enforcement: File secrets must be regular owner-only files opened without following symlinks, with exact ownership, mode, single-hard-link, and size checks before use.
     negative_test: sec-secret-file-identity
   transport_pinning:
-    threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the one-request and TLS contracts.
-    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt.
+    threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the per-stage request ceiling and TLS contracts.
+    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt for that configured stage and never creates a third evidence-data request.
     negative_test: sec-transport-backend-and-single-attempt
   jwks_route_parity:
     threat: The configured JWKS path and the served discovery route drift apart.
@@ -271,8 +281,16 @@ cross_cutting:
     negative_test: sec-sd-jwt-format-requires-bundle-and-grant
   sd_jwt_vc_holder_key_closed:
     threat: A caller-supplied holder key smuggles private key material, a non-allowlisted algorithm, or an unparseable body into a signed credential.
-    enforcement: The optional holder key must be a public OKP Ed25519 JWK; any private member, other key type or curve, or malformed body fails before credential acquisition and source access, and the rejection never echoes the submitted key material.
+    enforcement: The optional holder key must be a closed public EC P-256 JWK with exact x and y coordinates and optional ES256 alg and wallet-owned kid; any private or unknown member, other key type or curve, or malformed body fails before credential acquisition and source access, and the rejection never echoes the submitted key material.
     negative_test: sec-sd-jwt-holder-key-closed
+  signing_key_governance:
+    threat: A configured kid is detached from its public key, a compromised key remains usable through a cached key set, or exported local private material is used for deployable assurance.
+    enforcement: Service keys are exact ES256 P-256 public JWKs whose kid is their RFC 7638 thumbprint; active, published, and revoked sets are disjoint; production and evidence-grade require pinned-version Transit over a workload-local Unix socket and reject denied identifiers before key selection.
+    negative_test: sec-service-key-governance
+  audit_key_epoch:
+    threat: A replacement audit master is appended to an existing keyed chain, making one apparent chain depend on two unrecorded key histories.
+    enforcement: Audit chain and identifier keys are HKDF-separated from one master. Changing the master or hashKeyVersion requires a stopped, archived old epoch and a fresh audit path; the runtime rejects the replacement master against an existing chain.
+    negative_test: sec-audit-key-epoch
   sd_jwt_vc_claims_closed:
     threat: A claim outside the profile, such as a status reference, an audience restriction, or a smuggled selector value, reaches a relying party under a valid signature.
     enforcement: The published claim set is closed to the issuer-owned and always-disclosed names plus the declared disclosures; the verifier rejects any other member instead of ignoring it.

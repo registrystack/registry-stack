@@ -8,7 +8,7 @@
 #
 # Synthetic identifiers only. Nothing here describes a real person or source.
 version: 1
-assuranceProfile: production
+assuranceProfile: local
 service: {providerId: urn:example:demo:provider:evidence, trustDomain: urn:example:demo:trust-domain:delegation}
 issuer: {id: urn:example:demo:issuer:authority}
 authentication:
@@ -19,7 +19,9 @@ authentication:
   issuer: https://localhost:8443
   audiences: [evidence.demo.invalid]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
   jwksUri: https://localhost:8443/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
@@ -32,7 +34,7 @@ authentication:
 audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
-signing: {format: flattened-jws-json, algorithm: EdDSA, activeKeyId: demo-evidence-key, activeKeyRef: secret:file/signing-key, retiredPublicJwkFiles: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
+signing: {format: flattened-jws-json, algorithm: ES256, activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json, publishedPublicJwkFiles: [], revokedKeyIds: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 86400, verifierClockSkewSeconds: 30}
 selectorProfiles:
   demographics-v1:
     maximumAggregateBytes: 420
@@ -86,7 +88,9 @@ authorityProfiles:
 requirements:
   - id: urn:example:demo:requirement:residence-region:v1
     kind: information-requirement
-    source: demo-source
+    acquisition:
+      kind: single
+      source: demo-source
     purposes: [demo-routing]
     subjectRoles: [{role: subject, cardinality: one, selectorProfiles: [demographics-v1]}]
     referenceFrameworks: [urn:example:demo:framework:residence-region:v1]

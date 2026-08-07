@@ -1,6 +1,6 @@
 ---
-title: Registry Evidence API
-description: "Narrative context for the Registry Evidence OpenAPI reference: authentication, response formats, the frozen Version 1 contract, and documented limitations."
+title: Evidence Gateway API
+description: "Narrative context for the Evidence Gateway OpenAPI reference: authentication, response formats, the frozen Version 1 contract, and documented limitations."
 status: current
 owner: registry-docs
 source_repos:
@@ -14,21 +14,21 @@ standards_referenced:
   - cccev
 ---
 
-[Open the Registry Evidence API operations](../evidence/)
+[Open the Evidence Gateway API operations](../evidence/)
 
 The generated API reference linked above is the **authoritative route reference**. It is built from
-Evidence's generated OpenAPI document, synced from the
+Evidence Gateway's generated OpenAPI document, synced from the
 [`registry-stack`](https://github.com/registrystack/registry-stack) monorepo at the commit pinned in
 `src/data/repo-docs.yaml`. This page carries the context the specification does not: what the
 service asserts, how authentication works, which response formats exist, and what stays out of
 scope.
 
 For exact routes and schemas, read the generated API reference. For deployment and operator
-duties, see the [Registry Evidence product documentation](../../../products/registry-evidence/).
+duties, see the [Evidence Gateway product documentation](../../../products/registry-evidence/).
 
 ## What the API is
 
-Evidence is a minimum-disclosure assertion service. Given an authenticated requester, an
+Evidence Gateway is a minimum-disclosure assertion service. Given an authenticated requester, an
 authorized purpose, a predefined requirement, and the configured selector data an authoritative
 provider needs, `POST /v1/evidence` returns the smallest sufficient JSON assertion in an
 authorized response format. `GET /v1/evidence-definitions` is an authenticated, requester-scoped
@@ -37,7 +37,7 @@ public catalog. The remaining routes are operational: `GET /health`, `GET /ready
 `GET /openapi.json`, the signing keys at `GET /.well-known/evidence/jwks.json`, and JWT VC issuer
 metadata at `GET /.well-known/jwt-vc-issuer`.
 
-The assertion is the product's CCCEV-aligned domain object, expressed as a documented Evidence
+The assertion is the product's CCCEV-aligned domain object, expressed as a documented Evidence Gateway
 JSON profile rather than RDF or XML (`products/evidence/CONCEPT.md`). The Version 1 contract is
 frozen: the two versioned operations and their envelopes are the complete evidence surface.
 
@@ -56,7 +56,7 @@ regenerates the contracts and fails on any byte difference from the committed ar
 committed document cannot drift from the code. The docs build then pulls the committed document at
 the pinned ref (`scripts/fetch-openapi.mjs`) and renders it as the generated operations pages.
 
-A running Evidence service publishes the same document at `GET /openapi.json` with media type
+A running Evidence Gateway service publishes the same document at `GET /openapi.json` with media type
 `application/openapi+json`. The route requires no authentication and reaches no dependency; the
 handler in `crates/registry-evidence/src/server.rs` takes no credential, and the unit test
 `the_served_openapi_document_is_the_generated_release_artifact` in
@@ -65,7 +65,7 @@ handler in `crates/registry-evidence/src/server.rs` takes no credential, and the
 ## Authentication
 
 The two evidence routes require exactly one `Authorization` header containing one Bearer token.
-Evidence verifies OIDC access tokens against one reviewed profile: exactly one trusted issuer with
+Evidence Gateway verifies OIDC access tokens against one reviewed profile: exactly one trusted issuer with
 exact audience, token type, and algorithm allowlists, and one configured principal claim with no
 `client_id`, `azp`, header, or request fallback (`products/evidence/OPERATOR-CONTRACT.md`). There
 is no API-key mode. The operational routes take no credential and reveal no deployment

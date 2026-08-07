@@ -1,6 +1,6 @@
 ---
 title: Start with Registry Stack 1.0
-description: Answer a bounded question with Evidence, or publish protected records with Registry Relay, then adapt the source or the definition.
+description: Answer a bounded question with Evidence Gateway, or publish protected records with Registry Relay, then adapt the source or the definition.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,18 +13,18 @@ standards_referenced: []
 ---
 
 Pick the door that matches what your caller needs. To learn only a fact about
-one subject, start with Evidence. To read specific records or fields, start
+one subject, start with Evidence Gateway. To read specific records or fields, start
 with Registry Relay over the maintained spreadsheet registry. Both first runs
 use one terminal and synthetic data. Neither needs a source checkout,
 production keys, or a deployment package.
 
-## Answer a bounded question with Evidence
+## Answer a bounded question with Evidence Gateway
 
-Evidence signs the answer to one bounded question about one subject without
+Evidence Gateway signs the answer to one bounded question about one subject without
 releasing the record behind it.
-[Evidence overview](../evidence-quickstart/) explains the source, assertion,
+[Evidence Gateway overview](../evidence-quickstart/) explains the source, assertion,
 verification, and audit boundaries.
-[Get your first Evidence assertion](../../tutorials/first-evidence-assertion/)
+[Get your first Evidence Gateway assertion](../../tutorials/first-evidence-assertion/)
 then connects a visible Python registry, sends a real request, and verifies the
 minimum answer before reading the answer.
 
@@ -55,19 +55,12 @@ Continue with:
 - [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
   for a synthetic example of that generic integration path
 
-## See both doors working together
+## Keep the two doors separate
 
-The two doors are not alternatives an institution has to choose between once
-and for all. One institution can publish records through Registry Relay and
-answer bounded questions through Evidence over those same records, because
-Evidence treats a Relay API as an ordinary fixed HTTP source.
+An institution can operate Registry Relay and Evidence Gateway, but they are
+independent products with separate sources, authorization, configuration, and
+audit boundaries. Evidence Gateway does not use Relay as its source path.
 
-[First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) is
-where that arrangement is visible end to end. It brings up a whole fictional
-country's registry services on a laptop, then asks Evidence one question about
-one person: is this subject an adult? The answer comes back signed, carrying
-`true` and neither the identifier nor the date of birth that settled it, while
-the record stays with the authority that holds it.
-
-Run it after the spreadsheet or HTTP tutorial above. It needs Docker and
-about 30 minutes.
+Choose the tutorial for the result you need. Start with the Evidence Gateway
+tutorial for a signed, minimum-disclosure answer, or use the spreadsheet and
+HTTP tutorials for a protected record API.

@@ -162,7 +162,8 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
         "generated/audit/mint.jsonl",
         "generated/keys/mint-audit-hmac-key",
         "generated/keys/mint-private.jwk",
-        "generated/keys/mint-public.jwk.json",
+        "generated/keys/holder-private.jwk",
+        "generated/keys/holder-public.jwk.json",
         "generated/keys/caller-private.jwk",
         "generated/keys/caller-public.jwk.json",
         "logs/supervisor.log",
@@ -170,6 +171,39 @@ fn real_detached_lifecycle_is_ready_private_and_stops_only_owned_children() {
         "logs/evidence.log",
     ] {
         assert_mode(&dev.join(path), 0o600);
+    }
+    let mint_private_path = dev.join("generated/keys/mint-private.jwk");
+    let mint_private: Value =
+        serde_json::from_slice(&fs::read(&mint_private_path).expect("generated Mint private JWK"))
+            .expect("generated Mint private JWK parses");
+    let mint_kid = mint_private["kid"]
+        .as_str()
+        .expect("generated Mint private JWK has a kid");
+    let mint_public_path = dev.join(format!("generated/keys/{mint_kid}.jwk.json"));
+    assert_mode(&mint_public_path, 0o600);
+    for name in ["mint", "caller", "holder"] {
+        let private_path = dev.join(format!("generated/keys/{name}-private.jwk"));
+        let private: Value = if name == "mint" {
+            mint_private.clone()
+        } else {
+            serde_json::from_slice(&fs::read(private_path).expect("generated private JWK"))
+                .expect("generated private JWK parses")
+        };
+        let public_path = if name == "mint" {
+            mint_public_path.clone()
+        } else {
+            dev.join(format!("generated/keys/{name}-public.jwk.json"))
+        };
+        let public: Value =
+            serde_json::from_slice(&fs::read(public_path).expect("generated public JWK"))
+                .expect("generated public JWK parses");
+        assert_eq!(private["kty"], "EC");
+        assert_eq!(private["crv"], "P-256");
+        assert_eq!(private["alg"], "ES256");
+        assert_eq!(public["kty"], "EC");
+        assert_eq!(public["crv"], "P-256");
+        assert_eq!(public["alg"], "ES256");
+        assert_eq!(private["kid"], public["kid"]);
     }
 
     let state: Value = serde_json::from_slice(&fs::read(dev.join("state.json")).expect("state"))
@@ -792,7 +826,6 @@ impl Project {
             &evidencectl()
                 .args(["keygen", "signing", "--out-dir"])
                 .arg(&secrets)
-                .args(["--kid", "local-signing-key-1"])
                 .output()
                 .expect("signing key"),
             "signing key",
@@ -1059,8 +1092,12 @@ fn jwks_ready_at(port: u16) -> bool {
         .and_then(|response| serde_json::from_reader::<_, Value>(response.into_reader()).ok())
         .and_then(|value| value["keys"].as_array().cloned())
         .is_some_and(|keys| {
-            keys.iter()
-                .any(|key| key["kid"] == "local-mint-signing-key-1")
+            keys.iter().any(|key| {
+                key["kty"] == "EC"
+                    && key["crv"] == "P-256"
+                    && key["alg"] == "ES256"
+                    && key["kid"].as_str().is_some_and(|kid| kid.len() == 43)
+            })
         })
 }
 

@@ -1,11 +1,11 @@
 ---
-title: Manage Evidence verifier trust
+title: Manage Evidence Gateway verifier trust
 description: Pin provider identity and public keys independently, then approve signing-key rotation without trusting the response being verified.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - consumer or verifier
@@ -16,7 +16,7 @@ standards_referenced: []
 A valid signature proves control of a private key. Your consumer still decides which provider,
 issuer, key set, algorithm, audience, requirement, and configuration revision it trusts.
 
-Keep that decision outside the Evidence response. Discovery helps you find candidate metadata; it
+Keep that decision outside the Evidence Gateway response. Discovery helps you find candidate metadata; it
 does not make the candidate trusted.
 
 ## Establish trust before the first request
@@ -24,8 +24,8 @@ does not make the candidate trusted.
 Through your organization's provider-onboarding process, verify and retain:
 
 - the legal issuer and technical provider identifiers;
-- the expected Evidence service and JWKS endpoints;
-- the Ed25519 public keys and their `kid` values;
+- the expected Evidence Gateway service and JWKS endpoints;
+- the ES256 P-256 public keys and their RFC 7638 thumbprint `kid` values;
 - the audience that identifies your relying party;
 - the requirements, evidence types, purposes, concepts, and configuration revisions you accept;
 - the maximum assertion lifetime and clock skew your decisions allow.
@@ -72,6 +72,26 @@ not issuer, provider, audience, purpose, requirement, concept, or configuration 
 Approve and atomically activate the candidate through your normal configuration process. Keep the
 previous trust file and approval record for rollback and audit.
 
+## Revoke a compromised key immediately
+
+Treat the current revocation list as a separate governed trust input, not as metadata learned from
+the issuer or from the response. When a provider reports a compromised service key:
+
+1. verify the affected RFC 7638 thumbprint through the emergency onboarding channel;
+2. add it to the application's current `revokedKeyIds` (Node) or `revoked_key_ids` (Rust and
+   Python) configuration;
+3. remove the key from the current pinned JWKS;
+4. reconstruct or restart the client so every instance uses both changes; and
+5. prove that a response signed by the revoked key is refused before resuming decisions.
+
+The current denylist takes precedence even when the key remains in a cached JWKS or an older
+prepared request retained it in its verification policy. This lets an application stop accepting a
+compromised key without waiting for caches or prepared work to expire.
+
+Keep current acceptance separate from historical verification. If policy permits historical replay,
+retain the exact trust set, denylist, decision instant, and approval record that governed the
+original decision. Never remove a key from today's denylist merely to replay an older record.
+
 ## Retire the old key deliberately
 
 Remove a retiring key from current verification only after:
@@ -85,6 +105,6 @@ Remove a retiring key from current verification only after:
 Never make verification fetch a missing key automatically. An unknown `kid` is a trust-change
 signal and must fail closed until your organization approves the change.
 
-Provider operators use [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
+Provider operators use [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
 for the other side of this rotation. Consumers remain independent and do not inherit trust merely
 because the provider published a key.

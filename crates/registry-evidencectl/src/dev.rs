@@ -47,8 +47,6 @@ const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
-const MINT_KEY_ID: &str = "local-mint-signing-key-1";
-const CALLER_KEY_ID: &str = "local-tutorial-caller-key-1";
 const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -914,24 +912,15 @@ fn prepare_and_start(
         create_private_directory(directory)?;
     }
 
-    let (mint_private, _) = keygen::generate_dev_keypair(
-        &keys,
-        MINT_KEY_ID,
-        "mint-private.jwk",
-        "mint-public.jwk.json",
-    )?;
+    let mint_public = generate_service_and_holder_keys(&keys)?;
     let mint_audit_key = keys.join(MINT_AUDIT_KEY_FILENAME);
     generate_mint_audit_key(&mint_audit_key)?;
-    let mint_config = mint_config(&compiled, &mint_private, &mint_audit_key, ports);
+    let mint_config = mint_config(&compiled, &mint_public, &keys, ports);
     let mint_config_path = generated.join("mint.yaml");
     write_private_yaml(&mint_config_path, &mint_config)?;
     let caller = if compiled.access_policies.is_empty() {
-        let (caller_private, caller_public) = keygen::generate_dev_keypair(
-            &keys,
-            CALLER_KEY_ID,
-            "caller-private.jwk",
-            "caller-public.jwk.json",
-        )?;
+        let (caller_private, caller_public) =
+            keygen::generate_dev_keypair(&keys, "caller-private.jwk", "caller-public.jwk.json")?;
         let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
         write_private_yaml(
             &clients.join("caller.yaml"),
@@ -1018,6 +1007,57 @@ fn prepare_and_start(
     println!("Evidence ready at {evidence_origin}");
     println!("Mint ready at {mint_origin}");
     Ok(ExitCode::SUCCESS)
+}
+
+fn generate_service_and_holder_keys(keys: &Path) -> Result<PathBuf> {
+    for name in [
+        "mint-private.jwk",
+        "mint-public.jwk.json",
+        "holder-private.jwk",
+        "holder-public.jwk.json",
+    ] {
+        match fs::symlink_metadata(keys.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => bail!("refusing to replace existing private dev key material"),
+            Err(error) => return Err(error).context("inspecting private dev key material"),
+        }
+    }
+    let (_mint_private, staged_mint_public) =
+        keygen::generate_dev_keypair(keys, "mint-private.jwk", "mint-public.jwk.json")?;
+    let mint_public = publish_thumbprint_named_public_jwk(&staged_mint_public)?;
+    // Keep one disposable holder pair beside the other private local session
+    // keys so wallet-binding examples need no extra setup. Evidence does not
+    // consume the private half and neither half leaves supervised dev state.
+    let _holder =
+        keygen::generate_dev_keypair(keys, "holder-private.jwk", "holder-public.jwk.json")?;
+    Ok(mint_public)
+}
+
+fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
+    let bytes = read_owner_file(staged, 16 * 1024)?;
+    let encoded = std::str::from_utf8(&bytes).context("generated public JWK is not UTF-8")?;
+    let public = registry_platform_crypto::PublicJwk::parse(encoded)
+        .context("generated public JWK failed validation")?;
+    let kid = public
+        .kid
+        .as_deref()
+        .ok_or_else(|| anyhow!("generated public JWK has no key id"))?;
+    if public
+        .jkt()
+        .context("generated public JWK has no thumbprint")?
+        != kid
+    {
+        bail!("generated public JWK key id is not its RFC 7638 thumbprint");
+    }
+    let published = staged
+        .parent()
+        .ok_or_else(|| anyhow!("generated public JWK has no parent directory"))?
+        .join(format!("{kid}.jwk.json"));
+    let mut file = create_private_file(&published)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::remove_file(staged).context("failed to remove the staged public JWK")?;
+    Ok(published)
 }
 
 fn stop_dev(project: &Path) -> Result<ExitCode> {
@@ -1157,7 +1197,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     if wait_for_http(
         &format!("{}/.well-known/jwks.json", state.mint_origin),
         children.mint.as_mut().expect("Mint child was assigned"),
-        HttpProof::MintKey(MINT_KEY_ID),
+        HttpProof::MintEs256Key,
         args.ready_timeout_seconds,
         terminate,
     )
@@ -1316,15 +1356,15 @@ fn spawn_evidence(binary: &Path, runtime: &Path, log: &Path) -> Result<Child> {
         .with_context(|| format!("failed to start {}", binary.display()))
 }
 
-enum HttpProof<'a> {
-    MintKey(&'a str),
+enum HttpProof {
+    MintEs256Key,
     EvidenceReady,
 }
 
 fn wait_for_http(
     url: &str,
     child: &mut Child,
-    proof: HttpProof<'_>,
+    proof: HttpProof,
     seconds: u64,
     terminate: &AtomicBool,
 ) -> Result<()> {
@@ -1349,9 +1389,14 @@ fn wait_for_http(
             if bytes.len() as u64 <= MAX_HTTP_BODY_BYTES {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let matches = match proof {
-                    HttpProof::MintKey(kid) => value["keys"]
-                        .as_array()
-                        .is_some_and(|keys| keys.iter().any(|key| key["kid"] == kid)),
+                    HttpProof::MintEs256Key => value["keys"].as_array().is_some_and(|keys| {
+                        keys.iter().any(|key| {
+                            key["kty"] == "EC"
+                                && key["crv"] == "P-256"
+                                && key["alg"] == "ES256"
+                                && key["kid"].as_str().is_some_and(|kid| kid.len() == 43)
+                        })
+                    }),
                     HttpProof::EvidenceReady => value == json!({"status": "ready"}),
                 };
                 if matches && child.try_wait()?.is_none() {
@@ -1460,8 +1505,8 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
 
 fn mint_config(
     compiled: &CompiledProject,
-    mint_private: &Path,
-    mint_audit_key: &Path,
+    mint_public: &Path,
+    secret_root: &Path,
     ports: LocalServicePorts,
 ) -> Value {
     let mint_origin = ports.mint_origin();
@@ -1477,19 +1522,24 @@ fn mint_config(
             "requestTimeoutMilliseconds": 5000,
         },
         "signing": {
-            "algorithm": "EdDSA",
-            "activeKeyId": MINT_KEY_ID,
-            "activeKeyFile": mint_private,
-            "retiredPublicJwkFiles": [],
+            "algorithm": "ES256",
+            "activePublicJwkFile": mint_public,
+            "publishedPublicJwkFiles": [],
+            "revokedKeyIds": [],
             "jwksPath": "/.well-known/jwks.json",
         },
+        "signer": {
+            "kind": "local-jwk",
+            "privateKeyRef": "secret:file/mint-private.jwk",
+        },
+        "secretProviders": {"file": {"root": secret_root}},
         "audit": {
             "path": "audit/mint.jsonl",
             // Mint rotates a sealed segment at this threshold. A local
             // tutorial session never reaches it, and the value matches the
             // documented deployment example.
             "maximumFileBytes": 1_073_741_824u64,
-            "hashKeyFile": mint_audit_key,
+            "hashKeyRef": "secret:file/mint-audit-hmac-key",
             "hashKeyVersion": 1,
         },
         "accessTokens": {
@@ -1506,7 +1556,7 @@ fn mint_config(
         "clientAssertion": {
             "audience": token_url,
             "maximumLifetimeSeconds": 120,
-            "algorithms": ["EdDSA"],
+            "algorithms": ["ES256"],
             "replayCacheEntries": 256,
         },
         "clients": {"directory": "clients"},
@@ -1946,13 +1996,13 @@ mod tests {
         let compiled = compiled(Path::new("/private/runtime.yaml"));
         let config = mint_config(
             &compiled,
-            Path::new("/private/mint-private.jwk"),
-            Path::new("/private/mint-audit-hmac-key"),
+            Path::new("/private/mint-public.jwk.json"),
+            Path::new("/private"),
             LocalServicePorts::default(),
         );
         let caller = local_caller_registration(
             &compiled,
-            json!({"kty":"OKP","crv":"Ed25519","kid":"caller","alg":"EdDSA","x":"public"}),
+            json!({"kty":"EC","crv":"P-256","kid":"caller","alg":"ES256","x":"public","y":"public"}),
         );
         assert_eq!(config["validationMode"], "supervised-local-development");
         assert_eq!(config["issuer"], "http://127.0.0.1:8081");
@@ -1972,7 +2022,7 @@ mod tests {
             json!({
                 "path": "audit/mint.jsonl",
                 "maximumFileBytes": 1_073_741_824u64,
-                "hashKeyFile": "/private/mint-audit-hmac-key",
+                "hashKeyRef": "secret:file/mint-audit-hmac-key",
                 "hashKeyVersion": 1,
             })
         );
@@ -1982,6 +2032,67 @@ mod tests {
             compiled.caller_evidence_audience
         );
         assert!(caller.to_string().find("private").is_none());
+    }
+
+    #[test]
+    fn supervised_dev_generates_create_only_private_p256_mint_and_holder_pairs() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let keys = root.path().join("keys");
+        let mint_public = generate_service_and_holder_keys(&keys).expect("generate dev keys");
+
+        for name in ["mint", "holder"] {
+            let private_path = keys.join(format!("{name}-private.jwk"));
+            let private = registry_platform_crypto::PrivateJwk::parse(
+                &fs::read_to_string(&private_path).expect("private JWK"),
+            )
+            .expect("private JWK parses");
+            let public_path = if name == "mint" {
+                assert_eq!(
+                    mint_public.file_name().and_then(|value| value.to_str()),
+                    private
+                        .kid
+                        .as_deref()
+                        .map(|kid| format!("{kid}.jwk.json"))
+                        .as_deref()
+                );
+                mint_public.clone()
+            } else {
+                keys.join("holder-public.jwk.json")
+            };
+            let public = registry_platform_crypto::PublicJwk::parse(
+                &fs::read_to_string(&public_path).expect("public JWK"),
+            )
+            .expect("public JWK parses");
+            assert_eq!(private.kty, "EC");
+            assert_eq!(private.crv.as_deref(), Some("P-256"));
+            assert_eq!(private.alg.as_deref(), Some("ES256"));
+            assert_eq!(private.kid, public.kid);
+            assert_eq!(
+                fs::metadata(private_path)
+                    .expect("private JWK metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                PRIVATE_FILE_MODE
+            );
+            assert_eq!(
+                fs::metadata(public_path)
+                    .expect("public JWK metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                PRIVATE_FILE_MODE
+            );
+        }
+        assert!(!keys.join("mint-public.jwk.json").exists());
+
+        let before = fs::read(keys.join("holder-private.jwk")).expect("holder private JWK");
+        assert!(generate_service_and_holder_keys(&keys).is_err());
+        assert_eq!(
+            fs::read(keys.join("holder-private.jwk")).expect("holder private JWK"),
+            before,
+            "a repeated dev setup must not replace disposable keys"
+        );
     }
 
     #[test]

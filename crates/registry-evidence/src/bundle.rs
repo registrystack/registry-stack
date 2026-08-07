@@ -6,8 +6,11 @@ use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
+use registry_platform_crypto::{
+    canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
+};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -18,8 +21,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::config::{
-    ArtifactPath, ConceptForm, EvidenceConfig, OrderedMap, RuntimeConfig, SchemaFault,
-    SelectorField,
+    ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
+    RuntimeConfig, SchemaFault, SelectorField,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -32,6 +35,11 @@ const CONFIG_FILE: &str = "evidence.yaml";
 const RUNTIME_FILE: &str = "runtime.yaml";
 const REVISION_DOMAIN: &[u8] = b"registry.evidence.bundle-revision/v1\0";
 const RUNTIME_REVISION_DOMAIN: &[u8] = b"registry.evidence.runtime-revision/v1\0";
+const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revision/v1\0";
+/// Path the canonical configuration projection takes inside a requirement's
+/// closure. An artifact path can hold no `#`, so this can never collide with a
+/// bundle file.
+const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 const ALLOWED_DIRECTORIES: [&str; 6] = [
     "adapters",
@@ -241,12 +249,14 @@ pub struct Bundle {
     root: PathBuf,
     pub config: EvidenceConfig,
     revision: String,
+    requirement_revisions: BTreeMap<String, String>,
     files: BTreeMap<String, Vec<u8>>,
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
     pub codelists: BTreeMap<String, Codelist>,
     pub fixtures: BTreeMap<String, YamlValue>,
-    pub retired_public_jwks: BTreeMap<String, JsonValue>,
+    pub active_public_jwk: PublicJwk,
+    pub published_public_jwks: BTreeMap<String, PublicJwk>,
 }
 
 /// One captured operator runtime configuration and its bound trust anchors.
@@ -362,22 +372,26 @@ impl Bundle {
 
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
+        validate_prior_fact_bindings(&config, &fact_schemas)?;
         let codelists = load_codelists(&config, &files)?;
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(&config, &files)?;
-        let retired_public_jwks = load_retired_public_jwks(&config, &files)?;
+        let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let revision = compute_revision(&files)?;
+        let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
         Ok(Self {
             root: root.to_path_buf(),
             config,
             revision,
+            requirement_revisions,
             files,
             scripts,
             fact_schemas,
             codelists,
             fixtures,
-            retired_public_jwks,
+            active_public_jwk,
+            published_public_jwks,
         })
     }
 
@@ -385,12 +399,26 @@ impl Bundle {
         &self.root
     }
 
-    pub fn configuration_revision(&self) -> &str {
-        &self.revision
+    /// The configuration revision an assertion for one requirement carries.
+    ///
+    /// It covers this requirement's own closure: the canonical projection of the
+    /// configuration it depends on, and the exact bytes of every artifact it
+    /// reaches. An edit that cannot change this requirement's assertions leaves
+    /// it alone, so a relying party pinning it is not broken by a deployment's
+    /// unrelated work. `None` names a requirement the bundle does not configure.
+    pub fn configuration_revision(&self, requirement_id: &str) -> Option<&str> {
+        self.requirement_revisions
+            .get(requirement_id)
+            .map(String::as_str)
     }
 
+    /// The digest of every file in the deployment bundle.
+    ///
+    /// This is the deployment's own identity, for audit, status, and operator
+    /// diagnostics. It is not what an assertion carries: see
+    /// [`Bundle::configuration_revision`].
     pub fn revision(&self) -> &str {
-        self.configuration_revision()
+        &self.revision
     }
 
     pub fn artifact(&self, path: &str) -> Option<&[u8]> {
@@ -719,11 +747,12 @@ fn validate_file_closure(
             }
         }
     }
-    for path in &config.signing.retired_public_jwk_files {
+    expected.insert(config.signing.active_public_jwk_file.as_str().to_owned());
+    for path in &config.signing.published_public_jwk_files {
         expected.insert(path.as_str().to_owned());
     }
-    expected.extend(reviewed_schema_paths(config, files)?);
-    expected.extend(reviewed_bucket_codelist_paths(config, files)?);
+    expected.extend(reviewed_schema_paths(all_concepts(config), files)?);
+    expected.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let present: BTreeSet<&str> = files.keys().map(String::as_str).collect();
     let referenced: BTreeSet<&str> = expected.iter().map(String::as_str).collect();
     if let Some(missing) = referenced.difference(&present).next() {
@@ -741,14 +770,19 @@ fn validate_file_closure(
     Ok(())
 }
 
-fn reviewed_bucket_codelist_paths(
-    config: &EvidenceConfig,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeSet<String>, BundleError> {
-    let declarations = config
+/// Every concept the configuration declares, in configuration order.
+fn all_concepts(config: &EvidenceConfig) -> impl Iterator<Item = &ConceptConfig> {
+    config
         .requirements
         .iter()
         .flat_map(|requirement| &requirement.concepts)
+}
+
+fn reviewed_bucket_codelist_paths<'a>(
+    concepts: impl Iterator<Item = &'a ConceptConfig>,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeSet<String>, BundleError> {
+    let declarations = concepts
         .filter(|concept| {
             matches!(
                 concept.form,
@@ -787,14 +821,11 @@ fn reviewed_bucket_codelist_paths(
     Ok(paths)
 }
 
-fn reviewed_schema_paths(
-    config: &EvidenceConfig,
+fn reviewed_schema_paths<'a>(
+    concepts: impl Iterator<Item = &'a ConceptConfig>,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeSet<String>, BundleError> {
-    let identifiers = config
-        .requirements
-        .iter()
-        .flat_map(|requirement| &requirement.concepts)
+    let identifiers = concepts
         .filter(|concept| concept.form == ConceptForm::ReviewedStructuredValue)
         .map(|concept| concept_constraint_string(&concept.constraints, "schema"))
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -1002,7 +1033,7 @@ fn load_fact_schemas(
         })
         .map(ToOwned::to_owned)
         .collect::<BTreeSet<_>>();
-    paths.extend(reviewed_schema_paths(config, files)?);
+    paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
     let mut schemas = BTreeMap::new();
     for path in paths {
         let role = if parameter_paths.contains(path.as_str()) {
@@ -1022,6 +1053,61 @@ fn load_fact_schemas(
             .map_err(|error| error.in_artifact(schema_path))?;
     }
     Ok(schemas)
+}
+
+/// Prove at startup that every Rust-owned fetch path binding can be filled by
+/// the exact search fact schema that precedes it. Fact schemas require their
+/// complete closed property set, so a declared scalar property exists on every
+/// validated search match.
+fn validate_prior_fact_bindings(
+    config: &EvidenceConfig,
+    schemas: &BTreeMap<String, JsonValue>,
+) -> Result<(), BundleError> {
+    for requirement in &config.requirements {
+        let crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } =
+            &requirement.acquisition
+        else {
+            continue;
+        };
+        let search_source = config
+            .sources
+            .get(search)
+            .ok_or(invalid_artifact("search source is unavailable"))?;
+        let fetch_source = config
+            .sources
+            .get(fetch)
+            .ok_or(invalid_artifact("fetch source is unavailable"))?;
+        let search_schema = schemas
+            .get(search_source.fact_schema.as_str())
+            .and_then(JsonValue::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(JsonValue::as_object)
+            .ok_or(invalid_artifact("search fact schema is unavailable"))?;
+        for (_, binding) in fetch_source.request.path_bindings.iter() {
+            let crate::config::PathBindingConfig::PriorFact { field } = binding else {
+                continue;
+            };
+            let property = search_schema
+                .get(field.as_str())
+                .and_then(JsonValue::as_object)
+                .ok_or(invalid_artifact(
+                    "fetch path binding references an unknown search fact",
+                ))?;
+            let scalar_type = property
+                .get("type")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| matches!(value, "string" | "integer" | "boolean"));
+            let scalar_const = property
+                .get("const")
+                .is_some_and(|value| value.is_string() || value.is_i64() || value.is_boolean());
+            if !scalar_type && !scalar_const {
+                return Err(invalid_artifact(
+                    "fetch path binding requires a scalar search fact",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn load_fact_schema(
@@ -1406,7 +1492,7 @@ fn load_codelists(
             }
         }
     }
-    paths.extend(reviewed_bucket_codelist_paths(config, files)?);
+    paths.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let mut codelists = BTreeMap::new();
     for path in paths {
         let codelist = load_codelist(&path, files).map_err(|error| error.in_artifact(&path))?;
@@ -1689,27 +1775,78 @@ impl FixtureCategories {
     }
 }
 
-fn load_retired_public_jwks(
+fn load_public_jwks(
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, JsonValue>, BundleError> {
+) -> Result<(PublicJwk, BTreeMap<String, PublicJwk>), BundleError> {
+    let active_path = config.signing.active_public_jwk_file.as_str();
+    let active = files
+        .get(active_path)
+        .ok_or(invalid_artifact("active public JWK is missing"))
+        .and_then(|bytes| parse_service_public_jwk(bytes))
+        .map_err(|error| error.in_artifact(active_path))?;
+    let active_kid = active
+        .kid
+        .as_deref()
+        .ok_or(invalid_artifact("active public JWK kid is missing"))?;
+    validate_public_jwk_path(active_path, active_kid)
+        .map_err(|error| error.in_artifact(active_path))?;
+    if config
+        .signing
+        .revoked_key_ids
+        .iter()
+        .any(|kid| kid == active_kid)
+    {
+        return Err(invalid_artifact("active public JWK is revoked").in_artifact(active_path));
+    }
+
     let mut keys = BTreeMap::new();
-    for path in &config.signing.retired_public_jwk_files {
+    for path in &config.signing.published_public_jwk_files {
         let path = path.as_str();
-        let load = || -> Result<(String, JsonMap<String, JsonValue>), BundleError> {
+        let load = || -> Result<(String, PublicJwk), BundleError> {
             let bytes = files
                 .get(path)
-                .ok_or(invalid_artifact("retired public JWK is missing"))?;
-            let object = parse_strict_json_object(bytes)?;
-            let kid = validate_public_jwk(&object, &config.signing.active_key_id)?;
-            Ok((kid, object))
+                .ok_or(invalid_artifact("published public JWK is missing"))?;
+            let jwk = parse_service_public_jwk(bytes)?;
+            let kid = jwk
+                .kid
+                .as_deref()
+                .ok_or(invalid_artifact("published public JWK kid is missing"))?
+                .to_owned();
+            validate_public_jwk_path(path, &kid)?;
+            if kid == active_kid {
+                return Err(invalid_artifact(
+                    "published public JWK duplicates the active key",
+                ));
+            }
+            if config
+                .signing
+                .revoked_key_ids
+                .iter()
+                .any(|revoked| revoked == &kid)
+            {
+                return Err(invalid_artifact("published public JWK is revoked"));
+            }
+            Ok((kid, jwk))
         };
-        let (kid, object) = load().map_err(|error| error.in_artifact(path))?;
-        if keys.insert(kid, JsonValue::Object(object)).is_some() {
-            return Err(invalid_artifact("retired public JWK kid is duplicated").in_artifact(path));
+        let (kid, jwk) = load().map_err(|error| error.in_artifact(path))?;
+        if keys.insert(kid, jwk).is_some() {
+            return Err(
+                invalid_artifact("published public JWK kid is duplicated").in_artifact(path)
+            );
         }
     }
-    Ok(keys)
+    Ok((active, keys))
+}
+
+fn validate_public_jwk_path(path: &str, kid: &str) -> Result<(), BundleError> {
+    let expected = format!("public-keys/{kid}.jwk.json");
+    if path != expected {
+        return Err(invalid_artifact(
+            "public JWK filename does not match its RFC 7638 thumbprint",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_strict_json_object(bytes: &[u8]) -> Result<JsonMap<String, JsonValue>, BundleError> {
@@ -1753,54 +1890,36 @@ fn parse_strict_json_object(bytes: &[u8]) -> Result<JsonMap<String, JsonValue>, 
     Ok(object.0)
 }
 
-fn validate_public_jwk(
-    object: &JsonMap<String, JsonValue>,
-    active_key_id: &str,
-) -> Result<String, BundleError> {
-    const ALLOWED: [&str; 7] = ["kty", "crv", "x", "kid", "alg", "use", "key_ops"];
-    if object.keys().any(|key| !ALLOWED.contains(&key.as_str()))
-        || object.get("kty").and_then(JsonValue::as_str) != Some("OKP")
-        || object.get("crv").and_then(JsonValue::as_str) != Some("Ed25519")
-        || object.get("alg").and_then(JsonValue::as_str) != Some("EdDSA")
+fn parse_service_public_jwk(bytes: &[u8]) -> Result<PublicJwk, BundleError> {
+    const EXACT_MEMBERS: [&str; 6] = ["kty", "crv", "x", "y", "alg", "kid"];
+    let object = parse_strict_json_object(bytes)?;
+    if object.len() != EXACT_MEMBERS.len()
         || object
-            .get("use")
-            .is_some_and(|value| value.as_str() != Some("sig"))
+            .keys()
+            .any(|member| !EXACT_MEMBERS.contains(&member.as_str()))
     {
+        return Err(invalid_artifact("service public JWK members are not exact"));
+    }
+    let json = serde_json::to_string(&object)
+        .map_err(|_| invalid_artifact("service public JWK JSON is invalid"))?;
+    let jwk =
+        PublicJwk::parse(&json).map_err(|_| invalid_artifact("service public JWK is invalid"))?;
+    if jwk.algorithm().ok() != Some(ProviderSigningAlgorithm::Es256)
+        || jwk.kty != "EC"
+        || jwk.crv.as_deref() != Some("P-256")
+        || jwk.alg.as_deref() != Some("ES256")
+    {
+        return Err(invalid_artifact("service public JWK must be ES256 P-256"));
+    }
+    let thumbprint = jwk
+        .jkt()
+        .map_err(|_| invalid_artifact("service public JWK thumbprint is invalid"))?;
+    if thumbprint.len() != 43 || jwk.kid.as_deref() != Some(thumbprint.as_str()) {
         return Err(invalid_artifact(
-            "retired JWK is not an allowed public EdDSA key",
+            "service public JWK kid must equal its RFC 7638 thumbprint",
         ));
     }
-    let kid = object
-        .get("kid")
-        .and_then(JsonValue::as_str)
-        .filter(|kid| {
-            !kid.is_empty()
-                && kid.len() <= 256
-                && !kid.chars().any(char::is_control)
-                && *kid != active_key_id
-        })
-        .ok_or(invalid_artifact("retired JWK kid is invalid"))?;
-    let x = object
-        .get("x")
-        .and_then(JsonValue::as_str)
-        .ok_or(invalid_artifact("retired JWK public coordinate is missing"))?;
-    let decoded = URL_SAFE_NO_PAD
-        .decode(x)
-        .map_err(|_| invalid_artifact("retired JWK public coordinate is invalid"))?;
-    if decoded.len() != 32 {
-        return Err(invalid_artifact(
-            "retired JWK public coordinate has the wrong size",
-        ));
-    }
-    if let Some(operations) = object.get("key_ops") {
-        let operations = operations
-            .as_array()
-            .ok_or(invalid_artifact("retired JWK key_ops is invalid"))?;
-        if operations.len() != 1 || operations[0].as_str() != Some("verify") {
-            return Err(invalid_artifact("retired JWK key_ops is not verify-only"));
-        }
-    }
-    Ok(kid.to_owned())
+    Ok(jwk)
 }
 
 fn concept_codelist_path(constraints: &OrderedMap<YamlValue>) -> Result<&str, BundleError> {
@@ -1821,6 +1940,44 @@ fn validate_runtime_bindings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Result<(), BundleError> {
+    let signer_matches_assurance = match bundle.assurance_profile {
+        crate::config::AssuranceProfile::Local => runtime.signer.is_local_jwk(),
+        crate::config::AssuranceProfile::Production
+        | crate::config::AssuranceProfile::EvidenceGrade => runtime.signer.is_transit(),
+    };
+    if !signer_matches_assurance {
+        return Err(invalid_artifact(
+            "runtime signer kind does not match the bundle assurance profile",
+        ));
+    }
+    let audit_ref = &bundle.audit.hash_secret_ref;
+    let subject_ref = &bundle.subject_binding.secret_ref;
+    if let Some(signing_ref) = runtime.signer.private_key_ref() {
+        if signing_ref == audit_ref || signing_ref == subject_ref {
+            return Err(invalid_artifact(
+                "the local signing key reference must be distinct from audit and subject-binding references",
+            ));
+        }
+    }
+    let secret_root = Path::new(&runtime.secret_providers.file.root);
+    let audit_path = Path::new(&runtime.audit_storage.path);
+    let configured_secret_paths = [
+        Some(audit_ref),
+        Some(subject_ref),
+        runtime.signer.private_key_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|reference| reference.as_str().strip_prefix("secret:file/"))
+    .map(|name| secret_root.join(name));
+    if configured_secret_paths
+        .into_iter()
+        .any(|path| path == audit_path)
+    {
+        return Err(invalid_artifact(
+            "the audit storage path must not resolve to configured secret material",
+        ));
+    }
     let required = bundle
         .sources
         .iter()
@@ -1931,6 +2088,266 @@ fn compute_revision(files: &BTreeMap<String, Vec<u8>>) -> Result<String, BundleE
     compute_named_revision(REVISION_DOMAIN, files)
 }
 
+/// One configuration revision per configured requirement.
+///
+/// Each digest covers exactly what can change that requirement's assertions:
+/// the canonical projection of the configuration it depends on, and the exact
+/// bytes of every artifact it reaches. Requirements in one bundle therefore no
+/// longer share a revision, so an edit that serves one of them does not
+/// invalidate the revision a relying party pinned for another.
+fn compute_requirement_revisions(
+    config: &EvidenceConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, String>, BundleError> {
+    let mut revisions = BTreeMap::new();
+    for requirement in &config.requirements {
+        let mut closure = BTreeMap::from([(
+            PROJECTION_PATH.to_owned(),
+            canonical_projection(config, requirement)?,
+        )]);
+        for path in requirement_artifact_paths(config, requirement, files)? {
+            // The bundle-wide closure check ran first, so a referenced artifact
+            // is present. A miss here would silently shrink the digest, so it
+            // fails instead.
+            let bytes = files.get(&path).ok_or_else(|| {
+                unknown_file(
+                    &path,
+                    "the requirement references an artifact the bundle does not contain",
+                )
+            })?;
+            closure.insert(path, bytes.clone());
+        }
+        revisions.insert(
+            requirement.id.clone(),
+            compute_named_revision(REQUIREMENT_REVISION_DOMAIN, &closure)?,
+        );
+    }
+    Ok(revisions)
+}
+
+/// Every bundle artifact one requirement reaches.
+///
+/// This is the bundle-wide closure of [`validate_file_closure`] restricted to
+/// one requirement: its own derivation script, fixtures, concept codelists,
+/// reviewed schemas and bucket codelists, the artifacts of every source its
+/// bounded acquisition names, and the codelists of the selector profiles its subject roles and
+/// grants use. The active and published public signing keys are deployment-wide
+/// and stay in every requirement's closure, so this narrows nothing beyond
+/// separating one requirement from another.
+fn requirement_artifact_paths(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeSet<String>, BundleError> {
+    let mut paths = BTreeSet::new();
+    for source_id in requirement.acquisition.source_ids() {
+        let source = config.sources.get(source_id).ok_or_else(|| {
+            invalid_artifact("the requirement names a source the configuration does not define")
+        })?;
+        paths.insert(source.request.prepare_script.as_str().to_owned());
+        paths.insert(source.extract_script.as_str().to_owned());
+        paths.insert(source.request.adapter_parameters_schema.as_str().to_owned());
+        paths.insert(source.response_schema.as_str().to_owned());
+        paths.insert(source.fact_schema.as_str().to_owned());
+    }
+    paths.insert(requirement.derivation.script.as_str().to_owned());
+    if let Some(fixtures) = &requirement.fixtures {
+        paths.insert(fixtures.as_str().to_owned());
+    }
+    for concept in &requirement.concepts {
+        if matches!(
+            concept.form,
+            ConceptForm::ControlledCode
+                | ConceptForm::ControlledCategory
+                | ConceptForm::ControlledCodeList
+        ) {
+            paths.insert(concept_codelist_path(&concept.constraints)?.to_owned());
+        }
+    }
+    for name in requirement_selector_profiles(config, requirement) {
+        let profile = config.selector_profiles.get(&name).ok_or_else(|| {
+            invalid_artifact(
+                "the requirement names a selector profile the configuration does not define",
+            )
+        })?;
+        for (_, field) in profile.fields.iter() {
+            if let SelectorField::ControlledCode { codelist, .. } = field {
+                paths.insert(codelist.as_str().to_owned());
+            }
+        }
+    }
+    paths.insert(config.signing.active_public_jwk_file.as_str().to_owned());
+    for path in &config.signing.published_public_jwk_files {
+        paths.insert(path.as_str().to_owned());
+    }
+    paths.extend(reviewed_schema_paths(requirement.concepts.iter(), files)?);
+    paths.extend(reviewed_bucket_codelist_paths(
+        requirement.concepts.iter(),
+        files,
+    )?);
+    Ok(paths)
+}
+
+/// The selector profiles one requirement can be served through: those its
+/// subject roles declare, and those a grant for it names.
+fn requirement_selector_profiles(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = requirement
+        .subject_roles
+        .iter()
+        .flat_map(|role| role.selector_profiles.iter().cloned())
+        .collect();
+    for (_, profile) in config.authority_profiles.iter() {
+        for grant in &profile.grants {
+            if grant.requirement == requirement.id {
+                names.extend(
+                    grant
+                        .subjects
+                        .iter()
+                        .map(|subject| subject.selector_profile.clone()),
+                );
+            }
+        }
+    }
+    names
+}
+
+/// The configuration one requirement depends on, in the canonical form its
+/// revision digest covers.
+///
+/// The projection starts from the complete parsed configuration and replaces
+/// only the four members that hold per-requirement configuration, keeping this
+/// requirement's own entries: the requirement itself, every source its bounded
+/// acquisition names, the selector profiles it can be served through, and the authority
+/// grants that offer it. Every other member is kept exactly as configured, so a
+/// configuration member added later is covered without revisiting this
+/// projection.
+///
+/// Starting from the parsed configuration rather than the file bytes is what
+/// makes the projection possible at all, and it is faithful because the
+/// configuration types reject an unknown member: nothing in the reviewed file
+/// can be dropped by parsing it. Comments and formatting are not covered,
+/// because neither can change an assertion.
+fn canonical_projection(
+    config: &EvidenceConfig,
+    requirement: &RequirementConfig,
+) -> Result<Vec<u8>, BundleError> {
+    let mut document = serde_json::to_value(config)
+        .map_err(|_| invalid_artifact("the configuration does not project"))?;
+    let members = document
+        .as_object_mut()
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    let requirement_value = serde_json::to_value(requirement)
+        .map_err(|_| invalid_artifact("the requirement does not project"))?;
+    members.insert(
+        "requirements".to_owned(),
+        JsonValue::Array(vec![requirement_value]),
+    );
+    let profiles = requirement_selector_profiles(config, requirement);
+    let acquisition_sources = requirement
+        .acquisition
+        .source_ids()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    retain_members(members, "sources", |name| {
+        acquisition_sources.contains(name)
+    })?;
+    retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
+    preserve_selector_field_order(members, config, &profiles)?;
+    project_authority_profiles(members, &requirement.id)?;
+    // RFC 8785 canonicalization, shared with the rest of the stack, makes
+    // order-insensitive mappings and number formatting deterministic. The one
+    // mapping whose declaration order changes assertion bytes is projected as
+    // a sequence first, so canonicalization cannot erase that distinction.
+    canonicalize_json(&document)
+        .map_err(|_| invalid_artifact("the projection does not canonicalize"))
+}
+
+/// Keep only the named members of one projected configuration mapping.
+fn retain_members(
+    members: &mut JsonMap<String, JsonValue>,
+    member: &str,
+    keep: impl Fn(&str) -> bool,
+) -> Result<(), BundleError> {
+    let mapping = members
+        .get_mut(member)
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    mapping.retain(|name, _| keep(name));
+    Ok(())
+}
+
+/// Preserve the declaration order that defines canonical selector encoding.
+///
+/// `OrderedMap` serializes as a JSON object, whose member order RFC 8785
+/// deliberately erases. Selector field order is not presentation: it orders
+/// the normalized values used by subject binding. Project each retained field
+/// mapping as `[name, value]` pairs before canonicalization so a reorder moves
+/// the revision with the assertion behavior it protects.
+fn preserve_selector_field_order(
+    members: &mut JsonMap<String, JsonValue>,
+    config: &EvidenceConfig,
+    retained_profiles: &BTreeSet<String>,
+) -> Result<(), BundleError> {
+    let projected_profiles = members
+        .get_mut("selectorProfiles")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the selector profiles do not project as a mapping"))?;
+    for name in retained_profiles {
+        let configured = config
+            .selector_profiles
+            .get(name)
+            .ok_or_else(|| invalid_artifact("a retained selector profile is not configured"))?;
+        let projected = projected_profiles
+            .get_mut(name)
+            .and_then(JsonValue::as_object_mut)
+            .ok_or_else(|| invalid_artifact("a selector profile does not project as a mapping"))?;
+        let fields = configured
+            .fields
+            .iter()
+            .map(|(field_name, field)| {
+                serde_json::to_value(field)
+                    .map(|value| {
+                        JsonValue::Array(vec![JsonValue::String(field_name.to_owned()), value])
+                    })
+                    .map_err(|_| invalid_artifact("a selector field does not project"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        projected.insert("fields".to_owned(), JsonValue::Array(fields));
+    }
+    Ok(())
+}
+
+/// Keep only the grants that offer one requirement, and only the authority
+/// profiles left holding at least one of them.
+fn project_authority_profiles(
+    members: &mut JsonMap<String, JsonValue>,
+    requirement_id: &str,
+) -> Result<(), BundleError> {
+    let profiles = members
+        .get_mut("authorityProfiles")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    for (_, profile) in profiles.iter_mut() {
+        let grants = profile
+            .get_mut("grants")
+            .and_then(JsonValue::as_array_mut)
+            .ok_or_else(|| invalid_artifact("an authority profile does not project"))?;
+        grants.retain(|grant| {
+            grant.get("requirement").and_then(JsonValue::as_str) == Some(requirement_id)
+        });
+    }
+    profiles.retain(|_, profile| {
+        profile
+            .get("grants")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|grants| !grants.is_empty())
+    });
+    Ok(())
+}
+
 fn compute_named_revision(
     domain: &[u8],
     files: &BTreeMap<String, Vec<u8>>,
@@ -2034,6 +2451,227 @@ mod tests {
         assert_ne!(compute_revision(&first), compute_revision(&renamed));
     }
 
+    /// The revision every configured requirement carries, keyed by requirement.
+    #[cfg(unix)]
+    fn requirement_revisions(root: &Path) -> BTreeMap<String, String> {
+        let bundle = Bundle::load(root).expect("the acceptance bundle loads");
+        bundle
+            .config
+            .requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.id.clone(),
+                    bundle
+                        .configuration_revision(&requirement.id)
+                        .expect("a configured requirement has a revision")
+                        .to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Load the multi-requirement acceptance bundle, apply one edit to its
+    /// configuration or artifacts, and answer the revisions before and after.
+    #[cfg(unix)]
+    fn revisions_across_edit(
+        edit: impl FnOnce(&Path),
+    ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let before = requirement_revisions(directory.path());
+
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        edit(directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let after = requirement_revisions(directory.path());
+        (before, after)
+    }
+
+    /// The point of scoping a revision per requirement: an edit that serves one
+    /// requirement leaves the revision every other relying party pinned alone.
+    /// Before this, one shared bundle digest meant any byte change anywhere
+    /// broke every relying party at once, with nothing but an opaque policy
+    /// failure to explain it.
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_for_one_requirement_leaves_the_other_revisions_alone() {
+        const EDITED: &str = "urn:example:fixture:requirement:residence-region:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let script = root.join("derivations/residence-region.rhai");
+            let text = fs::read_to_string(&script).expect("the derivation reads");
+            fs::write(&script, format!("{text}\n// reviewed again\n"))
+                .expect("the derivation writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` was not edited and keeps its revision"
+                );
+            }
+        }
+    }
+
+    /// The same isolation for the configuration file itself, which is the churn
+    /// a whole-file digest cannot avoid: every requirement is configured in one
+    /// `evidence.yaml`, so onboarding or retuning one of them used to invalidate
+    /// all of them.
+    #[cfg(unix)]
+    #[test]
+    fn a_configuration_edit_for_one_requirement_leaves_the_other_revisions_alone() {
+        const EDITED: &str = "urn:example:fixture:requirement:professional-licence-status:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            // The only requirement configured with this observation timezone
+            // is the edited one, so the replacement cannot reach a sibling.
+            assert_eq!(
+                text.matches("observationTimezone: Africa/Nairobi").count(),
+                1
+            );
+            fs::write(
+                &path,
+                text.replace(
+                    "observationTimezone: Africa/Nairobi",
+                    "observationTimezone: Africa/Accra",
+                ),
+            )
+            .expect("the configuration writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` was not edited and keeps its revision"
+                );
+            }
+        }
+    }
+
+    /// Selector field declaration order controls normalized subject values and
+    /// therefore the audience-scoped subject binding. RFC 8785 sorts object
+    /// members, so the projection must preserve this order explicitly.
+    #[cfg(unix)]
+    #[test]
+    fn selector_field_reordering_changes_the_affected_requirement_revision() {
+        const EDITED: &str = "urn:example:fixture:requirement:adult-status:v1";
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            let original = concat!(
+                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      birth_date: {type: date}\n",
+            );
+            let reordered = concat!(
+                "      birth_date: {type: date}\n",
+                "      family_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+                "      given_name: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
+            );
+            assert_eq!(text.matches(original).count(), 1);
+            fs::write(&path, text.replace(original, reordered)).expect("the configuration writes");
+        });
+
+        assert_ne!(before[EDITED], after[EDITED]);
+        for (requirement, revision) in &before {
+            if requirement != EDITED {
+                assert_eq!(
+                    revision, &after[requirement],
+                    "`{requirement}` does not use the reordered selector profile"
+                );
+            }
+        }
+    }
+
+    /// Isolation between requirements is the only narrowing. A deployment-wide
+    /// edit still changes every requirement's revision, so nothing that can
+    /// change an assertion has stopped being covered.
+    #[cfg(unix)]
+    #[test]
+    fn a_deployment_wide_edit_changes_every_requirement_revision() {
+        let (before, after) = revisions_across_edit(|root| {
+            let path = root.join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            assert_eq!(text.matches("keyVersion: 1").count(), 1);
+            fs::write(&path, text.replace("keyVersion: 1", "keyVersion: 2"))
+                .expect("the configuration writes");
+        });
+
+        assert_eq!(before.len(), 4);
+        for (requirement, revision) in &before {
+            assert_ne!(
+                revision, &after[requirement],
+                "`{requirement}` depends on the edited deployment configuration"
+            );
+        }
+    }
+
+    /// The projection keeps every configuration member. A member it dropped
+    /// would stop being covered by any revision, which is a silently narrower
+    /// tripwire rather than a visible failure, so the member list is asserted
+    /// against the configuration itself instead of a copy of it.
+    #[cfg(unix)]
+    #[test]
+    fn the_projection_covers_every_configuration_member() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the acceptance bundle loads");
+
+        let configured = serde_json::to_value(&bundle.config).expect("the configuration projects");
+        let projected: JsonValue = serde_json::from_slice(
+            &canonical_projection(&bundle.config, &bundle.config.requirements[0])
+                .expect("the projection is canonical JSON"),
+        )
+        .expect("the projection parses");
+
+        assert_eq!(
+            projected
+                .as_object()
+                .expect("the projection is a mapping")
+                .keys()
+                .collect::<BTreeSet<_>>(),
+            configured
+                .as_object()
+                .expect("the configuration is a mapping")
+                .keys()
+                .collect::<BTreeSet<_>>()
+        );
+        // Only the four per-requirement members are narrowed, and each keeps
+        // exactly what this requirement reaches.
+        assert_eq!(projected["requirements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(projected["sources"].as_object().map(JsonMap::len), Some(1));
+        assert!(projected["sources"].get("source-a").is_some());
+    }
+
+    /// A revision must depend on the configuration alone. Canonical JSON is
+    /// what keeps it independent of the member ordering a dependency happens to
+    /// use, so a feature selection somewhere in the tree cannot invalidate every
+    /// pinned revision without a configuration change.
+    #[cfg(unix)]
+    #[test]
+    fn the_projection_is_already_canonical() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("the acceptance bundle loads");
+
+        let projection = canonical_projection(&bundle.config, &bundle.config.requirements[0])
+            .expect("the projection is canonical JSON");
+        let reparsed: JsonValue =
+            serde_json::from_slice(&projection).expect("the projection parses");
+        assert_eq!(
+            canonicalize_json(&reparsed).expect("the parsed projection canonicalizes"),
+            projection
+        );
+    }
+
     #[test]
     fn fixture_coverage_is_case_neutral_but_complete() {
         let fixture: YamlValue = serde_norway::from_str(
@@ -2134,15 +2772,13 @@ mod tests {
     #[test]
     fn strict_public_jwk_rejects_private_material_and_duplicate_members() {
         let private = br#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"old","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","d":"secret"}"#;
-        let object = parse_strict_json_object(private).expect("JSON parses");
-        assert!(validate_public_jwk(&object, "active").is_err());
+        assert!(parse_service_public_jwk(private).is_err());
 
         let duplicate = br#"{"kty":"OKP","kty":"OKP"}"#;
         assert!(parse_strict_json_object(duplicate).is_err());
 
         let control_kid = br#"{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","kid":"old\u000aidentifier","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#;
-        let object = parse_strict_json_object(control_kid).expect("JSON parses");
-        assert!(validate_public_jwk(&object, "active").is_err());
+        assert!(parse_service_public_jwk(control_kid).is_err());
     }
 
     #[cfg(unix)]
@@ -2159,8 +2795,11 @@ mod tests {
             set_tree_mode(directory.path(), 0o555, 0o444);
 
             let bundle = Bundle::load(directory.path()).expect("bundle loads");
-            assert!(bundle.configuration_revision().starts_with("sha256:"));
-            assert_eq!(bundle.configuration_revision().len(), 71);
+            let revision = bundle
+                .configuration_revision(&bundle.config.requirements[0].id)
+                .expect("the configured requirement has a revision");
+            assert!(revision.starts_with("sha256:"));
+            assert_eq!(revision.len(), 71);
             assert_eq!(bundle.scripts.len(), 3);
             assert_eq!(bundle.fact_schemas.len(), 3);
             assert_eq!(bundle.fixtures.len(), 1);
@@ -2411,7 +3050,7 @@ mod tests {
         fs::write(
             &runtime_path,
             format!(
-                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
+                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),

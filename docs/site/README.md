@@ -29,7 +29,8 @@ build, and generated Redoc API pages. It checks the current site only. Published
 release archives are immutable bundles and are not rebuilt during routine docs
 work.
 
-To verify the complete deployable tree, including every locked release archive:
+To verify the complete deployable tree, including the three archived releases
+in the publication window:
 
 ```sh
 npm run check:archives
@@ -43,6 +44,10 @@ check:archive-lock -- --base-ref origin/main` enforces that invariant.
 Historical archives retain their sealed search output. New release archives
 carry Pagefind and machine-readable discovery files built once by the release
 workflow.
+
+Archives outside the publication window are not restored or link-checked by
+routine CI. Their immutable lock metadata and release assets remain available
+for explicit audit or recovery work.
 
 To publish a new archived docset, build only that docset and create its bundle:
 
@@ -67,15 +72,18 @@ The production site uses one indexable namespace:
 
 - `/` serves the latest released documentation with self-canonical URLs and the public sitemap.
 - `/dev/` serves unreleased documentation built from `main` with `noindex,follow`.
-- `/v/<version>/` serves immutable release archives with `noindex,follow`.
+- `/v/<version>/` serves the newest three semantic release archives with `noindex,follow`.
 - `/preview/` keeps old links working by redirecting matching pages to `/`.
 
 The Pages workflow verifies the selected release archive against
 `src/data/archive-lock.yaml` and copies the separately built trees to their
 bound destinations without rewriting either one. The immutable
-`/v/<version>/` tree and its release asset are not changed. Search data and
-machine-readable corpora are sealed into the canonical-root release tree, so
-the canonical site does not depend on unreleased `/dev/` content.
+`/v/<version>/` trees inside the publication window and their release assets are not changed.
+Older release assets remain attached to their GitHub Releases, but Registry Docs does not expand
+them into the Pages artifact. Earlier Pages-only fallback bundles age out with their expanded routes.
+`published_archive_limit` in `src/data/docsets.yaml` sets the window. Search data and
+machine-readable corpora are sealed into the canonical-root release tree, so the canonical site does
+not depend on unreleased `/dev/` content.
 
 ## Content Sources
 

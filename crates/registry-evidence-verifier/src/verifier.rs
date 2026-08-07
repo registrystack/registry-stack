@@ -15,17 +15,17 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    config::AssuranceProfile,
     contracts::evidence_contract_accepts,
-    model::{Evidence, FlattenedJws, JwksDocument},
+    model::{Evidence, FlattenedJws, HolderPublicKey, JwksDocument},
     sdjwt_vc::evidence_payload_from_claims,
-    EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1, EVIDENCE_SD_JWT_VC_TYP,
+    AssuranceProfile, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
+    EVIDENCE_SD_JWT_VC_TYP,
 };
 
 const MAX_JWS_BYTES: usize = 256 * 1024;
 const MAX_PROTECTED_BYTES: usize = 8 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
-const MAX_TRUSTED_KEYS: usize = 33;
+pub(crate) const MAX_TRUSTED_KEYS: usize = 33;
 /// One disclosure per Supported Value, bounded well above the largest
 /// requirement a Version 1 bundle can declare.
 const MAX_DISCLOSURES: usize = 64;
@@ -33,11 +33,87 @@ const MAX_DISCLOSURE_BYTES: usize = 8 * 1024;
 const MINIMUM_SALT_BYTES: usize = 16;
 const MAXIMUM_SALT_BYTES: usize = 64;
 
+/// Shortest maximum assertion lifetime a policy may state, per the
+/// verification policy contract.
+///
+/// This bound and the bounds below it are the contract constraints on a policy
+/// that fail open, so they are enforced here. A pattern,
+/// length, or uniqueness violation elsewhere in a policy fails closed: the
+/// payload is itself contract-checked, so an out-of-contract expectation is one
+/// no conformant payload can match and verification refuses the response. A
+/// lifetime or skew wider than the contract allows fails the other way, making
+/// this verifier accept assertions a conformant relying party must refuse. The
+/// failure-class vocabulary is frozen and has no class for an unusable policy,
+/// so a forbidden bound is refused where a policy is read or built, never
+/// reported as a verification outcome.
+pub const MINIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 1;
+/// Longest maximum assertion lifetime a policy may state, per the same
+/// contract.
+pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: u64 = 31_536_000;
+/// Largest clock skew tolerance a policy may state, per the same contract.
+/// Omitting the tolerance means zero, which is always inside the bound.
+pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
+/// Smallest list cardinality a policy may state.
+pub const MINIMUM_EXPECTED_LIST_ITEMS: usize = 1;
+/// Largest list cardinality a policy may state.
+pub const MAXIMUM_EXPECTED_LIST_ITEMS: usize = 64;
+
+/// A policy stating a bound the verification policy contract forbids.
+///
+/// This is a refusal to use the policy at all, not a verification outcome. Both
+/// Variants carry the stated value, which is a relying party's own expectation
+/// and never comes from a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PolicyBoundsError {
+    #[error("maximumAssertionLifetimeSeconds must be {MINIMUM_ASSERTION_LIFETIME_SECONDS} to {MAXIMUM_ASSERTION_LIFETIME_SECONDS}, not {0}")]
+    AssertionLifetime(u64),
+    #[error("clockSkewSeconds must be at most {MAXIMUM_CLOCK_SKEW_SECONDS}, not {0}")]
+    ClockSkew(u64),
+    #[error("minimumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    MinimumItems(usize),
+    #[error("maximumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    MaximumItems(usize),
+}
+
+fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if !(MINIMUM_ASSERTION_LIFETIME_SECONDS..=MAXIMUM_ASSERTION_LIFETIME_SECONDS).contains(&seconds)
+    {
+        return Err(PolicyBoundsError::AssertionLifetime(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn checked_clock_skew(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if seconds > MAXIMUM_CLOCK_SKEW_SECONDS {
+        return Err(PolicyBoundsError::ClockSkew(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn checked_minimum_items(items: usize) -> Result<usize, PolicyBoundsError> {
+    if !(MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS).contains(&items) {
+        return Err(PolicyBoundsError::MinimumItems(items));
+    }
+    Ok(items)
+}
+
+fn checked_maximum_items(items: usize) -> Result<usize, PolicyBoundsError> {
+    if !(MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS).contains(&items) {
+        return Err(PolicyBoundsError::MaximumItems(items));
+    }
+    Ok(items)
+}
+
 /// Complete relying-procedure expectations for strict verification.
 ///
 /// Every expectation comes from independent trusted state such as the relying
 /// procedure, a previously trusted binding, or a trusted requirement contract.
 /// Copying values out of the JWS under verification proves nothing.
+///
+/// The two time bounds are private, so the only ways to a policy are the
+/// checked conversions on this type and on
+/// [`EvidenceVerificationPolicyDocument`], and no caller can state a bound the
+/// contract forbids.
 #[derive(Debug, Clone)]
 pub struct EvidenceVerificationPolicy {
     pub assurance_profile: AssuranceProfile,
@@ -55,10 +131,15 @@ pub struct EvidenceVerificationPolicy {
     pub expected_subjects: Vec<ExpectedSubject>,
     /// Expected concept identifiers, value forms, and cardinalities.
     pub expected_outputs: Vec<ExpectedOutput>,
-    /// Longest acceptable `validUntil - issuedAt` interval.
-    pub maximum_assertion_lifetime: Duration,
+    /// Service key thumbprints that fail closed even if present in a stale or
+    /// otherwise trusted JWKS document.
+    pub revoked_key_ids: Vec<String>,
+    /// Longest acceptable `validUntil - issuedAt` interval. Read it with
+    /// [`EvidenceVerificationPolicy::maximum_assertion_lifetime`].
+    maximum_assertion_lifetime: Duration,
     pub now: DateTime<Utc>,
-    pub clock_skew: Duration,
+    /// Read it with [`EvidenceVerificationPolicy::clock_skew`].
+    clock_skew: Duration,
 }
 
 /// Closed wire document for independently retained verification expectations.
@@ -67,38 +148,72 @@ pub struct EvidenceVerificationPolicy {
 /// durations. This document is the serializable form used by offline operator
 /// boundaries, including the local pre-response context. It never learns
 /// expectations from the response it is asked to verify.
+///
+/// Reading one refuses the two time bounds the contract forbids, so an
+/// out-of-contract document never reaches verification.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceVerificationPolicyDocument {
-    pub(crate) expected_assurance_profile: AssuranceProfile,
-    pub(crate) issued_by: String,
-    pub(crate) provided_by: String,
-    pub(crate) requirement: String,
-    pub(crate) evidence_type: String,
-    pub(crate) purpose: String,
-    pub(crate) audience: String,
-    pub(crate) configuration_revision: String,
+    pub expected_assurance_profile: AssuranceProfile,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub requirement: String,
+    pub evidence_type: String,
+    pub purpose: String,
+    pub audience: String,
+    pub configuration_revision: String,
     /// The exact nonce from the independently retained original request.
-    pub(crate) request_nonce: String,
-    pub(crate) expected_subjects: Vec<ExpectedSubjectDocument>,
-    pub(crate) expected_outputs: Vec<ExpectedOutputDocument>,
-    pub(crate) maximum_assertion_lifetime_seconds: u64,
-    #[serde(default)]
-    pub(crate) clock_skew_seconds: u64,
+    pub request_nonce: String,
+    pub expected_subjects: Vec<ExpectedSubjectDocument>,
+    pub expected_outputs: Vec<ExpectedOutputDocument>,
+    pub revoked_key_ids: Vec<String>,
+    #[serde(deserialize_with = "read_assertion_lifetime_seconds")]
+    pub maximum_assertion_lifetime_seconds: u64,
+    #[serde(default, deserialize_with = "read_clock_skew_seconds")]
+    pub clock_skew_seconds: u64,
+}
+
+fn read_assertion_lifetime_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_assertion_lifetime(seconds).map_err(serde::de::Error::custom)?;
+    Ok(seconds)
+}
+
+fn read_clock_skew_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_clock_skew(seconds).map_err(serde::de::Error::custom)?;
+    Ok(seconds)
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExpectedSubjectDocument {
+    pub role: String,
+    pub binding: String,
+}
+
+impl std::fmt::Debug for ExpectedSubjectDocument {
+    /// A binding is a pseudonymous per-subject identifier, so only the role is
+    /// rendered.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExpectedSubjectDocument")
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedSubjectDocument {
-    pub(crate) role: String,
-    pub(crate) binding: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedOutputDocument {
-    pub(crate) concept: String,
-    pub(crate) form: ExpectedFormDocument,
+pub struct ExpectedOutputDocument {
+    pub concept: String,
+    pub form: ExpectedFormDocument,
 }
 
 /// The closed expected value-form vocabulary as written in a policy document.
@@ -107,14 +222,14 @@ pub(crate) struct ExpectedOutputDocument {
 /// form as a plain string and the list form as a mapping under `list`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
-pub(crate) enum ExpectedFormDocument {
+pub enum ExpectedFormDocument {
     Scalar(ExpectedScalarFormDocument),
     List(ExpectedListFormDocument),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum ExpectedScalarFormDocument {
+pub enum ExpectedScalarFormDocument {
     Boolean,
     Integer,
     String,
@@ -126,20 +241,49 @@ pub(crate) enum ExpectedScalarFormDocument {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ExpectedListFormDocument {
-    pub(crate) list: ExpectedListDocument,
+pub struct ExpectedListFormDocument {
+    pub list: ExpectedListDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExpectedListDocument {
-    pub(crate) minimum_items: usize,
-    pub(crate) maximum_items: usize,
+pub struct ExpectedListDocument {
+    #[serde(deserialize_with = "read_minimum_items")]
+    pub minimum_items: usize,
+    #[serde(deserialize_with = "read_maximum_items")]
+    pub maximum_items: usize,
+}
+
+fn read_minimum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = usize::deserialize(deserializer)?;
+    checked_minimum_items(items).map_err(serde::de::Error::custom)
+}
+
+fn read_maximum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = usize::deserialize(deserializer)?;
+    checked_maximum_items(items).map_err(serde::de::Error::custom)
 }
 
 impl EvidenceVerificationPolicyDocument {
-    pub fn into_policy(self, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
-        EvidenceVerificationPolicy {
+    /// The runtime-facing policy for one verification instant, or a refusal when
+    /// the document states a bound the contract forbids.
+    ///
+    /// Reading a document already refuses bounded fields, so this is what holds
+    /// them for a document built in code, where the public fields accept any value.
+    pub fn try_into_policy(
+        self,
+        now: DateTime<Utc>,
+    ) -> Result<EvidenceVerificationPolicy, PolicyBoundsError> {
+        let maximum_assertion_lifetime =
+            checked_assertion_lifetime(self.maximum_assertion_lifetime_seconds)?;
+        let clock_skew = checked_clock_skew(self.clock_skew_seconds)?;
+        Ok(EvidenceVerificationPolicy {
             assurance_profile: self.expected_assurance_profile,
             issued_by: self.issued_by,
             provided_by: self.provided_by,
@@ -160,22 +304,25 @@ impl EvidenceVerificationPolicyDocument {
             expected_outputs: self
                 .expected_outputs
                 .into_iter()
-                .map(|output| ExpectedOutput {
-                    concept: output.concept,
-                    form: expected_value_form_document(output.form),
+                .map(|output| {
+                    Ok(ExpectedOutput {
+                        concept: output.concept,
+                        form: expected_value_form_document(output.form)?,
+                    })
                 })
-                .collect(),
-            maximum_assertion_lifetime: Duration::from_secs(
-                self.maximum_assertion_lifetime_seconds,
-            ),
+                .collect::<Result<Vec<_>, PolicyBoundsError>>()?,
+            revoked_key_ids: self.revoked_key_ids,
+            maximum_assertion_lifetime,
             now,
-            clock_skew: Duration::from_secs(self.clock_skew_seconds),
-        }
+            clock_skew,
+        })
     }
 }
 
-fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValueForm {
-    match document {
+fn expected_value_form_document(
+    document: ExpectedFormDocument,
+) -> Result<ExpectedValueForm, PolicyBoundsError> {
+    Ok(match document {
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => {
             ExpectedValueForm::Boolean
         }
@@ -198,13 +345,26 @@ fn expected_value_form_document(document: ExpectedFormDocument) -> ExpectedValue
             ExpectedValueForm::Structured
         }
         ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
-            minimum_items: wrapper.list.minimum_items,
-            maximum_items: wrapper.list.maximum_items,
+            minimum_items: checked_minimum_items(wrapper.list.minimum_items)?,
+            maximum_items: checked_maximum_items(wrapper.list.maximum_items)?,
         },
-    }
+    })
 }
 
 impl EvidenceVerificationPolicy {
+    /// Longest acceptable `validUntil - issuedAt` interval, within the bounds
+    /// the verification policy contract states.
+    #[must_use]
+    pub fn maximum_assertion_lifetime(&self) -> Duration {
+        self.maximum_assertion_lifetime
+    }
+
+    /// Accepted clock skew tolerance, within the same contract's bound.
+    #[must_use]
+    pub fn clock_skew(&self) -> Duration {
+        self.clock_skew
+    }
+
     /// Build expectations from evidence accepted in an original trusted
     /// transaction, for later re-verification of the stored response.
     ///
@@ -214,14 +374,21 @@ impl EvidenceVerificationPolicy {
     /// values back as expectations proves nothing. The expected nonce comes
     /// from the independently retained original request, never from the
     /// response.
+    ///
+    /// The two time bounds are the relying party's own, stated in seconds as the
+    /// contract states them, and a value the contract forbids is refused rather
+    /// than honoured.
     pub fn from_accepted_transaction(
         evidence: &Evidence,
         retained_request_nonce: &str,
-        maximum_assertion_lifetime: Duration,
+        maximum_assertion_lifetime_seconds: u64,
         now: DateTime<Utc>,
-        clock_skew: Duration,
-    ) -> Self {
-        Self {
+        clock_skew_seconds: u64,
+    ) -> Result<Self, PolicyBoundsError> {
+        let maximum_assertion_lifetime =
+            checked_assertion_lifetime(maximum_assertion_lifetime_seconds)?;
+        let clock_skew = checked_clock_skew(clock_skew_seconds)?;
+        Ok(Self {
             assurance_profile: evidence.assurance_profile,
             issued_by: evidence.issued_by.clone(),
             provided_by: evidence.provided_by.clone(),
@@ -247,10 +414,11 @@ impl EvidenceVerificationPolicy {
                     form: expected_form_of(&value.value),
                 })
                 .collect(),
+            revoked_key_ids: Vec::new(),
             maximum_assertion_lifetime,
             now,
             clock_skew,
-        }
+        })
     }
 }
 
@@ -276,10 +444,21 @@ fn expected_form_of(value: &crate::model::PublicValue) -> ExpectedValueForm {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ExpectedSubject {
     pub role: String,
     pub binding: String,
+}
+
+impl std::fmt::Debug for ExpectedSubject {
+    /// A binding is a pseudonymous per-subject identifier, so only the role is
+    /// rendered.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExpectedSubject")
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +515,31 @@ pub enum VerificationError {
     Disclosure,
 }
 
+impl VerificationError {
+    /// A stable, machine-readable name for which kind of verification failure
+    /// this is.
+    ///
+    /// It exists for callers that want to branch or aggregate on the failure
+    /// without matching this crate's enum directly: a metric label, a
+    /// structured log field, or a language binding that carries the
+    /// discriminant across a boundary a Rust enum cannot cross. The rendered
+    /// message is for people and may be reworded; these names are part of the
+    /// crate's contract and will not be renamed.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::MalformedJws => "malformed_jws",
+            Self::ProtectedHeader => "protected_header",
+            Self::Key => "key",
+            Self::Signature => "signature",
+            Self::Payload => "payload",
+            Self::Policy => "policy",
+            Self::Time => "time",
+            Self::Disclosure => "disclosure",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProtectedHeader {
@@ -353,6 +557,17 @@ struct SdJwtHeader {
     alg: String,
     kid: String,
     typ: String,
+}
+
+/// Whether a pinned trusted key set is one this verifier could ever use.
+///
+/// Verification applies this rule to every response, so a key set that fails it
+/// can never verify anything. Exposing it lets a relying party apply it once,
+/// where it pinned the set, instead of learning per response that the pinning
+/// decision was unusable. The rule stays owned here: this is the same check
+/// verification performs, not a restatement of it.
+pub fn trusted_keys_are_usable(trusted_jwks: &JwksDocument) -> Result<(), VerificationError> {
+    trusted_keys(trusted_jwks).map(|_| ())
 }
 
 /// Strict one-call verification: cryptographic authenticity, every policy
@@ -393,19 +608,25 @@ pub fn verify_flattened_jws_report(
         parse_json_strict(&protected_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
     let protected: ProtectedHeader =
         serde_json::from_value(protected_strict).map_err(|_| VerificationError::ProtectedHeader)?;
-    if protected.alg != "EdDSA"
+    if protected.alg != "ES256"
         || protected.typ != EVIDENCE_JWS_TYP
         || protected.cty != EVIDENCE_JWS_CTY
-        || protected.kid.is_empty()
-        || protected.kid.len() > 256
-        || protected.kid.chars().any(char::is_control)
+        || !key_identifier_is_thumbprint(&protected.kid)
     {
         return Err(VerificationError::ProtectedHeader);
+    }
+    validate_revocations(&policy.revoked_key_ids)?;
+    if policy
+        .revoked_key_ids
+        .iter()
+        .any(|kid| kid == &protected.kid)
+    {
+        return Err(VerificationError::Key);
     }
 
     let keys = trusted_keys(trusted_jwks)?;
     let key = keys.get(&protected.kid).ok_or(VerificationError::Key)?;
-    if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+    if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
     let signature = decode_bounded(
@@ -494,18 +715,20 @@ pub fn verify_sd_jwt_vc_report(
         parse_json_strict(&header_bytes).map_err(|_| VerificationError::ProtectedHeader)?;
     let header: SdJwtHeader =
         serde_json::from_value(header_strict).map_err(|_| VerificationError::ProtectedHeader)?;
-    if header.alg != "EdDSA"
+    if header.alg != "ES256"
         || header.typ != EVIDENCE_SD_JWT_VC_TYP
-        || header.kid.is_empty()
-        || header.kid.len() > 256
-        || header.kid.chars().any(char::is_control)
+        || !key_identifier_is_thumbprint(&header.kid)
     {
         return Err(VerificationError::ProtectedHeader);
+    }
+    validate_revocations(&policy.revoked_key_ids)?;
+    if policy.revoked_key_ids.iter().any(|kid| kid == &header.kid) {
+        return Err(VerificationError::Key);
     }
 
     let keys = trusted_keys(trusted_jwks)?;
     let key = keys.get(&header.kid).ok_or(VerificationError::Key)?;
-    if key.algorithm().ok() != Some(SigningAlgorithm::EdDsa) {
+    if key.algorithm().ok() != Some(SigningAlgorithm::Es256) {
         return Err(VerificationError::Key);
     }
     let signature = decode_bounded(
@@ -706,7 +929,7 @@ fn resolve_disclosures(
     Ok(resolved)
 }
 
-/// The confirmation, when present, carries exactly one Ed25519 public key and
+/// The confirmation, when present, carries exactly one P-256 public key and
 /// no private material.
 fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> {
     let Some(members) = confirmation.as_object() else {
@@ -716,12 +939,9 @@ fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> 
         return Err(VerificationError::Payload);
     }
     let jwk = members.get("jwk").ok_or(VerificationError::Payload)?;
-    let key: PublicJwk =
+    let key: HolderPublicKey =
         serde_json::from_value(jwk.clone()).map_err(|_| VerificationError::Payload)?;
-    if key.kty != "OKP"
-        || key.crv.as_deref() != Some("Ed25519")
-        || key.algorithm().ok() != Some(SigningAlgorithm::EdDsa)
-    {
+    if !key.is_acceptable() {
         return Err(VerificationError::Payload);
     }
     Ok(())
@@ -733,19 +953,57 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
     }
     let mut output = BTreeMap::new();
     for value in &jwks.keys {
+        let members = value.as_object().ok_or(VerificationError::Key)?;
+        let exact_members = ["alg", "crv", "kid", "kty", "x", "y"]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if members.keys().map(String::as_str).collect::<BTreeSet<_>>() != exact_members {
+            return Err(VerificationError::Key);
+        }
         let key: PublicJwk =
             serde_json::from_value(value.clone()).map_err(|_| VerificationError::Key)?;
         let kid = key.kid.clone().ok_or(VerificationError::Key)?;
-        if kid.is_empty()
-            || kid.len() > 256
-            || kid.chars().any(char::is_control)
-            || key.algorithm().ok() != Some(SigningAlgorithm::EdDsa)
+        if !key_identifier_is_thumbprint(&kid)
+            || key.algorithm().ok() != Some(SigningAlgorithm::Es256)
+            || key.jkt().ok().as_deref() != Some(kid.as_str())
             || output.insert(kid, key).is_some()
         {
             return Err(VerificationError::Key);
         }
     }
     Ok(output)
+}
+
+/// Validate a relying party's emergency service-key denylist.
+///
+/// This is public so clients can reject unusable pinned trust configuration at
+/// construction rather than deferring the same failure to every verification.
+/// An identifier may deliberately still appear in a cached JWKS: revocation is
+/// checked first and overrides that cached key.
+pub fn revoked_key_ids_are_usable(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
+    if revoked_key_ids.len() > MAX_TRUSTED_KEYS
+        || revoked_key_ids
+            .iter()
+            .any(|kid| !key_identifier_is_thumbprint(kid))
+        || revoked_key_ids.iter().collect::<BTreeSet<_>>().len() != revoked_key_ids.len()
+    {
+        return Err(VerificationError::Key);
+    }
+    Ok(())
+}
+
+fn validate_revocations(revoked_key_ids: &[String]) -> Result<(), VerificationError> {
+    revoked_key_ids_are_usable(revoked_key_ids)
+}
+
+fn key_identifier_is_thumbprint(kid: &str) -> bool {
+    kid.len() == 43
+        && kid
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        && URL_SAFE_NO_PAD
+            .decode(kid)
+            .is_ok_and(|decoded| decoded.len() == 32 && URL_SAFE_NO_PAD.encode(&decoded) == kid)
 }
 
 /// Compare every policy expectation after signature and schema verification.
@@ -907,22 +1165,228 @@ fn decode_bounded(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
+    use p256::elliptic_curve::rand_core::OsRng;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+    use serde::Deserialize;
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::{
-        model::{
-            EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
-            SupportedValue,
-        },
-        signing::{jwks_document, EvidenceSigner},
+    use crate::fixtures::{jwks_document, EvidenceSigner};
+    use crate::model::{
+        EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
+        SupportedValue,
     };
 
-    const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"evidence-key-1"}"#;
-    const RETIRED_PRIVATE_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"retired-evidence-key"}"#;
+    const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const RETIRED_KEY_ID: &str = "xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M";
+    const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    const RETIRED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExternalVectorFixture {
+        fixture: String,
+        synthetic_only: bool,
+        compatibility_claim: String,
+        purpose: String,
+        issuer_public_jwk: PublicJwk,
+        vectors: Vec<ExternalVector>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExternalVector {
+        id: String,
+        standard: String,
+        provenance: ExternalVectorProvenance,
+        serialized: String,
+        expected: ExternalVectorExpected,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ExternalVectorProvenance {
+        source: String,
+        revision: String,
+        location: String,
+        derivation: String,
+        serialized_sha256: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ExternalVectorExpected {
+        protected_typ: String,
+        issuer: String,
+        #[serde(default)]
+        vct: Option<String>,
+        disclosure_names: Vec<String>,
+        evidence_profile_rejection: String,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct ExternalPresentation {
+        protected_typ: String,
+        issuer: String,
+        vct: Option<String>,
+        disclosure_names: Vec<String>,
+    }
+
+    fn verify_external_presentation(
+        serialized: &str,
+        public_key: &PublicJwk,
+    ) -> Result<ExternalPresentation, &'static str> {
+        let without_trailing_tilde = serialized
+            .strip_suffix('~')
+            .ok_or("presentation lacks the no-KB-JWT trailing tilde")?;
+        let mut presentation_parts = without_trailing_tilde.split('~');
+        let jwt = presentation_parts.next().ok_or("issuer JWT is absent")?;
+        let disclosures = presentation_parts.collect::<Vec<_>>();
+        if disclosures.is_empty() || disclosures.iter().any(|value| value.is_empty()) {
+            return Err("presentation disclosures are absent or empty");
+        }
+
+        let jwt_parts = jwt.split('.').collect::<Vec<_>>();
+        let [protected, payload, encoded_signature] = jwt_parts.as_slice() else {
+            return Err("issuer JWT is not compact JWS");
+        };
+        let header_bytes = URL_SAFE_NO_PAD
+            .decode(protected)
+            .map_err(|_| "protected header is not base64url")?;
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| "payload is not base64url")?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .map_err(|_| "signature is not base64url")?;
+        let header = parse_json_strict(&header_bytes).map_err(|_| "header is not strict JSON")?;
+        let payload_value =
+            parse_json_strict(&payload_bytes).map_err(|_| "payload is not strict JSON")?;
+        if header.get("alg").and_then(Value::as_str) != Some("ES256") {
+            return Err("external vector is not ES256");
+        }
+        verify(
+            format!("{protected}.{payload}").as_bytes(),
+            &signature,
+            public_key,
+        )
+        .map_err(|_| "external ES256 signature does not verify")?;
+
+        let payload = payload_value
+            .as_object()
+            .ok_or("external payload is not an object")?;
+        if payload.get("_sd_alg").and_then(Value::as_str) != Some("sha-256") {
+            return Err("external vector does not select sha-256 disclosures");
+        }
+        let mut embedded_digests = BTreeSet::new();
+        collect_external_sd_digests(&payload_value, &mut embedded_digests);
+        let mut disclosure_names = Vec::with_capacity(disclosures.len());
+        for disclosure in disclosures {
+            let digest = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+            if !embedded_digests.contains(&digest) {
+                return Err("presented disclosure digest is not signed");
+            }
+            let disclosure_bytes = URL_SAFE_NO_PAD
+                .decode(disclosure)
+                .map_err(|_| "disclosure is not base64url")?;
+            let disclosure_value = parse_json_strict(&disclosure_bytes)
+                .map_err(|_| "disclosure is not strict JSON")?;
+            let disclosure_array = disclosure_value
+                .as_array()
+                .filter(|members| members.len() == 3)
+                .ok_or("disclosure is not a property disclosure")?;
+            disclosure_names.push(
+                disclosure_array[1]
+                    .as_str()
+                    .ok_or("disclosure name is not a string")?
+                    .to_owned(),
+            );
+        }
+
+        Ok(ExternalPresentation {
+            protected_typ: header
+                .get("typ")
+                .and_then(Value::as_str)
+                .ok_or("protected typ is absent")?
+                .to_owned(),
+            issuer: payload
+                .get("iss")
+                .and_then(Value::as_str)
+                .ok_or("issuer is absent")?
+                .to_owned(),
+            vct: payload
+                .get("vct")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            disclosure_names,
+        })
+    }
+
+    fn collect_external_sd_digests(value: &Value, output: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(members) => {
+                if members.len() == 1 {
+                    if let Some(digest) = members.get("...").and_then(Value::as_str) {
+                        output.insert(digest.to_owned());
+                    }
+                }
+                if let Some(digests) = members.get("_sd").and_then(Value::as_array) {
+                    output.extend(digests.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+                for member in members.values() {
+                    collect_external_sd_digests(member, output);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    collect_external_sd_digests(member, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn mutate_external_signature(serialized: &str) -> String {
+        let mut presentation_parts = serialized
+            .strip_suffix('~')
+            .expect("fixture has trailing tilde")
+            .split('~')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut jwt_parts = presentation_parts[0]
+            .split('.')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut signature = URL_SAFE_NO_PAD
+            .decode(&jwt_parts[2])
+            .expect("fixture signature decodes");
+        signature[0] ^= 1;
+        jwt_parts[2] = URL_SAFE_NO_PAD.encode(signature);
+        presentation_parts[0] = jwt_parts.join(".");
+        format!("{}~", presentation_parts.join("~"))
+    }
+
+    fn mutate_first_external_disclosure(serialized: &str) -> String {
+        let mut parts = serialized
+            .strip_suffix('~')
+            .expect("fixture has trailing tilde")
+            .split('~')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let disclosure = parts.get_mut(1).expect("fixture has a disclosure");
+        let last = disclosure.pop().expect("fixture disclosure is nonempty");
+        disclosure.push(if last == 'A' { 'B' } else { 'A' });
+        format!("{}~", parts.join("~"))
+    }
 
     async fn sign_with_protected_header(
         private_jwk: &str,
@@ -1000,7 +1464,7 @@ mod tests {
         let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("signer builds"));
-        let signer = EvidenceSigner::initialize(provider, "evidence-key-1")
+        let signer = EvidenceSigner::initialize(provider, KEY_ID)
             .await
             .expect("signer initializes");
         let jws = signer.sign_json(&evidence).await.expect("evidence signs");
@@ -1017,10 +1481,11 @@ mod tests {
         EvidenceVerificationPolicy::from_accepted_transaction(
             evidence,
             &evidence.request_nonce,
-            Duration::from_secs(48 * 60 * 60),
+            48 * 60 * 60,
             now,
-            Duration::from_secs(30),
+            30,
         )
+        .expect("the fixture policy states bounds the contract allows")
     }
 
     async fn signed_fixture() -> (Vec<u8>, JwksDocument, EvidenceVerificationPolicy) {
@@ -1029,6 +1494,108 @@ mod tests {
             "2026-08-02T12:00:00Z".parse().expect("time parses"),
         )
         .await
+    }
+
+    #[test]
+    fn external_rfc9901_and_draft18_vectors_verify_shared_cryptography_and_preserve_profile_boundary(
+    ) {
+        let fixture: ExternalVectorFixture = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/external-sd-jwt-vectors.yaml"
+        ))
+        .expect("external vector fixture parses");
+        assert_eq!(
+            fixture.fixture,
+            "registry.evidence.external-sd-jwt-vectors/v1"
+        );
+        assert!(fixture.synthetic_only);
+        assert_eq!(fixture.compatibility_claim, "none");
+        assert!(fixture.purpose.contains("shared ES256 and RFC 9901"));
+        assert_eq!(fixture.vectors.len(), 2);
+
+        let mut evidence_jwk = fixture.issuer_public_jwk.clone();
+        evidence_jwk.kid = Some(
+            evidence_jwk
+                .jkt()
+                .expect("external key thumbprint computes"),
+        );
+        let evidence_jwks = jwks_document(evidence_jwk, []).expect("strict Evidence JWKS builds");
+        let evidence_policy = policy_for(
+            &fixture_evidence(),
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+
+        for vector in &fixture.vectors {
+            let (expected_standard, expected_source, expected_revision, expected_sha256) =
+                match vector.id.as_str() {
+                    "rfc-9901-section-5-single-disclosure" => (
+                        "RFC 9901",
+                        "https://www.rfc-editor.org/rfc/rfc9901.txt",
+                        "RFC 9901, November 2025",
+                        "ded07ccce2201ac557def085e1f514f2669e1274914c33efdd7459a04bae50f2",
+                    ),
+                    "sd-jwt-vc-draft-18-figure-10" => (
+                        "draft-ietf-oauth-sd-jwt-vc-18",
+                        "https://www.ietf.org/archive/id/draft-ietf-oauth-sd-jwt-vc-18.txt",
+                        "draft-ietf-oauth-sd-jwt-vc-18; oauth-wg tag commit 69e50ea623367c212c12c680e35e256b640b5f6b",
+                        "d76ee28606ccc124fb90567f2511ddd5f2cddf2ee3f2ff7eeebfa51b3e759ad2",
+                    ),
+                    other => panic!("unexpected external vector {other}"),
+                };
+            assert_eq!(vector.standard, expected_standard);
+            assert_eq!(vector.provenance.source, expected_source);
+            assert_eq!(vector.provenance.revision, expected_revision);
+            assert!(!vector.provenance.location.is_empty());
+            assert!(!vector.provenance.derivation.is_empty());
+            assert_eq!(vector.provenance.serialized_sha256, expected_sha256);
+            assert_eq!(sha256_hex(vector.serialized.as_bytes()), expected_sha256);
+
+            let verified =
+                verify_external_presentation(&vector.serialized, &fixture.issuer_public_jwk)
+                    .expect("authoritative external vector verifies");
+            assert_eq!(
+                verified,
+                ExternalPresentation {
+                    protected_typ: vector.expected.protected_typ.clone(),
+                    issuer: vector.expected.issuer.clone(),
+                    vct: vector.expected.vct.clone(),
+                    disclosure_names: vector.expected.disclosure_names.clone(),
+                }
+            );
+
+            assert!(verify_external_presentation(
+                &mutate_external_signature(&vector.serialized),
+                &fixture.issuer_public_jwk,
+            )
+            .is_err());
+            assert!(verify_external_presentation(
+                &mutate_first_external_disclosure(&vector.serialized),
+                &fixture.issuer_public_jwk,
+            )
+            .is_err());
+
+            assert_eq!(
+                vector.expected.evidence_profile_rejection,
+                "protected-header"
+            );
+            assert_eq!(
+                verify_sd_jwt_vc(
+                    vector.serialized.as_bytes(),
+                    &evidence_jwks,
+                    &evidence_policy,
+                ),
+                Err(VerificationError::ProtectedHeader),
+                "external standards vectors must not silently widen the Evidence profile",
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_requires_canonical_sha256_thumbprint_encoding() {
+        assert!(key_identifier_is_thumbprint(&"A".repeat(43)));
+        assert!(!key_identifier_is_thumbprint(&format!(
+            "{}B",
+            "A".repeat(42)
+        )));
     }
 
     #[tokio::test]
@@ -1121,8 +1688,8 @@ mod tests {
         let base = serde_json::to_string(&fixture_evidence()).expect("Evidence serializes");
         assert_eq!(base.matches("\"value\":false").count(), 1);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1260,6 +1827,7 @@ mod tests {
                 "add an unprotected header",
                 "add jku, x5u, jwk, x5c, crit, or b64",
                 "unknown kid",
+                "revoked kid, even when the key remains in a cached JWKS",
                 "algorithm mismatch",
                 "signed payload violates the Evidence JSON Schema",
                 "duplicate evidence object beside payload",
@@ -1269,8 +1837,8 @@ mod tests {
 
         let evidence = fixture_evidence();
         let base_header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1279,6 +1847,12 @@ mod tests {
         let jwks = jwks_document(public, []).expect("JWKS builds");
         let (_, _, policy) = signed_fixture().await;
         assert!(verify_flattened_jws(&valid, &jwks, &policy).is_ok());
+        let mut revoked = policy.clone();
+        revoked.revoked_key_ids = vec![KEY_ID.to_owned()];
+        assert_eq!(
+            verify_flattened_jws(&valid, &jwks, &revoked),
+            Err(VerificationError::Key)
+        );
 
         let mut missing_signature: Value = serde_json::from_slice(&valid).expect("JWS parses");
         missing_signature
@@ -1295,7 +1869,7 @@ mod tests {
         );
 
         for extra in [
-            ("header", json!({"kid": "evidence-key-1"})),
+            ("header", json!({"kid": KEY_ID})),
             (
                 "evidence",
                 serde_json::to_value(&evidence).expect("Evidence serializes"),
@@ -1342,14 +1916,14 @@ mod tests {
         for (header, expected) in [
             (
                 json!({
-                    "alg": "EdDSA", "kid": "unknown-key", "typ": EVIDENCE_JWS_TYP,
+                    "alg": "ES256", "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "typ": EVIDENCE_JWS_TYP,
                     "cty": EVIDENCE_JWS_CTY
                 }),
                 VerificationError::Key,
             ),
             (
                 json!({
-                    "alg": "HS256", "kid": "evidence-key-1", "typ": EVIDENCE_JWS_TYP,
+                    "alg": "HS256", "kid": KEY_ID, "typ": EVIDENCE_JWS_TYP,
                     "cty": EVIDENCE_JWS_CTY
                 }),
                 VerificationError::ProtectedHeader,
@@ -1380,8 +1954,8 @@ mod tests {
         let mut mutated = fixture_evidence();
         mutated.request_nonce = "B".repeat(43);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "evidence-key-1",
+            "alg": "ES256",
+            "kid": KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1457,6 +2031,327 @@ mod tests {
                 Err(VerificationError::Policy)
             );
         }
+    }
+
+    const DEBUG_BINDING_CANARY: &str = "verifier-debug-binding-canary-x7q";
+
+    #[test]
+    fn expected_subject_document_debug_never_carries_its_binding() {
+        let subject = ExpectedSubjectDocument {
+            role: "candidate-parent".to_string(),
+            binding: DEBUG_BINDING_CANARY.to_string(),
+        };
+        let rendered = format!("{subject:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+        assert!(rendered.contains("candidate-parent"), "{rendered}");
+    }
+
+    #[test]
+    fn expected_subject_debug_never_carries_its_binding() {
+        let subject = ExpectedSubject {
+            role: "candidate-parent".to_string(),
+            binding: DEBUG_BINDING_CANARY.to_string(),
+        };
+        let rendered = format!("{subject:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+        assert!(rendered.contains("candidate-parent"), "{rendered}");
+    }
+
+    /// The policy document derives its `Debug`, so this proves the derive
+    /// delegates to `ExpectedSubjectDocument`'s own redaction rather than
+    /// relying on a second hand-written impl here.
+    #[test]
+    fn policy_document_debug_never_carries_a_subject_binding_through_derive() {
+        let policy = EvidenceVerificationPolicyDocument {
+            expected_assurance_profile: AssuranceProfile::EvidenceGrade,
+            issued_by: "urn:example:issuer".to_string(),
+            provided_by: "urn:example:provider".to_string(),
+            requirement: "urn:example:requirement:v1".to_string(),
+            evidence_type: "urn:example:type:v1".to_string(),
+            purpose: "casework".to_string(),
+            audience: "urn:example:audience".to_string(),
+            configuration_revision: format!("sha256:{}", "0".repeat(64)),
+            request_nonce: FIXTURE_NONCE.to_string(),
+            expected_subjects: vec![ExpectedSubjectDocument {
+                role: "candidate-parent".to_string(),
+                binding: DEBUG_BINDING_CANARY.to_string(),
+            }],
+            expected_outputs: Vec::new(),
+            revoked_key_ids: Vec::new(),
+            maximum_assertion_lifetime_seconds: 48 * 60 * 60,
+            clock_skew_seconds: 30,
+        };
+        let rendered = format!("{policy:?}");
+        assert!(!rendered.contains(DEBUG_BINDING_CANARY), "{rendered}");
+    }
+
+    /// A valid policy document whose two contract-bounded time fields the
+    /// caller sets, so a bound test states only what it is about.
+    fn policy_document_with_time_bounds(
+        maximum_assertion_lifetime_seconds: u64,
+        clock_skew_seconds: u64,
+    ) -> EvidenceVerificationPolicyDocument {
+        EvidenceVerificationPolicyDocument {
+            expected_assurance_profile: AssuranceProfile::EvidenceGrade,
+            issued_by: "urn:example:issuer".to_string(),
+            provided_by: "urn:example:provider".to_string(),
+            requirement: "urn:example:requirement:v1".to_string(),
+            evidence_type: "urn:example:type:v1".to_string(),
+            purpose: "casework".to_string(),
+            audience: "urn:example:audience".to_string(),
+            configuration_revision: format!("sha256:{}", "0".repeat(64)),
+            request_nonce: FIXTURE_NONCE.to_string(),
+            expected_subjects: Vec::new(),
+            expected_outputs: Vec::new(),
+            revoked_key_ids: Vec::new(),
+            maximum_assertion_lifetime_seconds,
+            clock_skew_seconds,
+        }
+    }
+
+    fn policy_document_with_list_bounds(
+        minimum_items: usize,
+        maximum_items: usize,
+    ) -> EvidenceVerificationPolicyDocument {
+        let mut document = policy_document_with_time_bounds(48 * 60 * 60, 30);
+        document.expected_outputs.push(ExpectedOutputDocument {
+            concept: "urn:example:concept".to_string(),
+            form: ExpectedFormDocument::List(ExpectedListFormDocument {
+                list: ExpectedListDocument {
+                    minimum_items,
+                    maximum_items,
+                },
+            }),
+        });
+        document
+    }
+
+    /// The bounds this crate enforces are the contract's, not a second opinion
+    /// about them.
+    #[test]
+    fn the_enforced_time_bounds_are_the_contract_bounds() {
+        let contract: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/verification-policy.schema.yaml"
+        ))
+        .expect("the verification policy contract is YAML");
+        let bound = |field: &str, bound: &str| -> u64 {
+            serde_norway::from_value(contract["properties"][field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "minimum"),
+            MINIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "maximum"),
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(bound("clockSkewSeconds", "minimum"), 0);
+        assert_eq!(
+            bound("clockSkewSeconds", "maximum"),
+            MAXIMUM_CLOCK_SKEW_SECONDS
+        );
+
+        let list =
+            &contract["$defs"]["expected-form"]["oneOf"][1]["properties"]["list"]["properties"];
+        let list_bound = |field: &str, bound: &str| -> usize {
+            serde_norway::from_value(list[field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        for field in ["minimumItems", "maximumItems"] {
+            assert_eq!(list_bound(field, "minimum"), MINIMUM_EXPECTED_LIST_ITEMS);
+            assert_eq!(list_bound(field, "maximum"), MAXIMUM_EXPECTED_LIST_ITEMS);
+        }
+    }
+
+    /// A policy document is an input, and one that states a time bound the
+    /// contract forbids is unusable rather than merely unsatisfied. Reading it
+    /// has to refuse it: the failure-class vocabulary is frozen, so verification
+    /// has no class to report it under, and honouring it would make this
+    /// verifier accept assertions a conformant relying party must refuse.
+    #[test]
+    fn a_policy_document_stating_a_forbidden_time_bound_is_refused_when_read() {
+        let refused = |document: EvidenceVerificationPolicyDocument| {
+            let bytes = serde_json::to_vec(&document).expect("the document serializes");
+            serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes)
+                .expect_err("a document outside the contract bounds is refused")
+                .to_string()
+        };
+        for (label, document) in [
+            (
+                "a zero lifetime",
+                policy_document_with_time_bounds(MINIMUM_ASSERTION_LIFETIME_SECONDS - 1, 0),
+            ),
+            (
+                "a lifetime past the ceiling",
+                policy_document_with_time_bounds(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0),
+            ),
+        ] {
+            let message = refused(document);
+            assert!(
+                message.contains("maximumAssertionLifetimeSeconds"),
+                "{label} is refused for the field it states: {message}"
+            );
+        }
+        let message = refused(policy_document_with_time_bounds(
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+            MAXIMUM_CLOCK_SKEW_SECONDS + 1,
+        ));
+        assert!(message.contains("clockSkewSeconds"), "{message}");
+    }
+
+    #[test]
+    fn a_policy_document_at_the_contract_bounds_is_read() {
+        for (lifetime, skew) in [
+            (MINIMUM_ASSERTION_LIFETIME_SECONDS, 0),
+            (
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                MAXIMUM_CLOCK_SKEW_SECONDS,
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_time_bounds(lifetime, skew))
+                .expect("the document serializes");
+            let read: EvidenceVerificationPolicyDocument = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("{lifetime}s and {skew}s skew are read: {error}"));
+            assert_eq!(read.maximum_assertion_lifetime_seconds, lifetime);
+            assert_eq!(read.clock_skew_seconds, skew);
+        }
+
+        for (minimum_items, maximum_items) in [
+            (MINIMUM_EXPECTED_LIST_ITEMS, MINIMUM_EXPECTED_LIST_ITEMS),
+            (MAXIMUM_EXPECTED_LIST_ITEMS, MAXIMUM_EXPECTED_LIST_ITEMS),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_list_bounds(
+                minimum_items,
+                maximum_items,
+            ))
+            .expect("the document serializes");
+            serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes).unwrap_or_else(
+                |error| panic!("{minimum_items}..={maximum_items} items are read: {error}"),
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_document_stating_a_forbidden_list_bound_is_refused_when_read() {
+        for (label, minimum_items, maximum_items) in [
+            ("zero minimum", 0, 1),
+            (
+                "minimum past the ceiling",
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1,
+                MAXIMUM_EXPECTED_LIST_ITEMS,
+            ),
+            ("zero maximum", 1, 0),
+            (
+                "maximum past the ceiling",
+                MINIMUM_EXPECTED_LIST_ITEMS,
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1,
+            ),
+        ] {
+            let bytes = serde_json::to_vec(&policy_document_with_list_bounds(
+                minimum_items,
+                maximum_items,
+            ))
+            .expect("the document serializes");
+            assert!(
+                serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&bytes).is_err(),
+                "{label} was accepted"
+            );
+        }
+    }
+
+    /// The document fields are public, so a caller can build one in code
+    /// without going through a reader. The conversion to a policy is the second
+    /// place the bounds hold.
+    #[test]
+    fn a_policy_document_built_in_code_cannot_widen_the_contract_bounds() {
+        let now = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let refusal = |lifetime, skew| {
+            policy_document_with_time_bounds(lifetime, skew)
+                .try_into_policy(now)
+                .map(|_| ())
+        };
+        assert_eq!(
+            refusal(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0),
+            Err(PolicyBoundsError::AssertionLifetime(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1
+            ))
+        );
+        assert_eq!(refusal(0, 0), Err(PolicyBoundsError::AssertionLifetime(0)));
+        assert_eq!(
+            refusal(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                MAXIMUM_CLOCK_SKEW_SECONDS + 1
+            ),
+            Err(PolicyBoundsError::ClockSkew(MAXIMUM_CLOCK_SKEW_SECONDS + 1))
+        );
+        let policy = policy_document_with_time_bounds(
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+            MAXIMUM_CLOCK_SKEW_SECONDS,
+        )
+        .try_into_policy(now)
+        .expect("a document at the bounds converts");
+        assert_eq!(
+            policy.maximum_assertion_lifetime(),
+            Duration::from_secs(MAXIMUM_ASSERTION_LIFETIME_SECONDS)
+        );
+        assert_eq!(
+            policy.clock_skew(),
+            Duration::from_secs(MAXIMUM_CLOCK_SKEW_SECONDS)
+        );
+
+        assert_eq!(
+            policy_document_with_list_bounds(0, 1)
+                .try_into_policy(now)
+                .map(|_| ()),
+            Err(PolicyBoundsError::MinimumItems(0))
+        );
+        assert_eq!(
+            policy_document_with_list_bounds(1, MAXIMUM_EXPECTED_LIST_ITEMS + 1)
+                .try_into_policy(now)
+                .map(|_| ()),
+            Err(PolicyBoundsError::MaximumItems(
+                MAXIMUM_EXPECTED_LIST_ITEMS + 1
+            ))
+        );
+    }
+
+    /// Re-verifying a retained response is the third way to a policy, and it
+    /// never reads a document, so it carries the same bounds itself.
+    #[test]
+    fn an_accepted_transaction_cannot_widen_the_contract_bounds() {
+        let evidence = fixture_evidence();
+        let now = "2026-08-02T12:00:00Z".parse().expect("time parses");
+        let policy_for_bounds = |lifetime, skew| {
+            EvidenceVerificationPolicy::from_accepted_transaction(
+                &evidence,
+                &evidence.request_nonce,
+                lifetime,
+                now,
+                skew,
+            )
+        };
+        assert_eq!(
+            policy_for_bounds(MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1, 0).map(|_| ()),
+            Err(PolicyBoundsError::AssertionLifetime(
+                MAXIMUM_ASSERTION_LIFETIME_SECONDS + 1
+            ))
+        );
+        assert_eq!(
+            policy_for_bounds(0, 0).map(|_| ()),
+            Err(PolicyBoundsError::AssertionLifetime(0))
+        );
+        assert_eq!(
+            policy_for_bounds(48 * 60 * 60, MAXIMUM_CLOCK_SKEW_SECONDS + 1).map(|_| ()),
+            Err(PolicyBoundsError::ClockSkew(MAXIMUM_CLOCK_SKEW_SECONDS + 1))
+        );
+        let policy = policy_for_bounds(MINIMUM_ASSERTION_LIFETIME_SECONDS, 0)
+            .expect("a transaction at the bounds builds a policy");
+        assert_eq!(
+            policy.maximum_assertion_lifetime(),
+            Duration::from_secs(MINIMUM_ASSERTION_LIFETIME_SECONDS)
+        );
+        assert_eq!(policy.clock_skew(), Duration::ZERO);
     }
 
     #[tokio::test]
@@ -1559,8 +2454,8 @@ mod tests {
     async fn retired_public_key_verifies_only_while_published_and_payload_is_current() {
         let evidence = fixture_evidence();
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "retired-evidence-key",
+            "alg": "ES256",
+            "kid": RETIRED_KEY_ID,
             "typ": EVIDENCE_JWS_TYP,
             "cty": EVIDENCE_JWS_CTY
         });
@@ -1597,18 +2492,13 @@ mod tests {
         let active = LocalJwkSigner::new(private)
             .expect("active signer builds")
             .public_jwk();
-        let retired = (0..32).map(|index| {
-            let mut key = active.clone();
-            key.kid = Some(format!("retired-evidence-key-{index:02}"));
-            key
-        });
+        let retired = (0..32).map(|_| generated_public_jwk());
         let maximum = jwks_document(active.clone(), retired).expect("maximum JWKS builds");
         assert_eq!(maximum.keys.len(), MAX_TRUSTED_KEYS);
         assert!(verify_flattened_jws(&jws, &maximum, &policy).is_ok());
 
         let mut excess = maximum;
-        let mut extra = active;
-        extra.kid = Some("retired-evidence-key-excess".to_owned());
+        let extra = generated_public_jwk();
         excess
             .keys
             .push(serde_json::to_value(extra).expect("extra key serializes"));
@@ -1616,6 +2506,56 @@ mod tests {
             verify_flattened_jws(&jws, &excess, &policy),
             Err(VerificationError::Key)
         );
+    }
+
+    /// A relying party pins its trusted key set once, long before any response
+    /// arrives. This check is what lets it learn there that the set is unusable,
+    /// so it must refuse exactly what verification refuses.
+    #[tokio::test]
+    async fn the_pinned_key_set_check_agrees_with_what_verification_would_refuse() {
+        let (jws, usable, policy) = signed_fixture().await;
+        assert!(trusted_keys_are_usable(&usable).is_ok());
+        assert!(verify_flattened_jws(&jws, &usable, &policy).is_ok());
+
+        let one_key = usable.keys[0].clone();
+        let mut private_material = one_key.clone();
+        private_material["d"] = serde_json::json!("cHJpdmF0ZS1zY2FsYXItcGxhY2Vob2xkZXI");
+        let mut absent_kid = one_key.clone();
+        absent_kid
+            .as_object_mut()
+            .expect("the key is an object")
+            .remove("kid");
+        let mut empty_kid = one_key.clone();
+        empty_kid["kid"] = serde_json::json!("");
+        for keys in [
+            // Nothing to verify against.
+            vec![],
+            // Private material a public set must never carry.
+            vec![private_material],
+            // No identifier to select the key by.
+            vec![absent_kid],
+            vec![empty_kid],
+            // Two keys claiming one identifier.
+            vec![one_key.clone(), one_key.clone()],
+            // Not the signature algorithm the profile fixes.
+            vec![
+                serde_json::json!({"kty": "EC", "crv": "P-256", "kid": "es256", "alg": "ES256",
+                "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+                "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}),
+            ],
+        ] {
+            let refused = JwksDocument { keys };
+            assert_eq!(
+                trusted_keys_are_usable(&refused),
+                Err(VerificationError::Key),
+                "the pinning check accepted a set verification refuses"
+            );
+            assert_eq!(
+                verify_flattened_jws(&jws, &refused, &policy),
+                Err(VerificationError::Key),
+                "verification and the pinning check disagree"
+            );
+        }
     }
 
     /// Issue the fixture as an SD-JWT VC through the same signer, mapping, and
@@ -1641,7 +2581,7 @@ mod tests {
         let private = PrivateJwk::parse(PRIVATE_JWK).expect("key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("signer builds"));
-        EvidenceSigner::initialize(provider, "evidence-key-1")
+        EvidenceSigner::initialize(provider, KEY_ID)
             .await
             .expect("signer initializes")
     }
@@ -1690,6 +2630,17 @@ mod tests {
             verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy).expect("SD-JWT VC verifies");
         // The rebuilt payload is the payload the signed JWS would carry.
         assert_eq!(evidence, fixture_evidence());
+    }
+
+    #[tokio::test]
+    async fn revoked_key_rejects_sd_jwt_even_when_cached_jwks_still_contains_it() {
+        let (serialized, jwks, mut policy) = issued_sd_jwt_vc().await;
+        policy.revoked_key_ids = vec![KEY_ID.to_owned()];
+
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Key)
+        );
     }
 
     #[tokio::test]
@@ -1749,10 +2700,11 @@ mod tests {
         let evidence = fixture_evidence();
         let signer = fixture_signer().await;
         let holder = crate::model::HolderPublicKey {
-            kty: "OKP".to_owned(),
-            crv: "Ed25519".to_owned(),
-            x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_owned(),
-            alg: Some("EdDSA".to_owned()),
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
+            x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_owned(),
+            y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_owned(),
+            alg: Some("ES256".to_owned()),
             kid: Some("holder-1".to_owned()),
         };
         let input = crate::sdjwt_vc::issuance_input(&evidence, Some(&holder), &BTreeMap::new())
@@ -1880,9 +2832,9 @@ mod tests {
         let (jwt, disclosures) = split_sd_jwt(&serialized);
 
         for header in [
-            json!({"alg": "none", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP}),
-            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": "JWT"}),
-            json!({"alg": "EdDSA", "kid": "evidence-key-1", "typ": EVIDENCE_SD_JWT_VC_TYP, "jwk": {"kty": "OKP"}}),
+            json!({"alg": "none", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP}),
+            json!({"alg": "ES256", "kid": KEY_ID, "typ": "JWT"}),
+            json!({"alg": "ES256", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP, "jwk": {"kty": "EC"}}),
         ] {
             let replacement =
                 URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
@@ -1903,8 +2855,8 @@ mod tests {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
         let (jwt, disclosures) = split_sd_jwt(&serialized);
         let header = json!({
-            "alg": "EdDSA",
-            "kid": "some-other-key",
+            "alg": "ES256",
+            "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "typ": EVIDENCE_SD_JWT_VC_TYP
         });
         let replacement =
@@ -1919,6 +2871,23 @@ mod tests {
             ),
             Err(VerificationError::Key)
         );
+    }
+
+    fn generated_public_jwk() -> PublicJwk {
+        let signing_key = p256::ecdsa::SigningKey::random(&mut OsRng);
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let mut key = PublicJwk {
+            kty: "EC".to_owned(),
+            kid: None,
+            alg: Some("ES256".to_owned()),
+            crv: Some("P-256".to_owned()),
+            x: point.x().map(|x| URL_SAFE_NO_PAD.encode(x)),
+            y: point.y().map(|y| URL_SAFE_NO_PAD.encode(y)),
+            n: None,
+            e: None,
+        };
+        key.kid = Some(key.jkt().expect("thumbprint computes"));
+        key
     }
 
     #[tokio::test]
@@ -1974,5 +2943,26 @@ mod tests {
             verify_sd_jwt_vc(&jws, &jwks, &policy),
             Err(VerificationError::MalformedJws)
         );
+    }
+
+    /// The discriminant is what a binding, a metric label, or a caller's own
+    /// branch reads, so every variant has one and no two share it.
+    #[test]
+    fn every_verification_failure_reports_its_own_stable_kind() {
+        let cases = [
+            (VerificationError::MalformedJws, "malformed_jws"),
+            (VerificationError::ProtectedHeader, "protected_header"),
+            (VerificationError::Key, "key"),
+            (VerificationError::Signature, "signature"),
+            (VerificationError::Payload, "payload"),
+            (VerificationError::Policy, "policy"),
+            (VerificationError::Time, "time"),
+            (VerificationError::Disclosure, "disclosure"),
+        ];
+        for (error, kind) in &cases {
+            assert_eq!(error.kind(), *kind, "{error}");
+        }
+        let kinds: BTreeSet<&str> = cases.iter().map(|(error, _)| error.kind()).collect();
+        assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
     }
 }

@@ -509,9 +509,20 @@ impl RhaiRuntime {
         parameters: &Value,
         limits: &RequestPartsLimits,
     ) -> Result<RequestParts, RhaiRuntimeError> {
-        validate_adapter_inputs(selectors, parameters)?;
+        self.prepare_with_prior_facts(script, selectors, parameters, &BTreeMap::new(), limits)
+    }
+
+    pub fn prepare_with_prior_facts(
+        &self,
+        script: &CompiledPreparation,
+        selectors: &Value,
+        parameters: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+        limits: &RequestPartsLimits,
+    ) -> Result<RequestParts, RhaiRuntimeError> {
+        validate_adapter_inputs(selectors, parameters, prior_facts)?;
         let selectors = adapter_object_to_dynamic(selectors)?;
-        let parameters = adapter_object_to_dynamic(parameters)?;
+        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
         let result = self
             .engine
             .call_fn_with_options::<Dynamic>(
@@ -519,7 +530,7 @@ impl RhaiRuntime {
                 &mut Scope::new(),
                 &script.ast,
                 "prepare",
-                (selectors, parameters),
+                (selectors, context),
             )
             .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
         decode_request_parts(result, limits)
@@ -535,14 +546,34 @@ impl RhaiRuntime {
     where
         V: FactSchemaValidator + ?Sized,
     {
+        self.extract_with_prior_facts(
+            script,
+            source_response,
+            parameters,
+            &BTreeMap::new(),
+            fact_schema,
+        )
+    }
+
+    pub fn extract_with_prior_facts<V>(
+        &self,
+        script: &CompiledExtraction,
+        source_response: &Value,
+        parameters: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+        fact_schema: &V,
+    ) -> Result<LookupResult, RhaiRuntimeError>
+    where
+        V: FactSchemaValidator + ?Sized,
+    {
         validate_json_bound(source_response, MAXIMUM_SOURCE_INPUT_BYTES)?;
         if !json_numbers_are_supported(source_response) {
             return Err(RhaiRuntimeError::InputBound);
         }
-        validate_adapter_object(parameters)?;
+        validate_adapter_context(parameters, prior_facts)?;
         let input =
             rhai::serde::to_dynamic(source_response).map_err(|_| RhaiRuntimeError::InputBound)?;
-        let parameters = adapter_object_to_dynamic(parameters)?;
+        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
         let result = self
             .engine
             .call_fn_with_options::<Dynamic>(
@@ -550,7 +581,7 @@ impl RhaiRuntime {
                 &mut Scope::new(),
                 &script.ast,
                 "extract",
-                (input, parameters),
+                (input, context),
             )
             .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
         decode_lookup_result(result, fact_schema)
@@ -1652,10 +1683,18 @@ fn is_identifier_continue(byte: u8) -> bool {
     is_identifier_start(byte) || byte.is_ascii_digit()
 }
 
-fn validate_adapter_inputs(selectors: &Value, parameters: &Value) -> Result<(), RhaiRuntimeError> {
+fn validate_adapter_inputs(
+    selectors: &Value,
+    parameters: &Value,
+    prior_facts: &BTreeMap<String, Value>,
+) -> Result<(), RhaiRuntimeError> {
     validate_adapter_object(selectors)?;
-    validate_adapter_object(parameters)?;
-    let combined = Value::Array(vec![selectors.clone(), parameters.clone()]);
+    validate_adapter_context(parameters, prior_facts)?;
+    let combined = Value::Array(vec![
+        selectors.clone(),
+        parameters.clone(),
+        prior_facts_value(prior_facts),
+    ]);
     let size = serde_json::to_vec(&combined)
         .map_err(|_| RhaiRuntimeError::AdapterInput)?
         .len();
@@ -1663,6 +1702,43 @@ fn validate_adapter_inputs(selectors: &Value, parameters: &Value) -> Result<(), 
         return Err(RhaiRuntimeError::InputBound);
     }
     Ok(())
+}
+
+fn validate_adapter_context(
+    parameters: &Value,
+    prior_facts: &BTreeMap<String, Value>,
+) -> Result<(), RhaiRuntimeError> {
+    validate_adapter_object(parameters)?;
+    if prior_facts.len() > MAXIMUM_FACT_ENTRIES {
+        return Err(RhaiRuntimeError::InputBound);
+    }
+    let prior_facts = prior_facts_value(prior_facts);
+    validate_adapter_object(&prior_facts)?;
+    validate_json_bound(&prior_facts, MAXIMUM_RESULT_BYTES)?;
+    Ok(())
+}
+
+fn prior_facts_value(prior_facts: &BTreeMap<String, Value>) -> Value {
+    Value::Object(
+        prior_facts
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+    )
+}
+
+fn adapter_context_to_dynamic(
+    parameters: &Value,
+    prior_facts: &BTreeMap<String, Value>,
+) -> Result<Dynamic, RhaiRuntimeError> {
+    validate_adapter_context(parameters, prior_facts)?;
+    let mut context = Map::new();
+    context.insert("parameters".into(), adapter_object_to_dynamic(parameters)?);
+    context.insert(
+        "prior_facts".into(),
+        adapter_object_to_dynamic(&prior_facts_value(prior_facts))?,
+    );
+    Ok(Dynamic::from(context))
 }
 
 fn validate_adapter_object(value: &Value) -> Result<(), RhaiRuntimeError> {
@@ -2347,7 +2423,8 @@ mod tests {
             .compile_preparation(
                 r#"
                     fn query_pair(name, value) { #{ name: name, value: value } }
-                    fn prepare(selectors, parameters) {
+                    fn prepare(selectors, context) {
+                        let parameters = context.parameters;
                         let query = [];
                         query.push(query_pair("filter", selectors.subject.values.reference));
                         query.push(query_pair("filter", parameters.status));
@@ -3231,7 +3308,8 @@ mod tests {
 
         let unavailable = runtime
             .compile_extraction(
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
+                    let parameters = context.parameters;
                     #{ outcome: "match", facts: #{ value: required(get_path(source_response, "/absent"), "required_fact_missing") } }
                 }"#,
             )
@@ -3584,8 +3662,8 @@ mod tests {
 
         let computed_key = runtime
             .compile_extraction(
-                r#"fn extract(source_response, parameters) {
-                    let field = parameters.field;
+                r#"fn extract(source_response, context) {
+                    let field = context.parameters.field;
                     #{ outcome: "match", facts: #{ code: source_response["record"][field] } }
                 }"#,
             )

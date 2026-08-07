@@ -16,15 +16,19 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
     verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
-    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, DurableSegmentedAuditLog,
+    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, AuditProfile,
+    DurableSegmentedAuditLog,
 };
 use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::config::AssuranceProfile;
 
 const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
+const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str = "registry.evidence.audit.authorization-refusal/v1";
+const AUTHORIZATION_REFUSAL_ERROR_CATEGORY: &str = "not-authorized";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,6 +50,81 @@ pub enum AuditDecision {
     DependencyFailure,
     EvaluationFailure,
     SigningFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorizationRefusalAuditDecision {
+    NotAuthorized,
+}
+
+/// Minimal native audit event for an authenticated authorization refusal.
+///
+/// This is deliberately a distinct closed shape from [`EvidenceAuditEvent`]:
+/// authorization has not resolved an authority, requirement, subjects, source,
+/// or response protection that could be recorded safely.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceAuthorizationRefusalAuditEvent {
+    pub schema: String,
+    pub assurance_profile: AssuranceProfile,
+    pub event_id: String,
+    pub occurred_at: String,
+    pub operation: String,
+    pub phase: AuditPhase,
+    pub bundle_revision: String,
+    pub requester_pseudonym: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_pseudonym: Option<String>,
+    pub decision: AuthorizationRefusalAuditDecision,
+    pub safe_error_category: String,
+    pub duration_milliseconds: u64,
+}
+
+impl EvidenceAuthorizationRefusalAuditEvent {
+    pub fn new(
+        assurance_profile: AssuranceProfile,
+        operation: String,
+        bundle_revision: String,
+        requester_pseudonym: String,
+        duration_milliseconds: u64,
+    ) -> Self {
+        Self {
+            schema: AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned(),
+            assurance_profile,
+            event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
+            occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            operation,
+            phase: AuditPhase::Denial,
+            bundle_revision,
+            requester_pseudonym,
+            actor_pseudonym: None,
+            decision: AuthorizationRefusalAuditDecision::NotAuthorized,
+            safe_error_category: AUTHORIZATION_REFUSAL_ERROR_CATEGORY.to_owned(),
+            duration_milliseconds,
+        }
+    }
+
+    pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        if self.schema != AUTHORIZATION_REFUSAL_AUDIT_SCHEMA
+            || self.phase != AuditPhase::Denial
+            || self.decision != AuthorizationRefusalAuditDecision::NotAuthorized
+            || !valid_uri(&self.event_id)
+            || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
+            || !(16..=128).contains(&self.operation.len())
+            || !valid_revision(&self.bundle_revision)
+            || !valid_pseudonym(&self.requester_pseudonym)
+            || self
+                .actor_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self.safe_error_category != AUTHORIZATION_REFUSAL_ERROR_CATEGORY
+            || self.duration_milliseconds > 86_400_000
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        Ok(())
+    }
 }
 
 /// Closed non-secret response-protection mode resolved with authorization.
@@ -376,9 +455,9 @@ impl EvidenceAuditLog {
             ))
             .into());
         }
-        let secret = AuditHashSecret::new(master_secret)?;
-        let chain_hasher = AuditChainHasher::keyed(secret.clone());
-        let key_hasher = AuditKeyHasher::Keyed(secret);
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
+        let chain_hasher = profile.chain_hasher();
+        let key_hasher = profile.key_hasher();
         let sink = Arc::new(
             DurableSegmentedAuditLog::initialize(path, maximum_file_bytes, chain_hasher).await?,
         );
@@ -454,6 +533,18 @@ impl EvidenceAuditLog {
             .map_err(EvidenceAuditError::Audit)
     }
 
+    pub async fn append_authorization_refusal(
+        &self,
+        event: EvidenceAuthorizationRefusalAuditEvent,
+    ) -> Result<AuditEnvelope, EvidenceAuditError> {
+        event.validate_phase_fields()?;
+        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
+        self.sink
+            .append_record(record)
+            .await
+            .map_err(EvidenceAuditError::Audit)
+    }
+
     pub async fn ready(&self) -> bool {
         self.sink.ready().await
     }
@@ -501,8 +592,15 @@ pub struct LocalAuditOperationView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+enum LocalAuditOperationEvent {
+    Authorized(LocalAuthorizedOperationEvent),
+    AuthorizationRefusal(LocalAuthorizationRefusalOperationEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LocalAuditOperationEvent {
+struct LocalAuthorizedOperationEvent {
     occurred_at: String,
     phase: AuditPhase,
     decision: AuditDecision,
@@ -514,6 +612,16 @@ struct LocalAuditOperationEvent {
     disclosed_concepts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalAuthorizationRefusalOperationEvent {
+    occurred_at: String,
+    phase: AuditPhase,
+    decision: AuthorizationRefusalAuditDecision,
+    requester_pseudonym: String,
+    safe_error_category: String,
 }
 
 #[derive(Clone, Copy)]
@@ -560,8 +668,26 @@ impl LocalAuditCollector {
         if self.records > bounds.maximum_records {
             return Err(file_size_error());
         }
-        let event: EvidenceAuditEvent =
-            serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+        match envelope
+            .record
+            .get("schema")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(AUDIT_SCHEMA) => {
+                let event =
+                    serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+                self.collect_authorized(event)
+            }
+            Some(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA) => {
+                let event =
+                    serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+                self.collect_authorization_refusal(event)
+            }
+            _ => Err(invalid_audit_data()),
+        }
+    }
+
+    fn collect_authorized(&mut self, event: EvidenceAuditEvent) -> Result<(), AuditError> {
         event
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
@@ -599,6 +725,27 @@ impl LocalAuditCollector {
         Ok(())
     }
 
+    fn collect_authorization_refusal(
+        &mut self,
+        event: EvidenceAuthorizationRefusalAuditEvent,
+    ) -> Result<(), AuditError> {
+        event
+            .validate_phase_fields()
+            .map_err(|_| invalid_audit_data())?;
+        let operation = event.operation.clone();
+        self.last_operation = Some(operation.clone());
+        if self.pending.contains_key(&operation) || !self.completed.insert(operation.clone()) {
+            return Err(invalid_audit_data());
+        }
+        self.last_completed = Some(LocalAuditOperationView {
+            schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
+            operation,
+            events: vec![LocalAuditOperationEvent::from(&event)],
+            assurance_profile: event.assurance_profile,
+        });
+        Ok(())
+    }
+
     fn finish(mut self) -> Result<LocalAuditOperationView, EvidenceAuditError> {
         let bounds = self.bounds.take().ok_or(EvidenceAuditError::InvalidEvent)?;
         let last = self
@@ -618,10 +765,18 @@ impl LocalAuditCollector {
                 .filter(|completed| completed.operation == last)
                 .ok_or(EvidenceAuditError::InvalidEvent)?
         };
-        if view.events.first().is_none_or(|event| {
-            event.phase != AuditPhase::AccessAttempt || event.decision != AuditDecision::Authorized
-        }) || view.assurance_profile != AssuranceProfile::Local
-        {
+        let starts_with_complete_native_event =
+            view.events.first().is_some_and(|event| match event {
+                LocalAuditOperationEvent::Authorized(event) => {
+                    event.phase == AuditPhase::AccessAttempt
+                        && event.decision == AuditDecision::Authorized
+                }
+                LocalAuditOperationEvent::AuthorizationRefusal(event) => {
+                    event.phase == AuditPhase::Denial
+                        && event.decision == AuthorizationRefusalAuditDecision::NotAuthorized
+                }
+            });
+        if !starts_with_complete_native_event || view.assurance_profile != AssuranceProfile::Local {
             return Err(EvidenceAuditError::InvalidEvent);
         }
         let serialized = serde_json::to_value(&view).map_err(AuditError::Json)?;
@@ -638,7 +793,7 @@ impl LocalAuditCollector {
 
 impl From<&EvidenceAuditEvent> for LocalAuditOperationEvent {
     fn from(event: &EvidenceAuditEvent) -> Self {
-        Self {
+        Self::Authorized(LocalAuthorizedOperationEvent {
             occurred_at: event.occurred_at.clone(),
             phase: event.phase,
             decision: event.decision,
@@ -648,7 +803,19 @@ impl From<&EvidenceAuditEvent> for LocalAuditOperationEvent {
             response_protection: event.response_protection,
             disclosed_concepts: event.disclosed_concepts.clone(),
             evidence_id: event.evidence_id.clone(),
-        }
+        })
+    }
+}
+
+impl From<&EvidenceAuthorizationRefusalAuditEvent> for LocalAuditOperationEvent {
+    fn from(event: &EvidenceAuthorizationRefusalAuditEvent) -> Self {
+        Self::AuthorizationRefusal(LocalAuthorizationRefusalOperationEvent {
+            occurred_at: event.occurred_at.clone(),
+            phase: event.phase,
+            decision: event.decision,
+            requester_pseudonym: event.requester_pseudonym.clone(),
+            safe_error_category: event.safe_error_category.clone(),
+        })
     }
 }
 
@@ -676,18 +843,18 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
 /// exact verified envelopes in that one replay.
 pub fn verified_last_local_audit_operation(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
     verified_last_local_audit_operation_with_bounds(
         path,
-        master_secret,
+        chain_secret,
         LocalAuditInspectionBounds::DEFAULT,
     )
 }
 
 fn verified_last_local_audit_operation_with_bounds(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
     bounds: LocalAuditInspectionBounds,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
     if bounds.maximum_segments == 0
@@ -697,7 +864,7 @@ fn verified_last_local_audit_operation_with_bounds(
         return Err(EvidenceAuditError::Configuration);
     }
 
-    let hasher = AuditChainHasher::keyed(master_secret.clone());
+    let hasher = AuditChainHasher::keyed(chain_secret.clone());
     let mut collector = LocalAuditCollector::new(bounds);
     visit_stopped_segmented_audit_chain(
         path,
@@ -713,10 +880,10 @@ fn verified_last_local_audit_operation_with_bounds(
 /// Verify every retained segment, including the active segment when no writer is running.
 pub fn verify_audit_chain(
     path: &Path,
-    master_secret: &AuditHashSecret,
+    chain_secret: &AuditHashSecret,
 ) -> Result<AuditChainSummary, EvidenceAuditError> {
     let summary =
-        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(master_secret.clone()))
+        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(chain_secret.clone()))
             .map_err(map_platform_audit_error)?;
     Ok(AuditChainSummary {
         segments: summary.segments,
@@ -843,7 +1010,7 @@ mod tests {
         release.decision = AuditDecision::Released;
         release.disclosed_concepts = Some(vec!["urn:example:fixture:concept:boolean-a".to_owned()]);
         release.evidence_id = Some("urn:example:fixture:evidence:001".to_owned());
-        release.signing_key_id = Some("fixture-key-2026-01".to_owned());
+        release.signing_key_id = Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
         release.duration_milliseconds = 12;
         release
             .validate_phase_fields()
@@ -865,11 +1032,47 @@ mod tests {
             serde_json::to_value(&unsigned_release).expect("unsigned release event serializes"),
             fixture["unsigned_disclosure_release"]
         );
-        unsigned_release.signing_key_id = Some("fixture-key-2026-01".to_owned());
+        unsigned_release.signing_key_id =
+            Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
         assert!(matches!(
             unsigned_release.validate_phase_fields(),
             Err(EvidenceAuditError::InvalidEvent)
         ));
+
+        let mut authorized_with_refusal_schema = access.clone();
+        authorized_with_refusal_schema.schema = AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned();
+        assert!(matches!(
+            authorized_with_refusal_schema.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
+
+        let refusal = EvidenceAuthorizationRefusalAuditEvent {
+            schema: AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned(),
+            assurance_profile: AssuranceProfile::EvidenceGrade,
+            event_id: "urn:example:fixture:audit:authorization-refusal-001".to_owned(),
+            occurred_at: "2026-08-02T00:00:03Z".to_owned(),
+            operation: "fixture-operation-00000002".to_owned(),
+            phase: AuditPhase::Denial,
+            bundle_revision:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            requester_pseudonym:
+                "hmac-sha256:v1:3333333333333333333333333333333333333333333333333333333333333333"
+                    .to_owned(),
+            actor_pseudonym: Some(
+                "hmac-sha256:v1:4444444444444444444444444444444444444444444444444444444444444444"
+                    .to_owned(),
+            ),
+            decision: AuthorizationRefusalAuditDecision::NotAuthorized,
+            safe_error_category: "not-authorized".to_owned(),
+            duration_milliseconds: 3,
+        };
+        refusal
+            .validate_phase_fields()
+            .expect("fixture authorization refusal satisfies native phase rules");
+        assert_eq!(
+            serde_json::to_value(&refusal).expect("authorization refusal serializes"),
+            fixture["authorization_refusal"]
+        );
 
         let mut signed_release_without_key = release.clone();
         signed_release_without_key.signing_key_id = None;
@@ -895,6 +1098,7 @@ mod tests {
         assert_eq!(
             fixture["order"],
             serde_json::json!({
+                "authorization_refusal_durable_before": ["not-authorized-response"],
                 "access_attempt_durable_before": ["credential-resolution", "source-access"],
                 "disclosure_release_durable_after": ["signing"],
                 "disclosure_release_durable_before": ["response-release"]
@@ -917,9 +1121,87 @@ mod tests {
                 "missing-release-fields-on-release-event",
                 "signing-key-on-unsigned-release-event",
                 "missing-signing-key-on-signed-release-event",
+                "request-derived-field-on-authorization-refusal",
+                "unmatched-authority-on-authorization-refusal",
+                "response-protection-on-authorization-refusal",
+                "missing-authorization-refusal-category",
+                "full-schema-on-authorization-refusal",
+                "refusal-schema-on-authorized-event",
                 "request-nonce-in-any-event"
             ])
         );
+    }
+
+    #[test]
+    fn audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes() {
+        let schema: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/audit-event.schema.yaml"
+        ))
+        .expect("audit event schema parses");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("audit event schema compiles as Draft 2020-12");
+        let fixture: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/audit-events.yaml"
+        ))
+        .expect("frozen audit fixture parses");
+
+        for name in [
+            "access_attempt",
+            "disclosure_release",
+            "unsigned_disclosure_release",
+            "authorization_refusal",
+        ] {
+            assert!(
+                validator.is_valid(&fixture[name]),
+                "schema rejects positive fixture {name}"
+            );
+        }
+
+        let mut refusal_with_full_schema = fixture["authorization_refusal"].clone();
+        refusal_with_full_schema["schema"] = serde_json::json!(AUDIT_SCHEMA);
+
+        let mut authorized_with_refusal_schema = fixture["access_attempt"].clone();
+        authorized_with_refusal_schema["schema"] =
+            serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA);
+
+        let mut polluted_refusal = fixture["authorization_refusal"].clone();
+        let polluted = polluted_refusal
+            .as_object_mut()
+            .expect("refusal fixture is an object");
+        polluted.insert(
+            "requirement".to_owned(),
+            serde_json::json!("urn:example:requirement:probe:v1"),
+        );
+        polluted.insert("purpose".to_owned(), serde_json::json!("probe"));
+        polluted.insert(
+            "authority".to_owned(),
+            serde_json::json!({"kind": "statutory"}),
+        );
+        polluted.insert(
+            "subjects".to_owned(),
+            serde_json::json!([{"role": "subject", "selectorProfile": "person-v1"}]),
+        );
+        polluted.insert("responseProtection".to_owned(), serde_json::json!("signed"));
+        polluted.insert(
+            "requestNonce".to_owned(),
+            serde_json::json!("request-derived-canary"),
+        );
+
+        for (name, candidate) in [
+            ("refusal-with-full-schema", refusal_with_full_schema),
+            (
+                "authorized-with-refusal-schema",
+                authorized_with_refusal_schema,
+            ),
+            ("polluted-refusal", polluted_refusal),
+        ] {
+            assert!(
+                !validator.is_valid(&candidate),
+                "schema accepts mixed audit shape {name}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1179,6 +1461,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacement_master_cannot_append_to_an_existing_evidence_epoch() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let original = b"original-evidence-audit-master-32-bytes";
+        let replacement = b"replacement-audit-master-is-also-32-bytes";
+        {
+            let log = EvidenceAuditLog::initialize(&path, 64 * 1024, original.to_vec(), 1)
+                .await
+                .expect("original audit epoch initializes");
+            log.append(event(&log)).await.expect("event appends");
+        }
+
+        assert!(verify_audit_chain(&path, &chain_secret(replacement)).is_err());
+        assert!(
+            EvidenceAuditLog::initialize(&path, 64 * 1024, replacement.to_vec(), 1)
+                .await
+                .is_err(),
+            "replacement master bytes cannot append under the existing epoch configuration"
+        );
+        assert!(verify_audit_chain(&path, &chain_secret(original)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn archived_and_fresh_evidence_audit_epochs_verify_independently() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let archived_path = directory.path().join("audit-epoch-1.jsonl");
+        let fresh_path = directory.path().join("audit-epoch-2.jsonl");
+        let archived_master = b"archived-evidence-audit-master-32-bytes";
+        let fresh_master = b"fresh-evidence-audit-master-value-32-bytes";
+
+        {
+            let archived = EvidenceAuditLog::initialize(
+                &archived_path,
+                64 * 1024,
+                archived_master.to_vec(),
+                1,
+            )
+            .await
+            .expect("archived epoch initializes");
+            archived
+                .append(event(&archived))
+                .await
+                .expect("archived event appends");
+        }
+        {
+            let fresh =
+                EvidenceAuditLog::initialize(&fresh_path, 64 * 1024, fresh_master.to_vec(), 2)
+                    .await
+                    .expect("fresh epoch initializes");
+            fresh
+                .append(event(&fresh))
+                .await
+                .expect("fresh event appends");
+        }
+
+        assert!(verify_audit_chain(&archived_path, &chain_secret(archived_master)).is_ok());
+        assert!(verify_audit_chain(&fresh_path, &chain_secret(fresh_master)).is_ok());
+        assert!(verify_audit_chain(&archived_path, &chain_secret(fresh_master)).is_err());
+        assert!(verify_audit_chain(&fresh_path, &chain_secret(archived_master)).is_err());
+    }
+
+    #[tokio::test]
     async fn same_length_external_mutation_fails_readiness_and_future_appends() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
@@ -1282,9 +1626,17 @@ mod tests {
         );
     }
 
+    fn chain_secret(master: &[u8]) -> AuditHashSecret {
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master.to_vec()))
+            .expect("audit profile builds");
+        match profile.chain_hasher() {
+            AuditChainHasher::Keyed(secret) => secret,
+            AuditChainHasher::UnkeyedDevOnly => panic!("production profile must be keyed"),
+        }
+    }
+
     fn audit_secret() -> AuditHashSecret {
-        AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
-            .expect("audit secret builds")
+        chain_secret(b"0123456789abcdef0123456789abcdef")
     }
 
     fn local_access(log: &EvidenceAuditLog, operation: &str) -> EvidenceAuditEvent {
@@ -1349,11 +1701,447 @@ mod tests {
         release
     }
 
+    fn local_authorization_refusal(
+        log: &EvidenceAuditLog,
+        operation: &str,
+    ) -> EvidenceAuthorizationRefusalAuditEvent {
+        let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
+            AssuranceProfile::Local,
+            operation.to_owned(),
+            format!("sha256:{}", "a".repeat(64)),
+            log.pseudonym(
+                "requester-v1",
+                "urn:example:trust",
+                b"raw-refused-requester-token-canary",
+            )
+            .expect("requester pseudonym builds"),
+            3,
+        );
+        event.actor_pseudonym = Some(
+            log.pseudonym(
+                "actor-v1",
+                "urn:example:trust",
+                b"raw-refused-actor-token-canary",
+            )
+            .expect("actor pseudonym builds"),
+        );
+        event
+    }
+
     async fn append_local_operation(log: &EvidenceAuditLog, operation: &str) {
         let access = local_access(log, operation);
         let release = local_release(&access);
         log.append(access).await.expect("access event appends");
         log.append(release).await.expect("release event appends");
+    }
+
+    #[tokio::test]
+    async fn authorization_refusal_is_a_distinct_minimal_native_event() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        let operation = "local-refusal-000000000000000001";
+        let event = local_authorization_refusal(&log, operation);
+        event
+            .validate_phase_fields()
+            .expect("native refusal validates");
+
+        let value = serde_json::to_value(&event).expect("refusal serializes");
+        assert_eq!(
+            value
+                .as_object()
+                .expect("refusal is an object")
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "actorPseudonym",
+                "assuranceProfile",
+                "bundleRevision",
+                "decision",
+                "durationMilliseconds",
+                "eventId",
+                "occurredAt",
+                "operation",
+                "phase",
+                "requesterPseudonym",
+                "safeErrorCategory",
+                "schema",
+            ]
+        );
+        assert_eq!(value["phase"], serde_json::json!("denial"));
+        assert_eq!(value["decision"], serde_json::json!("not-authorized"));
+        assert_eq!(
+            value["safeErrorCategory"],
+            serde_json::json!("not-authorized")
+        );
+        let rendered = serde_json::to_string(&value).expect("refusal renders");
+        for forbidden in [
+            "requirement",
+            "purpose",
+            "authority",
+            "subjects",
+            "responseProtection",
+            "sourceId",
+            "adapterId",
+            "nonce",
+            "requestNonce",
+            "raw-refused-requester-token-canary",
+            "raw-refused-actor-token-canary",
+        ] {
+            assert!(!rendered.contains(forbidden), "event disclosed {forbidden}");
+        }
+
+        log.append_authorization_refusal(event)
+            .await
+            .expect("refusal appends");
+        drop(log);
+        let summary = verify_audit_chain(&path, &audit_secret()).expect("chain verifies");
+        assert_eq!(summary.records, 1);
+    }
+
+    #[tokio::test]
+    async fn local_inspection_returns_a_standalone_refusal_as_the_last_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        let refusal_operation = "local-refusal-000000000000000002";
+        log.append_authorization_refusal(local_authorization_refusal(&log, refusal_operation))
+            .await
+            .expect("refusal appends");
+        drop(log);
+
+        let value = serde_json::to_value(
+            verified_last_local_audit_operation(&path, &audit_secret())
+                .expect("stopped local chain verifies"),
+        )
+        .expect("view serializes");
+        assert_eq!(value["operation"], serde_json::json!(refusal_operation));
+        let events = value["events"].as_array().expect("events are an array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0]
+                .as_object()
+                .expect("refusal is an object")
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "decision",
+                "occurredAt",
+                "phase",
+                "requesterPseudonym",
+                "safeErrorCategory",
+            ]
+        );
+        assert_eq!(events[0]["phase"], serde_json::json!("denial"));
+        assert_eq!(events[0]["decision"], serde_json::json!("not-authorized"));
+        assert_eq!(
+            events[0]["safeErrorCategory"],
+            serde_json::json!("not-authorized")
+        );
+        let rendered = serde_json::to_string(&value).expect("view renders");
+        for forbidden in [
+            "assuranceProfile",
+            "actorPseudonym",
+            "bundleRevision",
+            "durationMilliseconds",
+            "requirement",
+            "purpose",
+            "authority",
+            "subjects",
+            "responseProtection",
+            "sourceId",
+            "adapterId",
+        ] {
+            assert!(!rendered.contains(forbidden), "view disclosed {forbidden}");
+        }
+    }
+
+    #[tokio::test]
+    async fn authorization_refusal_rejects_non_native_fields_and_values() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+
+        for mutate in [
+            |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
+                event.phase = AuditPhase::AccessAttempt;
+            },
+            |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
+                event.safe_error_category = "grant-mismatch".to_owned();
+            },
+            |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
+                event.schema = AUDIT_SCHEMA.to_owned();
+            },
+        ] {
+            let mut invalid =
+                local_authorization_refusal(&log, "local-refusal-invalid-000000000001");
+            mutate(&mut invalid);
+            assert!(matches!(
+                invalid.validate_phase_fields(),
+                Err(EvidenceAuditError::InvalidEvent)
+            ));
+            assert!(matches!(
+                log.append_authorization_refusal(invalid).await,
+                Err(EvidenceAuditError::InvalidEvent)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_rejects_malformed_mixed_refusal_shapes() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let pseudonym_path = directory.path().join("pseudonyms.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &pseudonym_path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("pseudonym helper initializes");
+        let refusal = local_authorization_refusal(&log, "local-refusal-malformed-00000000001");
+        let mut refusal_with_full_schema = refusal.clone();
+        refusal_with_full_schema.schema = AUDIT_SCHEMA.to_owned();
+        let mut authorized_with_refusal_schema =
+            local_access(&log, "local-refusal-malformed-00000000003");
+        authorized_with_refusal_schema.schema = AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned();
+        let mut legacy_denial =
+            serde_json::to_value(local_access(&log, "local-refusal-malformed-00000000002"))
+                .expect("legacy event serializes");
+        let legacy_denial = legacy_denial
+            .as_object_mut()
+            .expect("legacy event is an object");
+        legacy_denial.insert("phase".to_owned(), serde_json::json!("denial"));
+        legacy_denial.insert("decision".to_owned(), serde_json::json!("not-authorized"));
+        legacy_denial.insert(
+            "safeErrorCategory".to_owned(),
+            serde_json::json!("not-authorized"),
+        );
+        let legacy_denial = serde_json::Value::Object(legacy_denial.clone());
+        drop(log);
+
+        let mut refusal_with_requirement =
+            serde_json::to_value(&refusal).expect("refusal serializes");
+        refusal_with_requirement
+            .as_object_mut()
+            .expect("refusal is an object")
+            .insert(
+                "requirement".to_owned(),
+                serde_json::json!("urn:example:requirement:probe:v1"),
+            );
+        let mut refusal_with_protection =
+            serde_json::to_value(&refusal).expect("refusal serializes");
+        refusal_with_protection
+            .as_object_mut()
+            .expect("refusal is an object")
+            .insert("responseProtection".to_owned(), serde_json::json!("signed"));
+        let mut refusal_without_category =
+            serde_json::to_value(&refusal).expect("refusal serializes");
+        refusal_without_category
+            .as_object_mut()
+            .expect("refusal is an object")
+            .remove("safeErrorCategory");
+        let mut refusal_with_wrong_decision =
+            serde_json::to_value(&refusal).expect("refusal serializes");
+        refusal_with_wrong_decision
+            .as_object_mut()
+            .expect("refusal is an object")
+            .insert("decision".to_owned(), serde_json::json!("no-match"));
+        let malformed = [
+            (
+                "full-schema-on-refusal",
+                serde_json::to_value(refusal_with_full_schema).expect("refusal serializes"),
+            ),
+            (
+                "refusal-schema-on-authorized",
+                serde_json::to_value(authorized_with_refusal_schema)
+                    .expect("authorized event serializes"),
+            ),
+            ("requirement", refusal_with_requirement),
+            ("response-protection", refusal_with_protection),
+            ("missing-category", refusal_without_category),
+            ("wrong-decision", refusal_with_wrong_decision),
+            ("legacy-full-shape", legacy_denial),
+        ];
+
+        for (name, record) in malformed {
+            let path = directory.path().join(format!("{name}.jsonl"));
+            let envelope = AuditEnvelope::new_with_hasher(
+                record,
+                None,
+                &AuditChainHasher::keyed(audit_secret()),
+            )
+            .expect("malformed record is still keyed");
+            std::fs::write(&path, envelope.to_jsonl().expect("envelope renders"))
+                .expect("audit writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("audit mode is owner-only");
+            }
+            assert!(
+                verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+                "mixed refusal shape {name} must fail closed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_never_pairs_an_access_event_with_a_refusal() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("access-then-refusal.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        let operation = "local-refusal-mixed-operation-0000001";
+        log.append(local_access(&log, operation))
+            .await
+            .expect("access appends");
+        log.append_authorization_refusal(local_authorization_refusal(&log, operation))
+            .await
+            .expect("refusal appends");
+        drop(log);
+
+        assert!(
+            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            "a refusal is standalone and cannot close an authorized access event"
+        );
+
+        let path = directory.path().join("refusal-then-access.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        log.append_authorization_refusal(local_authorization_refusal(&log, operation))
+            .await
+            .expect("refusal appends");
+        log.append(local_access(&log, operation))
+            .await
+            .expect("access appends");
+        drop(log);
+        assert!(
+            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            "an authorized operation cannot reuse a completed refusal operation id"
+        );
+
+        let path = directory.path().join("duplicate-refusal.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        log.append_authorization_refusal(local_authorization_refusal(&log, operation))
+            .await
+            .expect("first refusal appends");
+        log.append_authorization_refusal(local_authorization_refusal(&log, operation))
+            .await
+            .expect("second refusal appends");
+        drop(log);
+        assert!(
+            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            "a completed refusal operation id cannot be reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_inspection_uses_physical_last_record_across_heterogeneous_operations() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("authorized-terminal-last.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        let authorized_operation = "local-interleaved-authorized-000000001";
+        let access = local_access(&log, authorized_operation);
+        let release = local_release(&access);
+        log.append(access).await.expect("access appends");
+        log.append_authorization_refusal(local_authorization_refusal(
+            &log,
+            "local-interleaved-refusal-0000000001",
+        ))
+        .await
+        .expect("interleaved refusal appends");
+        log.append(release).await.expect("release appends");
+        drop(log);
+
+        let value = serde_json::to_value(
+            verified_last_local_audit_operation(&path, &audit_secret())
+                .expect("heterogeneous stopped chain verifies"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!(authorized_operation),
+            "the physically last authorized terminal wins over an earlier refusal"
+        );
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
+
+        let path = directory.path().join("refusal-last.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        append_local_operation(&log, "local-heterogeneous-authorized-000001").await;
+        let refusal_operation = "local-heterogeneous-refusal-000000001";
+        log.append_authorization_refusal(local_authorization_refusal(&log, refusal_operation))
+            .await
+            .expect("last refusal appends");
+        drop(log);
+
+        let value = serde_json::to_value(
+            verified_last_local_audit_operation(&path, &audit_secret())
+                .expect("heterogeneous stopped chain verifies"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!(refusal_operation),
+            "the physically last refusal wins over an earlier authorized terminal"
+        );
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(1));
     }
 
     #[tokio::test]

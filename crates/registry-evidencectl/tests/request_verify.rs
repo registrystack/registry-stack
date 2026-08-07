@@ -9,12 +9,13 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{Duration, SecondsFormat, Utc};
+use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
+use registry_platform_crypto::PublicJwk;
 use serde_json::{json, Value};
 
 const TOKEN: &str = "secret.token-canary";
-const CONTEXT: &str = "{\"schema\":\"context-canary\"}\n";
-const VERIFIED: &str =
-    "{\"purpose\":\"age-check\",\"schema\":\"verified-canary\",\"values\":{\"is_adult\":true}}\n";
+const BINDING: &str = "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const AGE_CHECKS_TAG: &str =
     "policy-v1-bc8c04f766133dc6ffd6e395caa64f9c3b43301c1d308716668c71b8b839c0dc";
 
@@ -101,10 +102,20 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
             .len(),
         32
     );
+    let context: Value = serde_json::from_slice(
+        &fs::read(retained.join("verification.json")).expect("verification context"),
+    )
+    .expect("verification context JSON");
     assert_eq!(
-        fs::read_to_string(retained.join("verification.json")).unwrap(),
-        CONTEXT
+        context["schema"],
+        "registry.evidence-client.retained-verification/v1"
     );
+    assert_eq!(context["responseFormat"], "signed-jws");
+    assert_eq!(
+        context["verificationPolicy"]["requestNonce"],
+        request["requestNonce"]
+    );
+    assert_eq!(context["subjectExpectation"]["mode"], "pinned");
     assert_eq!(
         fs::read_to_string(retained.join("authorization.curl")).unwrap(),
         format!("header = \"Authorization: Bearer {TOKEN}\"\n")
@@ -133,15 +144,27 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         .expect("Evidence prepare argv");
     let evidence_args = evidence_args.lines().collect::<Vec<_>>();
     assert_eq!(evidence_args[0], "--runtime");
-    assert_eq!(evidence_args[2], "prepare-local-verification-context");
-    assert_eq!(evidence_args[3], "--request");
-    assert!(evidence_args[4].ends_with("/request.json"));
-    assert_eq!(&evidence_args[5..], ["--response-format", "signed-jws"]);
+    assert_eq!(evidence_args[2], "prepare-local-relying-procedure");
+    assert_eq!(evidence_args[3], "--input");
+    assert!(evidence_args[4].ends_with("/procedure-input.json"));
     assert!(!evidence_args.join(" ").contains(TOKEN));
     assert_eq!(
         fs::read_to_string(fixture.evidence.with_extension("prepare.stdin")).unwrap(),
-        "stdin-ok\n"
+        "stdin-empty\n"
     );
+    let procedure_input: Value =
+        serde_json::from_slice(&fs::read(fixture.evidence.with_extension("input")).unwrap())
+            .unwrap();
+    assert_eq!(
+        procedure_input["schema"],
+        "registry.evidence.local-relying-procedure-input/v1"
+    );
+    assert_eq!(procedure_input["responseFormat"], "signed-jws");
+    assert_eq!(
+        procedure_input["audience"],
+        "urn:registrystack:evidence:local:caller"
+    );
+    assert!(procedure_input.get("requestNonce").is_none());
     for non_secret in [
         &request_bytes,
         fs::read(retained.join("verification.json"))
@@ -179,12 +202,16 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         "sd-jwt-assertion",
     );
     assert_success(&sd_jwt);
-    let evidence_args = fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
-        .expect("Evidence SD-JWT prepare argv");
-    assert_eq!(
-        &evidence_args.lines().collect::<Vec<_>>()[5..],
-        ["--response-format", "sd-jwt-vc"]
-    );
+    let sd_jwt_context: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .root
+                .join(".evidence/requests/sd-jwt-assertion/verification.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sd_jwt_context["responseFormat"], "sd-jwt-vc");
 
     let age = fixture.prepare_with(
         &[
@@ -216,32 +243,24 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         "local-subject-age-bracket-v1"
     );
 
-    let response = fixture.root.join("assertion.jws.json");
-    fs::write(&response, b"ordinary curl response").expect("response");
-    fs::set_permissions(&response, fs::Permissions::from_mode(0o644)).expect("curl mode");
+    fixture.write_signed_adult_response();
     let verified = fixture.verify("verified.json");
     assert_success(&verified);
     assert_eq!(verified.stdout, b"VERIFIED\n");
     let verified_path = fixture.root.join("verified.json");
     assert_mode(&verified_path, 0o600);
-    assert_eq!(fs::read_to_string(&verified_path).unwrap(), VERIFIED);
-    assert_eq!(
-        fs::read_to_string(fixture.evidence.with_extension("verify.args"))
-            .unwrap()
-            .lines()
-            .collect::<Vec<_>>(),
-        [
-            "verify-local-response",
-            "--context",
-            ".evidence/requests/first-assertion/verification.json",
-            "--response",
-            "assertion.jws.json",
-        ]
-    );
+    let verified_payload: Value =
+        serde_json::from_slice(&fs::read(&verified_path).unwrap()).unwrap();
+    assert_eq!(verified_payload["purpose"], "age-check");
+    assert_eq!(verified_payload["supportedValues"][0]["value"], true);
+    assert!(!fixture.evidence.with_extension("verify.args").exists());
 
     let refused = fixture.verify("verified.json");
     assert!(!refused.status.success());
-    assert_eq!(fs::read_to_string(&verified_path).unwrap(), VERIFIED);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&verified_path).unwrap()).unwrap(),
+        verified_payload
+    );
 }
 
 #[test]
@@ -274,6 +293,31 @@ fn named_client_prepare_uses_the_registered_identity() {
     assert!(fixture
         .root
         .join(".evidence/requests/named-client/request.json")
+        .is_file());
+
+    let unentitled = fixture.prepare_with(
+        &[
+            "age-bracket",
+            "--purpose",
+            "service-path-selection",
+            "--subject",
+            "person_id=person-456",
+            "--client",
+            "age-checker",
+        ],
+        "unentitled-question",
+    );
+    assert_success(&unentitled);
+    let input: Value =
+        serde_json::from_slice(&fs::read(fixture.evidence.with_extension("input")).unwrap())
+            .unwrap();
+    assert_eq!(
+        input["audience"],
+        "urn:registrystack:evidence:local:client:age-checker"
+    );
+    assert!(fixture
+        .root
+        .join(".evidence/requests/unentitled-question/verification.json")
         .is_file());
 }
 
@@ -571,10 +615,9 @@ fn unsafe_request_and_verify_paths_are_refused_without_clobbering() {
 }
 
 #[test]
-fn failed_core_verification_removes_the_unpublished_output() {
+fn failed_client_verification_removes_the_unpublished_output() {
     let fixture = Fixture::new();
     fs::write(fixture.root.join("assertion.jws.json"), b"response").unwrap();
-    fs::write(fixture.evidence.with_extension("fail-verify"), b"").unwrap();
     let output = fixture.verify("verified.json");
     assert!(!output.status.success());
     assert!(!fixture.root.join("verified.json").exists());
@@ -589,6 +632,8 @@ struct Fixture {
     root: PathBuf,
     evidence: PathBuf,
     mint: PathBuf,
+    signing_key: SigningKey,
+    signing_jwk: Value,
 }
 
 impl Fixture {
@@ -695,13 +740,22 @@ impl Fixture {
             )
             .as_bytes(),
         );
+        let signing_key = SigningKey::from_slice(&[7_u8; 32]).expect("test signing key");
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let mut signing_jwk = json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("x coordinate")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("y coordinate")),
+        });
+        let public = PublicJwk::parse(&serde_json::to_string(&signing_jwk).unwrap())
+            .expect("test public JWK");
+        signing_jwk["kid"] = Value::String(public.jkt().expect("test key thumbprint"));
         let evidence = temporary.path().join("evidence-stub");
         executable(
             &evidence,
-            format!(
-                "#!/bin/sh\ncase \"$1\" in\n  --runtime)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    bearer=$(dd bs=65536 count=1 2>/dev/null)\n    [ \"$bearer\" = '{TOKEN}' ] || exit 40\n    printf 'stdin-ok\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 41\n    printf '%s' '{CONTEXT}'\n    ;;\n  verify-local-response)\n    printf '%s\\n' \"$@\" > \"$0.verify.args\"\n    [ ! -f \"$0.fail-verify\" ] || exit 42\n    printf '%s' '{VERIFIED}'\n    ;;\n  *) exit 43 ;;\nesac\n"
-            )
-            .as_bytes(),
+            b"#!/bin/sh\ncase \"$1\" in\n  --runtime)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$3\" = 'prepare-local-relying-procedure' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
         );
         Self {
             _temporary: temporary,
@@ -709,7 +763,91 @@ impl Fixture {
             root,
             evidence,
             mint,
+            signing_key,
+            signing_jwk,
         }
+    }
+
+    fn write_procedure(&self, inputs: &[&str]) {
+        let question = inputs[0];
+        let (requirement, purpose, evidence_type, outputs, roles) = match question {
+            "adult-status" => (
+                "urn:registrystack:evidence:local:requirement:adult-status",
+                "age-check",
+                "urn:registrystack:evidence:local:evidence-type:adult-status",
+                json!([{
+                    "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                    "form": "boolean"
+                }]),
+                vec!["person"],
+            ),
+            "age-bracket" => (
+                "urn:registrystack:evidence:local:requirement:age-bracket",
+                "service-path-selection",
+                "urn:registrystack:evidence:local:evidence-type:age-bracket",
+                json!([{
+                    "concept": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
+                    "form": "string"
+                }]),
+                vec!["person"],
+            ),
+            "relationship-check" => (
+                "urn:registrystack:evidence:local:requirement:relationship-check",
+                "relationship-review",
+                "urn:registrystack:evidence:local:evidence-type:relationship-check",
+                json!([{
+                    "concept": "urn:registrystack:evidence:local:concept:relationship-check:relationship_confirmed",
+                    "form": "boolean"
+                }]),
+                vec!["child", "candidate"],
+            ),
+            _ => (
+                "urn:registrystack:evidence:local:requirement:other",
+                "other",
+                "urn:registrystack:evidence:local:evidence-type:other",
+                json!([{"concept": "urn:other", "form": "boolean"}]),
+                vec!["person"],
+            ),
+        };
+        let client = inputs
+            .windows(2)
+            .find(|pair| pair[0] == "--client")
+            .map(|pair| pair[1]);
+        let audience = client.map_or_else(
+            || "urn:registrystack:evidence:local:caller".to_owned(),
+            |client| format!("urn:registrystack:evidence:local:client:{client}"),
+        );
+        let response_format = inputs
+            .windows(2)
+            .find(|pair| pair[0] == "--format")
+            .map_or("signed-jws", |pair| pair[1]);
+        let expected_subjects = roles
+            .into_iter()
+            .map(|role| json!({"role": role, "binding": BINDING}))
+            .collect::<Vec<_>>();
+        let procedure = json!({
+            "schema": "registry.evidence.local-relying-procedure/v1",
+            "responseFormat": response_format,
+            "trustedJwks": {"keys": [self.signing_jwk.clone()]},
+            "expectedAssuranceProfile": "local",
+            "issuedBy": "urn:registrystack:evidence:local:issuer",
+            "providedBy": "urn:registrystack:evidence:local:provider",
+            "requirement": requirement,
+            "evidenceType": evidence_type,
+            "purpose": purpose,
+            "audience": audience,
+            "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+            "expectedSubjects": expected_subjects,
+            "expectedOutputs": outputs,
+            "revokedKeyIds": [],
+            "maximumAssertionLifetimeSeconds": 300,
+            "clockSkewSeconds": 30
+        });
+        fs::write(
+            self.evidence.with_extension("procedure"),
+            serde_json::to_vec(&procedure).unwrap(),
+        )
+        .unwrap();
     }
 
     fn prepare(&self, name: &str) -> Output {
@@ -726,6 +864,7 @@ impl Fixture {
     }
 
     fn prepare_with(&self, inputs: &[&str], name: &str) -> Output {
+        self.write_procedure(inputs);
         command()
             .current_dir(&self.root)
             .args(["request", "prepare"])
@@ -736,6 +875,69 @@ impl Fixture {
             .arg(&self.mint)
             .output()
             .expect("prepare command")
+    }
+
+    fn write_signed_adult_response(&self) {
+        let request: Value = serde_json::from_slice(
+            &fs::read(
+                self.root
+                    .join(".evidence/requests/first-assertion/request.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let issued_at = Utc::now() - Duration::seconds(5);
+        let payload = json!({
+            "schema": "registry.assertion-evidence/v1",
+            "assuranceProfile": "local",
+            "requestNonce": request["requestNonce"],
+            "id": "urn:registrystack:evidence:local:assertion:00000000-0000-4000-8000-000000000001",
+            "type": "Evidence",
+            "supportsRequirement": "urn:registrystack:evidence:local:requirement:adult-status",
+            "isConformantTo": "urn:registrystack:evidence:local:evidence-type:adult-status",
+            "issuedBy": "urn:registrystack:evidence:local:issuer",
+            "providedBy": "urn:registrystack:evidence:local:provider",
+            "issuedAt": issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "observedAt": issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "validUntil": (issued_at + Duration::seconds(300)).to_rfc3339_opts(SecondsFormat::Secs, true),
+            "purpose": "age-check",
+            "audience": "urn:registrystack:evidence:local:caller",
+            "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+            "subjects": [{"role": "person", "binding": BINDING}],
+            "supportedValues": [{
+                "providesValueFor": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+                "value": true
+            }]
+        });
+        let kid = self.signing_jwk["kid"].as_str().unwrap();
+        let protected = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "alg": "ES256",
+                "kid": kid,
+                "typ": "evidence+jws",
+                "cty": "application/evidence+json"
+            }))
+            .unwrap(),
+        );
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let signature: Signature = self
+            .signing_key
+            .sign(format!("{protected}.{payload}").as_bytes());
+        let jws = json!({
+            "protected": protected,
+            "payload": payload,
+            "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        });
+        fs::write(
+            self.root.join("assertion.jws.json"),
+            serde_json::to_vec(&jws).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(
+            self.root.join("assertion.jws.json"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
     }
 
     fn prepare_as(&self, client_id: &str, name: &str) -> Output {
@@ -826,9 +1028,7 @@ impl Fixture {
                 ".evidence/requests/first-assertion/verification.json",
                 "--output",
                 output,
-                "--evidence-bin",
             ])
-            .arg(&self.evidence)
             .output()
             .expect("verify command")
     }

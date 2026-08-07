@@ -14,7 +14,7 @@ use std::{
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
 use clap::{ArgGroup, Parser, Subcommand};
-use ed25519_dalek::SigningKey;
+use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
     audit::{
@@ -22,18 +22,18 @@ use registry_evidence::{
         EvidenceAuditError,
     },
     bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
-    config::{AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig, SelectorInput},
+    config::{
+        AcquisitionConfig, AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig,
+        SelectorInput,
+    },
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
         ValueProjection,
     },
-    local_verification::{
-        prepare_local_verification_context_for_format, verify_local_response, LocalResponseFormat,
-        LocalVerificationContext,
-    },
+    local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
-        EvidenceRequest, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
-        SelectorValue, SubjectBinding,
+        JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
+        SubjectBinding,
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
@@ -56,7 +56,9 @@ use registry_evidence::{
         EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
     },
 };
-use registry_platform_audit::{AuditHashSecret, OptionalHashHex};
+use registry_platform_audit::{
+    AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
+};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
@@ -94,6 +96,20 @@ enum Command {
         #[arg(long)]
         fixture: PathBuf,
     },
+    /// Internal Evidencectl seam for bundle-only semantic validation.
+    #[command(hide = true)]
+    BundleCheck {
+        #[arg(long)]
+        bundle: PathBuf,
+    },
+    /// Internal Evidencectl seam for bundle-only fixture evaluation.
+    #[command(hide = true)]
+    BundleEvaluate {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        fixture: PathBuf,
+    },
     /// Start the native Evidence HTTP service.
     Serve,
     /// Re-verify one stored signed response offline against a pinned key set.
@@ -126,29 +142,12 @@ enum Command {
     /// already sealed segment is not caught there. This is the counterpart
     /// check that catches it, meant to run out of band.
     VerifyAudit,
-    /// Internal local-adopter seam. Bearer bytes are accepted only on stdin.
+    /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
-    PrepareLocalVerificationContext {
-        /// Owner-only JSON file containing the exact request to retain.
+    PrepareLocalRelyingProcedure {
+        /// Owner-only JSON draft containing the request shape and audience.
         #[arg(long)]
-        request: PathBuf,
-        /// Exact response format the caller will request.
-        #[arg(
-            long,
-            default_value = "signed-jws",
-            value_parser = ["signed-jws", "sd-jwt-vc"]
-        )]
-        response_format: String,
-    },
-    /// Internal offline response-verification seam.
-    #[command(hide = true)]
-    VerifyLocalResponse {
-        /// Owner-only closed context produced before the response existed.
-        #[arg(long)]
-        context: PathBuf,
-        /// Bounded flattened JWS JSON returned by Evidence.
-        #[arg(long)]
-        response: PathBuf,
+        input: PathBuf,
     },
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
@@ -242,7 +241,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 &runtime.config.secret_providers.file.root,
             )
             .map_err(|_| runtime_initialization_error(RuntimeInitializationError::Secrets))?;
-            validate_secret_material(&bundle, &secrets)
+            validate_secret_material(&bundle, &runtime.config, &secrets)
                 .await
                 .map_err(runtime_initialization_error)?;
             println!(
@@ -260,7 +259,32 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let kernel = OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|_| CliError("fixture bundle compilation failed"))?;
             let source_plans = compile_source_plans(&bundle.config, &runtime)?;
-            let summary = evaluate_fixture(&bundle, &kernel, &source_plans, &fixture).await?;
+            let summary = evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true).await?;
+            println!(
+                "Evidence fixture passed ({} evaluated cases)",
+                summary.evaluated_cases
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::BundleCheck { bundle } => {
+            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            OfflineKernel::compile(Arc::clone(&bundle))
+                .map_err(|_| CliError("bundle compilation failed"))?;
+            let _source_plans = compile_bundle_source_plans(&bundle.config)?;
+            println!(
+                "Evidence bundle {} passed check ({} requirements)",
+                bundle.revision(),
+                bundle.config.requirements.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::BundleEvaluate { bundle, fixture } => {
+            let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
+            let kernel = OfflineKernel::compile(Arc::clone(&bundle))
+                .map_err(|_| CliError("fixture bundle compilation failed"))?;
+            let source_plans = compile_bundle_source_plans(&bundle.config)?;
+            let summary =
+                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false).await?;
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
                 summary.evaluated_cases
@@ -304,12 +328,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )?)
         }
         Command::VerifyAudit => run_verify_audit(&cli.runtime),
-        Command::PrepareLocalVerificationContext {
-            request,
-            response_format,
-        } => prepare_local_context_command(&cli.runtime, &request, &response_format).await,
-        Command::VerifyLocalResponse { context, response } => {
-            verify_local_response_command(&context, &response)
+        Command::PrepareLocalRelyingProcedure { input } => {
+            prepare_local_relying_procedure_command(&cli.runtime, &input).await
         }
         Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
@@ -400,6 +420,27 @@ fn compile_source_plans_with_runtime(
     Ok(plans)
 }
 
+fn compile_bundle_source_plans(
+    config: &EvidenceConfig,
+) -> Result<BTreeMap<String, SourceExecutor>, CliError> {
+    let secrets = Arc::new(
+        SecretResolver::new([SecretProvider::File], "/")
+            .map_err(|_| CliError("source plan compilation failed"))?,
+    );
+    let mut plans = BTreeMap::new();
+    for (source_id, source) in config.sources.iter() {
+        let allowed_selector_sets = config.source_selector_sets(source_id);
+        let plan = SourceExecutor::new_for_offline_fixture(
+            source,
+            &allowed_selector_sets,
+            Arc::clone(&secrets),
+        )
+        .map_err(|_| CliError("source plan compilation failed"))?;
+        plans.insert(source_id.to_owned(), plan);
+    }
+    Ok(plans)
+}
+
 /// Install the operational log subscriber for the serving process.
 ///
 /// Records are line-delimited JSON on stdout so a collector can read them
@@ -457,69 +498,39 @@ async fn shutdown_signal() {
 /// pulled into memory because a path was mistyped.
 const MAX_VERIFY_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_LOCAL_REQUEST_BYTES: u64 = 64 * 1024;
-const MAX_LOCAL_CONTEXT_BYTES: u64 = 256 * 1024;
-const MAX_LOCAL_RESPONSE_BYTES: u64 = 256 * 1024;
-const MAX_LOCAL_BEARER_BYTES: usize = 64 * 1024;
 
 /// Exit status for a response that is authentic but no longer current.
 const NOT_CURRENT_EXIT_CODE: u8 = 3;
 
 /// The one class reported for an input document that cannot be read or parsed.
 const VERIFY_MALFORMED: CliError = CliError("stored response verification failed (malformed)");
-const LOCAL_CONTEXT_FAILED: CliError = CliError("local verification context preparation failed");
-const LOCAL_RESPONSE_FAILED: CliError = CliError("local response verification failed");
+const LOCAL_RELYING_PROCEDURE_FAILED: CliError =
+    CliError("local relying procedure preparation failed");
 const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
 
-/// Prepare one closed context from trusted deployment state and a retained
-/// request. The bearer is read only from stdin and is never echoed.
-async fn prepare_local_context_command(
+/// Close trusted local procedure metadata and exact request-origin bindings.
+///
+/// This command has no bearer input. Authorization remains exclusively on the
+/// running service's HTTP request boundary.
+async fn prepare_local_relying_procedure_command(
     runtime_path: &Path,
-    request_path: &Path,
-    response_format: &str,
+    input_path: &Path,
 ) -> Result<ExitCode, CommandError> {
-    let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let request_bytes =
-        read_owner_only_input(request_path, MAX_LOCAL_REQUEST_BYTES, LOCAL_CONTEXT_FAILED)?;
-    let request_value = parse_json_strict(&request_bytes).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let request: EvidenceRequest =
-        serde_json::from_value(request_value).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let bearer = read_local_bearer(std::io::stdin()).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    let response_format = match response_format {
-        "signed-jws" => LocalResponseFormat::SignedJws,
-        "sd-jwt-vc" => LocalResponseFormat::SdJwtVc,
-        _ => return Err(LOCAL_CONTEXT_FAILED.into()),
-    };
-    let context = prepare_local_verification_context_for_format(
-        &deployment,
-        &request,
-        &bearer,
-        response_format,
-    )
-    .await
-    .map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    write_canonical_json_line(&context, LOCAL_CONTEXT_FAILED)?;
-    Ok(ExitCode::SUCCESS)
-}
-
-/// Verify from closed local state only. In particular, `--runtime` is not
-/// loaded on this path and no network, source, secret, or audit boundary is
-/// reachable after the context has been created.
-fn verify_local_response_command(
-    context_path: &Path,
-    response_path: &Path,
-) -> Result<ExitCode, CommandError> {
-    let context_bytes =
-        read_owner_only_input(context_path, MAX_LOCAL_CONTEXT_BYTES, LOCAL_RESPONSE_FAILED)?;
-    let context_value = parse_json_strict(&context_bytes).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    let context: LocalVerificationContext =
-        serde_json::from_value(context_value).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    let response = read_untrusted_response_input(
-        response_path,
-        MAX_LOCAL_RESPONSE_BYTES,
-        LOCAL_RESPONSE_FAILED,
+    let deployment =
+        DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let input_bytes = read_owner_only_input(
+        input_path,
+        MAX_LOCAL_REQUEST_BYTES,
+        LOCAL_RELYING_PROCEDURE_FAILED,
     )?;
-    let evidence = verify_local_response(context, &response).map_err(|_| LOCAL_RESPONSE_FAILED)?;
-    write_canonical_json_line(&evidence, LOCAL_RESPONSE_FAILED)?;
+    let input_value =
+        parse_json_strict(&input_bytes).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let input: LocalRelyingProcedureInput =
+        serde_json::from_value(input_value).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let procedure = prepare_local_relying_procedure(&deployment, &input)
+        .await
+        .map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    write_canonical_json_line(&procedure, LOCAL_RELYING_PROCEDURE_FAILED)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -531,17 +542,6 @@ fn read_owner_only_input(
     failure: CliError,
 ) -> Result<Vec<u8>, CliError> {
     read_bounded_regular_input(path, maximum_bytes, true, failure)
-}
-
-/// A signed response is untrusted input, not a trust anchor. Normal
-/// `curl --output` permissions are accepted, while file identity and size
-/// checks still prevent path tricks and blocking or unbounded reads.
-fn read_untrusted_response_input(
-    path: &Path,
-    maximum_bytes: u64,
-    failure: CliError,
-) -> Result<Vec<u8>, CliError> {
-    read_bounded_regular_input(path, maximum_bytes, false, failure)
 }
 
 fn read_bounded_regular_input(
@@ -580,33 +580,6 @@ fn read_bounded_regular_input(
     Ok(bytes)
 }
 
-/// Read exactly one compact bearer from stdin with at most one shell line
-/// ending. Other whitespace, control bytes, empty values, and oversize input
-/// are rejected before authentication.
-fn read_local_bearer(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
-    let mut bytes = Zeroizing::new(Vec::new());
-    reader
-        .take((MAX_LOCAL_BEARER_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    if bytes.len() > MAX_LOCAL_BEARER_BYTES {
-        return Err(LOCAL_CONTEXT_FAILED);
-    }
-    let body = bytes
-        .strip_suffix(b"\r\n")
-        .or_else(|| bytes.strip_suffix(b"\n"))
-        .unwrap_or(bytes.as_slice());
-    let bearer = std::str::from_utf8(body).map_err(|_| LOCAL_CONTEXT_FAILED)?;
-    if bearer.is_empty()
-        || bearer
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-    {
-        return Err(LOCAL_CONTEXT_FAILED);
-    }
-    Ok(Zeroizing::new(bearer.to_owned()))
-}
-
 fn write_canonical_json_line<T: serde::Serialize>(
     value: &T,
     failure: CliError,
@@ -636,8 +609,8 @@ fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, C
     let audit_secret = secrets
         .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
-        .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let master_secret =
+        derived_audit_chain_secret(audit_secret.expose_secret()).map_err(|_| LOCAL_AUDIT_FAILED)?;
     let view = verified_last_local_audit_operation(
         Path::new(&deployment.runtime.config.audit_storage.path),
         &master_secret,
@@ -693,7 +666,13 @@ fn verify_stored_response(
     let document: EvidenceVerificationPolicyDocument =
         serde_norway::from_slice(&read_verification_input(policy_path)?)
             .map_err(|_| VERIFY_MALFORMED)?;
-    let policy = document.into_policy(instant);
+    // A policy stating a time bound the contract forbids is an unusable input
+    // document. Reading it already refuses it; this is the same refusal for the
+    // conversion, and both are the malformed-input class rather than a
+    // verification outcome.
+    let policy = document
+        .try_into_policy(instant)
+        .map_err(|_| VERIFY_MALFORMED)?;
 
     // One policy document, one set of expectations, and one report shape serve
     // both response formats; only the serialization the operator named is
@@ -787,7 +766,7 @@ fn run_verify_audit(runtime_path: &Path) -> Result<ExitCode, CommandError> {
     let audit_secret = secrets
         .resolve(deployment.bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| CliError("audit verification secret resolution failed"))?;
-    let master_secret = AuditHashSecret::new(audit_secret.expose_secret().to_vec())
+    let master_secret = derived_audit_chain_secret(audit_secret.expose_secret())
         .map_err(|_| CliError("audit verification secret is invalid"))?;
     verify_audit_with_secret(
         Path::new(&deployment.runtime.config.audit_storage.path),
@@ -814,6 +793,16 @@ fn verify_audit_with_secret(
             println!("{detail}");
             Err(CommandError::Cli(class))
         }
+    }
+}
+
+fn derived_audit_chain_secret(master_secret: &[u8]) -> Result<AuditHashSecret, ()> {
+    let profile =
+        AuditChainProfile::production_from_secret_bytes(Zeroizing::new(master_secret.to_vec()))
+            .map_err(|_| ())?;
+    match profile.hasher() {
+        AuditChainHasher::Keyed(secret) => Ok(secret),
+        AuditChainHasher::UnkeyedDevOnly => Err(()),
     }
 }
 
@@ -867,8 +856,13 @@ async fn evaluate_fixture(
     kernel: &OfflineKernel,
     source_plans: &BTreeMap<String, SourceExecutor>,
     fixture_path: &Path,
+    exercise_signing: bool,
 ) -> Result<FixtureSummary, CliError> {
-    let signer = offline_fixture_signer().await?;
+    let signer = if exercise_signing {
+        Some(offline_fixture_signer().await?)
+    } else {
+        None
+    };
     let fixture_name = safe_fixture_name(fixture_path)?;
     let referenced = bundle
         .config
@@ -909,7 +903,7 @@ async fn evaluate_fixture(
                 bundle,
                 kernel,
                 source_plans,
-                &signer,
+                signer.as_ref(),
                 requirement,
                 object,
             )
@@ -984,7 +978,7 @@ async fn evaluate_fixture(
         let observed_at =
             fixture_observed_at(case, common, requirement.observation_timezone.as_deref())?;
 
-        if let Some(source) = case.get("source") {
+        if case.get("source").is_some() || case.get("sources").is_some() {
             let resolved = resolve_offline_fixture_authorization(
                 bundle,
                 requirement,
@@ -1005,31 +999,20 @@ async fn evaluate_fixture(
                     ));
                 }
             }
-            let source_config = bundle
-                .config
-                .sources
-                .get(&requirement.source)
-                .ok_or(CliError("fixture source is unavailable"))?;
-            let outcome = match project_fixture_response(source_config, source) {
-                Ok(projected) => kernel.evaluate_with_selectors(
-                    &requirement.id,
-                    &projected,
-                    &derivation_selectors,
-                    observed_at,
-                    ValueProjection {
-                        audience: OFFLINE_AUDIENCE,
-                        binding_key: &OFFLINE_BINDING_KEY,
-                        binding_key_version: 1,
-                    },
-                ),
-                Err(_) => Err(KernelError::SourceProtocol),
-            };
+            let outcome = evaluate_fixture_acquisition(
+                bundle,
+                kernel,
+                requirement,
+                case,
+                &derivation_selectors,
+                observed_at,
+            )?;
             if let Some(values) = validate_case_outcome(id, case, outcome)? {
                 successful_values.push(
                     sign_and_verify_fixture_evidence(
                         bundle,
                         kernel,
-                        &signer,
+                        signer.as_ref(),
                         requirement,
                         &resolved,
                         values,
@@ -1069,11 +1052,117 @@ async fn evaluate_fixture(
     Ok(summary)
 }
 
+fn evaluate_fixture_acquisition(
+    bundle: &Bundle,
+    kernel: &OfflineKernel,
+    requirement: &registry_evidence::config::RequirementConfig,
+    case: &JsonMap<String, Value>,
+    derivation_selectors: &Value,
+    observed_at: DateTime<Utc>,
+) -> Result<Result<KernelOutcome, KernelError>, CliError> {
+    let projection = || ValueProjection {
+        audience: OFFLINE_AUDIENCE,
+        binding_key: &OFFLINE_BINDING_KEY,
+        binding_key_version: 1,
+    };
+    match &requirement.acquisition {
+        AcquisitionConfig::Single { source } => {
+            if case.contains_key("sources") {
+                return Err(CliError("single fixture must use source"));
+            }
+            let response = case
+                .get("source")
+                .ok_or(CliError("single fixture source is unavailable"))?;
+            let source_config = bundle
+                .config
+                .sources
+                .get(source)
+                .ok_or(CliError("fixture source is unavailable"))?;
+            Ok(match project_fixture_response(source_config, response) {
+                Ok(projected) => kernel.evaluate_with_selectors(
+                    &requirement.id,
+                    &projected,
+                    derivation_selectors,
+                    observed_at,
+                    projection(),
+                ),
+                Err(_) => Err(KernelError::SourceProtocol),
+            })
+        }
+        AcquisitionConfig::SearchThenFetch { search, fetch } => {
+            if case.contains_key("source") {
+                return Err(CliError("search-then-fetch fixture must use sources"));
+            }
+            let responses = case
+                .get("sources")
+                .and_then(Value::as_object)
+                .ok_or(CliError("chained fixture sources are unavailable"))?;
+            if responses.len() != 2
+                || !responses.contains_key(search)
+                || !responses.contains_key(fetch)
+            {
+                return Err(CliError("chained fixture sources are not exact"));
+            }
+            let search_config = bundle
+                .config
+                .sources
+                .get(search)
+                .ok_or(CliError("fixture search source is unavailable"))?;
+            let search_response = match project_fixture_response(
+                search_config,
+                responses
+                    .get(search)
+                    .ok_or(CliError("fixture search response is unavailable"))?,
+            ) {
+                Ok(response) => response,
+                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+            };
+            let search_facts =
+                match kernel.extract_source(search, &search_response, &BTreeMap::new()) {
+                    Ok(LookupResult::Match(facts)) => facts,
+                    Ok(LookupResult::NoMatch) => return Ok(Ok(KernelOutcome::NoMatch)),
+                    Ok(LookupResult::Ambiguous) => return Ok(Ok(KernelOutcome::Ambiguous)),
+                    Err(error) => return Ok(Err(error)),
+                };
+            let fetch_config = bundle
+                .config
+                .sources
+                .get(fetch)
+                .ok_or(CliError("fixture fetch source is unavailable"))?;
+            let fetch_response = match project_fixture_response(
+                fetch_config,
+                responses
+                    .get(fetch)
+                    .ok_or(CliError("fixture fetch response is unavailable"))?,
+            ) {
+                Ok(response) => response,
+                Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+            };
+            let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
+                Ok(LookupResult::Match(facts)) => facts,
+                Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
+                    return Ok(Err(KernelError::SourceProtocol));
+                }
+                Err(error) => return Ok(Err(error)),
+            };
+            Ok(kernel
+                .derive_and_validate_with_selectors(
+                    &requirement.id,
+                    &facts,
+                    derivation_selectors,
+                    observed_at,
+                    projection(),
+                )
+                .map(KernelOutcome::Match))
+        }
+    }
+}
+
 async fn evaluate_reference_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
     source_plans: &BTreeMap<String, SourceExecutor>,
-    signer: &EvidenceSigner,
+    signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
     fixture: &JsonMap<String, Value>,
 ) -> Result<FixtureSummary, CliError> {
@@ -1101,14 +1190,23 @@ async fn evaluate_reference_fixture(
             "derivationSelectorInputs",
             "expectedRequestParts",
             "expectedTransport",
+            "expectedFetchRequestParts",
+            "expectedFetchTransport",
         ],
     )?;
-    for required in [
+    let mut required_common = vec![
         "observed_at",
         "selectors",
         "expectedRequestParts",
         "expectedTransport",
-    ] {
+    ];
+    if matches!(
+        requirement.acquisition,
+        AcquisitionConfig::SearchThenFetch { .. }
+    ) {
+        required_common.extend(["expectedFetchRequestParts", "expectedFetchTransport"]);
+    }
+    for required in required_common {
         if !common.contains_key(required) {
             return Err(CliError("reference fixture common block is incomplete"));
         }
@@ -1132,6 +1230,7 @@ async fn evaluate_reference_fixture(
                 "id",
                 "purpose",
                 "response",
+                "responses",
                 "sourceFailure",
                 "bundleMutation",
                 "requestMutation",
@@ -1178,6 +1277,7 @@ async fn evaluate_reference_fixture(
         }
         let forms = [
             "response",
+            "responses",
             "sourceFailure",
             "bundleMutation",
             "requestMutation",
@@ -1229,10 +1329,10 @@ async fn evaluate_reference_fixture(
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .ok_or(CliError("reference fixture source is unavailable"))?;
         let source_plan = source_plans
-            .get(&requirement.source)
+            .get(requirement.initial_source())
             .ok_or(CliError("reference fixture source plan is unavailable"))?;
         let preparation_selectors =
             fixture_selector_value(&resolved, &source.request.selector_inputs)?;
@@ -1332,29 +1432,143 @@ async fn evaluate_reference_fixture(
             continue;
         }
 
-        let response = case
-            .get("response")
-            .ok_or(CliError("reference fixture response is unavailable"))?;
-        let projected = project_fixture_response(source, response)
-            .map_err(|_| CliError("reference fixture source projection failed"))?;
-        if let Some(values) = validate_reference_response(
-            ReferenceResponseContext {
-                bundle,
-                kernel,
-                signer,
-                requirement,
-                resolved: &resolved,
-            },
-            &projected,
-            &derivation_selectors,
-            observed_at,
-            expected,
-        )
-        .await?
-        {
+        let response_context = ReferenceResponseContext {
+            bundle,
+            kernel,
+            signer,
+            requirement,
+            resolved: &resolved,
+        };
+        let (values, source_request_count) = match &requirement.acquisition {
+            AcquisitionConfig::Single { .. } => {
+                let response = case
+                    .get("response")
+                    .ok_or(CliError("reference fixture response is unavailable"))?;
+                let projected = project_fixture_response(source, response)
+                    .map_err(|_| CliError("reference fixture source projection failed"))?;
+                (
+                    validate_reference_response(
+                        response_context,
+                        &projected,
+                        &derivation_selectors,
+                        observed_at,
+                        expected,
+                    )
+                    .await?,
+                    1,
+                )
+            }
+            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+                let responses = case
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .ok_or(CliError("reference chained responses are unavailable"))?;
+                if responses.len() != 2
+                    || !responses.contains_key(search)
+                    || !responses.contains_key(fetch)
+                {
+                    return Err(CliError("reference chained responses are not exact"));
+                }
+                let search_response = responses
+                    .get(search)
+                    .ok_or(CliError("reference search response is unavailable"))?;
+                let projected_search = project_fixture_response(source, search_response)
+                    .map_err(|_| CliError("reference search response projection failed"))?;
+                let search_lookup =
+                    match kernel.extract_source(search, &projected_search, &BTreeMap::new()) {
+                        Ok(lookup) => lookup,
+                        Err(error) => {
+                            validate_reference_error(expected, error, false)?;
+                            require_reference_request_count(expected, 1)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                    };
+                let prior_facts = match search_lookup {
+                    LookupResult::NoMatch => {
+                        validate_reference_unresolved(expected, "no_match")?;
+                        require_reference_request_count(expected, 1)?;
+                        summary.evaluated_cases += 1;
+                        continue;
+                    }
+                    LookupResult::Ambiguous => {
+                        validate_reference_unresolved(expected, "ambiguous")?;
+                        require_reference_request_count(expected, 1)?;
+                        summary.evaluated_cases += 1;
+                        continue;
+                    }
+                    LookupResult::Match(facts) => facts,
+                };
+                let fetch_source = bundle
+                    .config
+                    .sources
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch source is unavailable"))?;
+                let fetch_plan = source_plans
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch source plan is unavailable"))?;
+                let fetch_preparation_selectors =
+                    fixture_selector_value(&resolved, &fetch_source.request.selector_inputs)?;
+                let fetch_parts = kernel
+                    .prepare_source(fetch, &fetch_preparation_selectors, &prior_facts)
+                    .map_err(|_| CliError("reference fetch request preparation failed"))?;
+                validate_reference_request_parts_named(
+                    common,
+                    "expectedFetchRequestParts",
+                    &fetch_parts,
+                )?;
+                let fetch_selectors =
+                    reference_source_selectors(&resolved, &fetch_source.request.selector_inputs)?;
+                validate_reference_transport_with_prior_facts(
+                    fetch_source,
+                    fetch_plan,
+                    &fetch_selectors,
+                    &prior_facts,
+                    &fetch_parts,
+                    common
+                        .get("expectedFetchTransport")
+                        .and_then(Value::as_object)
+                        .ok_or(CliError("reference fetch transport expectation is invalid"))?,
+                )?;
+                let fetch_response = responses
+                    .get(fetch)
+                    .ok_or(CliError("reference fetch response is unavailable"))?;
+                let projected_fetch = project_fixture_response(fetch_source, fetch_response)
+                    .map_err(|_| CliError("reference fetch response projection failed"))?;
+                let fetch_lookup =
+                    match kernel.extract_source(fetch, &projected_fetch, &prior_facts) {
+                        Ok(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            validate_reference_error(expected, KernelError::SourceProtocol, false)?;
+                            require_reference_request_count(expected, 2)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                        Ok(lookup) => lookup,
+                        Err(error) => {
+                            validate_reference_error(expected, error, false)?;
+                            require_reference_request_count(expected, 2)?;
+                            summary.evaluated_cases += 1;
+                            continue;
+                        }
+                    };
+                (
+                    validate_reference_lookup(
+                        &response_context,
+                        fetch_lookup,
+                        &Value::Object(responses.clone()),
+                        &derivation_selectors,
+                        observed_at,
+                        expected,
+                    )
+                    .await?,
+                    2,
+                )
+            }
+        };
+        if let Some(values) = values {
             successful_values.push(values);
         }
-        require_reference_request_count(expected, 1)?;
+        require_reference_request_count(expected, source_request_count)?;
         summary.evaluated_cases += 1;
         let _ = id;
     }
@@ -1366,7 +1580,7 @@ async fn evaluate_reference_fixture(
 struct ReferenceResponseContext<'a> {
     bundle: &'a Bundle,
     kernel: &'a OfflineKernel,
-    signer: &'a EvidenceSigner,
+    signer: Option<&'a EvidenceSigner>,
     requirement: &'a registry_evidence::config::RequirementConfig,
     resolved: &'a ResolvedAuthorization,
 }
@@ -1385,6 +1599,17 @@ async fn validate_reference_response(
             return Ok(None);
         }
     };
+    validate_reference_lookup(&context, lookup, response, selectors, observed_at, expected).await
+}
+
+async fn validate_reference_lookup(
+    context: &ReferenceResponseContext<'_>,
+    lookup: LookupResult,
+    protected_response: &Value,
+    selectors: &Value,
+    observed_at: DateTime<Utc>,
+    expected: &JsonMap<String, Value>,
+) -> Result<Option<Value>, CliError> {
     match lookup {
         LookupResult::NoMatch => {
             validate_reference_unresolved(expected, "no_match")?;
@@ -1475,7 +1700,7 @@ async fn validate_reference_response(
                 let encoded = serde_json::to_string(values.as_slice())
                     .map_err(|_| CliError("reference values are not representable"))?;
                 let mut protected_source_strings = Vec::new();
-                collect_strings(response, &mut protected_source_strings);
+                collect_strings(protected_response, &mut protected_source_strings);
                 if protected_source_strings
                     .iter()
                     .filter(|value| value.len() >= 8)
@@ -1505,7 +1730,7 @@ async fn validate_reference_response(
 async fn sign_and_verify_fixture_evidence(
     bundle: &Bundle,
     kernel: &OfflineKernel,
-    signer: &EvidenceSigner,
+    signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
     resolved: &ResolvedAuthorization,
     values: ValidatedValues,
@@ -1546,6 +1771,10 @@ async fn sign_and_verify_fixture_evidence(
             },
         )
         .map_err(|_| CliError("fixture evidence construction failed"))?;
+    let Some(signer) = signer else {
+        return serde_json::to_value(evidence)
+            .map_err(|_| CliError("fixture evidence is not representable"));
+    };
     let signed = signer
         .sign_json(&evidence)
         .await
@@ -1555,17 +1784,23 @@ async fn sign_and_verify_fixture_evidence(
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &evidence,
         registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-        std::time::Duration::from_secs(31_536_000),
+        registry_evidence::verifier::MAXIMUM_ASSERTION_LIFETIME_SECONDS,
         issued_at,
-        std::time::Duration::ZERO,
-    );
+        0,
+    )
+    .map_err(|_| CliError("fixture verification policy is outside its contract bounds"))?;
     policy.issued_by = bundle.config.issuer.id.clone();
     policy.provided_by = bundle.config.service.provider_id.clone();
     policy.requirement = requirement.id.clone();
     policy.evidence_type = requirement.evidence_type.clone();
     policy.purpose = resolved.purpose.clone();
     policy.audience = OFFLINE_AUDIENCE.to_owned();
-    policy.configuration_revision = bundle.revision().to_owned();
+    policy.configuration_revision = bundle
+        .configuration_revision(&requirement.id)
+        .ok_or(CliError(
+            "fixture requirement has no configuration revision",
+        ))?
+        .to_owned();
     let verified = verify_flattened_jws(
         &serde_json::to_vec(&signed)
             .map_err(|_| CliError("fixture signed evidence is not representable"))?,
@@ -1580,18 +1815,29 @@ async fn sign_and_verify_fixture_evidence(
 async fn offline_fixture_signer() -> Result<EvidenceSigner, CliError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-    const KEY_ID: &str = "offline-fixture-signing-key";
-    let signing_key = SigningKey::generate(&mut OsRng);
+    let signing_key = SigningKey::random(&mut OsRng);
     let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public_bytes = signing_key.verifying_key().to_bytes();
-    let private_jwk = PrivateJwk {
-        kty: "OKP".to_owned(),
-        kid: Some(KEY_ID.to_owned()),
-        alg: Some("EdDSA".to_owned()),
-        crv: Some("Ed25519".to_owned()),
-        d: Some(URL_SAFE_NO_PAD.encode(private_bytes.as_slice())),
-        x: Some(URL_SAFE_NO_PAD.encode(public_bytes)),
-        y: None,
+    let public = signing_key.verifying_key().to_encoded_point(false);
+    let mut private_jwk = PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: Some("ES256".to_owned()),
+        crv: Some("P-256".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(&private_bytes[..])),
+        x: Some(
+            URL_SAFE_NO_PAD.encode(
+                public
+                    .x()
+                    .ok_or(CliError("offline fixture public key is invalid"))?,
+            ),
+        ),
+        y: Some(
+            URL_SAFE_NO_PAD.encode(
+                public
+                    .y()
+                    .ok_or(CliError("offline fixture public key is invalid"))?,
+            ),
+        ),
         n: None,
         e: None,
         p: None,
@@ -1600,11 +1846,16 @@ async fn offline_fixture_signer() -> Result<EvidenceSigner, CliError> {
         dq: None,
         qi: None,
     };
+    let key_id = private_jwk
+        .public()
+        .jkt()
+        .map_err(|_| CliError("offline fixture key identifier derivation failed"))?;
+    private_jwk.kid = Some(key_id.clone());
     let provider = Arc::new(
         LocalJwkSigner::new(private_jwk)
             .map_err(|_| CliError("offline fixture signer initialization failed"))?,
     );
-    EvidenceSigner::initialize(provider, KEY_ID)
+    EvidenceSigner::initialize(provider, &key_id)
         .await
         .map_err(|_| CliError("offline fixture signer self-test failed"))
 }
@@ -1628,7 +1879,7 @@ fn validate_reference_expectation_keys(
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
     let allowed: &[&str] = match form {
-        "response" => &[
+        "response" | "responses" => &[
             "lookup",
             "facts",
             "value",
@@ -1701,8 +1952,16 @@ fn validate_reference_request_parts(
     common: &JsonMap<String, Value>,
     actual: &RequestParts,
 ) -> Result<(), CliError> {
+    validate_reference_request_parts_named(common, "expectedRequestParts", actual)
+}
+
+fn validate_reference_request_parts_named(
+    common: &JsonMap<String, Value>,
+    expectation_name: &str,
+    actual: &RequestParts,
+) -> Result<(), CliError> {
     let expected = common
-        .get("expectedRequestParts")
+        .get(expectation_name)
         .and_then(Value::as_object)
         .ok_or(CliError("reference request-parts expectation is invalid"))?;
     require_exact_keys(expected, &["query", "body"])?;
@@ -1738,9 +1997,27 @@ fn validate_reference_transport(
     parts: &RequestParts,
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
+    validate_reference_transport_with_prior_facts(
+        source,
+        source_plan,
+        selectors,
+        &BTreeMap::new(),
+        parts,
+        expected,
+    )
+}
+
+fn validate_reference_transport_with_prior_facts(
+    source: &registry_evidence::config::SourceConfig,
+    source_plan: &SourceExecutor,
+    selectors: &[ResolvedSourceSelector],
+    prior_facts: &BTreeMap<String, Value>,
+    parts: &RequestParts,
+    expected: &JsonMap<String, Value>,
+) -> Result<(), CliError> {
     require_allowed_keys(expected, &["path", "query", "body", "fixedHeaders"])?;
     let materialized = source_plan
-        .materialize_request(selectors, parts)
+        .materialize_request_with_prior_facts(selectors, prior_facts, parts)
         .map_err(|_| CliError("reference transport materialization failed"))?;
     if expected
         .get("path")
@@ -1997,29 +2274,33 @@ fn validate_reference_parameter_mutation(
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
         .map_err(|_| CliError("reference disposable kernel did not compile"))?;
+    let disposable_requirement = disposable
+        .config
+        .requirements
+        .iter()
+        .find(|candidate| candidate.id == requirement.id)
+        .ok_or(CliError("reference disposable requirement is unavailable"))?;
     let positive = cases
         .iter()
         .find(|case| case.get("id").and_then(Value::as_str) == Some("positive"))
-        .and_then(|case| case.get("response"))
+        .and_then(Value::as_object)
+        .ok_or(CliError("reference positive case is unavailable"))?;
+    let (reference_field, fixture_field) = match &disposable_requirement.acquisition {
+        AcquisitionConfig::Single { .. } => ("response", "source"),
+        AcquisitionConfig::SearchThenFetch { .. } => ("responses", "sources"),
+    };
+    let response = positive
+        .get(reference_field)
         .ok_or(CliError("reference positive response is unavailable"))?;
-    let source = disposable
-        .config
-        .sources
-        .get(&requirement.source)
-        .ok_or(CliError("reference disposable source is unavailable"))?;
-    let projected = project_fixture_response(source, positive)
-        .map_err(|_| CliError("reference positive response projection failed"))?;
-    let outcome = kernel.evaluate_with_selectors(
-        &requirement.id,
-        &projected,
+    let acquisition_case = JsonMap::from_iter([(fixture_field.to_owned(), response.clone())]);
+    let outcome = evaluate_fixture_acquisition(
+        &disposable,
+        &kernel,
+        disposable_requirement,
+        &acquisition_case,
         selectors,
         observed_at,
-        ValueProjection {
-            audience: OFFLINE_AUDIENCE,
-            binding_key: &OFFLINE_BINDING_KEY,
-            binding_key_version: 1,
-        },
-    );
+    )?;
     match outcome {
         Err(error) => validate_reference_error(expected, error, true),
         Ok(_) => Err(CliError("reference parameter mutation did not fail")),
@@ -2034,7 +2315,7 @@ fn require_reference_request_count(
         .get("sourceRequestCount")
         .and_then(Value::as_u64)
         .is_some_and(|count| count != actual)
-        || actual > 1
+        || actual > 2
     {
         return Err(CliError("reference source request count did not match"));
     }
@@ -2664,8 +2945,9 @@ mod tests {
     fn local_shell_seams_are_hidden_from_adopter_help() {
         let command = Cli::command();
         for name in [
-            "prepare-local-verification-context",
-            "verify-local-response",
+            "bundle-check",
+            "bundle-evaluate",
+            "prepare-local-relying-procedure",
             "local-audit-last-operation",
         ] {
             assert!(
@@ -2679,25 +2961,6 @@ mod tests {
     }
 
     #[test]
-    fn local_bearer_is_bounded_and_accepts_only_one_shell_line() {
-        assert_eq!(
-            read_local_bearer("header.payload.signature\n".as_bytes())
-                .expect("one shell line is accepted")
-                .as_str(),
-            "header.payload.signature"
-        );
-        for invalid in [
-            "",
-            "\n",
-            "header.payload.signature\n\n",
-            "header.payload. signature",
-        ] {
-            assert!(read_local_bearer(invalid.as_bytes()).is_err());
-        }
-        assert!(read_local_bearer(vec![b'a'; MAX_LOCAL_BEARER_BYTES + 1].as_slice()).is_err());
-    }
-
-    #[test]
     fn local_documents_require_one_owner_only_regular_file() {
         use std::os::unix::fs::{symlink, PermissionsExt as _};
 
@@ -2707,51 +2970,26 @@ mod tests {
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
             .expect("input becomes owner-only");
         assert_eq!(
-            read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).expect("owner-only input reads"),
+            read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED)
+                .expect("owner-only input reads"),
             b"{}"
         );
 
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o640))
             .expect("input becomes group-readable");
-        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
         fs::set_permissions(&safe, fs::Permissions::from_mode(0o600))
             .expect("input becomes owner-only again");
 
         let link = directory.path().join("second-link.json");
         fs::hard_link(&safe, &link).expect("hard link is created");
-        assert!(read_owner_only_input(&safe, 2, LOCAL_CONTEXT_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
         fs::remove_file(&link).expect("hard link is removed");
 
         let symbolic = directory.path().join("symbolic.json");
         symlink(&safe, &symbolic).expect("symbolic link is created");
-        assert!(read_owner_only_input(&symbolic, 2, LOCAL_CONTEXT_FAILED).is_err());
-        assert!(read_owner_only_input(&safe, 1, LOCAL_CONTEXT_FAILED).is_err());
-    }
-
-    #[test]
-    fn local_response_accepts_curl_permissions_but_rejects_file_identity_tricks() {
-        use std::os::unix::fs::{symlink, PermissionsExt as _};
-
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let response = directory.path().join("assertion.jws.json");
-        fs::write(&response, b"{}").expect("response is written");
-        fs::set_permissions(&response, fs::Permissions::from_mode(0o644))
-            .expect("response uses ordinary curl output permissions");
-        assert_eq!(
-            read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED)
-                .expect("ordinary curl output reads"),
-            b"{}"
-        );
-
-        let link = directory.path().join("response-link.json");
-        fs::hard_link(&response, &link).expect("hard link is created");
-        assert!(read_untrusted_response_input(&response, 2, LOCAL_RESPONSE_FAILED).is_err());
-        fs::remove_file(&link).expect("hard link is removed");
-
-        let symbolic = directory.path().join("response-symbolic.json");
-        symlink(&response, &symbolic).expect("symbolic link is created");
-        assert!(read_untrusted_response_input(&symbolic, 2, LOCAL_RESPONSE_FAILED).is_err());
-        assert!(read_untrusted_response_input(&response, 1, LOCAL_RESPONSE_FAILED).is_err());
+        assert!(read_owner_only_input(&symbolic, 2, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
+        assert!(read_owner_only_input(&safe, 1, LOCAL_RELYING_PROCEDURE_FAILED).is_err());
     }
 
     /// Every expected form the published policy schema accepts must parse the
@@ -2779,7 +3017,11 @@ mod tests {
             let policy: EvidenceVerificationPolicyDocument = serde_norway::from_str(&document)
                 .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
             assert_eq!(
-                policy.into_policy(Utc::now()).expected_outputs[0].form,
+                policy
+                    .try_into_policy(Utc::now())
+                    .expect("the fixture policy states bounds the contract allows")
+                    .expected_outputs[0]
+                    .form,
                 expected,
                 "`{written}` parsed as a different form"
             );
@@ -2820,6 +3062,7 @@ mod tests {
              expectedOutputs:\n\
              \x20 - concept: urn:example:concept\n\
              \x20   {form}\n\
+             revokedKeyIds: []\n\
              maximumAssertionLifetimeSeconds: 86400\n\
              clockSkewSeconds: 30\n",
             binding = "A".repeat(43),
@@ -2979,6 +3222,21 @@ mod tests {
             transport.as_object().expect("object"),
         )
         .is_err());
+
+        let chained = serde_json::json!({
+            "lookup": "match",
+            "derivationRuns": true,
+            "signed": true,
+            "sourceRequestCount": 2
+        });
+        let chained = chained.as_object().expect("object");
+        assert_eq!(
+            validate_reference_expectation_keys("responses", chained),
+            Ok(())
+        );
+        assert_eq!(require_reference_request_count(chained, 2), Ok(()));
+        assert!(require_reference_request_count(chained, 1).is_err());
+        assert!(require_reference_request_count(chained, 3).is_err());
     }
 
     #[test]
@@ -3010,6 +3268,158 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chained_reference_parameter_mutation_uses_final_fetch_facts() {
+        let (bundle, fixture) = chained_reference_fixture_bundle();
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("chained reference requirement is captured");
+        let fixture = fixture.as_object().expect("fixture is an object");
+        let common = fixture["common"].as_object().expect("common is an object");
+        let selectors = &common["derivationSelectorInputs"];
+        let observed_at = fixture_observed_at(&JsonMap::new(), Some(common), None)
+            .expect("observation time resolves");
+        let mut cases = fixture["cases"]
+            .as_array()
+            .expect("cases are an array")
+            .clone();
+        let positive = cases
+            .iter_mut()
+            .find(|case| case["id"] == "positive")
+            .and_then(Value::as_object_mut)
+            .expect("positive case is an object");
+        let response = positive
+            .remove("response")
+            .expect("positive response is available");
+        positive.insert(
+            "responses".to_owned(),
+            serde_json::json!({
+                REFERENCE_CHAINED_SEARCH: response,
+                REFERENCE_CHAINED_FETCH: response,
+            }),
+        );
+        let mutation_case = cases
+            .iter()
+            .find(|case| case["id"] == "namespace-mismatch")
+            .and_then(Value::as_object)
+            .expect("parameter mutation case is an object");
+
+        assert_eq!(
+            validate_reference_parameter_mutation(
+                &bundle,
+                requirement,
+                &cases,
+                mutation_case["derivationParameterMutation"]
+                    .as_object()
+                    .expect("mutation is an object"),
+                selectors,
+                observed_at,
+                mutation_case["expected"]
+                    .as_object()
+                    .expect("expectation is an object"),
+            ),
+            Ok(())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chained_fixture_projection_failures_are_source_protocol_outcomes() {
+        let (bundle, fixture) = chained_reference_fixture_bundle();
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("chained reference requirement is captured");
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let fixture = fixture.as_object().expect("fixture is an object");
+        let common = fixture["common"].as_object().expect("common is an object");
+        let selectors = &common["derivationSelectorInputs"];
+        let positive = fixture["cases"]
+            .as_array()
+            .expect("cases are an array")
+            .iter()
+            .find(|case| case["id"] == "positive")
+            .and_then(|case| case.get("response"))
+            .expect("positive response is available")
+            .clone();
+        let rejected = serde_json::json!({"errors": []});
+        let observed_at = DateTime::parse_from_rfc3339("2026-08-02T00:00:00Z")
+            .expect("fixed time parses")
+            .with_timezone(&Utc);
+
+        for (search_response, fetch_response) in
+            [(rejected.clone(), positive.clone()), (positive, rejected)]
+        {
+            let case = serde_json::json!({
+                "sources": {
+                    REFERENCE_CHAINED_SEARCH: search_response,
+                    REFERENCE_CHAINED_FETCH: fetch_response,
+                }
+            });
+            assert_eq!(
+                evaluate_fixture_acquisition(
+                    &bundle,
+                    &kernel,
+                    requirement,
+                    case.as_object().expect("case is an object"),
+                    selectors,
+                    observed_at,
+                ),
+                Ok(Err(KernelError::SourceProtocol))
+            );
+        }
+    }
+
+    const REFERENCE_CHAINED_REQUIREMENT: &str =
+        "urn:gov:example:requirement:registered-parent-relationship:v1";
+    const REFERENCE_CHAINED_SEARCH: &str = "registered-birth-parents";
+    const REFERENCE_CHAINED_FETCH: &str = "registered-birth-parents-fetch";
+
+    #[cfg(unix)]
+    fn chained_reference_fixture_bundle() -> (Arc<Bundle>, Value) {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle",
+        );
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let mut bundle = Bundle::load(directory.path()).expect("reference bundle loads");
+        let fixture = serde_json::to_value(
+            bundle
+                .fixtures
+                .get("fixtures/registered-parent-relationship-cases.yaml")
+                .expect("reference fixture is captured"),
+        )
+        .expect("reference fixture is representable");
+        let mut config = serde_json::to_value(&bundle.config).expect("config is representable");
+        let fetch = config["sources"][REFERENCE_CHAINED_SEARCH].clone();
+        config["sources"]
+            .as_object_mut()
+            .expect("sources are an object")
+            .insert(REFERENCE_CHAINED_FETCH.to_owned(), fetch);
+        let requirement = config["requirements"]
+            .as_array_mut()
+            .expect("requirements are an array")
+            .iter_mut()
+            .find(|requirement| requirement["id"] == REFERENCE_CHAINED_REQUIREMENT)
+            .expect("reference requirement is available");
+        requirement["acquisition"] = serde_json::json!({
+            "kind": "search-then-fetch",
+            "search": REFERENCE_CHAINED_SEARCH,
+            "fetch": REFERENCE_CHAINED_FETCH,
+        });
+        bundle.config = serde_json::from_value(config).expect("chained config parses");
+        bundle.config.validate().expect("chained config validates");
+        set_tree_mode(directory.path(), 0o755, 0o444);
+        (Arc::new(bundle), fixture)
     }
 
     #[test]
@@ -3085,8 +3495,8 @@ mod tests {
     }
 
     fn test_audit_secret() -> AuditHashSecret {
-        AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
-            .expect("audit secret builds")
+        derived_audit_chain_secret(b"0123456789abcdef0123456789abcdef")
+            .expect("audit chain secret derives")
     }
 
     fn test_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
@@ -3311,7 +3721,7 @@ mod tests {
                 .expect("cases")
                 .len();
             assert_eq!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture).await,
+                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
                 Ok(FixtureSummary {
                     evaluated_cases: expected_cases,
                 }),
@@ -3352,7 +3762,7 @@ mod tests {
                     .as_str(),
             );
             assert!(
-                evaluate_fixture(&bundle, &kernel, &source_plans, fixture)
+                evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true)
                     .await
                     .is_ok(),
                 "combined acceptance fixture failed"
@@ -3421,7 +3831,7 @@ mod tests {
                     .expect("cases")
                     .len();
                 assert_eq!(
-                    evaluate_fixture(&bundle, &kernel, &source_plans, fixture).await,
+                    evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
                     Ok(FixtureSummary {
                         evaluated_cases: expected_cases,
                     }),

@@ -1,7 +1,9 @@
 //! Deterministic public-contract generation for Evidence Version 1.
 //!
-//! The generated files are release artifacts. This module is their only
-//! source and deliberately has no dependency on a deployment bundle.
+//! The generated files are release artifacts. This module is their source,
+//! together with the Evidence payload schema the portable
+//! `registry-evidence-verifier` crate owns, and deliberately has no dependency
+//! on a deployment bundle.
 
 use std::{
     collections::BTreeMap,
@@ -11,6 +13,10 @@ use std::{
 };
 
 use jsonschema::{Draft, JSONSchema};
+use registry_evidence_verifier::contracts::{
+    evidence_schema, ContractValidationError, EVIDENCE_SCHEMA_ID, REQUEST_NONCE_PATTERN,
+    SCHEMA_DIALECT,
+};
 use schemars::JsonSchema;
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -19,6 +25,11 @@ use crate::model::{
     Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
     UnsignedEvidenceEnvelope,
 };
+
+/// Evidence payload validation belongs to verification, which the portable
+/// crate owns. The runtime exercises it from its own tests.
+#[cfg(test)]
+pub(crate) use registry_evidence_verifier::contracts::evidence_contract_accepts;
 
 pub const OPENAPI_FILE: &str = "registry-evidence.openapi.json";
 pub const REQUEST_SCHEMA_FILE: &str = "evidence-request-v1.schema.json";
@@ -29,10 +40,7 @@ pub const UNSIGNED_ENVELOPE_SCHEMA_FILE: &str = "evidence-unsigned-envelope-v1.s
 pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
 
-const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const REQUEST_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/request-v1.json";
-const EVIDENCE_SCHEMA_ID: &str =
-    "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json";
 const DEFINITIONS_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/definitions-v1.json";
 const JWS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/flattened-jws-v1.json";
@@ -40,11 +48,10 @@ const UNSIGNED_ENVELOPE_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/unsigned-envelope-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
-const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 /// Shape of the server-minted operation identifier, shared by the response
 /// header and the problem member so the two cannot describe different values.
 const OPERATION_PATTERN: &str = "^[0-9A-HJKMNP-TV-Z]{26}$";
-/// Unpadded base64url encoding of exactly one 32-byte Ed25519 public key.
+/// Unpadded base64url encoding of exactly one 32-byte P-256 affine coordinate.
 const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
     ("malformed_request", 400, "Request is not valid"),
@@ -76,13 +83,8 @@ const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
 
 static SERVED_OPENAPI: OnceLock<Option<String>> = OnceLock::new();
 static REQUEST_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
-static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
 static DEFINITIONS_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
     OnceLock::new();
-
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-#[error("built-in public contract schema failed to initialize")]
-pub(crate) struct ContractValidationError;
 
 #[derive(Debug, Error)]
 pub enum ContractGenerationError {
@@ -178,12 +180,6 @@ pub(crate) fn served_openapi_document() -> Option<&'static str> {
 /// Validate an inbound public request against the exact generated Version 1 schema.
 pub(crate) fn request_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
     contract_validator(&REQUEST_VALIDATOR, request_schema)
-        .map(|validator| validator.is_valid(value))
-}
-
-/// Validate a verified JWS payload against the exact generated Version 1 schema.
-pub(crate) fn evidence_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
-    contract_validator(&EVIDENCE_VALIDATOR, evidence_schema)
         .map(|validator| validator.is_valid(value))
 }
 
@@ -316,12 +312,13 @@ fn request_schema() -> Value {
             },
             "holder-key": {
                 "type": "object", "additionalProperties": false,
-                "required": ["kty", "crv", "x"],
+                "required": ["kty", "crv", "x", "y"],
                 "properties": {
-                    "kty": {"type": "string", "enum": ["OKP"]},
-                    "crv": {"type": "string", "enum": ["Ed25519"]},
+                    "kty": {"type": "string", "enum": ["EC"]},
+                    "crv": {"type": "string", "enum": ["P-256"]},
                     "x": {"type": "string", "pattern": HOLDER_KEY_COORDINATE_PATTERN},
-                    "alg": {"type": "string", "enum": ["EdDSA"]},
+                    "y": {"type": "string", "pattern": HOLDER_KEY_COORDINATE_PATTERN},
+                    "alg": {"type": "string", "enum": ["ES256"]},
                     "kid": {"type": "string", "minLength": 1, "maxLength": 256}
                 }
             }
@@ -338,12 +335,11 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "configurationRevision", "issuedBy", "providedBy", "definitions"
+            "schema", "assuranceProfile", "issuedBy", "providedBy", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
-            "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "definitions": {
@@ -355,11 +351,12 @@ fn definitions_schema() -> Value {
             "definition": {
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "requirement", "kind", "evidenceType", "purpose",
+                    "requirement", "configurationRevision", "kind", "evidenceType", "purpose",
                     "referenceFrameworks", "subjects", "concepts"
                 ],
                 "properties": {
                     "requirement": {"type": "string", "format": "uri", "maxLength": 512},
+                    "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
                     "kind": {"enum": ["criterion", "information-requirement", "constraint"]},
                     "evidenceType": {"type": "string", "format": "uri", "maxLength": 512},
                     "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
@@ -467,108 +464,6 @@ fn definitions_schema() -> Value {
     })
 }
 
-fn evidence_schema() -> Value {
-    json!({
-        "$schema": SCHEMA_DIALECT,
-        "$id": EVIDENCE_SCHEMA_ID,
-        "title": "Evidence assertion payload Version 1",
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "schema", "assuranceProfile", "requestNonce", "id", "type", "supportsRequirement", "isConformantTo",
-            "issuedBy", "providedBy", "issuedAt", "observedAt", "validUntil",
-            "purpose", "audience", "configurationRevision", "subjects", "supportedValues"
-        ],
-        "properties": {
-            "schema": {"const": "registry.assertion-evidence/v1"},
-            "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
-            "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
-            "id": {"type": "string", "format": "uri", "maxLength": 512},
-            "type": {"const": "Evidence"},
-            "supportsRequirement": {"type": "string", "format": "uri", "maxLength": 512},
-            "isConformantTo": {"type": "string", "format": "uri", "maxLength": 512},
-            "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
-            "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
-            "issuedAt": {"type": "string", "format": "date-time"},
-            "observedAt": {"type": "string", "format": "date-time"},
-            "validUntil": {"type": "string", "format": "date-time"},
-            "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
-            "audience": {"type": "string", "format": "uri", "maxLength": 512},
-            "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-            "subjects": {
-                "type": "array", "minItems": 1, "maxItems": 8,
-                "items": {"$ref": "#/$defs/subject-binding"}
-            },
-            "supportedValues": {
-                "type": "array", "minItems": 1, "maxItems": 16,
-                "items": {"$ref": "#/$defs/supported-value"}
-            }
-        },
-        "$defs": {
-            "subject-binding": {
-                "type": "object", "additionalProperties": false,
-                "required": ["role", "binding"],
-                "properties": {
-                    "role": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
-                    "binding": {"type": "string", "pattern": "^urn:evidence:subject:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$"}
-                }
-            },
-            "supported-value": {
-                "type": "object", "additionalProperties": false,
-                "required": ["providesValueFor", "value"],
-                "properties": {
-                    "providesValueFor": {"type": "string", "format": "uri", "maxLength": 512},
-                    "value": {"$ref": "#/$defs/value"}
-                }
-            },
-            "value": {
-                "anyOf": [
-                    {"type": "boolean"},
-                    {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64},
-                    {"type": "string", "minLength": 1, "maxLength": 1024},
-                    {"$ref": "#/$defs/bucket"},
-                    {"$ref": "#/$defs/entity-reference"},
-                    {"$ref": "#/$defs/structured"},
-                    {
-                        "type": "array", "minItems": 1, "maxItems": 64,
-                        "items": {"anyOf": [
-                            {"type": "string", "minLength": 1, "maxLength": 1024},
-                            {"$ref": "#/$defs/entity-reference"}
-                        ]}
-                    }
-                ]
-            },
-            "bucket": {
-                "type": "object", "additionalProperties": false,
-                "required": ["form", "scheme", "bucket"],
-                "properties": {
-                    "form": {"enum": ["date-bucket", "time-bucket"]},
-                    "scheme": {"type": "string", "format": "uri", "maxLength": 512},
-                    "bucket": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
-                }
-            },
-            "entity-reference": {
-                "type": "object", "additionalProperties": false,
-                "required": ["form", "reference"],
-                "properties": {
-                    "form": {"const": "audience-scoped-entity-reference"},
-                    "reference": {"type": "string", "pattern": "^urn:evidence:entity:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$"}
-                }
-            },
-            "structured": {
-                "type": "object", "additionalProperties": false,
-                "required": ["form", "schema", "fields"],
-                "properties": {
-                    "form": {"const": "reviewed-structured-value"},
-                    "schema": {"type": "string", "format": "uri", "maxLength": 512},
-                    "fields": {"type": "object", "minProperties": 1, "maxProperties": 16}
-                }
-            }
-        },
-        "$comment": "The selected concept declaration further closes value form, schema, codelist, precision, cardinality, structured fields, and uniqueness. Selector profiles and selector values never appear in Evidence."
-    })
-}
-
 fn jws_schema() -> Value {
     json!({
         "$schema": SCHEMA_DIALECT,
@@ -582,7 +477,7 @@ fn jws_schema() -> Value {
             "payload": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
             "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
         },
-        "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=EdDSA, kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes."
+        "$comment": "Flattened JWS JSON Serialization. The protected header has exactly alg=ES256, an RFC 7638 thumbprint kid, typ=evidence+jws, and cty=application/evidence+json. The payload is the base64url encoding without padding of exact UTF-8 Evidence JSON bytes."
     })
 }
 
@@ -670,23 +565,24 @@ fn jwks_schema() -> Value {
         "properties": {
             "keys": {
                 "type": "array", "minItems": 1, "maxItems": 33, "uniqueItems": true,
-                "items": {"$ref": "#/$defs/ed25519-public-jwk"}
+                "items": {"$ref": "#/$defs/p256-public-jwk"}
             }
         },
         "$defs": {
-            "ed25519-public-jwk": {
+            "p256-public-jwk": {
                 "type": "object", "additionalProperties": false,
-                "required": ["kty", "kid", "alg", "crv", "x"],
+                "required": ["kty", "kid", "alg", "crv", "x", "y"],
                 "properties": {
-                    "kty": {"const": "OKP"},
-                    "kid": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
-                    "alg": {"const": "EdDSA"},
-                    "crv": {"const": "Ed25519"},
-                    "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+                    "kty": {"const": "EC"},
+                    "kid": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                    "alg": {"const": "ES256"},
+                    "crv": {"const": "P-256"},
+                    "x": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                    "y": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
                 }
             }
         },
-        "$comment": "Only the active and configured retired public keys are published. Key ids are unique and limited to 256 UTF-8 bytes by the runtime; JSON Schema maxLength is an additional code-point bound. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location."
+        "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location."
     })
 }
 
@@ -942,8 +838,8 @@ fn openapi_document(
             "additionalProperties": false,
             "required": ["alg", "kid", "typ", "cty"],
             "properties": {
-                "alg": {"type": "string", "enum": ["EdDSA"]},
-                "kid": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F]+$"},
+                "alg": {"type": "string", "enum": ["ES256"]},
+                "kid": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
                 "typ": {"type": "string", "enum": ["evidence+jws"]},
                 "cty": {"type": "string", "enum": ["application/evidence+json"]}
             }
@@ -954,7 +850,7 @@ fn openapi_document(
         &mut schemas,
         "JwksDocument",
         jwks,
-        &[("ed25519-public-jwk", "Ed25519PublicJwk")],
+        &[("p256-public-jwk", "P256PublicJwk")],
     );
     schemas.insert(
         "SdJwtVcCredential".to_string(),
@@ -969,10 +865,10 @@ fn openapi_document(
         json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["issuer", "jwks"],
+            "required": ["issuer", "jwks_uri"],
             "properties": {
                 "issuer": {"type": "string", "maxLength": 512},
-                "jwks": {"$ref": "#/components/schemas/JwksDocument"}
+                "jwks_uri": {"type": "string", "format": "uri", "maxLength": 1024}
             }
         }),
     );
@@ -1330,7 +1226,7 @@ mod tests {
         assert_eq!(
             document["components"]["schemas"]["EvidenceProtectedHeader"]["properties"]["alg"]
                 ["enum"],
-            json!(["EdDSA"])
+            json!(["ES256"])
         );
 
         for path in paths.values() {
@@ -1433,11 +1329,11 @@ mod tests {
                 json!({
                     "schema": "registry.evidence-definitions/v1",
                     "assuranceProfile": "evidence-grade",
-                    "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
                     "definitions": [{
                         "requirement": "urn:example:requirement:v1",
+                        "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                         "kind": "criterion",
                         "evidenceType": "urn:example:evidence-type:v1",
                         "purpose": "casework",
@@ -1481,8 +1377,9 @@ mod tests {
             (
                 jwks_schema(),
                 json!({"keys": [{
-                    "kty": "OKP", "kid": "evidence-key-1", "alg": "EdDSA",
-                    "crv": "Ed25519", "x": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    "kty": "EC", "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo", "alg": "ES256",
+                    "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                    "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
                 }]}),
             ),
         ];

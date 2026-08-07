@@ -19,8 +19,10 @@ adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
 Registry Mint is a supporting service, not a third pattern: it issues the
 access tokens a resource server such as Evidence verifies, for deployments with
-no identity provider. The dependency runs one way only. Mint's tests drive
-Evidence's authenticator; Evidence does not depend on Mint.
+no identity provider. The dependency runs one way only in production: no
+Evidence crate depends on Mint at runtime. Mint's tests drive Evidence's
+authenticator, and Evidence test code may drive a real Mint instance to prove a
+client against a real authorization server.
 
 ## Repository map
 
@@ -28,6 +30,10 @@ Evidence's authenticator; Evidence does not depend on Mint.
 |---|---|
 | `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
+| `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
+| `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
+| `crates/registry-evidence-client-node` | Node.js binding for `registry-evidence-client`, via napi-rs |
+| `crates/registry-evidence-client-py` | Python binding for `registry-evidence-client`, via PyO3 |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
@@ -52,14 +58,33 @@ binary. It may reuse narrowly applicable `registry-platform-*`
 primitives such as audit, crypto, OIDC, HTTP security, SD-JWT serialization,
 and testing.
 
+`registry-evidence-verifier` is the portable response-verification library the
+runtime depends on. It owns the response wire formats, the Evidence payload
+contract, and relying-party verification, so client tooling can verify a signed
+Evidence response without the runtime. It is a library, not a second runtime and
+not a pattern of its own, and it carries no server, source access, or
+service-runtime dependency; portable means free of the service runtime, not
+target independent.
+
+`registry-evidence-client` is the relying-party SDK beside the runtime. It
+requests assertions over the public HTTP contract and links
+`registry-evidence-verifier` for every verification decision, so it sits outside
+the frozen Version 1 runtime contract and adds no Evidence semantics of its own.
+`registry-evidence-client-node` (napi-rs) and `registry-evidence-client-py`
+(PyO3) are thin bindings over that SDK and carry the same boundary. All three
+are covered by the same source-product and domain neutrality checks as the
+runtime.
+
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
 OpenAPI authoring workspaces, and drives fixture runs for complete deployment
-projects, but it shells out to the `evidence` binary for every Evidence semantic
-decision and never re-implements evaluation, signing, or verification. Its
-source is covered by the same source-product and domain neutrality checks as
-the runtime.
+projects. It delegates runtime evaluation, signing, bundle validation, and
+fixture evaluation to the `evidence` binary, and reuses
+`registry-evidence-client` and `registry-evidence-verifier` for relying-party
+request preparation and offline response verification. It adds no Evidence
+semantics of its own. Its source is covered by the same source-product and
+domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,
@@ -124,11 +149,31 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 (`just openapi-contract` from `crates/registry-relay`). cargo-deny needs v0.19+
 to parse this `deny.toml`; CI pins 0.19.8.
 
-Evidence-specific contracts and source neutrality:
+Evidence-specific contracts, source neutrality, and verifier portability:
 
 ```bash
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
+```
+
+Evidence client bindings, from `crates/registry-evidence-client-node`:
+
+```bash
+npm ci
+npm run build:debug
+npm test
+npm run check:types
+cmp ../../LICENSE LICENSE
+```
+
+and from `crates/registry-evidence-client-py`:
+
+```bash
+cargo build --locked -p registry-evidence-client-py --lib \
+  --features registry-evidence-client-py/extension-module
+python3 -m unittest discover -s tests/python -v
+cmp ../../LICENSE LICENSE
 ```
 
 Release source checks:

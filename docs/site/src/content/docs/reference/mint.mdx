@@ -1,11 +1,11 @@
 ---
 title: Registry Mint reference
-description: Configuration fields, the token endpoint contract, and the Evidence verification path for the Registry Mint token issuer.
+description: Configuration fields, the token endpoint contract, and the Evidence Gateway verification path for the Registry Mint token issuer.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -50,9 +50,12 @@ following tables group the surface by the struct that owns each field.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `version` | integer | required | Must equal `1`. |
+| `validationMode` | `strict` or `supervised-local-development` | `strict` | Strict mode requires Transit. Supervised local development also permits `local-jwk`. |
 | `issuer` | string (URL) | required | Must be `https`, have a host, and carry no credentials, query, or fragment. |
 | `listener` | object | required | See [Listener](#listener). |
 | `signing` | object | required | See [Signing](#signing). |
+| `signer` | object | required | The local-JWK or Transit signing provider. |
+| `secretProviders` | object | required | File-secret root for local signing and audit masters. |
 | `audit` | object | required | See [Audit](#audit). |
 | `accessTokens` | object | required | See [Access tokens](#access-tokens). |
 | `clientAssertion` | object | required | See [Client assertion](#client-assertion). |
@@ -71,11 +74,20 @@ following tables group the surface by the struct that owns each field.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `algorithm` | enum: `EdDSA`, `ES256`, `RS256` | required | Shared by minted tokens and accepted client assertions. |
-| `activeKeyId` | string (1..=256 bytes) | required | Must match the `kid` of the private JWK at `activeKeyFile`. |
-| `activeKeyFile` | path | required | Private JWK. Must be a regular, owner-only, single-link file. |
-| `retiredPublicJwkFiles` | list of paths | `[]` | Public JWKs of keys that no longer sign but may still have live tokens. |
+| `algorithm` | `ES256` | required | Fixed service-token signing algorithm. Client assertions have their own allowlist. |
+| `activePublicJwkFile` | path | required | Exact public P-256 JWK for the signer. Its `kid` must be the derived RFC 7638 thumbprint. |
+| `publishedPublicJwkFiles` | list of paths | `[]` | Other current public P-256 JWKs that remain in JWKS during a planned rotation. |
+| `revokedKeyIds` | list of thumbprints | `[]` | Denylisted service keys. They cannot be active, published, or returned by JWKS. |
 | `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, or `/.well-known/oauth-authorization-server`. |
+
+### Signer
+
+`signer.kind` is `transit` in strict mode and `local-jwk` only for supervised local development.
+A Transit configuration has `unixSocketPath`, `mount`, `keyName`, `keyVersion`, and
+`timeoutMilliseconds`. The Unix socket points to a workload-local proxy, not a network provider.
+The key version is nonzero and pinned. Mint verifies the public key, Transit custody controls, key
+version, and a signature before readiness admits traffic. A local-JWK configuration has only
+`privateKeyRef`; its resolved key must match `activePublicJwkFile`.
 
 ### Audit
 
@@ -83,7 +95,7 @@ following tables group the surface by the struct that owns each field.
 | --- | --- | --- | --- |
 | `path` | path | required | One keyed JSONL chain. The parent directory and existing chain must be owner-only. |
 | `maximumFileBytes` | integer (`u64`) | required | Per-segment rotation threshold, from `1048576` through `1099511627776` bytes. |
-| `hashKeyFile` | path | required | At least 32 bytes in a regular, owner-only, single-link file. Must differ from signing and audit paths. |
+| `hashKeyRef` | `secret:file/<name>` | required | At least 32 bytes in a regular, owner-only file beneath `secretProviders.file.root`. Must differ from the local signing key reference. |
 | `hashKeyVersion` | integer (`u32`) | required | Must be non-zero. Labels keyed pseudonyms so an operator can identify the correlating key generation. |
 
 Mint takes a single-writer lock, verifies the active chain at startup, and synchronizes the chain
@@ -191,8 +203,8 @@ configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
 }
 ```
 
-`access_token` is a compact JWS with header `{"alg": "<signing.algorithm>", "typ": "at+jwt",
-"kid": "<signing.activeKeyId>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
+`access_token` is a compact JWS with header `{"alg": "ES256", "typ": "at+jwt",
+"kid": "<RFC-7638-thumbprint>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
 `exp`, `jti`, `client_id`, and `sub` (the principal), plus the authority claims named under
 `accessTokens.claims`. `expires_in` equals `accessTokens.lifetimeSeconds`. Mint durably appends
 the matching token-release audit record before sending this response. If that append fails, the
@@ -217,9 +229,9 @@ Every response body is `{"error": "<code>"}`, from
 | `GET <signing.jwksPath>` (default `/.well-known/jwks.json`) | Public keys for verifying minted tokens, `application/jwk-set+json`. |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and the key set. |
 | `GET /health` | Liveness. |
-| `GET /ready` | Readiness. Returns `503` while no client is registered or after an audit write failure poisons the writer. |
+| `GET /ready` | Readiness. Returns `503` while no client is registered, after an audit write failure poisons the writer, or while the signing provider is unavailable. Provider readiness recovers after a successful self-test. |
 
-## How a client, Registry Mint, and Evidence interact
+## How a client, Registry Mint, and Evidence Gateway interact
 
 One round trip, from a client that holds only its own private key to a signed assertion. Every
 label in this diagram is stated in the prose and tables on this page; the diagram is a summary of
@@ -230,10 +242,10 @@ sequenceDiagram
     autonumber
     participant C as Registered client
     participant M as Registry Mint
-    participant E as Evidence
+    participant E as Evidence Gateway
     participant S as Source
 
-    Note over C,E: Set up once, before any request: the client's public JWK<br/>sits in Mint's client registry, and Evidence's<br/>authentication block names Mint's issuer and key set.
+    Note over C,E: Set up once, before any request: the client's public JWK<br/>sits in Mint's client registry, and Evidence Gateway's<br/>authentication block names Mint's issuer and key set.
 
     C->>C: Sign an assertion with<br/>the client's own private key
     C->>M: POST /token<br/>client_credentials + assertion
@@ -251,43 +263,44 @@ sequenceDiagram
 ```
 
 Everything through the access-token return is the whole of Registry Mint's job. It never sees the
-source, the acceptance definition, or the assertion. The remaining exchanges are Evidence's, and
-Evidence's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
+source, the acceptance definition, or the assertion. The remaining exchanges are Evidence Gateway's, and
+Evidence Gateway's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
 names in its own
 configuration, so any issuer writing those claims would serve equally well.
 
 The exact wire shapes the diagram abbreviates are given in full below:
 [Token endpoint contract](#token-endpoint-contract) for the assertion and token,
 [Other endpoints](#other-endpoints) for the key set path, and
-[How Evidence verifies these tokens](#how-evidence-verifies-these-tokens) for the claim names.
+[How Evidence Gateway verifies these tokens](#how-evidence-gateway-verifies-these-tokens) for the claim names.
 
 Two failures collapse deliberately and are worth reading beside the diagram. A client
 authentication failure returns `401 invalid_client` whatever went wrong, so the token endpoint
 cannot be used to probe which client ids are registered. A key-set retrieval failure prevents
-Evidence from verifying a token: with no key set ever retrieved, every request is rejected until
+Evidence Gateway from verifying a token: with no key set ever retrieved, every request is rejected until
 one can be, and with a key set already held, that held set keeps being accepted only until its
-allowance runs out. Evidence names the outage in either case rather than failing silently.
+allowance runs out. Evidence Gateway names the outage in either case rather than failing silently.
 
-## How Evidence verifies these tokens
+## How Evidence Gateway verifies these tokens
 
-Evidence's own `authentication` configuration block, defined in
+Evidence Gateway's own `authentication` configuration block, defined in
 `crates/registry-evidence/src/config.rs` (`AuthenticationConfig`), names the same claims Registry
 Mint writes: `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `grantIdClaim`,
 `grantAuthorityClaim`, and an optional `actorClaim`, alongside `issuer`, `audiences`,
-`tokenTypes`, `algorithms`, and `jwksUri`. Evidence verifies a presented token against that
+`tokenTypes`, `algorithms`, and `jwksUri`. Evidence Gateway verifies a presented token against that
 configuration in `crates/registry-evidence/src/auth.rs` (`Authenticator`), reading each claim by
 the name configured there rather than any hardcoded name. Setting `authentication.issuer` and
 `authentication.jwksUri` to Registry Mint's own `issuer` and published key set, and setting each
-claim name to match `accessTokens.claims` on Registry Mint, is what lets one token flow between
-the two.
+claim name to match `accessTokens.claims` on Registry Mint, and setting its required maximum token
+lifetime and `revokedKeyIds`, is what lets one token flow between the two. Evidence Gateway checks
+the key denylist before it selects a cached JWKS entry.
 
 This is proven by tests, not only by matching configuration. `registry-mint`'s
 `tests/evidence_compatibility.rs` drives the real Registry Mint router over a real on-disk
-deployment and feeds the minted token to Evidence's own authenticator;
+deployment and feeds the minted token to Evidence Gateway's own authenticator;
 `tests/delegated_subject_binding.rs` does the same for delegated, subject-bound tokens, running
-Evidence's own entitlement match and selector resolution over a token minted by the real Registry
-Mint router. The dependency runs one way only: Registry Mint's tests exercise Evidence's
-authenticator, and Evidence does not depend on Registry Mint.
+Evidence Gateway's own entitlement match and selector resolution over a token minted by the real Registry
+Mint router. The dependency runs one way only: Registry Mint's tests exercise Evidence Gateway's
+authenticator, and Evidence Gateway does not depend on Registry Mint.
 
 ## Next
 

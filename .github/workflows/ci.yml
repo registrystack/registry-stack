@@ -51,6 +51,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       editors: ${{ steps.filter.outputs.editors }}
+      client_bindings: ${{ steps.filter.outputs.client_bindings }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
     steps:
@@ -457,8 +458,14 @@ jobs:
       - name: Reproduce Evidence generated contracts
         run: products/evidence/scripts/check-contracts.sh
 
+      - name: Self-test the Evidence neutrality gate
+        run: products/evidence/scripts/test-check-source-neutrality.sh
+
       - name: Enforce Evidence source-product neutrality
         run: products/evidence/scripts/check-source-neutrality.sh
+
+      - name: Enforce Evidence verifier portability
+        run: products/evidence/scripts/check-verifier-portability.sh
 
   relay-contracts:
     name: Relay API contracts
@@ -1016,6 +1023,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
+      - name: Cache Registryctl authoring-reference build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: docs-authoring-reference
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Install docs shell dependency
         run: |
           sudo apt-get update
@@ -1112,7 +1125,7 @@ jobs:
           ARCHIVE_LOCK_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
         run: npm run check:archive-lock -- --base-ref "${ARCHIVE_LOCK_BASE_REF}"
 
-      - name: Assemble and verify every archived release
+      - name: Assemble and verify the published archive window
         working-directory: docs/site
         run: npm run check:archives
 
@@ -1155,6 +1168,41 @@ jobs:
           cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
           cmp LICENSE editors/zed/LICENSE
 
+  client-bindings:
+    name: Evidence client bindings
+    needs: changes
+    if: needs.changes.outputs.client_bindings == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
+
+      - name: Build and test the Node binding
+        working-directory: crates/registry-evidence-client-node
+        run: |
+          npm ci
+          npm run build:debug
+          npm test
+          npm run check:types
+          cmp ../../LICENSE LICENSE
+
+      - name: Build and test the Python binding
+        working-directory: crates/registry-evidence-client-py
+        run: |
+          cargo build --locked -p registry-evidence-client-py --lib --features registry-evidence-client-py/extension-module
+          python3 -m unittest discover -s tests/python -v
+          cmp ../../LICENSE LICENSE
+
   ci-result:
     name: CI result
     if: always()
@@ -1173,6 +1221,7 @@ jobs:
       - evidence-tutorials
       - docs
       - editor-extensions
+      - client-bindings
     runs-on: ubuntu-24.04
     env:
       CI_JOB_RESULTS: ${{ toJSON(needs) }}

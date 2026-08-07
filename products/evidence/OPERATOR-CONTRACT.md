@@ -18,15 +18,19 @@ The supported native deployment has:
   fallback;
 - reviewed requester and subject-authority mappings for named requirement
   revisions, purposes, audiences, roles, selector profiles, and value origins;
-- fixed, bounded HTTP JSON source requests with fixed or selector-bound paths,
+- fixed, bounded HTTP JSON source requests with fixed or tagged selector/prior-fact-bound paths,
   fixed non-secret headers, client-side response projection, denied redirects,
   logical private-CA trust profiles, and generic Basic, static Bearer, static
   API-key, or OAuth 2.0 client-credentials authentication through secret
   references;
 - optional credential-free source access only for `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
-- one active EdDSA reference signing key, flattened JWS JSON success responses,
-  and public key discovery at `/.well-known/evidence/jwks.json`;
+- one active ES256/P-256 service signing key whose `kid` is its RFC 7638
+  thumbprint, explicit published and revoked key sets, flattened JWS JSON
+  success responses, and public key discovery at
+  `/.well-known/evidence/jwks.json`;
+- a non-exportable, pinned-version Vault/OpenBao Transit key reached through a
+  workload-local Unix-socket proxy for production and evidence-grade serving;
 - keyed JSONL audit on storage whose durability the operator has explicitly
   established;
 - production HTTPS exposure, dependency timeouts, per-source concurrency
@@ -60,8 +64,9 @@ clients unbound tokens.
 The operator supplies one atomic bundle containing the approved YAML,
 preparation scripts, extraction scripts, derivation scripts, schemas, codelists,
 mappings, and fixtures. A separate closed `runtime.yaml` binds the bundle to
-one listener, bundle directory, secret root, audit destination, and local TLS
-trust files. The runtime file cannot override service identity, trust domain,
+one listener, bundle directory, secret root, audit destination, signer
+transport and pinned version, and local TLS trust files. The runtime file
+cannot override service identity, trust domain,
 authentication, authority, sources, request policy, scripts, disclosure, rate
 limits, signing policy, or audit fail-closed behavior. The two content hashes
 identify the exact loaded inputs but are not trust decisions. The operator
@@ -95,11 +100,12 @@ unsafe bundle safe.
 `evidencectl build` compiles an editable project and one explicit production
 target into a new candidate directory. It is a create-only authoring command,
 not an approval, promotion, deployment, key-generation, caller-registration,
-or service-start command. It runs the real `evidence` binary against private
-temporary validation material before atomically publishing a candidate with a
-copied `runtime.yaml` and one closed `bundle/`. The candidate contains no
-production private key, credential, token, local request, audit entry, or
-source response.
+or service-start command. It runs the real `evidence` binary through its
+bundle-only validation entry point and evaluates every referenced fixture
+without generating a temporary signing key or other validation secret. It then
+atomically publishes a candidate with a copied `runtime.yaml` and one closed
+`bundle/`. The candidate contains no production private key, credential, token,
+local request, audit entry, or source response.
 
 The operator reviews and transfers the exact candidate, records its bundle
 revision, and independently provisions the signing key, audit HMAC key,
@@ -108,8 +114,10 @@ root. Secret ownership and mode requirements remain unchanged: each referenced
 secret is a regular owner-only file accepted by the eventual service identity.
 The bundle and runtime must be non-writable to that identity. The copied
 runtime is target-specific; its revision and bound private-CA bytes are not the
-bundle revision, and signed assertions continue to carry only the bundle
-revision as `configurationRevision`.
+bundle revision, and signed assertions continue to carry only a configuration
+revision as `configurationRevision`. That value is scoped to the one requirement
+the assertion answers, not to the whole deployment, so it is neither the runtime
+revision nor the bundle revision.
 
 Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
@@ -146,6 +154,43 @@ names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
 binaries, not generated containers or orchestrator manifests.
 
+### Git-managed environments
+
+Use one protected branch and complete named environment targets. The maintained
+reference layout is under
+[`reference/deployment-targets/`](reference/deployment-targets/):
+
+```text
+shared/
+  evidence-project/
+environments/
+  local/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+  staging/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+  production/
+    evidence/{governance.yaml,runtime.yaml,public-keys/}
+    mint/{mint.yaml,clients/,public-keys/}
+    transit/{proxy-configs/,policies/}
+```
+
+Shared Evidence questions, scripts, schemas, and fixtures are authored once.
+Each environment target is nevertheless complete. It contains its own service
+identity, issuer, endpoints, audiences, public keys, runtime paths, pinned
+Transit versions, and logical secret references. There are no overlays,
+environment branches, symlinks, runtime substitutions, or inherited defaults.
+Promote a reviewed source revision, then build separate staging and production
+candidates from their complete targets.
+
+Git contains public JWKs and non-secret Transit proxy and policy configuration.
+It never contains private JWKs, HMAC masters, provider tokens, auto-auth
+credentials, access tokens, live responses, or real identifiers. A target
+template uses conspicuous replacement values and is not deployable until those
+values and public JWKs have been reviewed and replaced.
+
 ## Discovery of available evidence
 
 Evidence Version 1 answers "what may this caller request?" with authenticated
@@ -160,14 +205,15 @@ Discovery uses four separately trusted surfaces:
 | Artifact | Purpose | What it does not do |
 |---|---|---|
 | Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
-| Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision. | It performs no provider access, does not grant authority, and is not a global catalog. |
+| Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
 | Static onboarding material | Gives an approved consumer token-acquisition instructions, human descriptions, legal context, endpoint trust, and verifier policy through the existing API catalog, developer portal, configuration repository, or bilateral process. | It is not accepted by the runtime and grants no authority. |
 | Evidence JWKS | Publishes the active and retained public verification keys. | It is not a trust anchor and contains no definition or entitlement metadata. |
 
 Each item in `definitions` is one complete invocable combination, not a
 cartesian product for the client to assemble. It contains:
 
-- exact governed bundle revision plus legal issuer and technical provider;
+- the requirement's own configuration revision plus legal issuer and technical
+  provider;
 - requirement and Evidence Type identifiers;
 - one allowed purpose;
 - output concept identifiers and value forms;
@@ -201,13 +247,15 @@ The publication workflow is:
    governed bundle revision.
 3. Publish the generic OpenAPI and static onboarding material; configure token
    issuance and verifier trust through the same governed process.
-4. Obtain a token, call `GET /v1/evidence-definitions`, and bind the returned
-   `configurationRevision` to the deployment revision expected during rollout.
+4. Obtain a token, call `GET /v1/evidence-definitions`, and bind each returned
+   `configurationRevision` to the requirement it is published under. A relying
+   party pins the requirements it consumes, not the deployment.
 5. Construct requests only from one returned complete shape. Do not combine
    subjects, profiles, purposes, or fields across items.
 6. On a relevant bundle or trust change, update onboarding material and
-   coordinate rollout. Clients observe the new revision through authenticated
-   discovery, not by probing problem responses.
+   coordinate rollout with the relying parties whose requirements changed
+   revision. Clients observe a new revision through authenticated discovery,
+   not by probing problem responses.
 
 Version one does not implement a public, cross-requester, searchable, mutable,
 or federated catalog, a registration editor, or a `describe` CLI command.
@@ -319,8 +367,8 @@ different audience yields a different identifier and the credential is not a
 general-purpose multi-verifier credential.
 
 A request may carry an optional `holderKey`, which is echoed into the `cnf`
-claim and is meaningful only for the SD-JWT VC format. Only a public OKP
-Ed25519 JWK is accepted; an unacceptable key is rejected as a malformed request
+claim and is meaningful only for the SD-JWT VC format. Only a public EC P-256
+JWK is accepted; an unacceptable key is rejected as a malformed request
 alongside the nonce check, before authentication, credential acquisition, and
 source access. The key never reaches authorization, selectors, Rhai, sources,
 audit, or the signed-JWS payload. Evidence issues no key-binding JWT, requires
@@ -334,16 +382,25 @@ SD-JWT VC request to unsigned output or to the signed default.
 
 ## Secrets and keys
 
-Source credentials and private signing material are supplied only through the
-supported secret-reference mechanism. They do not appear in YAML values,
-Rhai, command arguments, environment dumps, logs, audit, errors, snapshots,
-or generated contracts. Private key parsing uses an explicit algorithm
-allowlist. Missing or failed signing is fail-closed and never releases an
-unsigned success response.
+Source credentials and local-authoring private signing material are supplied
+only through the supported secret-reference mechanism. Production and
+evidence-grade private signing material remains inside Vault/OpenBao Transit
+and is reached through a workload-local Unix-socket proxy. Provider tokens and
+auto-auth credentials stay in the proxy boundary and never enter Evidence.
+Secret material does not appear in bundle YAML values, Rhai, command arguments,
+environment dumps, logs, audit, errors, snapshots, or generated contracts.
+Private JWK parsing uses an explicit ES256/P-256 allowlist. Missing or failed
+signing is fail-closed and never releases an unsigned success response.
 
-The operator configures one active signing key and retains each retired public
-key in the published JWKS for at least the maximum assertion validity plus
-allowed clock skew. The JWKS is discovery, not a trust anchor. Verifiers obtain
+The operator commits one active public JWK and zero or more additionally
+published public JWKs. Every key is exact ES256/P-256 public material and its
+43-character `kid` is derived as its RFC 7638 thumbprint, never configured
+separately. Active and published identifiers are disjoint from
+`revokedKeyIds`. The JWKS contains only the active and published keys. During
+planned rotation, retain the predecessor for at least the maximum assertion
+validity plus allowed clock skew. Emergency revocation removes it immediately,
+and denylisting takes precedence over a cached key set. The JWKS is discovery,
+not a trust anchor. Verifiers obtain
 the provider identity and JWKS location through governed configuration, pin
 that trust, allowlist the expected algorithm, and resolve `kid` only within the
 trusted key set. They never follow a message-provided remote key URL.
@@ -353,6 +410,34 @@ the exact payload. It does not prove the source fact is true, confer legal
 notarization, create a qualified electronic signature, or create a holder
 credential. Governance establishes the provider's authority to act for the
 named legal issuer.
+
+### Service signing-key rotation
+
+Planned rotation is an overlap, switch, drain sequence:
+
+1. Create the next non-exportable Transit key version and export only its
+   public key.
+2. Commit that exact JWK under `public-keys/<thumbprint>.jwk.json` and add its
+   path to `publishedPublicJwkFiles`.
+3. Deploy and restart every replica so all of them publish both keys.
+4. Keep the named Transit key's minimum signing version low enough for both
+   pinned application versions. The ordinary Vault/OpenBao ACL grants the
+   named key path, not a request-body key version.
+5. Move the next path to `activePublicJwkFile`, keep the predecessor in
+   `publishedPublicJwkFiles`, pin `signer.keyVersion` to the next version, and
+   deploy and restart.
+6. After `maximumAssertionValiditySeconds + verifierClockSkewSeconds`, remove
+   the predecessor public key and raise the Transit key's minimum signing
+   version, or otherwise disable the predecessor provider-side.
+
+Emergency rotation has no overlap guarantee. First disable provider signing
+authority for the compromised version. Then remove its public JWK, add its
+thumbprint to `revokedKeyIds`, activate a replacement or leave the service
+unavailable, and restart every issuer and verifier that consumes the key set.
+If the compromised key issued Mint access tokens, add that Mint identifier to
+Evidence authentication `revokedKeyIds` in the same incident rollout. This
+shortens availability when necessary and is intentionally stronger than the
+ordinary validity window.
 
 ## Source and selector controls
 
@@ -373,8 +458,9 @@ resolved authoritative record. When count plus one minimized result is unavailab
 request may retrieve at most two minimally projected results solely to detect
 ambiguity.
 
-Every source declares its acquisition posture. Requirements inherit the
-posture of their configured source:
+Every source declares its acquisition posture. A single requirement inherits
+its source posture. A search-then-fetch requirement takes the weaker posture
+of its search and fetch sources:
 
 | Posture | Operator claim |
 |---|---|
@@ -391,9 +477,17 @@ cannot be closed at that boundary must use `record-transformed`, even when
 local projection and Rhai emit only narrow facts.
 
 Bundle-fixed headers cannot set authentication, routing, cookies, framing,
-forwarding, proxy, or tracing fields. Selector-bound path placeholders occupy
-complete segments and Rust expands them directly from already authorized
-selectors. Scripts render only query pairs and one JSON body.
+forwarding, proxy, or tracing fields. Tagged path placeholders occupy complete
+segments and Rust expands them directly from already authorized selectors or,
+only for a fixed fetch, a scalar property in the validated search FactSet.
+Scripts render only query pairs and one JSON body and cannot select the binding
+origin.
+
+Each requirement declares exactly `single` or `search-then-fetch`. The latter
+fixes both source identifiers at startup, performs the fetch only after a
+unique schema-valid search match, and has a hard two-call ceiling. It is not a
+workflow surface: neither a response nor Rhai may choose a source, origin,
+method, credentials, retry, or further call.
 
 A source may name a logical TLS trust profile. `runtime.yaml` binds it to one
 bounded PEM CA file. Hostname and fixed-origin verification remain mandatory;
@@ -402,17 +496,37 @@ there is no insecure or trust-all mode. Version 1 ignores `HTTP_PROXY`,
 
 ## Audit and operational data
 
-The configured audit sink must durably accept the access-attempt event before
-the first evidence-data source read. It must durably accept the
-disclosure-release event after signing and before response release. Either
-failure blocks the applicable action.
+After successful authentication, the configured audit sink must durably accept
+a minimal authorization-refusal event before a generic `403` is returned. It
+must durably accept one access-attempt event before each actual evidence-data
+source read and the disclosure-release event after signing and before response
+release. Any failure blocks the applicable action and returns a generic `503`
+when an HTTP response remains possible.
 
-Audit contains reviewed identifiers and decision categories, never raw
-selector values, per-field selector hashes, source values, Supported Values,
+Authorized-material audit events contain reviewed identifiers and decision
+categories, never raw selector values, per-field selector hashes, source
+values, prior facts, intermediate lookup identifiers, Supported Values,
 credentials, tokens, or raw subject identifiers. When correlation is required,
 one keyed, domain-separated, versioned pseudonym covers the complete canonical
 role, selector-profile identifier, ordered field names, and selector value
 bundle. It must not be globally stable across purposes or audiences.
+
+After successful authentication, every authorization refusal writes one
+standalone minimal native event before the generic `403` is returned. The event
+contains only the operation and event identifiers, assurance profile, bundle
+revision, scoped requester pseudonym, optional actor pseudonym, closed
+`not-authorized` decision and safe error category, timestamp, and duration. It
+omits the requested requirement, purpose, subjects, unmatched authority,
+selector information, response protection, source, and evaluation material.
+The requester and actor pseudonym scope binds the operator trust domain,
+requested purpose, and authenticated audience, while those scope inputs remain
+omitted from the event. This prevents a new cross-purpose or cross-audience
+identifier. Request-rate accounting remains separately scoped to the principal,
+so varying purpose cannot multiply or evade the request budget.
+The audit sink must durably accept that event. If it cannot, Evidence returns
+the generic `503` instead of the `403`. Authentication, malformed-request, and
+invalid-selector failures remain operational-only and create no native audit
+event.
 
 Operational logs contain route templates, operation identifiers, duration,
 status category, and safe internal error categories only. Request bodies,
@@ -423,17 +537,27 @@ excluded from logs, metrics, traces, snapshots, panics, and errors.
 Audit and operational logging are separate channels and operators must not
 confuse them. The audit chain is the accountability record: durable, complete,
 tamper-evident, and it has no severity levels and no way to turn records off.
-Both records every request writes, the access-attempt event durable before any
-source read and the disclosure-release event durable before response release
-as described above, are pinned by frozen Version 1 security invariants and are
-not configurable. The `tracing` channel is the operational and diagnostic
-record: it has levels, it is buffered and lossy, and it is cheap. The rule for
-operators and integrators is: accountability facts belong in the audit chain
-and never only in tracing, and operational noise belongs in tracing and never
-in the audit chain. If an adopter needs more detail than the frozen audit
-record carries, which some regulators require, the correct shape is a separate
-operational log keyed by the audit record's `eventId`, not a verbosity setting
-on the chain.
+Every authorized evidence evaluation writes one access-attempt event durable
+before each actual source read and the disclosure-release or terminal event
+required by its outcome. Every authenticated authorization refusal writes one
+minimal denial event before its response. Those gates are pinned by frozen
+Version 1 security invariants and are not configurable. The `tracing` channel
+is the operational and diagnostic record: it has levels, it is buffered and
+lossy, and it is cheap. The rule for operators and integrators is:
+accountability facts belong in the audit chain and never only in tracing, and
+operational noise belongs in tracing and never in the audit chain. If an
+adopter needs more detail than the frozen audit record carries, which some
+regulators require, the correct shape is a separate operational log keyed by
+the audit record's `eventId`, not a verbosity setting on the chain.
+
+The refusal event uses the distinct
+`registry.evidence.audit.authorization-refusal/v1` discriminator in the same
+keyed envelope and chain as `registry.evidence.audit/v1`. Updated semantic
+readers accept both closed shapes. Opaque keyed-chain verification remains
+compatible because it does not interpret the event payload. Older Version 1
+schema validators and local audit readers reject or cannot display the refusal
+shape, so operators must update semantic audit readers and the service together
+before routing traffic to the changed runtime.
 
 The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
@@ -461,6 +585,12 @@ The operator owns audit retention, backup, restore, access control, key
 rotation, and chain verification for the selected durable sink. A deployment
 profile may require more reviewed metadata or retention, but it cannot silently
 weaken the native privacy contract.
+
+The audit master feeds two HKDF-separated subkeys: one for chain integrity and
+one for identifier pseudonyms. The subject-binding master is a separate secret
+reference and must resolve to different bytes. This separation prevents a
+pseudonym oracle or subject-binding use from becoming a chain-MAC oracle while
+keeping the operator ceremony to two independent masters.
 
 Exactly one Evidence process may write a given audit path. The sink takes an
 exclusive OS advisory lock on `<auditStorage.path>.lock` at startup; a second
@@ -490,6 +620,25 @@ incident procedures, and on whatever cadence their audit retention policy
 requires; it is what proves sealed history was not tampered with.
 
 ## Audit chain rotation and rollback
+
+Audit-segment rotation below keeps one key and one continuous epoch. Rotating
+the audit master is different and always starts a new epoch:
+
+1. Drain traffic and stop the sole writer.
+2. Run `evidence verify-audit`; record the old chain head, bundle revision,
+   runtime revision, path, and `hashKeyVersion` in the change record.
+3. Archive the old runtime, audit-master secret under its governed secret
+   controls, every segment, lock-file disposition, and recorded head together.
+4. Generate a fresh independent audit master, increment `hashKeyVersion`, and
+   select a fresh empty `auditStorage.path`. Do not rename or reuse the old
+   active path.
+5. Run `evidence check` and the full handoff checks, start the new process, and
+   route traffic only after readiness succeeds.
+
+Never append a new audit master to an existing chain. Startup with replacement
+master bytes against existing segments fails closed. Old and new epochs verify
+independently with their archived runtime and master; neither is a continuation
+of the other.
 
 `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a
 total ceiling on the chain. When an append would push the active segment past
@@ -768,19 +917,26 @@ The reference file-secret provider reads only regular, non-symlink files below
 the configured `secretProviders.file.root`. The secret root is operator-only and
 each secret file must be owned by the service identity with mode `0600`.
 Audit and subject-binding secret files contain independently generated raw key
-bytes and must each be at least 32 bytes. They are not decoded as base64 by the
-file provider. Source credentials retain their provider-defined lexical form.
-Signing material is an Ed25519 private JWK whose `kid` exactly matches
-`signing.activeKeyId`; only the public current key and configured retired public
-keys appear at the JWKS endpoint. The audit JSONL path must be on storage whose
+bytes, must each be at least 32 bytes, must use distinct references, and must
+resolve to distinct bytes. They are not decoded as base64 by the file provider.
+Source credentials retain their provider-defined lexical form. Local signing
+material is an ES256 P-256 private JWK whose public projection exactly matches
+`signing.activePublicJwkFile`. Production and evidence-grade runtime
+configuration instead names a Transit Unix socket, mount, key name, pinned
+nonzero version, and bounded timeout. Transit metadata must report
+`ecdsa-p256`, signing enabled, `derived=false`, `exportable=false`, and
+`allow_plaintext_backup=false`, and its public key must exactly match the
+governed active public JWK. Only active and published non-revoked public keys
+appear at the JWKS endpoint. The audit JSONL path must be on storage whose
 append durability, permissions, capacity, backup, restore, retention, and keyed
 chain verification the operator owns.
 
 `evidence check` validates and compiles the complete bundle, and resolves and
-validates the mounted audit, subject-binding, and signing secret material
-exactly as startup does, without opening the audit chain. A deployment whose
-secret material startup would refuse, including a signing key whose `kid` does
-not match `signing.activeKeyId`, fails check. Source credentials are not
+validates the mounted audit, subject-binding, and signer exactly as startup
+does, including the asynchronous provider sign-and-verify test, without
+opening the audit chain. A deployment whose secret or provider material
+startup would refuse, including a signer whose public key differs from
+`signing.activePublicJwkFile`, fails check. Source credentials are not
 resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
@@ -813,9 +969,10 @@ evidence serve
 ```
 
 Startup confirms that the immutable bundle compiled, runtime ownership and
-every local path/trust binding validated, mounted secret files and signing
-material parsed, and the audit chain opened and verified. Readiness rechecks
-the subject-binding key, signing provider, pinned audit sink, and every source
+every local path/trust binding validated, mounted secret files and signer
+metadata parsed, the active public key matched, the signer completed its
+sign-and-verify test, and the audit chain opened and verified. Readiness
+rechecks the subject-binding key, signing provider, pinned audit sink, and every source
 credential. Basic, static Bearer, and static API-key credentials are checked
 locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
@@ -869,8 +1026,10 @@ format under [response formats](#response-formats). No public or
 cross-requester catalog is supported.
 
 `GET /.well-known/jwt-vc-issuer` is unauthenticated discovery for the SD-JWT VC
-format. It publishes the configured provider identity and the same public key
-set as `/.well-known/evidence/jwks.json`, and nothing else. It is served
+format. It publishes the exact configured provider identity as `issuer` and
+that origin plus `/.well-known/evidence/jwks.json` as `jwks_uri`, and nothing
+else. It does not inline the key set. Outside local assurance, enabling the
+format requires `service.providerId` to be a stable HTTPS origin. Metadata is served
 whether or not any grant enables the credential format, it never reveals which
 requesters or requirements do, and it is discovery rather than a trust anchor
 on exactly the terms in [secrets and keys](#secrets-and-keys).
@@ -878,20 +1037,25 @@ No-match and ambiguous outcomes are publicly indistinguishable by default.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 
-Every authorization refusal collapses to one generic `not_authorized` problem
-(code `n`) with HTTP 403 and reveals no layer detail: a principal outside the
-bundle audience, a requirement no matched grant permits, an authority the grant
-does not carry, and an unsigned-envelope request the bundle or grant does not
-allow all return the same body. This is deliberate; the response is not an
-oracle for which check failed. Because the wire response is intentionally
-uninformative, operators debug a 403 from trusted local state, not from the
-response. Confirm, in order: the Bearer principal is in the deployed bundle's
-audience; a grant matches the requested requirement, purpose, and subject
-roles; the grant carries the claimed authority; and, only for an unsigned
-request, both the bundle and that grant permit
-`application/vnd.registrystack.evidence-unsigned+json`. The keyed audit chain
-records the refusal phase for after-the-fact diagnosis; the caller never sees
-it.
+Every authorization refusal after successful authentication collapses to one
+generic problem with code `not_authorized` and HTTP 403 and reveals no layer
+detail: a principal outside the bundle audience, a requirement no matched grant
+permits, an authority the grant does not carry, and an unsigned-envelope request
+the bundle or grant does not allow all return the same body. This is deliberate;
+the response is not an oracle for which check failed. Because the wire response
+is intentionally uninformative, operators debug a 403 from trusted local state,
+not from the response. Confirm, in order: the Bearer principal is in the
+deployed bundle's audience; a grant matches the requested requirement, purpose,
+and subject roles; the grant carries the claimed authority; and, only for an
+unsigned request, both the bundle and that grant permit
+`application/vnd.registrystack.evidence-unsigned+json`. Before returning that
+problem, the keyed audit chain durably records the minimal refusal event under
+the response operation identifier. It proves that the authenticated requester
+was refused without recording which request field or authority check failed.
+The caller never sees the event. If the audit append fails, Evidence returns
+the generic `service_unavailable` problem with HTTP 503 instead. Authentication,
+malformed-request, and invalid-selector failures are operational-only and do not
+create this event.
 
 ## Measured throughput
 
@@ -899,7 +1063,9 @@ One end-to-end measurement is kept in the repository so capacity planning
 starts from a number rather than an estimate. It drives the real router over
 real sockets, and every request in it runs token verification, rate limiting,
 Rhai request preparation, one outbound source call, Rhai extraction, evidence
-construction, Ed25519 signing, and both durable audit appends.
+construction, in-process ES256 signing, and both durable audit appends for each
+successful request. It does not model the latency or availability of an
+external Transit deployment.
 
 | Measurement | Value |
 |---|---|
@@ -1009,9 +1175,11 @@ A relying party or operator re-verifies a stored signed response offline with
 `evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]`.
 The pinned JWKS file is the complete trust set and the policy document carries
 every expectation from independent trusted state: the retained request nonce,
-the expected assurance profile, role-bound subject bindings, and output contract,
-under
+the expected assurance profile, role-bound subject bindings, output contract,
+and explicit `revokedKeyIds` denylist under
 [`contracts/verification-policy.schema.yaml`](contracts/verification-policy.schema.yaml).
+A denied identifier fails before a key is selected even if the pinned file
+still contains it.
 The command performs no network access, reports cryptographic authenticity
 separately from current validity, and exits 0 only when both hold; an
 authentic but expired response exits 3. Every failed policy comparison reports

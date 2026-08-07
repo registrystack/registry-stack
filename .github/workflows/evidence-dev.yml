@@ -1,0 +1,718 @@
+name: Registry Evidence Development Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-evidence-development-build
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  validate:
+    name: Validate protected-main development source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      python_version: ${{ steps.identity.outputs.python_version }}
+      node_version: ${{ steps.identity.outputs.node_version }}
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Validate manual source and successful CI
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != workflow_dispatch ||
+                "${GITHUB_REF}" != refs/heads/main ]]; then
+            echo "Evidence development builds must be dispatched from main" >&2
+            exit 1
+          fi
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GitHub did not supply an exact source commit" >&2
+            exit 1
+          fi
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse refs/remotes/origin/main)" != "${GITHUB_SHA}" ]]; then
+            echo "Development source must be the current protected-main commit" >&2
+            exit 1
+          fi
+          ci_run="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
+              | jq -c --arg sha "${GITHUB_SHA}" \
+              '[.workflow_runs[] | select(
+                .head_sha == $sha and
+                .conclusion == "success" and
+                .event == "push"
+              )] | sort_by(.updated_at) | last'
+          )"
+          if [[ "${ci_run}" == null ]]; then
+            echo "Protected-main CI has no successful push run for this source" >&2
+            exit 1
+          fi
+          version="$(
+            cargo metadata --locked --no-deps --format-version 1 \
+              | jq -er '.packages[]
+                | select(.name == "registry-evidence")
+                | .version'
+          )"
+          if [[ ! "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Evidence workspace version is not canonical semantic version text" >&2
+            exit 1
+          fi
+          tag="v${version}-dev.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
+              >/dev/null 2>&1; then
+            echo "Development tag ${tag} already exists" >&2
+            exit 1
+          else
+            tag_lookup_status=$?
+            if [[ "${tag_lookup_status}" -ne 2 ]]; then
+              echo "Cannot prove development tag ${tag} is absent" >&2
+              exit 1
+            fi
+          fi
+          release_response="${RUNNER_TEMP}/evidence-dev-release-response"
+          if gh api --include --silent \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              >"${release_response}" 2>&1; then
+            release_status=200
+          else
+            release_status="$(
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${release_response}"
+            )"
+          fi
+          if [[ "${release_status}" != 404 ]]; then
+            echo "Development release destination is not absent" >&2
+            exit 1
+          fi
+          {
+            echo "source_sha=${GITHUB_SHA}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+            # The client packages carry a prerelease version of their own, so
+            # a tester who installs one can tell from `pip show` or
+            # `npm ls` which build they are running rather than reading a file
+            # name. Each ecosystem's own prerelease grammar: a PEP 440
+            # development release, which sorts below the eventual real
+            # ${version}, and the semantic-version equivalent. Neither carries
+            # the run attempt, whose only legal PEP 440 home is a local
+            # version segment that some installers reject; the asset file
+            # names below carry the full tag, attempt included.
+            echo "python_version=${version}.dev${GITHUB_RUN_ID}"
+            echo "node_version=${version}-dev.${GITHUB_RUN_ID}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build Evidence dev toolset for ${{ matrix.asset }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: linux-arm64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset: macos-arm64
+    steps:
+      - name: Checkout exact development source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Restore Evidence development Cargo cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: registry-evidence-dev-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            registry-evidence-dev-${{ matrix.asset }}-
+
+      - name: Build native Evidence development binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 \
+            --profile minimal --target "${{ matrix.target }}"
+          cargo build --release --locked \
+            -p registry-evidence \
+            -p registry-evidencectl \
+            -p registry-mint \
+            --target "${{ matrix.target }}"
+          mkdir -p development-platform
+          for binary in evidence evidencectl mint; do
+            asset="${binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/${binary}" \
+              "development-platform/${asset}"
+            chmod 0755 "development-platform/${asset}"
+            observed="$("development-platform/${asset}" --version)"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+          done
+
+      - name: Upload native Evidence development binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evidence-dev-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-platform
+          if-no-files-found: error
+          retention-days: 2
+
+  clients:
+    name: Build Evidence dev clients for ${{ matrix.asset }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      # Select the already installed toolchain directly. This prevents rustup
+      # from trying to reconcile the workspace's developer-only rustfmt and
+      # Clippy components while maturin or napi invokes Cargo on hosted ARM
+      # runners, where those component shims may already exist.
+      RUSTUP_TOOLCHAIN: "1.95.0"
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-amd64
+            # `pyo3`'s `abi3-py310` feature (see the workspace `Cargo.toml`)
+            # makes one wheel per platform cover every CPython from 3.10 up,
+            # so these tags are the whole roster: no Python-version matrix.
+            wheel_tag: cp310-abi3-linux_x86_64
+            napi_platform: linux-x64-gnu
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64
+            wheel_tag: cp310-abi3-linux_aarch64
+            napi_platform: linux-arm64-gnu
+          - runner: macos-14
+            asset: macos-arm64
+            wheel_tag: cp310-abi3-macosx_11_0_arm64
+            napi_platform: darwin-arm64
+    steps:
+      - name: Checkout exact development source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
+
+      - name: Restore Evidence development client Cargo cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: registry-evidence-dev-clients-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            registry-evidence-dev-clients-${{ matrix.asset }}-
+
+      - name: Build the Python client wheel
+        working-directory: crates/registry-evidence-client-py
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          # `maturin` gets its own environment: the wheel is smoked below in a
+          # separate one, which must hold the wheel and nothing else.
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet maturin==1.9.6
+          # The version `maturin` stamps into the wheel comes from this file's
+          # own `[project] version`, hand-synced with the workspace version, so
+          # the development version has to be written here before the build.
+          awk \
+            -v want='version = "${{ needs.validate.outputs.version }}"' \
+            -v line='version = "${{ needs.validate.outputs.python_version }}"' '
+            $0 == want && !rewritten { print line; rewritten = 1; next }
+            { print }
+            END { if (!rewritten) exit 1 }
+          ' pyproject.toml > "${RUNNER_TEMP}/pyproject.toml"
+          cp "${RUNNER_TEMP}/pyproject.toml" pyproject.toml
+          wheel_dir="${GITHUB_WORKSPACE}/development-clients"
+          mkdir -p "${wheel_dir}"
+          # `--compatibility linux` on Linux, rather than maturin's default
+          # manylinux audit: the audit picks a glibc floor from the symbols the
+          # compiled extension happens to need, so its platform tag is not
+          # predictable from the source, and this workflow publishes a closed
+          # roster of exactly named assets. The cost is that a Linux wheel
+          # needs the build runner's glibc or newer, which the release notes
+          # state.
+          if [[ "${RUNNER_OS}" == Linux ]]; then
+            "${RUNNER_TEMP}/maturin/bin/maturin" build \
+              --release --locked --compatibility linux --out "${wheel_dir}"
+          else
+            "${RUNNER_TEMP}/maturin/bin/maturin" build \
+              --release --locked --out "${wheel_dir}"
+          fi
+          wheel="registry_evidence_client-${{ needs.validate.outputs.python_version }}-${{ matrix.wheel_tag }}.whl"
+          if [[ ! -f "${wheel_dir}/${wheel}" ]]; then
+            echo "maturin did not produce ${wheel}" >&2
+            find "${wheel_dir}" -maxdepth 1 -name '*.whl' >&2
+            exit 1
+          fi
+          if [[ "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -ne 1 ]]; then
+            echo "expected exactly one wheel for ${{ matrix.asset }}" >&2
+            exit 1
+          fi
+
+      - name: Smoke the Python client wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="registry_evidence_client-${{ needs.validate.outputs.python_version }}-${{ matrix.wheel_tag }}.whl"
+          python3 -m venv "${RUNNER_TEMP}/wheel-smoke"
+          "${RUNNER_TEMP}/wheel-smoke/bin/pip" install --quiet \
+            "${GITHUB_WORKSPACE}/development-clients/${wheel}"
+          cat > "${RUNNER_TEMP}/wheel-smoke.py" <<'SMOKE'
+          """Proves the published wheel's compiled extension loads and works on
+          this platform, which is the failure a prebuilt native artifact
+          actually has. Behavioural coverage is the crate's own suite's job, in
+          ordinary CI; nothing here sends a request or touches the network."""
+
+          import registry_evidence_client as client_module
+
+          JWKS = {
+              "keys": [
+                  {
+                      "kty": "EC",
+                      "crv": "P-256",
+                      "alg": "ES256",
+                      "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+                      "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+                      "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
+                  }
+              ]
+          }
+          SPEC = {
+              "response_format": "signed-jws",
+              "requirement": "urn:example:requirement:v1",
+              "purpose": "example-purpose",
+              "audience": "urn:example:audience",
+              "evidence_type": "urn:example:evidence-type:v1",
+              "issued_by": "urn:example:issuer",
+              "provided_by": "urn:example:provider",
+              "configuration_revision": "sha256:" + "0" * 64,
+              "expected_assurance_profile": "local",
+              "subjects": [{"role": "subject", "selector_profile": "national-id"}],
+              "expected_outputs": [
+                  {"concept": "urn:example:concept:status-holds", "form": "boolean"}
+              ],
+              "maximum_assertion_lifetime_seconds": 300,
+              "clock_skew_seconds": 60,
+              "subject_expectations": "accept_first_use",
+          }
+
+          # A placeholder static token: no request is ever sent with it.
+          client = client_module.EvidenceClient(
+              "https://evidence.invalid", JWKS, [], "placeholder-not-a-credential"
+          )
+          prepared = client.prepare(SPEC)
+          if len(prepared.request_nonce) != 43:
+              raise SystemExit(f"unexpected nonce length {len(prepared.request_nonce)}")
+          if prepared.policy_document["audience"] != SPEC["audience"]:
+              raise SystemExit("the prepared policy does not carry the requested audience")
+          if prepared.subject_expectations != "accept_first_use":
+              raise SystemExit("the prepared request lost its subject expectations")
+
+          try:
+              client.prepare(dict(SPEC, configuration_revision=""))
+          except client_module.ConfigurationError as error:
+              if error.kind != "configuration":
+                  raise SystemExit(f"unexpected error kind {error.kind!r}") from error
+          else:
+              raise SystemExit("an empty configuration revision must be refused")
+
+          print("wheel smoke passed")
+          SMOKE
+          "${RUNNER_TEMP}/wheel-smoke/bin/python" "${RUNNER_TEMP}/wheel-smoke.py"
+
+      - name: Build the Node client package
+        working-directory: crates/registry-evidence-client-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          # Before the build, not after: `napi build` regenerates `index.js`,
+          # which embeds the package version for its own fallback check, so
+          # bumping first is what keeps the packed tree internally consistent.
+          npm version "${{ needs.validate.outputs.node_version }}" \
+            --no-git-tag-version --allow-same-version
+          npm run build
+          npm pack --pack-destination "${RUNNER_TEMP}"
+          packed="${RUNNER_TEMP}/registrystack-evidence-client-${{ needs.validate.outputs.node_version }}.tgz"
+          if [[ ! -f "${packed}" ]]; then
+            echo "npm pack did not produce ${packed}" >&2
+            exit 1
+          fi
+          # `npm pack` names a tarball after the package, not the platform, and
+          # this one carries a platform-specific compiled binding, so the
+          # published name has to say which platform it is for. The binding
+          # itself is asserted present: `package.json`'s `files` list is what
+          # puts it there, and a silent drift would ship a package that cannot
+          # load anywhere.
+          # The listing is captured rather than piped into `grep -q`: an early
+          # `-q` exit kills `tar` with SIGPIPE, and under `pipefail` that 141
+          # reads as a failed check on a tarball that is in fact correct.
+          entries="$(tar -tzf "${packed}")"
+          if ! grep -Fxq "package/evidence-client.${{ matrix.napi_platform }}.node" \
+              <<<"${entries}"; then
+            echo "the packed tarball has no evidence-client.${{ matrix.napi_platform }}.node" >&2
+            printf '%s\n' "${entries}" >&2
+            exit 1
+          fi
+          mkdir -p "${GITHUB_WORKSPACE}/development-clients"
+          cp "${packed}" \
+            "${GITHUB_WORKSPACE}/development-clients/evidence-client-node-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}.tgz"
+
+      - name: Smoke the Node client package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="${GITHUB_WORKSPACE}/development-clients/evidence-client-node-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}.tgz"
+          smoke="${RUNNER_TEMP}/node-smoke"
+          mkdir -p "${smoke}"
+          cd "${smoke}"
+          npm init --yes >/dev/null
+          npm install --no-audit --no-fund "${tarball}"
+          cat > smoke.js <<'SMOKE'
+          // Proves the published tarball's compiled binding loads and works on
+          // this platform, which is the failure a prebuilt native artifact
+          // actually has. Behavioural coverage is the crate's own suite's job,
+          // in ordinary CI; nothing here sends a request or touches the
+          // network.
+          'use strict';
+
+          const assert = require('node:assert');
+          const { EvidenceClient, EvidenceClientError } = require('@registrystack/evidence-client');
+
+          const trustedJwks = {
+            keys: [
+              {
+                kty: 'EC',
+                crv: 'P-256',
+                alg: 'ES256',
+                kid: '_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo',
+                x: '3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4',
+                y: 'GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU',
+              },
+            ],
+          };
+          const spec = {
+            responseFormat: 'signed-jws',
+            requirement: 'urn:example:requirement:v1',
+            purpose: 'example-purpose',
+            audience: 'urn:example:audience',
+            evidenceType: 'urn:example:evidence-type:v1',
+            issuedBy: 'urn:example:issuer',
+            providedBy: 'urn:example:provider',
+            configurationRevision: `sha256:${'0'.repeat(64)}`,
+            expectedAssuranceProfile: 'local',
+            subjects: [{ role: 'subject', selectorProfile: 'national-id' }],
+            expectedOutputs: [{ concept: 'urn:example:concept:status-holds', form: 'boolean' }],
+            maximumAssertionLifetimeSeconds: 300,
+            clockSkewSeconds: 60,
+            subjectExpectations: 'acceptFirstUse',
+          };
+
+          const client = new EvidenceClient({
+            baseUrl: 'https://evidence.invalid',
+            trustedJwks,
+            revokedKeyIds: [],
+            // A placeholder static token: no request is ever sent with it.
+            token: { static: 'placeholder-not-a-credential' },
+          });
+          const prepared = client.prepare(spec);
+          assert.strictEqual(prepared.requestNonce.length, 43);
+          assert.strictEqual(prepared.policyDocument.audience, spec.audience);
+
+          assert.throws(
+            () => client.prepare({ ...spec, configurationRevision: '' }),
+            (error) => error instanceof EvidenceClientError && error.kind === 'configuration',
+          );
+
+          console.log('tarball smoke passed');
+          SMOKE
+          node smoke.js
+
+      - name: Upload Evidence development client packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evidence-dev-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-clients
+          if-no-files-found: error
+          retention-days: 2
+
+  assemble:
+    name: Assemble and smoke the curl-installable toolset
+    needs:
+      - validate
+      - build
+      - clients
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact development source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download exact native binaries and client packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: evidence-dev-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-inputs
+          merge-multiple: true
+
+      - name: Assemble development assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          mkdir -p development-assets
+          cp development-inputs/* development-assets/
+          installer="evidencectl-${tag}-install.sh"
+          awk -v version="${tag}" '
+            $0 == "default_version=\"\"" {
+              print "default_version=\"" version "\""
+              rendered = 1
+              next
+            }
+            { print }
+            END { if (!rendered) exit 1 }
+          ' crates/registry-evidencectl/install.sh \
+            > "development-assets/${installer}"
+          chmod 0755 "development-assets/${installer}"
+          cp "development-assets/${installer}" \
+            development-assets/evidencectl-install.sh
+          chmod 0755 development-assets/evidencectl-install.sh
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
+            --arg version "${{ needs.validate.outputs.version }}" \
+            --arg tag "${tag}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{
+              schema: "registry.evidence-development-build/v1",
+              repository: $repository,
+              source_sha: $source_sha,
+              workspace_version: $version,
+              tag: $tag,
+              run_id: $run_id,
+              run_attempt: $run_attempt
+            }' > "development-assets/registry-evidence-${tag}-source.json"
+          checksum_file="${RUNNER_TEMP}/evidence-dev-SHA256SUMS"
+          (
+            cd development-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+              | sort -z \
+              | xargs -0 sha256sum --
+          ) > "${checksum_file}"
+          mv "${checksum_file}" development-assets/SHA256SUMS
+
+      - name: Smoke the development installer before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/evidence-dev-install"
+          EVIDENCECTL_ASSET_DIR="${GITHUB_WORKSPACE}/development-assets" \
+          EVIDENCECTL_INSTALL_DIR="${install_dir}" \
+            bash development-assets/evidencectl-install.sh
+          for binary in evidence evidencectl mint; do
+            observed="$("${install_dir}/${binary}" --version)"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+          done
+
+      - name: Upload exact Evidence development assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evidence-dev-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-assets
+          if-no-files-found: error
+          retention-days: 8
+
+  publish:
+    name: Publish unique Evidence development prerelease
+    needs:
+      - validate
+      - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download exact assembled development assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: evidence-dev-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: development-assets
+
+      - name: Reverify the closed development asset roster
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          for platform in linux-amd64 linux-arm64 macos-arm64; do
+            for binary in evidence evidencectl mint; do
+              echo "${binary}-${tag}-${platform}"
+            done
+            echo "evidence-client-node-${tag}-${platform}.tgz"
+          done > "${RUNNER_TEMP}/expected-assets"
+          # One wheel per platform, not per Python version: `pyo3`'s
+          # `abi3-py310` feature is what makes that true, so a change to it
+          # fails this roster rather than quietly publishing wheels no
+          # documented installer command names.
+          python_version="${{ needs.validate.outputs.python_version }}"
+          for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64; do
+            echo "registry_evidence_client-${python_version}-cp310-abi3-${wheel_platform}.whl"
+          done >> "${RUNNER_TEMP}/expected-assets"
+          {
+            echo "evidencectl-${tag}-install.sh"
+            echo evidencectl-install.sh
+            echo "registry-evidence-${tag}-source.json"
+            echo SHA256SUMS
+          } >> "${RUNNER_TEMP}/expected-assets"
+          sort -o "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/expected-assets"
+          find development-assets -maxdepth 1 -type f -exec basename {} \; \
+            | sort > "${RUNNER_TEMP}/actual-assets"
+          diff -u "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/actual-assets"
+          if find development-assets -type l -print -quit | grep -q .; then
+            echo "Development assets must not contain symbolic links" >&2
+            exit 1
+          fi
+          (
+            cd development-assets
+            sha256sum --check --strict SHA256SUMS
+          )
+          jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
+            --arg tag "${tag}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '.schema == "registry.evidence-development-build/v1" and
+             .repository == $repository and
+             .source_sha == $source_sha and
+             .tag == $tag and
+             .run_id == $run_id and
+             .run_attempt == $run_attempt' \
+            "development-assets/registry-evidence-${tag}-source.json" \
+            >/dev/null
+
+      - name: Publish unique development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          source_sha="${{ needs.validate.outputs.source_sha }}"
+          python_version="${{ needs.validate.outputs.python_version }}"
+          download_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          install_url="${download_url}/evidencectl-install.sh"
+          notes="${RUNNER_TEMP}/evidence-development-release-notes.md"
+          {
+            echo "Development build from protected-main source \`${source_sha}\`."
+            echo
+            echo "This is an unsupported prerelease for development and evaluation."
+            echo "Its checksums are not signed and it is not a Registry Stack release."
+            echo
+            echo '## Toolset'
+            echo
+            echo '```sh'
+            echo "curl -fsSL \"${install_url}\" | bash"
+            echo '```'
+            echo
+            echo '## Relying-party clients'
+            echo
+            echo 'Neither client is published to PyPI or npm. Install one from this'
+            echo 'prerelease, substituting your own platform:'
+            echo
+            echo '```sh'
+            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp310-abi3-linux_x86_64.whl\""
+            echo "npm install \"${download_url}/evidence-client-node-${tag}-linux-amd64.tgz\""
+            echo '```'
+            echo
+            echo 'One wheel covers CPython 3.10 and later. The wheels for the other'
+            echo "platforms end in \`linux_aarch64\` or \`macosx_11_0_arm64\`, and the"
+            echo "Node packages in \`linux-arm64\` or \`macos-arm64\`."
+            echo
+            echo 'The Linux wheels are built on Ubuntu 24.04 and need its glibc or'
+            echo 'newer. The Rust client is not published here: consume it as a git'
+            echo 'dependency pinned to the source commit above.'
+            echo
+            echo "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${notes}"
+          gh release create "${tag}" development-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${source_sha}" \
+            --title "Registry Evidence development build ${tag}" \
+            --notes-file "${notes}" \
+            --prerelease \
+            --latest=false
+          {
+            echo '## Install this development build'
+            echo
+            echo '```sh'
+            echo "curl -fsSL \"${install_url}\" | bash"
+            echo "pip install \"${download_url}/registry_evidence_client-${python_version}-cp310-abi3-linux_x86_64.whl\""
+            echo "npm install \"${download_url}/evidence-client-node-${tag}-linux-amd64.tgz\""
+            echo '```'
+            echo
+            echo "Source: \`${source_sha}\`"
+            echo
+            echo "This prerelease is unsupported and its checksums are not signed."
+          } >> "${GITHUB_STEP_SUMMARY}"

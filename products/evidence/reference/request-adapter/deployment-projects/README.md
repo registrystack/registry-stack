@@ -10,8 +10,8 @@ definitions, scripts, schemas, and sanitized contract cases.
 The projects use the Version 1 script contract:
 
 ```text
-prepare(source_required_selectors, adapter_parameters) -> RequestParts
-extract(source_response, adapter_parameters) -> LookupResult
+prepare(source_required_selectors, adapter_context) -> RequestParts
+extract(source_response, adapter_context) -> LookupResult
 derive(facts, authorized_requirement_selectors, evaluation_context)
     -> array<DerivedConceptValue>
 ```
@@ -57,9 +57,10 @@ each environment through its own runtime file and secret mounts.
 
 ## Security boundary
 
-Rust still owns authentication, authorization, durable access audit, fixed
-transport authority, credentials, one evidence-data request, limits, output
-validation, audience-scoped entity references, signing, and disclosure audit.
+Rust still owns authentication, authorization, durable per-stage access audit,
+the closed single or search-then-fetch acquisition, fixed transport authority,
+credentials, call ceilings, limits, output validation, audience-scoped entity
+references, signing, and disclosure audit.
 Scripts are reviewed and trusted but remain deterministic and unable to
 perform I/O.
 

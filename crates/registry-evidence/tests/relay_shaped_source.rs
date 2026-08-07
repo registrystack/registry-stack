@@ -18,12 +18,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
-use rand_core::OsRng;
 use registry_evidence::bundle::Bundle;
 use registry_evidence::config::{PreparationChannelPolicy, PreparationLimits, SourceConfig};
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
@@ -42,7 +39,6 @@ use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use zeroize::Zeroizing;
 
 /// The Relay-shaped protected read for one synthetic record: the templated
 /// `/v1/datasets/{dataset_id}/entities/{entity}/records/{id}` path with
@@ -99,6 +95,7 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
             "pathTemplate": "/v1/datasets/synthetic-units/entities/unit-record/records/{record}",
             "pathBindings": {
                 "record": {
+                    "from": "selector",
                     "role": "subject",
                     "profile": "residence-record-v1",
                     "field": "record_reference"
@@ -236,26 +233,9 @@ fn make_fixture_bundle_read_only(path: &Path) {
 }
 
 async fn fixture_signer() -> EvidenceSigner {
-    const KEY_ID: &str = "relay-composition-evidence-key";
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public_bytes = signing_key.verifying_key().to_bytes();
-    let private = PrivateJwk {
-        kty: "OKP".to_owned(),
-        kid: Some(KEY_ID.to_owned()),
-        alg: Some("EdDSA".to_owned()),
-        crv: Some("Ed25519".to_owned()),
-        d: Some(URL_SAFE_NO_PAD.encode(private_bytes.as_slice())),
-        x: Some(URL_SAFE_NO_PAD.encode(public_bytes)),
-        y: None,
-        n: None,
-        e: None,
-        p: None,
-        q: None,
-        dp: None,
-        dq: None,
-        qi: None,
-    };
+    const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("fixture key parses");
     let provider = Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
     EvidenceSigner::initialize(provider, KEY_ID)
         .await
@@ -511,17 +491,22 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     let mut policy = EvidenceVerificationPolicy::from_accepted_transaction(
         &evidence,
         registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
-        Duration::from_secs(31_536_000),
+        31_536_000,
         observed_at,
-        Duration::from_secs(0),
-    );
+        0,
+    )
+    .expect("the fixture policy states bounds the contract allows");
     policy.issued_by = "urn:example:fixture:issuer:authority".to_owned();
     policy.provided_by = "urn:example:fixture:provider:evidence".to_owned();
     policy.requirement = REQUIREMENT.to_owned();
     policy.evidence_type = "urn:example:fixture:evidence-type:residence-region:v1".to_owned();
     policy.purpose = "fixture-routing".to_owned();
     policy.audience = AUDIENCE.to_owned();
-    policy.configuration_revision = kernel.bundle().revision().to_owned();
+    policy.configuration_revision = kernel
+        .bundle()
+        .configuration_revision(REQUIREMENT)
+        .expect("the requirement has a configuration revision")
+        .to_owned();
     let verified = verify_flattened_jws(&serialized, &jwks, &policy)
         .expect("signed Evidence verifies against the deployment JWKS");
     assert_eq!(verified.supported_values.len(), 1);

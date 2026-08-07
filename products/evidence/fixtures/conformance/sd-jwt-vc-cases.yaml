@@ -1,8 +1,9 @@
 fixture: registry.evidence.sd-jwt-vc-cases/v1
 profile: ../../contracts/sd-jwt-vc-profile.yaml
+standards_profile: RFC 9901 and SD-JWT VC draft 18
 media_type: application/dc+sd-jwt
 protected_header:
-  exact_json: '{"alg":"EdDSA","kid":"fixture-key-2026-01","typ":"dc+sd-jwt"}'
+  exact_json: '{"alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo","typ":"dc+sd-jwt"}'
   base64url_padding: prohibited
   cty_member: prohibited
 serialization:
@@ -33,11 +34,12 @@ negative:
   - mutate one payload byte
   - mutate one protected-header byte
   - unknown kid
+  - revoked kid, even when the key remains in a cached JWKS
   - a claim outside the published claim set
   - the format is not enabled by the immutable bundle
   - the format is not permitted by the complete matched grant
   - holder key carrying a private member
-  - holder key with a non-allowlisted key type, curve, or algorithm
+  - holder key that is not exact public EC P-256, or whose optional algorithm is not ES256
   - signing-provider failure
   - the serialization is offered to the flattened JWS verifier
 expected_failure: >-

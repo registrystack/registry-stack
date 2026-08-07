@@ -70,7 +70,7 @@ const MAX_OUTPUT_SCHEMA_NODES: usize = 256;
 const MAX_OUTPUT_SCHEMA_EXPANDED_NODES: usize = 4_096;
 const MAX_OUTPUT_OBJECT_FIELDS: usize = 32;
 const MAX_OUTPUT_ARRAY_ITEMS: usize = 256;
-const WORKER_STARTUP_GRACE: Duration = if cfg!(debug_assertions) {
+pub(crate) const WORKER_STARTUP_GRACE: Duration = if cfg!(debug_assertions) {
     Duration::from_secs(10)
 } else {
     Duration::from_secs(2)

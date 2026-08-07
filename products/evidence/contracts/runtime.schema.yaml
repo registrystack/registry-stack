@@ -3,7 +3,7 @@ $id: https://registrystack.org/schemas/evidence/runtime-v1.json
 title: Evidence closed operator runtime configuration Version 1
 type: object
 additionalProperties: false
-required: [version, bundleDirectory, listener, secretProviders, auditStorage, outboundTls]
+required: [version, bundleDirectory, listener, secretProviders, signer, auditStorage, outboundTls]
 properties:
   version: {const: 1}
   bundleDirectory: {$ref: '#/$defs/absolute-path'}
@@ -50,6 +50,24 @@ properties:
         required: [root]
         properties:
           root: {$ref: '#/$defs/absolute-path'}
+  signer:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [kind, privateKeyRef]
+        properties:
+          kind: {const: local-jwk}
+          privateKeyRef: {$ref: '#/$defs/secret-ref'}
+      - type: object
+        additionalProperties: false
+        required: [kind, unixSocketPath, mount, keyName, keyVersion, timeoutMilliseconds]
+        properties:
+          kind: {const: transit}
+          unixSocketPath: {$ref: '#/$defs/absolute-path'}
+          mount: {$ref: '#/$defs/local-id'}
+          keyName: {$ref: '#/$defs/local-id'}
+          keyVersion: {type: integer, minimum: 1, maximum: 4294967295}
+          timeoutMilliseconds: {type: integer, minimum: 1, maximum: 30000}
   auditStorage:
     type: object
     additionalProperties: false
@@ -75,6 +93,7 @@ properties:
             caBundleFile: {$ref: '#/$defs/absolute-path'}
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  secret-ref: {type: string, pattern: '^secret:file/[a-z][a-z0-9._-]{0,127}$'}
   absolute-path: {type: string, minLength: 2, maxLength: 512, pattern: '^/(?!/)(?!.*(?:^|/)\.\.?(?:/|$))[^\\\u0000]+$'}
 ownership:
   governed_fields: prohibited
@@ -83,6 +102,7 @@ ownership:
     - listener binding and process limits
     - optional operator metrics listener binding
     - file-secret root
+    - signer binding to a local private JWK or workload-local Transit proxy
     - audit path and rotation bound
     - logical private-CA file bindings
   overrides: prohibited
@@ -91,7 +111,8 @@ startup:
   mutability: runtime.yaml and bound CA files are captured read-only once; reload, merge, fallback, and partial serving are prohibited
   digest: independent SHA-256 revision over exact runtime.yaml bytes plus logical trust-profile names and exact CA bytes
   trust_profiles: names must exactly equal the logical tlsTrustProfile names used by the governed bundle
-  secrets: values are never parsed into or included in the runtime document or digest
+  secrets: values and provider tokens are never parsed into or included in the runtime document or digest
+  signer: local assurance requires local-jwk; production and evidence-grade require Transit through an absolute Unix socket. Transit key version is pinned and no provider token is supplied to Evidence.
   proxy: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY are ignored; no application-level proxy field exists
 platform:
   supported: Unix

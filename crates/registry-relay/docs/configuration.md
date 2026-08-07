@@ -1072,6 +1072,10 @@ For generic sync search, `identifiers` maps DCI `idtype-value` query types to en
 
 For `/dci/{registry}/registry/sync/disabled`, the caller needs the entity `evidence_verification_scope`. Generic search, details, and support need the entity `read_scope`. API-key authentication is still Registry Relay's normal auth layer. If a registry entry uses `response_mapping_path`, the binary must also be built with `--features standards-cel-mapping`; otherwise config validation fails with `spdci.config.mapping_feature_disabled`.
 
+A `response_schema_path` schema must be self-contained. Internal `#/` references resolve normally. An external `$ref` naming an `http(s)://` or `file://` target is never resolved, because the schema compiler carries no remote or file resolver: no request is made and no referenced file is read, at config validation or while serving a response. Such a schema still passes config validation, and the unresolved reference then fails every record, so generic search, details, and support answer `500 internal.unhandled` for any non-empty result. Inline the referenced definitions instead. `spdci.config.schema_compile_failed` reports a schema the compiler rejects outright, such as an unknown `type` name, a keyword holding the wrong JSON type, or a `pattern` that is not a valid regular expression.
+
+The compiler carries JSON Schema drafts 4, 6, 7, and 2020-12, and compiles each schema under the draft its `$schema` names. A schema with no `$schema`, or one naming a draft the compiler does not carry such as 2019-09, compiles under draft 7 with no diagnostic. The declared draft decides whether `format` is asserted: drafts 4, 6, and 7 reject a value that does not match its declared `format`, while 2020-12 treats `format` as an annotation and accepts the value, so a schema declaring 2020-12 needs an explicit `pattern` or `enum` wherever it relies on `format` to constrain a value. The 2020-12 keywords `prefixItems`, `dependentRequired`, and `dependentSchemas` are enforced whatever draft a schema declares.
+
 ## API keys
 
 ```yaml

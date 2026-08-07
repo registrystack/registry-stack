@@ -1,0 +1,59 @@
+[package]
+name = "registry-evidence-client-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python binding for the Evidence relying-party client, via PyO3."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_evidence_client"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+chrono.workspace = true
+# Renamed from the dependency's own package name: this crate's `[lib] name`
+# above is also `registry_evidence_client` (the Python module name the spec
+# requires), and every file under `tests/` is a separate crate that Cargo
+# auto-links against that same `[lib] name` on top of whatever `[dependencies]`
+# it needs, so an unaliased entry here would leave every integration test
+# depending on two different crates of the identical name (`error[E0464]:
+# multiple candidates for rmeta dependency`, which no `use` path syntax can
+# resolve). One consistent alias, used everywhere this crate reaches the SDK,
+# avoids that rather than special-casing test code against production code.
+evidence-client-sdk = { package = "registry-evidence-client", path = "../registry-evidence-client", version = "0.17.0" }
+pyo3.workspace = true
+registry-platform-crypto.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[dev-dependencies]
+# `auto-initialize` links directly against libpython so `cargo test` can start
+# an interpreter itself; the crate's own `[dependencies]` entry above must
+# never gain this feature, since `extension-module` (the feature actually
+# shipped to callers) is incompatible with linking against libpython.
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+base64.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+p256.workspace = true
+# The committed policy fixture stands for a relying party's own verification
+# policy document, so the tests validate it against the frozen contract that
+# governs one. `jsonschema` compiles that contract and `serde_norway` reads it.
+jsonschema.workspace = true
+registry-evidence-verifier.workspace = true
+serde.workspace = true
+serde_norway.workspace = true
+wiremock.workspace = true

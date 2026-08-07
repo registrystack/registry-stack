@@ -1,11 +1,11 @@
 ---
-title: Integrate an Evidence candidate with Docker Compose
-description: Mount an approved Evidence candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
+title: Integrate an Evidence Gateway candidate with Docker Compose
+description: Mount an approved Evidence Gateway candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - operator
@@ -16,44 +16,65 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Start with the approved candidate created in
-[Build and deploy an Evidence project](../build-and-deploy-evidence-project/). This guide runs that
+[Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/). This guide runs that
 candidate in an existing Docker Compose application. Compose is an operator-owned deployment
 adapter, not output from `evidencectl build`. The candidate bundle stays unchanged across host and
 container deployments.
 
 <QuickstartMeta
-  outcome="An approved Evidence candidate mounted unchanged with a separate runtime, secret root, and persistent audit volume."
+  outcome="An approved Evidence Gateway candidate mounted unchanged with a separate runtime, secret root, Transit socket, and persistent audit volume."
   time="About 20 minutes after the image and candidate are approved"
   level="Operator-owned Docker Compose deployment"
-  prerequisites={['Docker Compose', 'An approved Evidence candidate', 'A reviewed Evidence image', 'Persistent storage prepared for UID and GID 65532']}
+  prerequisites={['Docker Compose', 'An approved Evidence Gateway candidate', 'A reviewed Evidence Gateway image', 'A workload-local Transit proxy', 'Persistent storage prepared for UID and GID 65532']}
 />
 
 ## Before you start
 
 You need an approved candidate, a container image whose provenance and digest you have reviewed,
-an owner-only secret mount, and persistent storage for the audit chain. Do not use repository
-development images as released production artifacts.
+an owner-only secret mount, a workload-local Transit proxy, and persistent storage for the audit
+chain. Do not use repository development images as released production artifacts.
 
 Prepare a container-specific runtime document. It names the same bundle content but container paths,
 a private Compose-network listener, secret root, audit path, and any required private CA files.
 
+## Add the Transit proxy boundary
+
+Production and evidence-grade candidates require a workload-local Vault or OpenBao Transit proxy.
+Run one proxy for Evidence Gateway on the host or in an operator-owned sidecar. Give the proxy a
+dedicated host directory in which to create `transit-proxy.sock`, then bind-mount that directory at
+`/run/registry-evidence` in the Evidence Gateway container. Make the directory searchable but not
+writable by the Evidence Gateway identity. The proxy owns the directory and creates a mode `0660`
+socket whose group admits only that identity.
+
+The proxy owns its provider auto-auth credential, provider trust file, and reviewed HCL
+configuration. Do not mount those inputs into Evidence Gateway. The proxy configuration must force
+its auto-auth token, require the `X-Vault-Request` header, disable request retries, and set socket
+ownership for the Evidence Gateway process. Use
+[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+and the maintained deployment-target templates for the exact boundary.
+
+The Git-managed proxy HCL is nonsecret. Provider credentials and generated tokens remain outside
+Git and outside the Evidence Gateway container. If Compose also owns the sidecar, replace the host
+bind with a dedicated named volume shared only by the proxy and Evidence Gateway.
+
 ## Mount the deployment inputs
 
-The Compose service mounts four independently owned paths:
+The Evidence Gateway service mounts five independently owned paths:
 
 ```text
 candidate/bundle       -> /etc/registry-evidence/bundle       read-only
 runtime.docker.yaml    -> /etc/registry-evidence/runtime.yaml read-only
-Evidence secret root   -> /run/secrets/registry-evidence      read-only
-Evidence audit volume  -> /var/lib/registry-evidence          writable
+Evidence Gateway secret root   -> /run/secrets/registry-evidence      read-only
+Evidence Gateway audit volume  -> /var/lib/registry-evidence          writable
+Transit socket directory       -> /run/registry-evidence              socket access
 ```
 
 Keep the bundle and runtime read-only. A read-only mount establishes their immutability, but does
-not waive secret ownership or mode validation. The maintained Evidence image runs as UID and GID
+not waive secret ownership or mode validation. The maintained Evidence Gateway image runs as UID and GID
 `65532`; pin that identity in the Compose file and make every secret file acceptable to it with the
 required owner-only permissions. A different reviewed image requires an explicitly reviewed UID
 and matching ownership.
-Prepare the persistent audit volume for that same identity before startup. Do not run Evidence as
+Prepare the persistent audit volume for that same identity before startup. Do not run Evidence Gateway as
 root to compensate for an audit volume with the wrong owner.
 
 ```yaml
@@ -67,15 +88,16 @@ services:
       - ./runtime.docker.yaml:/etc/registry-evidence/runtime.yaml:ro
       - <evidence-secret-root>:/run/secrets/registry-evidence:ro
       - evidence-audit:/var/lib/registry-evidence
+      - <transit-socket-directory>:/run/registry-evidence:ro
 ```
 
-Bind Evidence to a private Compose-network address. Put TLS termination and public routing in an
+Bind Evidence Gateway to a private Compose-network address. Put TLS termination and public routing in an
 operator-controlled service ahead of that listener.
 
 ## Validate in the container context
 
-Run `evidence check` in the target execution context after mounts, ownership, paths, and trust
-files are in place:
+Start the Transit proxy, then run `evidence check` in the target execution context after mounts,
+ownership, paths, and trust files are in place:
 
 ```sh
 docker compose run --rm evidence \
@@ -86,22 +108,26 @@ Changing only the container runtime does not change the governed bundle, so it d
 fixture suite to run again. Run fixtures again when the bundle changes.
 
 The check exits successfully only when the container can read its immutable inputs, resolve the
-secret root, validate the configured audit path, and validate the runtime and bundle together. It
-does not append an audit event.
+secret root, validate the configured audit path, reach the Transit proxy, match the pinned provider
+version to the governed public JWK, and validate the runtime and bundle together. It does not append
+an audit event.
 
 ## Keep revisions distinct
 
 The bundle revision covers exact bundle bytes and remains the same in host and Compose deployments.
 The runtime revision covers exact runtime bytes and bound private CA files, so it changes with
-container paths, listener bindings, or trust files. Signed assertions carry the bundle revision as
-`configurationRevision`, never the runtime revision. Neither revision contains secret values or
-audit contents.
+container paths, listener bindings, or trust files. A configuration revision is narrower than either:
+it covers one requirement's own configuration and artifacts. Signed assertions carry the revision of
+the requirement they answer as `configurationRevision`, never the runtime or bundle revision. No
+revision contains secret values or audit contents.
 
 ## Add optional Mint
 
 When the same application uses Mint, run Mint as a separate private service. Mint retains its public
-HTTPS issuer and JWKS URI, while internal routing or split DNS resolves that identity. Evidence must
+HTTPS issuer and JWKS URI, while internal routing or split DNS resolves that identity. Evidence Gateway must
 continue to use the public HTTPS issuer and JWKS URI, not an internal plain-HTTP service name.
+Strict Mint uses its own proxy, Unix-socket directory, provider identity, policy, and Transit key.
+Do not share the Evidence Gateway proxy or socket with Mint.
 
 ## Stop without deleting the audit history
 
@@ -114,6 +140,7 @@ docker compose down
 
 ## Next
 
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
-- [Issue Evidence access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
-- [Configure Evidence](../../configure/evidence/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Configure Evidence Gateway](../../configure/evidence/)

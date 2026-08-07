@@ -1,11 +1,11 @@
 ---
-title: Prove an Evidence project
-description: Add fixtures that describe your own requirement and run them through the Evidence evaluator before a production build.
+title: Prove an Evidence Gateway project
+description: Add fixtures that describe your own requirement and run them through the Evidence Gateway evaluator before a production build.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - assertion provider
@@ -16,7 +16,7 @@ standards_referenced: []
 
 Start with a reviewed editable project. If you need to create one,
 [connect an institution source from OpenAPI](../connect-an-institution-source/) before adding
-fixtures. Fixtures are executable claims about your own Evidence project. They are not sample data
+fixtures. Fixtures are executable claims about your own Evidence Gateway project. They are not sample data
 for a first run and they must not be generated from an unrelated domain.
 
 Use them when your source, requirement, and derivation are ready for review. Local assurance may
@@ -95,17 +95,19 @@ Build and hand off only when these facts are recorded together:
 2. `evidence check` accepted the exact candidate runtime and bundle.
 3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
    codelists, purposes, audiences, and privacy expectations.
-4. The environment supplies independent owner-only signing, subject-binding, and audit secrets.
+4. The environment supplies a governed public signing key and matching Transit binding, plus
+   independent owner-only subject-binding and audit secrets.
 5. The deployed bundle revision matches the reviewed candidate.
 6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
 
-Keep the governed bundle unchanged across environments where practical. Bind environment-specific
-paths, secret roots, audit storage, listener settings, and trust files through each environment's
-runtime file. [Build and deploy an Evidence project](../build-and-deploy-evidence-project/) covers
-the target-host ceremony.
+Build a complete governed bundle for each environment. Each target owns its identities, endpoints,
+audiences, public keys, authority bindings, runtime paths, secret references, audit storage,
+listener settings, and trust files. Promote the reviewed editable source revision, then build
+staging and production candidates separately. [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+covers the target-host ceremony.
 
 ## Next
 
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)
-- [Rotate Evidence signing keys](../move-evidence-to-production-signing/)
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
+- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)

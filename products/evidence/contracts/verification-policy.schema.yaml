@@ -16,6 +16,7 @@ required:
   - expectedSubjects
   - expectedOutputs
   - maximumAssertionLifetimeSeconds
+  - revokedKeyIds
 properties:
   expectedAssuranceProfile: {enum: [local, production, evidence-grade]}
   issuedBy: {type: string, format: uri, maxLength: 512}
@@ -24,7 +25,13 @@ properties:
   evidenceType: {type: string, format: uri, maxLength: 512}
   purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
   audience: {type: string, format: uri, maxLength: 512}
-  configurationRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  configurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+    description: >-
+      The requirement-scoped revision the relying party pinned, as the
+      requirement's own definition published it. A deployment's unrelated edits
+      do not change it.
   requestNonce:
     type: string
     pattern: '^[A-Za-z0-9_-]{43}$'
@@ -48,6 +55,12 @@ properties:
     minimum: 1
     maximum: 31536000
     description: Longest acceptable validUntil minus issuedAt interval.
+  revokedKeyIds:
+    type: array
+    maxItems: 33
+    uniqueItems: true
+    items: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
+    description: Emergency denylist of Evidence service-key RFC 7638 thumbprints, checked before a pinned JWKS key is selected. An empty list is explicit.
   clockSkewSeconds:
     type: integer
     minimum: 0
@@ -112,7 +125,7 @@ output:
     3: authentic but not currently valid
     1: every other outcome, including a policy mismatch, an unusable input document, and an unreadable file
 $comment: >-
-  Every expectation in this document must come from independent trusted state,
+  Every expectation and revoked-key decision in this document must come from independent trusted state,
   such as the independently retained original request and an accepted original
   transaction. Copying values out of the JWS under verification proves nothing,
   and a policy that omitted an expectation would silently skip a comparison, so

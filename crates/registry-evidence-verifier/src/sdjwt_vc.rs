@@ -59,7 +59,7 @@ pub enum SdJwtVcMappingError {
     Subjects,
     #[error("an evidence claim is not representable as JSON")]
     Claim,
-    #[error("the holder public key is not an acceptable Ed25519 public JWK")]
+    #[error("the holder public key is not an acceptable P-256 public JWK")]
     HolderKey,
     #[error("the SD-JWT VC structured projection is inconsistent with the evidence value")]
     StructuredProjection,
@@ -191,7 +191,7 @@ fn confirmation(key: &HolderPublicKey) -> Result<HolderConfirmation, SdJwtVcMapp
             alg: key.alg.clone(),
             crv: Some(key.crv.clone()),
             x: Some(key.x.clone()),
-            y: None,
+            y: Some(key.y.clone()),
             n: None,
             e: None,
         },
@@ -432,16 +432,14 @@ fn rfc3339_of(claims: &Map<String, Value>, name: &str) -> Result<String, SdJwtVc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        EvidenceObjectType, PublicValue, SubjectBinding, SupportedValue,
-        OFFLINE_EVALUATION_REQUEST_NONCE,
-    };
+    use crate::fixtures::OFFLINE_EVALUATION_REQUEST_NONCE;
+    use crate::model::{EvidenceObjectType, PublicValue, SubjectBinding, SupportedValue};
     use crate::EVIDENCE_SCHEMA_V1;
 
     fn evidence() -> Evidence {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
-            assurance_profile: crate::config::AssuranceProfile::EvidenceGrade,
+            assurance_profile: crate::AssuranceProfile::EvidenceGrade,
             request_nonce: OFFLINE_EVALUATION_REQUEST_NONCE.to_string(),
             id: "urn:evidence:assertion:v1_2f0a".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
@@ -480,9 +478,10 @@ mod tests {
 
     fn holder_key() -> HolderPublicKey {
         HolderPublicKey {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".to_string(),
+            kty: "EC".to_string(),
+            crv: "P-256".to_string(),
+            x: "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4".to_string(),
+            y: "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU".to_string(),
             alg: None,
             kid: None,
         }
@@ -585,17 +584,18 @@ mod tests {
         let evidence = evidence();
         let mut key = holder_key();
         key.kid = Some("holder-1".to_string());
-        key.alg = Some("EdDSA".to_string());
+        key.alg = Some("ES256".to_string());
 
         let confirmation = issuance_input(&evidence, Some(&key), &BTreeMap::new())
             .expect("evidence maps")
             .cnf
             .expect("confirmation is present");
-        assert_eq!(confirmation.jwk.kty, "OKP");
-        assert_eq!(confirmation.jwk.crv.as_deref(), Some("Ed25519"));
+        assert_eq!(confirmation.jwk.kty, "EC");
+        assert_eq!(confirmation.jwk.crv.as_deref(), Some("P-256"));
         assert_eq!(confirmation.jwk.x.as_deref(), Some(key.x.as_str()));
+        assert_eq!(confirmation.jwk.y.as_deref(), Some(key.y.as_str()));
         assert_eq!(confirmation.jwk.kid.as_deref(), Some("holder-1"));
-        assert_eq!(confirmation.jwk.alg.as_deref(), Some("EdDSA"));
+        assert_eq!(confirmation.jwk.alg.as_deref(), Some("ES256"));
         assert!(confirmation.kid.is_none());
     }
 
@@ -603,11 +603,11 @@ mod tests {
     fn rejects_unacceptable_holder_keys() {
         let evidence = evidence();
         let mut wrong_curve = holder_key();
-        wrong_curve.crv = "P-256".to_string();
+        wrong_curve.crv = "P-384".to_string();
         let mut wrong_algorithm = holder_key();
-        wrong_algorithm.alg = Some("ES256".to_string());
+        wrong_algorithm.alg = Some("EdDSA".to_string());
         let mut wrong_key_type = holder_key();
-        wrong_key_type.kty = "EC".to_string();
+        wrong_key_type.kty = "OKP".to_string();
         let mut short_coordinate = holder_key();
         short_coordinate.x = "11qYAYKxCrfVS_7TyWQHOg".to_string();
         let mut padded_coordinate = holder_key();
@@ -630,9 +630,10 @@ mod tests {
     #[test]
     fn rejects_private_key_members_before_mapping() {
         let body = serde_json::json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+            "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
             "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
         });
         assert!(serde_json::from_value::<HolderPublicKey>(body).is_err());

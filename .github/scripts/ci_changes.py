@@ -31,7 +31,14 @@ SHARDS = {
         "registry-manifest-core",
     ),
     "relay": ("registry-relay",),
-    "evidence": ("registry-evidence", "registry-evidencectl"),
+    "evidence": (
+        "registry-evidence",
+        "registry-evidence-client",
+        "registry-evidence-client-node",
+        "registry-evidence-client-py",
+        "registry-evidence-verifier",
+        "registry-evidencectl",
+    ),
     "mint": ("registry-mint",),
     "developer-tools": (
         "registry-config-report",
@@ -64,16 +71,30 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/evidence-tutorial-fence.sh",
         "docs/site/scripts/registryctl-tutorial.mjs",
         "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+        "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
         "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+        "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
         "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
         "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     }
 )
 
+# Binding crates (the Node and Python relying-party SDKs today; more may join
+# them) stay in EVIDENCE_PACKAGES and the `evidence` shard, because their own
+# source is covered by check-source-neutrality.sh, and that is what makes
+# `evidence_contracts` run the neutrality check against them. A binding-only
+# change does not, on its own, replay the docs Evidence tutorials: it touches
+# none of a tutorial's shell commands or fixtures, so it is excluded here.
+EVIDENCE_BINDING_PACKAGES = frozenset(
+    {"registry-evidence-client-node", "registry-evidence-client-py"}
+)
+
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
-EVIDENCE_TUTORIAL_PACKAGES = EVIDENCE_PACKAGES | frozenset(SHARDS["mint"])
+EVIDENCE_TUTORIAL_PACKAGES = (EVIDENCE_PACKAGES - EVIDENCE_BINDING_PACKAGES) | frozenset(
+    SHARDS["mint"]
+)
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -87,6 +108,7 @@ ROOT_RUST_INPUTS = {
 
 RELEASE_SECURITY_WORKFLOWS = frozenset(
     {
+        ".github/workflows/evidence-dev.yml",
         ".github/workflows/release.yml",
         ".github/workflows/release-candidate.yml",
         ".github/workflows/release-repeatability.yml",
@@ -462,6 +484,11 @@ def classify(
         for path in paths
     )
     editors = complete or any(path.startswith("editors/") for path in paths)
+    # Reverse dependents, not changed paths: both bindings are Cargo path
+    # dependents of the SDK and the verifier, so a change to either can move
+    # the native surface or the error envelope the packages wrap without
+    # touching a file inside a binding crate.
+    client_bindings = complete or bool(affected & EVIDENCE_BINDING_PACKAGES)
 
     tutorial_infrastructure = any(
         path
@@ -544,6 +571,7 @@ def classify(
         "docs": docs,
         "docs_archives": docs_archives,
         "editors": editors,
+        "client_bindings": client_bindings,
         "registryctl_tutorial": registryctl_tutorial,
         "evidence_tutorial": evidence_tutorial,
     }

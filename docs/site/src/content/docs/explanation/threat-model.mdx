@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -24,8 +24,8 @@ properties it claims: which threats does the architecture consider, what does it
 mitigate, and where do the residual risks lie?**
 It is deliberately a map of boundaries and limits, not a runbook.
 Hardening procedures belong to the [hardening checklist](../../security/hardening-checklist/),
-and the invariant-by-invariant statement of what the Evidence runtime enforces belongs to the
-[Evidence security model](../../security/evidence/).
+and the invariant-by-invariant statement of what the Evidence Gateway runtime enforces belongs to the
+[Evidence Gateway security model](../../security/evidence/).
 Here the goal is a defensible threat model: the boundaries the design draws, the threats it
 places in and out of scope, and the residual risks.
 
@@ -53,19 +53,19 @@ beside them. A separate adopter demo sits outside the production trust boundary:
 - Registry Manifest: the offline metadata producer. No production data, no auth, no
   secrets. It lives entirely on the describe side of the primary boundary.
 - Registry Relay: a read-only consultation gateway over sources.
-- Evidence: a minimum-disclosure assertion service. It answers one bounded, predefined
+- Evidence Gateway: a minimum-disclosure assertion service. It answers one bounded, predefined
   question about one subject with a signed assertion carrying the answer and not the record.
 - Registry Platform: the shared security primitives that the runtime services build on.
 - Registry Mint: a supporting service, not a pattern of its own. It issues the short-lived
-  access tokens a resource server such as Evidence verifies, for a deployment with no
-  identity provider. The dependency runs one way: Evidence does not depend on Registry Mint.
+  access tokens a resource server such as Evidence Gateway verifies, for a deployment with no
+  identity provider. The dependency runs one way: Evidence Gateway does not depend on Registry Mint.
 - Solmara Lab: a separate adopter demo, running on synthetic data and demo configuration.
   Treat Solmara Lab as out of scope for production trust. Its demo and template integrations
   are integration examples, not a production freshness or replay-protection profile, and a
   team copying them into production must add request freshness, expiry, or nonce checks itself.
 
 This model has no credential-issuance or peer-federation boundary, because no product here has
-one: Evidence issues no credential lifecycle and evaluates nothing on a peer's behalf.
+one: Evidence Gateway issues no credential lifecycle and evaluates nothing on a peer's behalf.
 
 Security-critical primitives are concentrated in Registry Platform so that the behavior is
 identical across services and reviewable in one place. This is a deliberate attack-surface
@@ -77,46 +77,45 @@ auditing separately.
 {/* SVG diagram. Every boundary label is restated in the sections that follow. */}
 <figure>
   <img src="../../images/registry-trust-boundaries.svg"
-       alt="The Registry Stack trust boundaries in one map. A request path runs downward from
-            Registry Mint, which issues a short-lived access token, to the Caller, to Evidence, to
-            a Registry Relay protected read API, to the registry sources Relay reads in place.
-            Dashed rules mark the service edge in front of Evidence and in front of Relay, where
-            every record- or assertion-bearing route is authenticated before responding: Evidence
+       alt="The Registry Stack trust boundaries in one map. One request path runs from Registry Mint,
+            which issues a short-lived access token, to the caller, to Evidence Gateway, and then to
+            Evidence Gateway's configured authoritative HTTP source. Registry Relay has a separate
+            protected-read path to its own sources. Dashed rules mark authenticated service edges.
+            Evidence Gateway
             runs one OIDC bearer profile with one trusted issuer, one principal claim, and no trust
-            in proxy identity headers. Caller to Evidence carries a bearer token, a declared
+            in proxy identity headers. Caller to Evidence Gateway carries a bearer token, a declared
             purpose, a named requirement revision, and selector values; the answer, not the record,
             comes back, only predefined revisions are evaluable, one authorization decision binds
-            the whole tuple, and possession is never authority. Evidence to its fixed sources fixes
+            the whole tuple, and possession is never authority. Evidence Gateway to its fixed sources fixes
             origin, method, path, headers, credential, TLS, projection, redirect and proxy denial,
-            and one request per evaluation by trusted configuration executed only by the core, with
-            lookup collapsing to match, no match, or ambiguous and raw responses never logged. The
-            Relay-protected source composition is two independent authorization decisions, neither
-            widening the other, with the Relay client credential custodied as key material and
-            Relay authenticating the workload rather than the caller. Registry Mint to Evidence
-            runs one way: Evidence verifies the token as an ordinary resource server that knows
+            and one request per configured acquisition stage by trusted configuration executed only by the core, with
+            lookup collapsing to match, no match, or ambiguous and raw responses never logged. Evidence
+            Gateway and Registry Relay keep separate sources, credentials, authorization decisions, and
+            audit trails. Registry Mint to Evidence Gateway
+            runs one way: Evidence Gateway verifies the token as an ordinary resource server that knows
             Registry Mint only as an issuer URL and a key set, and a deployment with an identity
-            provider does not run Registry Mint at all. Relay to registry sources is fixed by a
-            compiled integration covering origin, credential interface, method and path authority,
-            and limits. A separate lane runs operator to key file to Evidence to public JWKS to
+            provider does not run Registry Mint at all. Relay's separate path to its registry sources is
+            fixed by a compiled integration covering origin, credential interface, method and path
+            authority, and limits. A separate lane runs operator to key file to Evidence Gateway to public JWKS to
             verifier, where private material reaches the process only by secret reference to an
             owner-only file, signing is fail-closed, and the verifier pins the key set. Only
             /health, /ready, /openapi.json, /.well-known/evidence/jwks.json, and
-            /.well-known/jwt-vc-issuer are unauthenticated at the Evidence edge." />
+            /.well-known/jwt-vc-issuer are unauthenticated at the Evidence Gateway edge." />
 </figure>
 
 **The service edge (authentication).** Authentication is the trust boundary at the service
 edge, and each service authenticates every record- or assertion-bearing route before
 responding. Registry Relay runs exactly one authentication mode, either static-credential
-fingerprint or OIDC. Evidence runs one reviewed OIDC bearer profile with exactly one trusted
+fingerprint or OIDC. Evidence Gateway runs one reviewed OIDC bearer profile with exactly one trusted
 issuer and exact audience, token type, and algorithm allowlists, and one configured principal
 claim with no `client_id`, `azp`, header, or request fallback: missing data denies rather than
-falling back to another claim (`V1-I04`). Evidence's unauthenticated surfaces are operational
+falling back to another claim (`V1-I04`). Evidence Gateway's unauthenticated surfaces are operational
 and discovery only: `/health`, `/ready`, `/openapi.json`,
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. None of them reveals
-which evidence definitions are enabled or which requesters may invoke them. Evidence never
+which evidence definitions are enabled or which requesters may invoke them. Evidence Gateway never
 trusts a proxy-supplied identity header, whatever the gateway in front of it asserts.
 
-**Caller to Evidence.** This is the boundary the whole product exists to draw. The caller
+**Caller to Evidence Gateway.** This is the boundary the whole product exists to draw. The caller
 crosses it with a bearer access token, a declared purpose, a named requirement revision, and
 selector values for the subject roles that requirement declares; what comes back is the
 answer, not the record. Four properties hold it:
@@ -143,53 +142,34 @@ A reviewer should still read a declared purpose as the caller's authorized selec
 granted set rather than an identity-provider attestation, unless the operator has issued a
 distinct requester tag per purpose.
 
-**Evidence to its fixed sources.** Evidence's outbound edge is deliberately not
+**Evidence Gateway to its fixed sources.** Evidence Gateway's outbound edge is deliberately not
 general-purpose. Source calls are fixed by trusted bundle configuration and executed only by
-the core, which owns origin, method, fixed or selector-bound path, fixed headers,
-authentication, TLS, projection, redirect denial, proxy denial, limits, and a one-request
-ceiling; this is what closes SSRF, credential forwarding, and script-directed networking
-(`V1-I09`). A preparation script renders only bounded query pairs and one JSON body, and Rust
+the core, which owns the closed single or search-then-fetch sequence, origin, method, fixed or tagged
+selector or prior-fact-bound path, fixed headers, authentication, TLS, projection, redirect denial,
+proxy denial, limits, and a one-request-per-stage ceiling; this is what closes SSRF, credential
+forwarding, script-directed networking, and response-led routing (`V1-I09`, `V1-I40`). A preparation
+script renders only bounded query pairs and one JSON body, and Rust
 validates that output before a credential is resolved. Every source declares a response schema
 that Rust validates the projected response against before any extraction script runs, so a
 response outside its reviewed shape is a source-protocol failure rather than an input to fact
-construction. Lookup collapses to `match`, `no_match`, or `ambiguous`: Evidence never fetches
+construction. Lookup collapses to `match`, `no_match`, or `ambiguous`: Evidence Gateway never fetches
 broad candidate sets, follows pages, scores candidates, or exposes counts (`V1-I10`). Raw
 source responses are never persisted or logged (`V1-I14`). Hostname and fixed-origin
 verification stay mandatory, there is no trust-all mode, and ambient `HTTP_PROXY`-family
 variables are ignored.
 
-**The Relay-protected source composition.** A common deployment makes the fixed source a
-Relay-protected read API, reached with OAuth 2.0 client-credentials authentication, which is
-one of the source authentication kinds the Evidence bundle schema admits. That composition is
-a real boundary with real failure modes, and a reviewer should treat it as two independent
-authorization decisions rather than one:
+**Registry Relay and Evidence Gateway remain separate.** A deployment may operate both products,
+but no request path joins them. Evidence Gateway contacts its own configured authoritative HTTP
+sources; Relay contacts the sources compiled for its protected-read APIs. Each product owns its own
+credentials, authorization decision, audit trail, and readiness checks. A reviewer should reject a
+deployment description that treats Relay authorization as Evidence Gateway authorization, or that
+describes Relay as an Evidence Gateway source hop.
 
-- Evidence matches its own complete entitlement before it resolves a credential or contacts
-  Relay, and Relay then applies its own scope-based, deny-by-default workload authorization
-  before source work. Neither decision widens the other.
-- The composition is only as narrow as the Relay route it reads. Evidence records this
-  honestly as an acquisition posture per source: `source-derived` and `field-projected` claim
-  acquisition minimization, while `record-transformed` claims disclosure minimization only.
-  A Relay route that returns a whole record makes the integration `record-transformed` even
-  though Evidence's own projection and derivation emit one narrow fact, and the operator must
-  not describe it as full lifecycle minimization.
-- Evidence holds a client credential for Relay. Its disclosure gives an attacker Relay reach
-  at that client's scope, independent of every Evidence-side control, so it is custodied as
-  key material rather than as configuration.
-- Relay authenticates the Evidence workload, not the caller that asked Evidence. Bundle-fixed
-  headers cannot set authentication, routing, cookie, framing, forwarding, proxy, or tracing
-  fields, so no caller correlation identifier crosses into the source request. Joining the two
-  audit trails for one request is therefore an operator procedure over two records, not
-  something either service does for you.
-- Readiness performs a bounded token bootstrap against the configured token endpoint, so a
-  token-endpoint outage surfaces as a failed readiness check rather than as a first failed
-  request. It never sends an evidence-data request or probes a source data endpoint.
-
-**Registry Mint to Evidence.** Registry Mint issues access tokens; Evidence verifies them as
-an ordinary resource server. The dependency runs one way, and Evidence's only knowledge of
+**Registry Mint to Evidence Gateway.** Registry Mint issues access tokens; Evidence Gateway verifies them as
+an ordinary resource server. The dependency runs one way, and Evidence Gateway's only knowledge of
 Registry Mint is an issuer URL and a key set: it reads every claim by the name in its own
 `authentication` block, so any issuer writing those claims serves equally well. Registry
-Mint's tests drive Evidence's authenticator, and Evidence does not depend on Registry Mint.
+Mint's tests drive Evidence Gateway's authenticator, and Evidence Gateway does not depend on Registry Mint.
 What a reviewer checks depends on which of the two shapes the deployment runs:
 
 - **With Registry Mint.** The client registry becomes part of the trust boundary. Registry
@@ -198,14 +178,14 @@ What a reviewer checks depends on which of the two shapes the deployment runs:
   consequence is that whoever can write a registration file into `clients.directory` can mint
   a token carrying any requester tags, and the running process re-reads that directory on
   `SIGHUP` without a restart. Treat the registry directory as sensitive as the signing key.
-  Registry Mint serves plain HTTP behind operator-terminated TLS, while Evidence requires an
+  Registry Mint serves plain HTTP behind operator-terminated TLS, while Evidence Gateway requires an
   HTTPS issuer and key set with no loopback exception, so the TLS terminator is load-bearing.
 - **Without Registry Mint.** A deployment that already has an identity provider does not run
-  Registry Mint at all; Evidence points at the provider's issuer and JWKS directly. Tag
-  issuance, client lifecycle, and revocation move entirely to that provider, and Evidence's
+  Registry Mint at all; Evidence Gateway points at the provider's issuer and JWKS directly. Tag
+  issuance, client lifecycle, and revocation move entirely to that provider, and Evidence Gateway's
   residual exposure is its trust in one issuer's key set.
 
-Both shapes share one property worth stating plainly: Evidence has no token revocation. A
+Both shapes share one property worth stating plainly: Evidence Gateway has no token revocation. A
 minted or issued token is accepted until it expires, which is why token lifetime is bounded
 short. If the issuer's key set becomes unreachable, an already-retrieved key set keeps being
 accepted for a bounded allowance and then every request is rejected with the same closed `401`
@@ -213,12 +193,13 @@ a bad token receives, with the reason recorded only in the deployment's own log.
 
 **Operator to signing key material, and consumer to the published key set.** Private signing
 material is core-owned and stays out of bundle values, Rhai, logs, audit, and errors
-(`V1-I23`). It reaches the process only through the secret-reference mechanism, resolved by a
-file provider that accepts only a regular, owner-only, non-symlink, single-hard-link file of
-the expected mode and size. Version 1 has exactly one secret provider, the file provider: there
-is no hardware-module option, so custody is a property of the host rather than of the runtime.
-The operator configures one active EdDSA key whose `kid` matches `signing.activeKeyId`, and
-retains each retired public key in the published JWKS for at least the maximum assertion
+(`V1-I23`). Local development resolves a private JWK through the file secret provider, which
+accepts only a regular, owner-only, non-symlink, single-hard-link file of the expected mode and
+size. Production and evidence-grade deployments instead sign through a workload-local
+Vault/OpenBao Transit proxy over a Unix socket, so the process receives no provider token or
+exportable private key.
+The operator governs one active ES256/P-256 public JWK whose `kid` is its RFC 7638
+thumbprint, and retains each previous public key in the published JWKS for at least the maximum assertion
 validity plus allowed clock skew. Signing is mandatory and fail-closed: a missing or failed
 signer returns a safe transient failure and never falls back to unsigned output (`V1-I22`).
 
@@ -263,12 +244,12 @@ data leakage, and privacy regressions that expose raw subject identifiers.
   verification against the configured issuer JWKS, plus issuer, audience, token type, and
   algorithm checks. The service still owns its route scopes and grants regardless of what the
   token asserts.
-- A sender-constrained token replayed as a bearer token: Evidence denies an access token
+- A sender-constrained token replayed as a bearer token: Evidence Gateway denies an access token
   carrying an RFC 7800 proof-of-possession confirmation claim rather than accepting it as an
   ordinary bearer, because it validates no sender proof and accepting one would silently
   discard the constraint the token was issued under (`V1-I32`).
 - Privilege escalation or over-reach: Authorization is deny-by-default. Relay refuses
-  unauthorized callers before source work; Evidence requires exactly one complete entitlement
+  unauthorized callers before source work; Evidence Gateway requires exactly one complete entitlement
   match before audit, credential resolution, or source access. Reach is never widened at
   request time.
 - An existence or matching oracle: No-match, ambiguous, missing-fact, and
@@ -310,9 +291,9 @@ data leakage, and privacy regressions that expose raw subject identifiers.
 - SSRF and uncontrolled egress: Registry Stack project authoring accepts exact HTTPS source
   origins. Relay's compiled plan fixes the destination, method, path authority, safe headers,
   and cumulative call budgets before the runtime resolves a credential or sends a request, and
-  Evidence's fixed executor does the same for its own sources. Scripts on either side control
+  Evidence Gateway's fixed executor does the same for its own sources. Scripts on either side control
   ordinary request flow only inside that host-enforced authority.
-- A hostile or defective reviewed script: Evidence's script engine has no filesystem,
+- A hostile or defective reviewed script: Evidence Gateway's script engine has no filesystem,
   environment, network, process, or module access, no ambient clock or randomness, and a
   normative operation ceiling that terminates a runaway invocation with a closed, value-free
   error.
@@ -321,9 +302,10 @@ data leakage, and privacy regressions that expose raw subject identifiers.
   receive a PDP permit or fail closed with a stable `pdp.*` code rather than falling back to an
   ungoverned read.
 
-**Audit as a control.** Evidence writes two mandatory records per request: an access-attempt
-event that must be durably accepted before the first source read, and a disclosure-release
-event that must be durably accepted after signing and before the response is released. Either
+**Audit as a control.** Evidence Gateway writes one mandatory access-attempt record before every
+actual acquisition stage, plus one disclosure-release record per successful response. Each
+access-attempt event must be durably accepted before its source read, and the disclosure-release
+event must be durably accepted after signing and before the response is released. Either
 failure blocks the corresponding action. The chain is keyed and hash-linked, has no severity
 levels and no way to turn records off, and carries reviewed identifiers and decision categories
 only: never raw selector values, per-field selector hashes, source values, credentials, tokens,
@@ -334,7 +316,7 @@ replaces each exact-value trust scope with a field-bound
 `registry:trust:<field>:hmac-sha256:<digest>` handle under the deployment audit key, which
 supports investigation and same-key correlation without disclosing the trusted value.
 
-Three caveats for the auditor. First, exactly one Evidence process may write a given audit
+Three caveats for the auditor. First, exactly one Evidence Gateway process may write a given audit
 path: the sink takes an exclusive advisory lock, because the chain head lives in process
 memory and two writers would interleave records and destroy tamper evidence. That makes the
 supported shape one replica per audit path, active/passive rather than active/active. Second,
@@ -354,11 +336,10 @@ threat model must weigh.
 These are the risks the design does *not* close:
 
 - Key custody is not certified by health checks: Readiness, liveness, and offline validation
-  confirm that key material parses and that its file ownership and mode are what the contract
-  requires. They do not certify production-grade custody. Evidence Version 1 has one secret
-  provider, the file provider, and no hardware-module option, so a deployment using
-  demo-generated or long-lived software keys can be reachable and internally consistent yet not
-  production-secure. Custody, rotation, and provider approval remain operator responsibilities.
+  confirm that governed key material and the selected signer agree. They do not independently
+  certify the Transit service, workload-local proxy, or operator policy. A local-assurance
+  deployment using demo-generated software keys can be reachable and internally consistent yet
+  not production-secure. Custody, rotation, and provider approval remain operator responsibilities.
 - The combined disclosure surface is a human review: The runtime validates one bundle at
   startup and refuses two simultaneously enabled requirements that declare the same disclosure
   family, but a declared family is a trusted operator attestation, not a semantic classifier.
@@ -375,7 +356,7 @@ These are the risks the design does *not* close:
   running N instances behind a load balancer multiplies every limit by N and a restart resets
   each budget to full. This matters most for the failed-selector budget, because that budget,
   not throughput, is the selector-enumeration defense.
-- A released assertion cannot be recalled: Evidence has no revocation, status list, or
+- A released assertion cannot be recalled: Evidence Gateway has no revocation, status list, or
   presentation-time check. The only levers over a released assertion are its declared validity
   window and signing-key rotation, and rotation does not invalidate assertions a retained
   public key still verifies.
@@ -396,7 +377,7 @@ These are the risks the design does *not* close:
   institution selected the correct source fields, lawful purpose, derivation rule, or
   disclosure default. Those decisions require project review and fixture evidence.
 - Admin reload is not a capability: Relay's admin surface is documented in its own generated
-  OpenAPI, and Evidence has no admin listener, reload route, or configuration apply path at
+  OpenAPI, and Evidence Gateway has no admin listener, reload route, or configuration apply path at
   all. A configuration change is a new reviewed revision and a restart, in both cases.
 
 ## What is explicitly out of scope
@@ -404,7 +385,7 @@ These are the risks the design does *not* close:
 These are non-goals for this version. None of them should be read into a Registry Stack
 conformance claim:
 
-- A credential lifecycle: Evidence's SD-JWT VC output is a second serialization of the same
+- A credential lifecycle: Evidence Gateway's SD-JWT VC output is a second serialization of the same
   stateless assertion under a frozen profile. There is no issuance session, holder binding
   ceremony, status list, revocation, presentation verification, or persisted credential state,
   and an optional caller-supplied holder key is echoed unverified into a confirmation claim
@@ -412,12 +393,13 @@ conformance claim:
 - Delegated or federated evaluation between peers: no service in this model evaluates a
   question on another deployment's behalf, and there is no trust-chain discovery, peer
   registry, or cross-institution evaluation route.
-- Identity resolution: lookup is match, no-match, or ambiguous. Evidence is not an
+- Identity resolution: lookup is match, no-match, or ambiguous. Evidence Gateway is not an
   identity-resolution or record-linkage engine and returns no candidate material.
 - Cross-verifier credential use: the subject binding is audience-scoped, so an assertion is
   meaningful to one relying party and correlatable across none.
 - Full external-policy interoperability: governed Relay PDP enforcement covers only the one
-  supported PDP profile (`registry-evidence-gateway-pdp/v1`). It is not dynamic external policy
+  supported PDP profile (`registry-evidence-gateway-pdp/v1`). This legacy identifier belongs to
+  Relay and does not name or connect to Evidence Gateway. It is not dynamic external policy
   discovery and not enforcement of ODRL terms outside that profile. Unsupported terms or
   invalid policy identity fail closed.
 - Certified standards compliance: Aligning with a standard is not conforming to it. Speaking
@@ -427,7 +409,7 @@ conformance claim:
   Features, Records, and EDR adapters and SP DCI sync) are feature-gated and mount only when
   the build is configured with the matching Cargo feature. Do not infer their presence from the
   route catalog of a different build.
-- Non-Unix targets: Evidence Version 1 supports Unix targets only, because its secret and
+- Non-Unix targets: Evidence Gateway Version 1 supports Unix targets only, because its secret and
   audit invariants depend on owner, mode, no-follow, link-count, and open-file identity checks.
 
 ## Related
@@ -436,6 +418,6 @@ conformance claim:
 - [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/), [RS-PR-RELAY](../../spec/rs-pr-relay/):
   protocol contracts
 - [RS-ARC-G](../../spec/rs-arc-g/): the two-layer architecture
-- [Evidence security model](../../security/evidence/): the invariant matrix and its tests
+- [Evidence Gateway security model](../../security/evidence/): the invariant matrix and its tests
 - [Harden a production deployment](../../security/hardening-checklist/): hardening procedures
 - [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/)

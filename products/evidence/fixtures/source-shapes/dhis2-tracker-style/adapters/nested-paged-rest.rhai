@@ -1,4 +1,5 @@
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     if !source_response.contains("pager") ||
        !source_response.contains("trackedEntities") ||
        source_response.len() != 2 {

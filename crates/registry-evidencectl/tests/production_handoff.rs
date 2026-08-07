@@ -19,11 +19,9 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use ed25519_dalek::{Signer as _, SigningKey};
+use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use serde_json::{json, Value};
 
-const AUTH_KEY_ID: &str = "acceptance-auth-key";
-const SIGNING_KEY_ID: &str = "production-signing-key-1";
 const TOKEN_AUDIENCE: &str = "registry-evidence-production-test";
 const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/production-acceptance";
 const REQUIREMENT: &str = "urn:example:requirements:adult-status:v1";
@@ -98,6 +96,11 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     fixture.wait_for_evidence(&mut service);
 
     let token = fixture.access_token();
+    let published_revision = published_configuration_revision(fixture.evidence_port, &token);
+    assert_ne!(
+        published_revision, revision,
+        "an assertion carries its requirement's own revision, not the bundle's"
+    );
     let nonce = URL_SAFE_NO_PAD.encode([0x42_u8; 32]);
     let (status, response) = post_evidence(fixture.evidence_port, &token, &nonce);
     if status != 200 {
@@ -128,7 +131,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 
     let payload = signed_payload(&response);
     assert_eq!(payload["assuranceProfile"], "production");
-    assert_eq!(payload["configurationRevision"], revision);
+    assert_eq!(payload["configurationRevision"], published_revision);
     assert_eq!(payload["supportedValues"][0]["providesValueFor"], CONCEPT);
     assert_eq!(payload["supportedValues"][0]["value"], true);
     let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
@@ -152,7 +155,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         "signed payload retained a source credential"
     );
 
-    fixture.write_verification_policy(&payload, &nonce, &revision);
+    fixture.write_verification_policy(&payload, &nonce, &published_revision);
     assert_success(
         Command::new(evidence)
             .arg("verify")
@@ -171,6 +174,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     assert_audit_contract(
         &audit,
         &revision,
+        &fixture.evidence_signing_kid(),
         &[source_token.as_slice(), token.as_bytes()],
     );
     stop_gracefully(&mut service, "Evidence");
@@ -252,6 +256,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
     );
     let token = token.trim();
 
+    let published_revision = published_configuration_revision(fixture.evidence_port, token);
     let nonce = URL_SAFE_NO_PAD.encode([0x24_u8; 32]);
     let (status, response) = post_evidence(fixture.evidence_port, token, &nonce);
     assert_eq!(status, 200, "a real Mint token must authorize Evidence");
@@ -260,7 +265,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
         .expect("protect Mint-backed response");
     let payload = signed_payload(&response);
     assert_eq!(payload["assuranceProfile"], "production");
-    assert_eq!(payload["configurationRevision"], revision);
+    assert_eq!(payload["configurationRevision"], published_revision);
     assert_eq!(payload["supportedValues"][0]["providesValueFor"], CONCEPT);
     assert_eq!(payload["supportedValues"][0]["value"], true);
     assert!(
@@ -271,7 +276,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
         "signed payload retained the Mint access token"
     );
 
-    fixture.write_verification_policy(&payload, &nonce, &revision);
+    fixture.write_verification_policy(&payload, &nonce, &published_revision);
     assert_success(
         Command::new(evidence)
             .arg("verify")
@@ -289,6 +294,7 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
     assert_audit_contract(
         &wait_for_audit(&fixture.audit_path),
         &revision,
+        &fixture.evidence_signing_kid(),
         &[source_token.as_slice(), token.as_bytes()],
     );
 
@@ -604,7 +610,7 @@ impl Fixture {
             ca: root.join("tls/ca.pem"),
             tls_cert: root.join("tls/server.pem"),
             tls_key: root.join("tls/server.key"),
-            oidc_private: root.join("oidc-private/signing-ed25519-private-jwk"),
+            oidc_private: root.join("oidc-private/signing-p256-private-jwk"),
             oidc_jwks: root.join("oidc.jwks.json"),
             source_token: secrets.join("source-token"),
             source_marker: root.join("source-requested"),
@@ -681,7 +687,8 @@ factSchema: schemas/people-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/people-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -695,7 +702,7 @@ factSchema: schemas/people-facts.schema.yaml
             ),
             (
                 "adapters/people-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
@@ -902,7 +909,8 @@ factSchema: schemas/relationships-facts.schema.yaml
         for (path, contents) in [
             (
                 "adapters/immunizations-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -916,7 +924,7 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/immunizations-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
@@ -928,7 +936,8 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/relationships-prepare.rhai",
-                r#"fn prepare(selectors, parameters) {
+                r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     #{
         query: [],
         body: #{
@@ -945,7 +954,7 @@ factSchema: schemas/relationships-facts.schema.yaml
             ),
             (
                 "adapters/relationships-extract.rhai",
-                r#"fn extract(source_response, parameters) {
+                r#"fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 { return #{outcome: "no_match"}; }
     if total > 1 { return #{outcome: "ambiguous"}; }
@@ -1331,7 +1340,7 @@ privacy_expectation:
             evidencectl()
                 .args(["keygen", "signing", "--out-dir"])
                 .arg(self.oidc_private.parent().expect("OIDC private directory"))
-                .args(["--kid", AUTH_KEY_ID, "--public-out"])
+                .arg("--public-out")
                 .arg(&public)
                 .output()
                 .expect("OIDC keygen starts"),
@@ -1349,7 +1358,32 @@ privacy_expectation:
     }
 
     fn stage_target(&self) {
-        fs::create_dir_all(&self.target).expect("production target");
+        let target_public_keys = self.target.join("public-keys");
+        fs::create_dir_all(&target_public_keys).expect("deployment target public keys");
+        let generated_public = self.root.join("evidence-transit-public.jwk.json");
+        assert_success(
+            evidencectl()
+                .args(["keygen", "signing", "--out-dir"])
+                .arg(self.root.join("transit-evidence-key"))
+                .arg("--public-out")
+                .arg(&generated_public)
+                .output()
+                .expect("Evidence Transit fixture keygen starts"),
+            "Evidence Transit fixture key generation",
+        );
+        let governed_public: Value = serde_json::from_slice(
+            &fs::read(&generated_public).expect("Evidence Transit fixture public JWK"),
+        )
+        .expect("Evidence Transit fixture public JWK parses");
+        let signing_kid = governed_public["kid"]
+            .as_str()
+            .expect("Evidence Transit fixture kid");
+        let governed_public_name = format!("{signing_kid}.jwk.json");
+        fs::rename(
+            &generated_public,
+            target_public_keys.join(&governed_public_name),
+        )
+        .expect("publish governed Evidence public JWK to deployment target");
         let identity = format!("https://127.0.0.1:{}", self.https_port);
         fs::write(
             self.target.join("governance.yaml"),
@@ -1363,22 +1397,24 @@ authentication:
   issuer: {identity}
   audiences: [{TOKEN_AUDIENCE}]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: {identity}/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit: {{format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}}
 subjectBinding: {{secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}}
 rateLimits: {{requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}}
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: {SIGNING_KEY_ID}
-  activeKeyRef: secret:file/signing-ed25519-private-jwk
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/{governed_public_name}
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
   maximumAssertionValiditySeconds: 86400
   verifierClockSkewSeconds: 30
@@ -1400,10 +1436,11 @@ authorityProfiles:
         fs::write(
             &self.target_runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 1048576\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 1048576\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 bundle = self.candidate.join("bundle").display(),
                 port = self.evidence_port,
                 secrets = self.secrets.display(),
+                transit_socket = self.root.join("transit-proxy.sock").display(),
                 audit = self.audit_path.display(),
             ),
         )
@@ -1412,7 +1449,7 @@ authorityProfiles:
 
     fn authorize_four_shapes(&self) {
         let path = self.target.join("governance.yaml");
-        let mut governance = fs::read_to_string(&path).expect("production governance");
+        let mut governance = fs::read_to_string(&path).expect("deployment governance");
         governance.push_str(&format!(
             r#"      - requirement: {AGE_REQUIREMENT}
         purpose: service-path-selection
@@ -1433,7 +1470,7 @@ authorityProfiles:
           - {{role: candidate-parent, selectorProfile: candidate-reference-v1, valueOrigin: request}}
 "#
         ));
-        fs::write(path, governance).expect("four-shape production governance");
+        fs::write(path, governance).expect("four-shape deployment governance");
     }
 
     fn build(&self, evidence: &Path) -> Output {
@@ -1459,17 +1496,6 @@ authorityProfiles:
             fs::Permissions::from_mode(0o700),
         )
         .expect("audit directory mode");
-        let public = self.root.join("evidence-public.jwk.json");
-        assert_success(
-            evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
-                .arg(&self.secrets)
-                .args(["--kid", SIGNING_KEY_ID, "--public-out"])
-                .arg(&public)
-                .output()
-                .expect("Evidence signing keygen starts"),
-            "independent Evidence signing key generation",
-        );
         for name in ["audit-hmac-key", "subject-binding-hmac-key"] {
             assert_success(
                 evidencectl()
@@ -1492,11 +1518,34 @@ authorityProfiles:
             evidencectl()
                 .args(["jwks", "--out"])
                 .arg(&self.evidence_jwks)
-                .arg(public)
+                .arg(self.active_evidence_public_jwk())
                 .output()
                 .expect("Evidence JWKS assembly starts"),
             "trusted Evidence JWKS assembly",
         );
+    }
+
+    fn active_evidence_public_jwk(&self) -> PathBuf {
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(self.candidate.join("bundle/evidence.yaml")).expect("candidate bundle"),
+        )
+        .expect("candidate bundle parses");
+        self.candidate.join("bundle").join(
+            bundle["signing"]["activePublicJwkFile"]
+                .as_str()
+                .expect("active public JWK file"),
+        )
+    }
+
+    fn evidence_signing_kid(&self) -> String {
+        let public: Value = serde_json::from_slice(
+            &fs::read(self.active_evidence_public_jwk()).expect("active Evidence public JWK"),
+        )
+        .expect("active Evidence public JWK parses");
+        public["kid"]
+            .as_str()
+            .expect("active Evidence signing kid")
+            .to_owned()
     }
 
     fn assert_compose_revision_distinction(&self, evidence: &Path, revision: &str) {
@@ -1513,12 +1562,13 @@ authorityProfiles:
         fs::write(
             &runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 2097152\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 2097152\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
                 // candidate/bundle mount in the container execution context.
                 bundle = self.candidate.join("bundle").display(),
                 port = free_port(),
                 secrets = self.secrets.display(),
+                transit_socket = self.root.join("transit-proxy.sock").display(),
                 audit = compose.join("persistent-audit/evidence.jsonl").display(),
             ),
         )
@@ -1546,19 +1596,30 @@ authorityProfiles:
         let clients = mint.join("clients");
         fs::create_dir_all(&clients).expect("Mint client registry");
 
-        let mint_public = mint.join("mint-public.jwk.json");
+        let mint_public_keys = mint.join("public-keys");
+        fs::create_dir(&mint_public_keys).expect("Mint public key directory");
+        let generated_mint_public = mint.join("mint-public.jwk.json");
         assert_success(
             evidencectl()
                 .args(["keygen", "signing", "--out-dir"])
-                .arg(mint.join("secrets"))
-                .args(["--kid", "mint-signing-key-1", "--public-out"])
-                .arg(&mint_public)
+                .arg(mint.join("transit-key"))
+                .arg("--public-out")
+                .arg(&generated_mint_public)
                 .output()
                 .expect("Mint signing keygen starts"),
             "independent Mint signing key generation",
         );
+        let mint_public_jwk: Value =
+            serde_json::from_slice(&fs::read(&generated_mint_public).expect("Mint public JWK"))
+                .expect("Mint public JWK parses");
+        let mint_kid = mint_public_jwk["kid"].as_str().expect("Mint signing kid");
+        let mint_public = mint_public_keys.join(format!("{mint_kid}.jwk.json"));
+        fs::rename(&generated_mint_public, &mint_public).expect("publish Mint public JWK");
         let audit = mint.join("audit");
         fs::create_dir(&audit).expect("Mint audit directory");
+        fs::create_dir(mint.join("secrets")).expect("Mint secret directory");
+        fs::set_permissions(mint.join("secrets"), fs::Permissions::from_mode(0o700))
+            .expect("Mint secret directory mode");
         fs::set_permissions(&audit, fs::Permissions::from_mode(0o700))
             .expect("Mint audit directory mode");
         let audit_key = mint.join("secrets/mint-audit-hmac-key");
@@ -1594,7 +1655,7 @@ authorityProfiles:
             evidencectl()
                 .args(["keygen", "signing", "--out-dir"])
                 .arg(&caller_directory)
-                .args(["--kid", "acceptance-client-key-1", "--public-out"])
+                .arg("--public-out")
                 .arg(&caller_public)
                 .output()
                 .expect("Mint caller keygen starts"),
@@ -1631,14 +1692,16 @@ authorityProfiles:
         fs::write(
             &config,
             format!(
-                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: EdDSA\n  activeKeyId: mint-signing-key-1\n  activeKeyFile: secrets/signing-ed25519-private-jwk\naudit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyFile: secrets/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [EdDSA]\nclients:\n  directory: clients\n",
+                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: ES256\n  activePublicJwkFile: public-keys/{mint_kid}.jwk.json\n  publishedPublicJwkFiles: []\n  revokedKeyIds: []\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: mint-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nsecretProviders:\n  file:\n    root: {secrets}\naudit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyRef: secret:file/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [ES256]\nclients:\n  directory: clients\n",
                 port = self.mint_port,
+                transit_socket = self.root.join("transit-proxy.sock").display(),
+                secrets = mint.join("secrets").display(),
             ),
         )
         .expect("Mint config");
         MintDeployment {
             config,
-            caller_private: caller_directory.join("signing-ed25519-private-jwk"),
+            caller_private: caller_directory.join("signing-p256-private-jwk"),
         }
     }
 
@@ -1711,12 +1774,12 @@ authorityProfiles:
         let secret = URL_SAFE_NO_PAD
             .decode(private["d"].as_str().expect("private JWK d"))
             .expect("private JWK d decodes");
-        let secret: [u8; 32] = secret.try_into().expect("Ed25519 seed length");
-        let key = SigningKey::from_bytes(&secret);
+        let key = SigningKey::from_slice(&secret).expect("P-256 signing scalar");
+        let kid = private["kid"].as_str().expect("private JWK kid");
         let identity = format!("https://127.0.0.1:{}", self.https_port);
         let now = Utc::now().timestamp();
         let header = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&json!({"alg":"EdDSA","kid":AUTH_KEY_ID,"typ":"at+jwt"}))
+            serde_json::to_vec(&json!({"alg":"ES256","kid":kid,"typ":"at+jwt"}))
                 .expect("JWT header"),
         );
         let claims = URL_SAFE_NO_PAD.encode(
@@ -1725,14 +1788,15 @@ authorityProfiles:
                 "aud": TOKEN_AUDIENCE,
                 "sub": "synthetic-caller",
                 "iat": now - 1,
-                "exp": now + 3600,
+                "exp": now + 299,
                 "evidence_tags": ["fixture-agency"],
                 "evidence_audience": EVIDENCE_AUDIENCE,
             }))
             .expect("JWT claims"),
         );
         let input = format!("{header}.{claims}");
-        let signature = URL_SAFE_NO_PAD.encode(key.sign(input.as_bytes()).to_bytes());
+        let signature: Signature = key.sign(input.as_bytes());
+        let signature = URL_SAFE_NO_PAD.encode(signature.to_bytes());
         format!("{input}.{signature}")
     }
 
@@ -1984,6 +2048,42 @@ fn post_evidence(port: u16, token: &str, nonce: &str) -> (u16, Vec<u8>) {
     (status, response[separator + 4..].to_vec())
 }
 
+/// The configuration revision discovery publishes for the fixture requirement.
+///
+/// It is requirement scoped, so it is not the deployment's bundle revision.
+/// Reading it from discovery keeps the assertion check independent of the
+/// signed payload it is compared against.
+fn published_configuration_revision(port: u16, token: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("Evidence connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .expect("request timeout");
+    write!(
+        stream,
+        "GET /v1/evidence-definitions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    )
+    .expect("discovery request headers");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).expect("response bytes");
+    let separator = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP response separator");
+    let document: Value =
+        serde_json::from_slice(&response[separator + 4..]).expect("discovery document JSON");
+    let definitions = document["definitions"]
+        .as_array()
+        .expect("discovery publishes definitions");
+    let revision = definitions
+        .iter()
+        .find(|definition| definition["requirement"] == REQUIREMENT)
+        .and_then(|definition| definition["configurationRevision"].as_str())
+        .expect("the fixture requirement publishes its own configuration revision")
+        .to_owned();
+    assert!(revision.starts_with("sha256:") && revision.len() == 71);
+    revision
+}
+
 fn signed_payload(response: &[u8]) -> Value {
     let jws: Value = serde_json::from_slice(response).expect("flattened JWS response");
     let encoded = jws["payload"].as_str().expect("flattened JWS payload");
@@ -2009,7 +2109,7 @@ fn wait_for_audit(path: &Path) -> String {
     result.expect("the complete operation audit")
 }
 
-fn assert_audit_contract(audit: &str, revision: &str, credentials: &[&[u8]]) {
+fn assert_audit_contract(audit: &str, revision: &str, signing_key_id: &str, credentials: &[&[u8]]) {
     let records = audit
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("audit JSONL"))
@@ -2023,7 +2123,7 @@ fn assert_audit_contract(audit: &str, revision: &str, credentials: &[&[u8]]) {
     assert_eq!(records[0]["record"]["decision"], "authorized");
     assert_eq!(records[1]["record"]["phase"], "disclosure-release");
     assert_eq!(records[1]["record"]["decision"], "released");
-    assert_eq!(records[1]["record"]["signingKeyId"], SIGNING_KEY_ID);
+    assert_eq!(records[1]["record"]["signingKeyId"], signing_key_id);
     for record in &records {
         assert_eq!(record["record"]["bundleRevision"], revision);
         assert_eq!(record["record"]["assuranceProfile"], "production");

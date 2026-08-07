@@ -87,7 +87,7 @@ crosswalk-functions = { workspace = true, features = ["date", "redaction"] }
 # Crosswalk CEL support for canonical attribute release and optional mapping
 # adapters.
 crosswalk-core = { workspace = true, optional = true }
-jsonschema = { version = "0.18", optional = true }
+jsonschema = { workspace = true, optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.
 serde-saphyr = { version = "0.0.26" }
 humantime-serde = { version = "1" }
@@ -158,7 +158,7 @@ insta = { version = "1", features = ["json"] }
 # don't multiply build-time copies.
 zip = { version = "8", default-features = false, features = ["deflate"] }
 # Validates payloads in standards-adapter tests.
-jsonschema = { version = "0.18", features = ["draft202012"] }
+jsonschema.workspace = true
 # Ed25519 key generation for tests so they can mint fresh keypairs and
 # convert them to/from JWK without shelling out to openssl.
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }

@@ -58,13 +58,13 @@ entries:
   - id: acceptance-row-11
     summary: JWS verification fails after any protected-header or payload mutation.
     tests:
-      - {file: crates/registry-evidence/src/verifier.rs, name: payload_and_protected_header_mutation_fail}
-      - {file: crates/registry-evidence/src/verifier.rs, name: duplicate_jws_members_and_unknown_kid_are_rejected}
-      - {file: crates/registry-evidence/src/verifier.rs, name: complete_jws_negative_fixture_is_executable}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: payload_and_protected_header_mutation_fail}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: duplicate_jws_members_and_unknown_kid_are_rejected}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: complete_jws_negative_fixture_is_executable}
   - id: acceptance-row-12
     summary: A valid false boolean result is a success in either authorized response format, not an error.
     tests:
-      - {file: crates/registry-evidence/src/verifier.rs, name: signed_false_round_trips_and_verifies}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: signed_false_round_trips_and_verifies}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_verification}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: all_four_definitions_pass_the_explicitly_authorized_unsigned_path}
   - id: acceptance-row-13
@@ -192,7 +192,7 @@ entries:
       - {file: crates/registry-evidence/src/kernel.rs, name: supported_value_fixture_global_negatives_are_enforced}
       - {file: crates/registry-evidence/src/kernel.rs, name: scalar_decimal_and_collection_forms_are_exact}
       - {file: crates/registry-evidence/src/kernel.rs, name: bucket_entity_and_structured_forms_are_closed}
-      - {file: crates/registry-evidence/src/verifier.rs, name: signed_schema_integer_lexical_forms_verify_without_type_loss}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: signed_schema_integer_lexical_forms_verify_without_type_loss}
   - id: acceptance-row-30
     summary: source-derived, field-projected, and record-transformed definitions use the same executor and report their acquisition guarantees honestly.
     tests:
@@ -295,7 +295,7 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}
       - {file: crates/registry-evidence/src/bundle.rs, name: symlinked_artifact_fails_before_file_access}
   - id: acceptance-row-46
-    summary: Fixed paths and selector-bound path templates pass exact encoding tests; missing, extra, duplicated, slash, backslash, percent, control, empty, and dot-segment bindings fail before credential acquisition or source access.
+    summary: Fixed paths and tagged selector or fetch prior-fact path templates pass exact encoding tests; missing, extra, duplicated, slash, backslash, percent, control, empty, and dot-segment bindings fail before credential acquisition or source access.
     tests:
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: path_binding_contract_rejects_empty_missing_and_extra_material_before_credentials}
@@ -347,16 +347,16 @@ entries:
   - id: acceptance-row-53
     summary: Signed Evidence echoes the exact request nonce; changing the expected or signed nonce fails verification, and nonce reuse is not represented as replay prevention.
     tests:
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_nonce_is_strict_and_never_reaches_source_or_audit}
   - id: acceptance-row-54
     summary: The verifier requires independently trusted expected subject roles and opaque bindings plus expected concept identifiers, forms, and cardinalities after signature verification; missing, extra, duplicated, substituted, or wrong-key-version bindings and unexpected output fail, and subject order alone is non-semantic.
     tests:
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
-      - {file: crates/registry-evidence/src/verifier.rs, name: signature_never_substitutes_for_provider_and_issuer_trust_policy}
-      - {file: crates/registry-evidence/src/verifier.rs, name: retired_public_key_verifies_only_while_published_and_payload_is_current}
-      - {file: crates/registry-evidence/src/verifier.rs, name: active_plus_maximum_retired_keys_is_a_usable_trusted_set}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: signature_never_substitutes_for_provider_and_issuer_trust_policy}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: retired_public_key_verifies_only_while_published_and_payload_is_current}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: active_plus_maximum_retired_keys_is_a_usable_trusted_set}
   - id: acceptance-row-55
     summary: Missing Accept, */*, and exact signed media select JWS; only exact unsigned media selects unsigned JSON, and duplicate, combined, parameterized, weighted, or unknown negotiation fails before source access.
     tests:
@@ -379,7 +379,7 @@ entries:
     summary: The unsigned envelope has its exact vendor media type, schema, type, integrity marker, warning, and closed nested Evidence with no protected, payload, signature, or signing-key claim, and the JWS verifier rejects it.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
-      - {file: crates/registry-evidence/src/verifier.rs, name: unsigned_envelope_is_rejected_by_the_strict_jws_verifier}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: unsigned_envelope_is_rejected_by_the_strict_jws_verifier}
       - {file: crates/registry-evidence/src/contracts.rs, name: schemas_accept_the_exact_public_wire_shapes}
       - {file: crates/registry-evidence/src/contracts.rs, name: jws_and_problem_schemas_are_closed}
   - id: acceptance-row-59
@@ -400,12 +400,12 @@ entries:
   - id: acceptance-row-61
     summary: Verification tooling re-verifies a stored signed response against a pinned trusted key, expected policy, request nonce, subject bindings, and output contract, and reports cryptographic authenticity separately from current validity.
     tests:
-      - {file: crates/registry-evidence/src/verifier.rs, name: authenticity_is_reported_separately_from_current_validity}
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
-      - {file: crates/registry-evidence/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
-      - {file: crates/registry-evidence/src/verifier.rs, name: assertion_lifetime_above_the_accepted_maximum_fails}
-      - {file: crates/registry-evidence/src/verifier.rs, name: complete_jws_negative_fixture_is_executable}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authenticity_is_reported_separately_from_current_validity}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_nonce_must_match_and_reuse_is_not_replay_prevention}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_subject_set_is_unordered_unique_and_exact}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: assertion_lifetime_above_the_accepted_maximum_fails}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: complete_jws_negative_fixture_is_executable}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_accepts_an_authentic_and_current_stored_response}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_separates_authenticity_from_current_validity}
       - {file: crates/registry-evidence/tests/cli.rs, name: verify_rejects_a_tampered_payload_without_naming_a_value}
@@ -418,3 +418,17 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
       - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
+  - id: acceptance-row-63
+    summary: An authorization refusal after successful authentication durably appends exactly one standalone minimal registry.evidence.audit.authorization-refusal/v1 denial event before returning the generic 403; append failure returns the generic 503, no source boundary is crossed, and authentication, malformed-request, and invalid-selector failures remain operational-only.
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
+  - id: acceptance-row-64
+    summary: A search-then-fetch requirement executes one fixed audited search and, only after a unique schema-valid match, one fixed audited fetch using declared scalar prior-fact path binding; only final facts reach derivation, the weaker posture governs, unresolved search makes no fetch, intermediate facts stay out of audit, and no third call or response-led routing exists.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
+      - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}

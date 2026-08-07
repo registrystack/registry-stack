@@ -16,16 +16,16 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Answer, "Is this candidate registered as a parent of this child?" Unlike
-[your first Evidence assertion](../first-evidence-assertion/) and the
+[your first Evidence Gateway assertion](../first-evidence-assertion/) and the
 [governed-value follow-up](../return-a-governed-value/), this standalone tutorial binds two people
-in distinct roles. Evidence must not let a caller omit a role, repeat one role, or swap its
+in distinct roles. Evidence Gateway must not let a caller omit a role, repeat one role, or swap its
 selector field.
 
 <QuickstartMeta
   outcome="A verified relationship assertion bound to a child and a candidate parent."
   time="About 15 minutes"
   level="Local development with synthetic data"
-  prerequisites={['Evidence toolset', 'Python 3', 'A shell with curl', 'Linux or macOS']}
+  prerequisites={['Evidence Gateway toolset', 'Python 3', 'A shell with curl', 'Linux or macOS']}
 />
 
 ## Start a relationship registry
@@ -106,15 +106,14 @@ The synthetic registry knows three people and one registered relationship. Its e
 only the relationship decision for a known pair. A production source would need governance that
 defines what "registered parent" means and who can maintain that relationship.
 
-## Create the Evidence project
+## Create the Evidence Gateway project
 
 In another terminal, create an editable project from the registry's OpenAPI description:
 
 ```sh
 evidencectl new parent-relationship \
   --openapi http://127.0.0.1:8002/openapi.json \
-  --profile local \
-  --generate-keys
+  --profile local
 cd parent-relationship
 ```
 
@@ -164,7 +163,7 @@ fn answer(facts, selectors, context) {
 ```
 
 This source already owns the reviewed relationship decision, so the derivation maps that fact to
-the one governed answer. Evidence still validates the source response, answer form, disclosure,
+the one governed answer. Evidence Gateway still validates the source response, answer form, disclosure,
 and both subject bindings before signing.
 
 ## Start the project
@@ -174,7 +173,7 @@ evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
@@ -252,5 +251,5 @@ Return to the registry terminal and press `Ctrl+C`.
 
 - [Issue registered-parent evidence from OpenCRVS](../verify-a-registered-parent-with-opencrvs/)
 - [Issue immunization evidence from DHIS2](../issue-immunization-evidence-from-dhis2/)
-- [See Evidence refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Configure Evidence](../../configure/evidence/)
+- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
+- [Configure Evidence Gateway](../../configure/evidence/)

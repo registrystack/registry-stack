@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -26,10 +26,10 @@ production-ready.
 ## When to use this
 
 Use this checklist before a deployment serving real data goes live, and again after any change to
-signing keys, audit sinks, network placement, the governed Evidence bundle, or Relay's declared
+signing keys, audit sinks, network placement, the governed Evidence Gateway bundle, or Relay's declared
 deployment profile. It assumes you have already configured your services per the
 [Registry Relay configuration reference](../../products/registry-relay/configuration/) and, for
-Evidence, [Configure Evidence](../../configure/evidence/).
+Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 
 ## Before you start
 
@@ -39,7 +39,7 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   profile is never inferred from hostname or network position; you declare it.
 - Have your Relay startup logs and `registry-relay doctor` output available to check gate findings
   as you work through each Relay item.
-- Have `evidence check` runnable against the exact revision you intend to serve. Evidence has no
+- Have `evidence check` runnable against the exact revision you intend to serve. Evidence Gateway has no
   posture endpoint, no profile declaration, and no admin surface: its equivalent of a gate finding
   is a startup or readiness failure, so the offline commands are where you find problems first.
 - When the deployment runs Registry Mint, have `mint check` and `mint verify-audit` runnable
@@ -47,44 +47,48 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 
 ## Keys and custody
 
-- Evidence: configure exactly one active signing key, an Ed25519 private JWK whose `kid` matches
-  `signing.activeKeyId` in the governed bundle. `evidence check` refuses a deployment whose signing
-  material startup would refuse, including a `kid` mismatch.
-- Evidence: supply every private key and source credential through a `secret:file/<name>`
-  reference resolved under `secretProviders.file.root`, never as a YAML value, a command argument,
-  or an environment dump. The file provider reads only regular, non-symlink files below that root,
-  each owned by the service identity at mode `0600`, and it checks owner, mode, no-follow, link
-  count, and open-file identity. Keep the secret root itself operator-only.
-- Evidence: give the audit hash key and the subject-binding key independently generated raw key
+- Evidence Gateway: configure one active ES256 P-256 public JWK with a derived RFC 7638 thumbprint
+  `kid`, plus only the public overlap keys needed for current assertions. `evidence check` refuses a
+  revoked, malformed, or mismatched active signer.
+- Evidence Gateway: supply local-assurance private JWKs, HMAC keys, and source credentials through a
+  `secret:file/<name>` reference resolved under `secretProviders.file.root`, never as a YAML value,
+  a command argument, or an environment dump. The file provider reads only regular, non-symlink
+  files below that root, each owned by the service identity at mode `0600`, and checks owner, mode,
+  no-follow, link count, and open-file identity. Keep the secret root itself operator-only. Strict
+  deployments receive only a Transit Unix socket for signing.
+- Evidence Gateway: give the audit hash key and the subject-binding key independently generated raw key
   material of at least 32 bytes each. The file provider does not base64-decode them, so write raw
   bytes rather than an encoded string.
-- Evidence: rotate a signing key by starting a new revision with the new active key and keeping
-  the retired public JWK published for at least the maximum assertion validity plus the allowed
-  clock skew. Do not remove a public key a stored assertion still needs.
-- Evidence Version 1 has exactly one secret provider, the file provider. There is no
-  hardware-security-module or PKCS#11 option, so key custody is a property of the host, its disk,
-  its backups, and its operators. Treat that as a deployment control you own, not one the runtime
-  provides. See [Move Evidence to production signing](../../tutorials/move-evidence-to-production-signing/).
+- Evidence Gateway: rotate a signing key by first publishing its next public JWK, then changing the
+  active public JWK and pinned Transit key version, while retaining the old public key for at least
+  maximum assertion validity plus allowed clock skew. Do not remove a public key a stored assertion
+  still needs. Follow
+  [Rotate Evidence Gateway signing keys](../../tutorials/rotate-evidence-signing-keys/).
+- Evidence Gateway: use a workload-local Vault or OpenBao Transit proxy over a Unix socket in
+  production and evidence-grade deployments. Require P-256, signing enabled, non-exportable key
+  material, plaintext backup disabled, and an exact governed public-key match. Local JWK signing is
+  for local assurance only. See
+  [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
 - Relay: confirm every env-backed `fingerprint.name` referenced in config exists in the runtime
   environment, and that no raw key, fingerprint, private JWK, or full environment dump reaches a
   log line; see the production checklist in the
   [Registry Relay configuration reference](../../products/registry-relay/configuration/).
 - Relay: keep the OIDC algorithm allowlist to what the deployment actually uses. `HS*` and `none`
   are absent from the configuration type entirely; the default allowlist is RS256, ES256, and
-  EdDSA. Evidence's own access-token allowlist is configured per bundle from the same three, while
-  its assertion signing is EdDSA only and not configurable.
-- Registry Mint, when the deployment runs it: hold Registry Mint's private JWK in an owner-only,
-  non-symlink file, and treat `clients.directory` as key material rather than configuration. Any
+  EdDSA. Evidence Gateway's own access-token allowlist is configured per bundle from the same three, while
+  its assertion signing is fixed ES256.
+- Registry Mint, when the deployment runs it: use the same active, published, revoked P-256 service
+  key posture and Transit boundary as Evidence Gateway. Treat `clients.directory` as key material. Any
   file written there registers a client and the authority Registry Mint will assert for it, and a
   running process re-reads the directory on `SIGHUP` without a restart.
 - Registry Mint: generate its audit HMAC key independently from its signing key, give it at least
   32 bytes of random material, and keep it in a separate owner-only, non-symlink file. Retain the
   key for as long as its audit chain must remain verifiable.
 
-## Freeze the Evidence deployment project
+## Freeze the Evidence Gateway deployment project
 
 - Mount the governed `bundle/` directory, `runtime.yaml`, and every captured artifact read-only
-  and non-writable to the service process. Evidence reports a non-immutable-input error and
+  and non-writable to the service process. Evidence Gateway reports a non-immutable-input error and
   refuses to start rather than serving from an input it could write to.
 - Freeze the project before validating or serving it, then validate the frozen bytes:
 
@@ -109,20 +113,20 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 
 ## Audit sink and retention
 
-- Evidence: put `auditStorage.path` on storage whose append durability, permissions, capacity,
-  backup, restore, and retention you own. Both audit events are fail-closed by contract: the
-  access-attempt event must be durably accepted before the first source read and the
+- Evidence Gateway: put `auditStorage.path` on storage whose append durability, permissions, capacity,
+  backup, restore, and retention you own. Audit is fail-closed by contract: one access-attempt
+  event must be durably accepted before every actual source stage and the
   disclosure-release event before the response is released, so an unwritable sink stops the
   service returning success rather than degrading quietly.
-- Evidence: run exactly one process per audit path. The sink takes an exclusive advisory lock on
+- Evidence Gateway: run exactly one process per audit path. The sink takes an exclusive advisory lock on
   `<auditStorage.path>.lock` at startup, and a second process pointed at the same path fails to
   start. The supported shape is one replica per audit path, active/passive, recovered with a
   readiness probe and restart-on-failure rather than with a second concurrent writer.
-- Evidence: treat `auditStorage.maximumFileBytes` as a per-segment rotation threshold, not a
+- Evidence Gateway: treat `auditStorage.maximumFileBytes` as a per-segment rotation threshold, not a
   ceiling on the chain. Rotation happens online with no operator action, nothing in the runtime
   deletes or compacts a sealed segment, and total disk consumption is therefore unbounded until
   your retention process acts.
-- Evidence: run `evidence verify-audit` over the whole audit directory during backup, restore, and
+- Evidence Gateway: run `evidence verify-audit` over the whole audit directory during backup, restore, and
   incident procedures, and on whatever cadence your retention policy requires. Startup verifies
   only the active segment, so this pass is what proves sealed history was not tampered with.
 - Registry Mint: put `audit.path` on durable storage whose permissions, capacity, backup, restore,
@@ -171,17 +175,17 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   before exposing a service beyond the host.
 - Terminate TLS and manage certificates at your reverse proxy or load balancer; RS-SEC-G Section 9
   leaves transport termination and certificate management to the operator.
-- Evidence: bind the listener to loopback, a private IPv4 address, or a unique-local IPv6 address.
+- Evidence Gateway: bind the listener to loopback, a private IPv4 address, or a unique-local IPv6 address.
   The runtime schema admits nothing else, fixes `tlsTermination` at
   `operator-controlled-upstream`, and fixes `trustProxyIdentityHeaders` at `false`. A gateway may
-  add publication, routing, and extra rate controls, but Evidence still validates its own token
+  add publication, routing, and extra rate controls, but Evidence Gateway still validates its own token
   profile and never accepts a proxy-supplied identity header.
-- Evidence: leave `metricsListener` unset unless you need it. When set, it must bind an address
+- Evidence Gateway: leave `metricsListener` unset unless you need it. When set, it must bind an address
   distinct from the evidence listener and subject to the same private-address rule, it serves only
   `GET /metrics`, and the evidence listener never serves metrics. Reach it from your own network
   only: per-route request rates are operational information even though no label carries caller
   content.
-- Evidence: size `rateLimits` knowing they are per process and in memory. Running N replicas
+- Evidence Gateway: size `rateLimits` knowing they are per process and in memory. Running N replicas
   multiplies every configured limit by N and a restart resets each budget to full. Set the
   failed-selector budget deliberately, because it is the selector-enumeration defense rather than
   a throughput knob, and put per-client quotas in the gateway.
@@ -199,10 +203,9 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 - Relay: enforce ingress rate limiting at your gateway or edge, then either declare
   `deployment.evidence.ingress_rate_limit: true` or accept the `relay.ingress.rate_limit_missing`
   finding it otherwise raises. The flag defaults to `false`.
-- When Evidence reads a Relay-protected API as a fixed source, keep that hop on a private network,
-  publish no port for it, and give Evidence its own client credential scoped to exactly the routes
-  the bundle reads. Relay authenticates the Evidence workload, not the caller that asked Evidence,
-  so joining the two audit trails for one request is a procedure you own.
+- Keep every Evidence Gateway source hop on a private network where possible, publish no unnecessary
+  source port, and give Evidence Gateway a dedicated source credential scoped to exactly the operation
+  the bundle performs. Source authorization and audit remain independently operated controls.
 - Require every project-authored Relay source destination to be an exact HTTPS origin. The project
   validator rejects origins with user information, paths, queries, or fragments.
 - For Postgres sources, require `sslmode=require` on the connection string and use read-only
@@ -210,12 +213,12 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   table or view.
 - Apply Registry Platform HTTP-security response headers and outbound HTTP policy to product
   egress. Confirm that Relay source calls remain inside the compiler-pinned destination, method,
-  path, and cumulative budget (REQ-SEC-G-012), and that every Evidence source keeps hostname and
-  fixed-origin verification on. Evidence ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
+  path, and cumulative budget (REQ-SEC-G-012), and that every Evidence Gateway source keeps hostname and
+  fixed-origin verification on. Evidence Gateway ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
   `NO_PROXY` and has no application-level proxy, so an ambient proxy variable will not silently
   redirect a source call.
 - Registry Mint, when the deployment runs it: put TLS in front of it. Registry Mint serves plain
-  HTTP and expects termination it does not manage, while Evidence requires the token issuer and
+  HTTP and expects termination it does not manage, while Evidence Gateway requires the token issuer and
   its key set to be HTTPS with no loopback exception. Keep `accessTokens.lifetimeSeconds` short
   inside its `60..=3600` bound, because a minted token is accepted until it expires and no service
   in this stack revokes one.
@@ -247,12 +250,12 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 - Relay: use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`)
   only to assert controls that live outside the process and cannot be observed by it. Each flag
   defaults to `false`.
-- Evidence has no equivalent declaration and no posture route, by design. Its posture is the exact
+- Evidence Gateway has no equivalent declaration and no posture route, by design. Its posture is the exact
   bytes it loaded: one governed bundle and one closed runtime file, each with its own content
   digest, mounted read-only, with no reload, merge, mutation, governed-field override, or fallback
   path. Record the bundle revision you deployed, because that identifier plus the digests is the
   only description of what the process is enforcing.
-- Evidence serves one operator-controlled trust domain per process. Mutually distrustful issuers
+- Evidence Gateway serves one operator-controlled trust domain per process. Mutually distrustful issuers
   or customers, or one issuer whose clients carry the same authority under different claim names,
   require a second deployment with its own bundle, signer, and audit boundary.
 
@@ -260,19 +263,20 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 
 - Know your private disclosure channel before you need it: see
   [Report a vulnerability](../report-a-vulnerability/).
-- Rotate a compromised Evidence signing key by deploying a new revision with a new active key,
-  keeping the compromised public key published only as long as stored assertions must still
-  verify, then removing it. Evidence defines no revocation, status list, or presentation-time
-  check, so a released assertion stays verifiable until its declared validity expires. Plan the
-  incident response around short validity windows rather than around recall.
+- Rotate a compromised Evidence Gateway signing key by disabling provider signing authority
+  immediately, removing its public JWK, adding its thumbprint to `signing.revokedKeyIds`, and
+  activating a checked replacement or leaving the service unavailable. Restart every affected
+  issuer and consumer.
+  Evidence Gateway defines no credential-status or lifecycle feature, so plan incident response
+  around short assertion validity windows and service-key denylisting rather than recall.
 - Rotate a compromised source credential or Registry Mint client key at the credential's own
   source and restart the affected process. Neither service reloads secret material in place.
-- Preserve the audit trail for post-incident review. For Evidence, take the whole audit directory
+- Preserve the audit trail for post-incident review. For Evidence Gateway, take the whole audit directory
   including sealed segments and run `evidence verify-audit` over it before and after moving it;
   for Relay, hash-chained, fail-closed audit records are the record a deployment reconstructs a
   request timeline from (REQ-SEC-G-008, REQ-SEC-G-009). For Registry Mint, preserve the chain and
   matching HMAC key, then run `mint verify-audit` before and after moving it.
-- Expect a `403` from Evidence to tell you nothing. Every authorization refusal collapses to one
+- Expect a `403` from Evidence Gateway to tell you nothing. Every authorization refusal collapses to one
   generic `not_authorized` problem, deliberately, so it is not an oracle for which check failed.
   Debug it from trusted local state in this order: the bearer principal is in the deployed
   bundle's audience; a grant matches the requested requirement, purpose, and subject roles; the
@@ -288,7 +292,7 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   matches what you declared, and that no unwaived finding at or above your profile's threshold is
   outstanding. Validate the response as [RS-OP-POSTURE](../../spec/rs-op-posture/) before an
   automated check acts on it.
-- Evidence: confirm `GET /ready` succeeds, which rechecks the subject-binding key, the signing
+- Evidence Gateway: confirm `GET /ready` succeeds, which rechecks the subject-binding key, the signing
   provider, the pinned audit sink, and every source credential, including a bounded OAuth token
   bootstrap where a source uses client credentials. Readiness sends no evidence-data request and
   probes no source data endpoint, so a passing probe is not proof that a source returns data.
@@ -297,7 +301,7 @@ Evidence, [Configure Evidence](../../configure/evidence/).
   retained chain. A passing readiness probe does not prove off-host receipt or retention.
 - Send a request that should be audited and confirm a corresponding record lands in your
   configured sink, not only `stdout`.
-- Evidence: request an assertion and verify the stored response offline with
+- Evidence Gateway: request an assertion and verify the stored response offline with
   `evidence verify --jws <file> --jwks <file> --policy <file>`, using expectations you retained
   independently rather than values read back out of the response.
 - Attempt an admin-listener request to Relay from outside the private network it is meant to be
@@ -310,16 +314,16 @@ Evidence, [Configure Evidence](../../configure/evidence/).
 | Relay refuses to start after declaring `production` or `evidence_grade` | A `startup_fail` gate tripped, for example a missing audit sink or unsigned config | Check the posture or startup log for the finding id, then fix the underlying condition; `startup_fail` gates cannot be waived |
 | Relay startup reports `deployment.profile_undeclared` | No `deployment.profile` is set | Declare the actual profile explicitly before restarting; an omitted profile is not the same as `local` |
 | Relay posture reports `deployment.waiver_expired` | A waiver's `expires` date passed | Re-review the finding and either fix it or issue a new waiver with a new expiry |
-| Evidence refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, or a captured artifact is writable by the service process | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`) and restart |
-| A second Evidence process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
+| Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, or a captured artifact is writable by the service process | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`) and restart |
+| A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
 | A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |
 | Registry Mint returns `500 server_error` and then fails readiness | The process could not durably append a token decision and poisoned its audit writer | Stop traffic, preserve and verify the chain, restore writable durable storage, and restart Mint; the failed request did not receive a token |
-| Evidence returns `403 not_authorized` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
+| Evidence Gateway returns `403 not_authorized` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
 
 ## Next
 
 - [Security overview](../)
-- [Evidence security model](../evidence/)
+- [Evidence Gateway security model](../evidence/)
 - [Report a vulnerability](../report-a-vulnerability/)
-- [Configure Evidence](../../configure/evidence/)
+- [Configure Evidence Gateway](../../configure/evidence/)
 - [Known limitations and non-guarantees](../../explanation/known-limitations/)

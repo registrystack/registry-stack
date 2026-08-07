@@ -1,17 +1,17 @@
 ---
-title: Evidence security model
-description: "The security invariants Evidence enforces, how each traces to a named test, and the duties that remain with the operator."
+title: Evidence Gateway security model
+description: "The security invariants Evidence Gateway enforces, how each traces to a named test, and the duties that remain with the operator."
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Evidence's security model is contract-driven. The invariant matrix in
+Evidence Gateway's security model is contract-driven. The invariant matrix in
 `products/evidence/contracts/security-invariant-matrix.yaml` is the source of
 truth for what the runtime guarantees, `products/evidence/contracts/security-test-traceability.yaml`
 binds every invariant to the named tests that prove it, and continuous
@@ -22,14 +22,14 @@ guarantee or drops its test fails that job rather than merging unnoticed.
 
 ## What the invariant matrix guarantees
 
-The matrix pins 33 numbered invariants, `V1-I01` through `V1-I33`, each with a
+The matrix pins 40 numbered invariants, `V1-I01` through `V1-I40`, each with a
 rule, the threat it closes, its enforcement, and one `negative_test` id. This
 section groups them by theme and cites each id in backticks; the matrix itself
 is the complete, normative text.
 
 ### Closed request and requirement scope
 
-Evidence evaluates only predefined, versioned requirement revisions
+Evidence Gateway evaluates only predefined, versioned requirement revisions
 (`V1-I01`). The request schema is closed, so callers cannot supply
 thresholds, expressions, scripts, paths, headers, source fields, relationship
 types, adapter parameters, or response projections (`V1-I02`). Because a
@@ -56,7 +56,7 @@ exact field set (`V1-I08`).
 Source calls are fixed by trusted configuration and executed only by the
 core, closing off SSRF, credential forwarding, and script-directed
 networking (`V1-I09`). Provider lookup exposes only `match`, `no_match`, or
-`ambiguous`; Evidence never surfaces or chooses candidates (`V1-I10`). Rhai
+`ambiguous`; Evidence Gateway never surfaces or chooses candidates (`V1-I10`). Rhai
 scripts return one closed lookup result and declared typed concept values
 only (`V1-I11`), and the core rejects undeclared concepts, extra fields, and
 any value that violates its type, codelist, cardinality, precision, or size
@@ -101,7 +101,7 @@ integrity; it does not assert legal-signature status or source truth
 
 ### Discovery, nonce handling, and response-format authorization
 
-Evidence-definition discovery is authenticated and requester-scoped; it never
+Evidence Gateway definition discovery is authenticated and requester-scoped; it never
 creates authority or exposes deployment internals such as selectors, source
 plans, or credentials (`V1-I26`). Every request carries one canonical
 32-byte random nonce that is echoed into the evidence payload but never
@@ -124,9 +124,22 @@ unique role-bound subject bindings, and the expected concept identifiers,
 forms, and cardinalities, and returns one generic policy-mismatch error
 rather than revealing which comparison failed (`V1-I31`). An access token
 carrying a proof-of-possession confirmation claim is denied rather than
-accepted as an ordinary bearer token, because Evidence validates no sender
+accepted as an ordinary bearer token, because Evidence Gateway validates no sender
 proof and accepting one would discard the constraint the token was issued
 under (`V1-I32`).
+
+### Assurance and fixed acquisition
+
+The local assurance profile alone may omit requirement fixtures, while production and evidence-grade
+retain complete fixture validation (`V1-I34`). Assertions, definition responses, and audit events carry
+the governed assurance profile, and verification compares it with an independent expectation
+(`V1-I35`). Credential-free source access is limited to local authoring against an exact numeric
+loopback HTTP origin and sends no authentication header (`V1-I36`). Configured authority claims use
+distinct token members and cannot reuse registered JWT claims, except that the principal may use `sub`
+(`V1-I37`). Every authority selector set must fill each selector-bound path template it can activate
+(`V1-I38`). A search-then-fetch acquisition is one fixed search and, only after a unique schema-valid
+match, one fixed fetch; only validated prior facts cross the stage boundary and no response or script
+can create another call (`V1-I40`).
 
 ### Telemetry
 
@@ -137,7 +150,7 @@ request content (`V1-I33`).
 
 ### Cross-cutting controls
 
-The matrix also pins 21 cross-cutting controls, keyed by name rather than a
+The matrix also pins 23 cross-cutting controls, keyed by name rather than a
 `V1-I` id, each with its own negative test. They cover bundle and secret
 trust (`config_trust`, `secret_parsing`), durable audit ordering
 (`audit_order`), listener exposure and outbound transport
@@ -147,7 +160,8 @@ file identity (`secret_file_identity`), the closed runtime file
 (`request_preparation`, `subject_role_order`, `source_response_shape`,
 `script_resource_exhaustion`, `reserved_header_aliases`,
 `jwks_route_parity`, `unsigned_envelope_distinct`, `exact_decimal`,
-`entity_reference_projection`), and the SD-JWT VC serialization
+`entity_reference_projection`), signing and audit key governance
+(`signing_key_governance`, `audit_key_epoch`), and the SD-JWT VC serialization
 (`sd_jwt_vc_projection_integrity`, `sd_jwt_vc_format_authorization`,
 `sd_jwt_vc_holder_key_closed`, `sd_jwt_vc_claims_closed`).
 
@@ -204,7 +218,9 @@ Owner-only key files. Each secret file below the configured
 `secretProviders.file.root` must be a regular, non-symlink file owned by the
 service identity with mode `0600`; the file provider rejects anything else.
 Audit and subject-binding secret files must contain independently generated
-raw key bytes and be at least 32 bytes.
+raw key bytes and be at least 32 bytes. The runtime derives separated audit-chain and identifier
+subkeys from each master, but Evidence Gateway also requires the two secret references and resolved
+master bytes to be distinct.
 
 Immutable bundle and runtime file. The operator mounts one reviewed governed
 bundle and one closed `runtime.yaml` read-only at startup; the bundle
@@ -214,17 +230,18 @@ write bits. There is no runtime upload, editor, approval API, hot reload,
 merge, mutation, governed-field override, or fallback bundle or runtime
 file: a new revision is a new deployment, not a live change.
 
-Secret handling. Source credentials and private signing material reach
-Evidence only through the secret-reference mechanism and must not appear in
+Secret handling. Source credentials and local-development private signing material reach
+Evidence Gateway only through the secret-reference mechanism and must not appear in
 YAML values, Rhai, command arguments, environment dumps, logs, audit,
-errors, snapshots, or generated contracts. The operator configures exactly
-one active signing key, whose `kid` matches `signing.activeKeyId`, and
-retains each retired public key in the published JWKS for at least the
-maximum assertion validity plus allowed clock skew.
+errors, snapshots, or generated contracts. Production and evidence-grade deployment uses a
+workload-local Vault or OpenBao Transit proxy over a Unix socket, leaving the service private key
+non-exportable. The operator configures one active public ES256 P-256 JWK, whose derived RFC 7638
+thumbprint is its `kid`, and retains published public keys for at least the maximum assertion
+validity plus allowed clock skew. A revoked key can be neither active nor published.
 
 ## Report a vulnerability
 
-Suspected Evidence vulnerabilities, including credential disclosure,
+Suspected Evidence Gateway vulnerabilities, including credential disclosure,
 authentication bypass, audit redaction failure, source connector data
 leakage, and signing-key handling bugs, go through the private disclosure
 process in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md),

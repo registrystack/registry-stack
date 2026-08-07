@@ -19,19 +19,24 @@ unsigned_envelope:
 protected_header:
   exact_members: [alg, kid, typ, cty]
   alg:
-    allowed: [EdDSA]
+    allowed: [ES256]
     rule: Must equal the algorithm bound to the trusted key.
   kid:
     required: true
-    maximum_bytes: 256
-    rule: Resolved only within the verifier-pinned provider JWKS.
+    exact_length: 43
+    rule: The RFC 7638 SHA-256 thumbprint of the exact public EC P-256 JWK, resolved only within the verifier-pinned provider JWKS.
   typ: {const: evidence+jws}
   cty: {const: application/evidence+json}
   prohibited: [jku, x5u, jwk, x5c, crit, b64]
 signing:
   active_keys: 1
-  private_key_location: signing.activeKeyRef through a supported runtime secret provider only
-  retired_public_keys: signing.retiredPublicJwkFiles are bundle-owned public JWKs and never contain private members
+  algorithm: ES256 over P-256
+  governed_active_public_key: signing.activePublicJwkFile
+  published_public_keys: signing.publishedPublicJwkFiles are bundle-owned public JWKs and never contain private members
+  revoked_key_ids: signing.revokedKeyIds are excluded from the active and published sets and from JWKS
+  runtime_signer: local assurance uses signer.kind local-jwk; production and evidence-grade use signer.kind transit through a workload-local Unix socket with a pinned nonzero key version
+  provider_controls: Transit metadata must report ecdsa-p256 with signing enabled, derived false, exportable false, allow_plaintext_backup false, and an exact public-key match. Evidence receives no provider token.
+  startup_proof: The runtime signer public key must equal the governed active public JWK and pass one sign-and-verify test before readiness.
   bundle_private_key_material: prohibited
   order:
     - core validates the complete derivation result
@@ -48,13 +53,15 @@ key_discovery:
   content: public keys only
   trust_rule: Discovery is not a trust anchor; provider identity and JWKS location are pinned through governed verifier configuration.
 rotation:
-  new_assertions_use: the single configured active key
-  retired_public_key_minimum_availability: maximum assertion validity plus allowed verifier clock skew
+  planned: Publish the next public key first, deploy every replica, keep the named Transit key's minimum signing version low enough for both pinned application versions, then atomically switch activePublicJwkFile and signer.keyVersion while leaving the predecessor published. Ordinary Vault/OpenBao ACLs grant the named key path rather than filtering the request-body key version.
+  old_public_key_minimum_availability: maximum assertion validity plus allowed verifier clock skew
+  emergency: Raise the Transit minimum signing version or otherwise disable the compromised version provider-side, remove its public key, add its thumbprint to revokedKeyIds, activate a replacement or remain unavailable, then restart every affected consumer.
   kid_reuse: prohibited for different key material
 verifier_rules:
   - Parse flattened JWS with strict duplicate-member rejection.
   - Reject unprotected headers and any protected member outside the exact allowlist.
   - Resolve kid only in the pinned provider key set and require the allowlisted algorithm.
+  - Reject a policy-denied kid before selecting a pinned public key, even when that key is present in a cached or retained JWKS.
   - Verify the signature before parsing or acting on payload claims.
   - Validate the strict payload against the complete committed Evidence JSON Schema before deserializing or applying relying-procedure policy.
   - Require the assurance profile, schema, issuer, provider, requirement, Evidence Type, purpose, audience, observation, validity, and configuration revision expected independently by the relying procedure. An authentic local assertion never satisfies a production or evidence-grade expectation.
@@ -82,6 +89,7 @@ negative_tests:
   - jws-protected-header-modification
   - jws-message-key-url-rejected
   - jws-unknown-kid-rejected
+  - jws-revoked-kid-rejected
   - jws-schema-invalid-signed-payload-rejected
   - jws-retired-key-window
   - signing-failure-no-unsigned-success

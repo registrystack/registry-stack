@@ -63,13 +63,14 @@ Endpoints:
 | `POST /token` | Issue an access token |
 | `GET /.well-known/jwks.json` | Public keys for verifying minted tokens (path is configurable) |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the above |
-| `GET /health`, `GET /ready` | Liveness, and readiness (503 without clients or a writable audit chain) |
+| `GET /health`, `GET /ready` | Liveness, and readiness (503 without clients, a ready signer, or a writable audit chain) |
 
 ## Configuration
 
-One YAML document. Every path in it resolves relative to the document's own
-directory. Everything here is startup-only: issuer identity, signing and audit
-keys, listener, and token policy are fixed for the life of the process.
+One YAML document. Governed public-key, audit, and client-registry paths resolve
+relative to the document's own directory. The secret root and Transit socket
+are absolute. Everything here is startup-only: issuer identity, signing and
+audit keys, listener, and token policy are fixed for the life of the process.
 
 ```yaml
 version: 1
@@ -78,15 +79,24 @@ listener:
   address: 127.0.0.1
   port: 8081
 signing:
-  algorithm: EdDSA
-  activeKeyId: mint-2026-01
-  activeKeyFile: secrets/signing.jwk
-  # Public JWKs of keys that no longer sign but may still have live tokens.
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/<thumbprint>.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-mint/transit-proxy.sock
+  mount: transit
+  keyName: mint-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+secretProviders:
+  file:
+    root: /run/registry-mint/secrets
 audit:
   path: audit/mint.jsonl
   maximumFileBytes: 1073741824
-  hashKeyFile: secrets/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
 accessTokens:
   audiences: [evidence]
@@ -113,15 +123,33 @@ requester tags, evidence audience, and grant pair from configurable claim
 names. Access token lifetime is bounded to 60..=3600 seconds; a long-lived
 bearer token is the thing Mint exists to avoid.
 
-The signing key file must be a private JWK and must be readable only by its
-owner. Never commit it, print it, or pass it on a command line.
+Mint's service key is always P-256/ES256. Each governed public JWK carries a
+`kid` equal to its 43-character RFC 7638 thumbprint and is stored as
+`<thumbprint>.jwk.json`. Strict deployments use a non-exportable Vault/OpenBao
+Transit key through the configured workload-local Unix socket. Mint receives
+no provider token.
+
+Supervised local development may replace the `signer` block with:
+
+```yaml
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/mint-signing
+```
+
+The referenced private JWK must exactly match `activePublicJwkFile`. Secret
+files are resolved beneath `secretProviders.file.root` and must be regular,
+single-link, owner-only files. Never commit, print, or pass them on a command
+line. Client assertion keys remain independently owned and may use EdDSA,
+ES256, or RS256 with their own identifiers.
 
 The audit key file is also owner-only and must contain at least 32 bytes. The
 audit directory, chain, and lock file must be owned by the Mint process user and
 unavailable to group and other users. For a new deployment, `openssl rand -hex
-32 > secrets/audit-hmac-key` followed by `chmod 600
-secrets/audit-hmac-key` is sufficient. Mint verifies the keyed chain at startup
-and holds a single-writer lock for the process lifetime. It writes a durable
+32 > /run/registry-mint/secrets/audit-hmac-key` followed by `chmod 600
+/run/registry-mint/secrets/audit-hmac-key` is sufficient. Mint derives separate
+HKDF subkeys for chain integrity and identifier pseudonyms. It verifies the
+keyed chain at startup and holds a single-writer lock for the process lifetime. It writes a durable
 release record before returning every access token; if that write fails, the
 request returns `server_error` and readiness fails. Denials are recorded with
 value-free error categories. Raw assertions, tokens, client ids, actors,
@@ -135,6 +163,30 @@ keyed chain continues across the seam. Mint never deletes or compacts sealed
 segments, so monitor total capacity and archive sealed history under the
 deployment's retention policy while retaining the matching audit key. Never
 rename or archive the active segment while Mint is running.
+
+Audit master rotation starts a new epoch. Stop Mint, record and archive the old
+chain head, runtime, key, and segments, then increment `hashKeyVersion`, select
+a fresh audit path, install the new key, run `mint check`, and restart. Never
+append a replacement audit master to an existing chain.
+
+For planned service-key rotation, create the next Transit version, publish its
+public JWK first, and deploy and restart every replica with that overlap set.
+Only after every replica publishes both keys, switch `activePublicJwkFile` and
+the pinned `keyVersion` together while leaving the old key published, then
+deploy and restart every replica again. Remove the old public key and raise the
+Transit key's `min_encryption_version` only after the maximum access-token
+lifetime plus consumer clock skew. For compromise, disable provider signing
+authority immediately, remove its JWK, add its thumbprint to `revokedKeyIds`,
+and activate a replacement or leave Mint unavailable. Add the compromised Mint
+thumbprint to each Evidence consumer's `authentication.revokedKeyIds` in the
+same incident rollout. Configuration is startup-only, so every rotation step
+takes effect through a restart.
+
+Mint client-key rotation is independent of the service key. Add the new public
+client key, reload, move the client, and retain the old public key for the
+configured maximum client-assertion lifetime plus 30 seconds before removing
+and reloading again. Remove a compromised client key immediately and reload;
+do not provide an overlap window during an incident.
 
 ## Registering a client
 

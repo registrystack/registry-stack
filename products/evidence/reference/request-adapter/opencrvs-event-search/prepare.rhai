@@ -1,7 +1,8 @@
 // Exploratory exact OpenCRVS child-event request preparation. It has no
 // credentials, transport authority, or network access.
 
-fn prepare(selectors, parameters) {
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
     let child = selectors["child"];
     #{
         query: [],

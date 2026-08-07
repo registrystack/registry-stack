@@ -25,6 +25,26 @@ Registry Notary and must not depend on or copy abstractions from
 `registry-platform-pdp`, `registry-platform-oid4vci`,
 `registry-platform-replay`, or `registry-platform-sts`.
 
+The runtime depends on the portable `registry-evidence-verifier` library, which
+owns the response formats, the Evidence payload contract, and relying-party
+verification so client tooling can verify a signed response without the runtime.
+The verifier library sits beside the runtime and is not a second runtime; its
+source is covered by the same source-product and domain neutrality checks.
+
+`registry-evidence-client` is adopter tooling beside the runtime, like
+`registry-evidencectl`. It requests assertions over the public HTTP contract and
+links `registry-evidence-verifier` for every verification decision, so it
+re-implements no part of evaluation, signing, or verification. It sits outside
+the frozen Version 1 runtime contract, and its source is covered by the same
+source-product and domain neutrality checks. `registry-evidencectl` reuses that
+client and verifier for relying-party request preparation and offline response
+verification while continuing to delegate runtime evaluation, signing, bundle
+validation, and fixture evaluation to the `evidence` binary.
+`registry-evidence-client-node` is a thin napi-rs binding over
+`registry-evidence-client` for Node.js callers, and carries the same neutrality
+checks. `registry-evidence-client-py` is the same binding pattern for Python
+callers, via PyO3, and carries the same neutrality checks.
+
 Selected `registry-platform-*` primitives may be reused only when their existing
 contracts fit Evidence directly. The approved candidates are audit, crypto,
 OIDC, HTTP security, testing, and the `registry-platform-sdjwt` serialization
@@ -53,8 +73,9 @@ and completion means every Definition of Done row passes on one revision.
 
 Governed configuration, Rhai scripts, schemas, codelists, and fixtures are one
 trusted, immutable, startup-only bundle. A separate closed runtime file owns
-only process-local listener, filesystem, audit-storage, secret-mount, and TLS
-trust bindings and cannot override the bundle. Rust owns authentication,
+only process-local listener, filesystem, audit-storage, secret-mount, signer
+transport and pinned version, and TLS trust bindings and cannot override the
+bundle or governed active public key. Rust owns authentication,
 authorization, selector validation and minimization, credentials, fixed
 networking, path/header authority, response projection, script capabilities
 and limits, output validation, evidence construction, signing, and audit. Rhai
@@ -147,6 +168,7 @@ cargo test --locked --workspace
 cargo deny check
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
+products/evidence/scripts/check-verifier-portability.sh
 ```
 
 Use the repository Cargo wrapper if one is added. Otherwise, in Codex-managed

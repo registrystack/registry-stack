@@ -1,0 +1,157 @@
+---
+title: Enable SD-JWT VC in a deployment
+description: Permit SD-JWT VC at both governed response-format gates, request it over HTTP, and preserve independent verifier trust.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-06"
+doc_type: how-to
+persona:
+  - assertion provider
+  - consumer or verifier
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+---
+
+Start with a complete governed deployment project. Evidence Gateway can serialize the same
+stateless assertion as signed JWS or SD-JWT VC. The question, source access, derivation, supported
+values, subject binding, purpose, audience, signing key, and audit boundaries remain the same.
+
+For an executable introduction, complete [Explore SD-JWT VC locally](../../tutorials/request-evidence-as-sd-jwt-vc/)
+first. Local question authoring uses `responseFormats` to compile both local permission gates. A
+deployment instead keeps the bundle ceiling and authority grant under deployment governance.
+
+## Permit the format at both gates
+
+Keep signed JWS enabled and add `sd-jwt-vc` to the bundle-wide response formats:
+
+```yaml
+responseFormats: [signed-jws, sd-jwt-vc]
+```
+
+Add the same format to every exact authority grant that may return it:
+
+```yaml
+authorityProfiles:
+  approved-caller:
+    kind: explicit-request
+    requesterTags: [approved-caller]
+    grants:
+      - requirement: urn:example:requirement:age-bracket:v1
+        purpose: service-path-selection
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, sd-jwt-vc]
+        subjects:
+          - role: person
+            selectorProfile: person-reference-v1
+            valueOrigin: request
+```
+
+Both gates must permit the format. Enabling only one returns the ordinary authorization refusal
+before source access. An unknown, combined, parameterized, or malformed `Accept` value returns
+HTTP 406.
+
+Run the candidate checks and deploy the exact reviewed revision:
+
+```sh
+evidencectl fixtures run --project "<evidence-project>"
+evidence check --runtime <evidence-project>/runtime.yaml
+```
+
+## Choose root or structured disclosures
+
+An ordinary scalar or unprojected governed value becomes one root disclosure named by its concept
+URI. No extra requirement configuration is needed.
+
+To make the direct fields of a reviewed structure independently encoded disclosures, add an
+`sdJwtVc` projection to that concept:
+
+```yaml
+concepts:
+  - id: urn:example:concept:birth-certificate:v1
+    form: reviewed-structured-value
+    required: true
+    constraints:
+      schema: urn:example:schema:birth-certificate:v1
+      maximumSerializedBytes: 2048
+    sdJwtVc:
+      claim: birthCertificate
+      disclosure: top-level
+```
+
+`birthCertificate` is adopter configuration, not a built-in Evidence Gateway claim. A direct
+nested object remains one atomic disclosure. Review the complete and combined disclosure surfaces
+before widening a production requirement.
+
+## Request the serialization
+
+The requester must retain its expected format before sending the request. For local integration
+testing, `evidencectl request prepare` records that expectation:
+
+```sh
+evidencectl request prepare "<question>" \
+  --purpose "<purpose>" \
+  --subject "<role>:<field>=<value>" \
+  --format sd-jwt-vc \
+  --name "<request-name>"
+```
+
+Only response negotiation changes at the HTTP boundary:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config authorization.curl \
+  --request POST \
+  --url https://<evidence-host>/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @request.json \
+  --output assertion.sd-jwt
+```
+
+Treat `assertion.sd-jwt` as untrusted opaque input. Do not decode its disclosures into application
+state before verification.
+
+## Verify with independent trust
+
+Use an independently retained verification policy and trusted key set:
+
+```sh
+evidence verify \
+  --sd-jwt-vc assertion.sd-jwt \
+  --jwks trusted-issuer-keys.json \
+  --policy verification-policy.json
+```
+
+The verifier opens no network connection. `trusted-issuer-keys.json` is the complete approved
+trust set for the run, and `verification-policy.json` comes from the consumer's request and
+governance records, not from the credential.
+
+Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
+`/.well-known/evidence/jwks.json`. Both endpoints are discovery. Outside local mode, the service
+provider identifier must be a stable HTTPS origin. It becomes the signed `iss`, and issuer
+metadata publishes its exact `issuer` and `jwks_uri`.
+
+Approve trust independently through [Manage Evidence Gateway verifier trust](../../tutorials/manage-evidence-verifier-trust/).
+
+## Keep the boundary explicit
+
+This response is not a credential lifecycle:
+
+- no OID4VCI offer, issuance session, token exchange, or wallet onboarding;
+- no status list, revocation, refresh, or reissuance;
+- no presentation exchange or key-binding JWT;
+- no general multi-verifier subject identifier.
+
+The subject binding remains scoped to the assertion's audience and purpose. An optional
+`holderKey` can place only a public P-256 JWK in `cnf`. Its inclusion alone proves no possession.
+
+The profile emits `application/dc+sd-jwt`, `typ: dc+sd-jwt`, `vct`, SHA-256 disclosures, optional
+`cnf.jwk`, and a trailing tilde without a key-binding JWT. It is pinned to RFC 9901 and SD-JWT VC
+draft v18. Evidence Gateway's current verifier checks the complete stored credential. It does not
+verify a selectively disclosed presentation from a wallet.
+
+For deterministic source-tree proof of the format and tamper refusals, see the
+[maintained SD-JWT VC demo](https://github.com/registrystack/registry-stack/blob/main/products/evidence/SD-JWT-VC-DEMO.md).

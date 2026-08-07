@@ -1,25 +1,27 @@
 {
-  "$comment": "Only the active and configured retired public keys are published. Key ids are unique and limited to 256 UTF-8 bytes by the runtime; JSON Schema maxLength is an additional code-point bound. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location.",
+  "$comment": "Only the governed active and published non-revoked P-256 keys are returned. Each kid is the key's RFC 7638 SHA-256 thumbprint. Discovery is not a trust anchor; verifiers pin the governed provider and JWKS location.",
   "$defs": {
-    "ed25519-public-jwk": {
+    "p256-public-jwk": {
       "additionalProperties": false,
       "properties": {
         "alg": {
-          "const": "EdDSA"
+          "const": "ES256"
         },
         "crv": {
-          "const": "Ed25519"
+          "const": "P-256"
         },
         "kid": {
-          "maxLength": 256,
-          "minLength": 1,
-          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
         },
         "kty": {
-          "const": "OKP"
+          "const": "EC"
         },
         "x": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "y": {
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
         }
@@ -29,7 +31,8 @@
         "kid",
         "alg",
         "crv",
-        "x"
+        "x",
+        "y"
       ],
       "type": "object"
     }
@@ -40,7 +43,7 @@
   "properties": {
     "keys": {
       "items": {
-        "$ref": "#/$defs/ed25519-public-jwk"
+        "$ref": "#/$defs/p256-public-jwk"
       },
       "maxItems": 33,
       "minItems": 1,

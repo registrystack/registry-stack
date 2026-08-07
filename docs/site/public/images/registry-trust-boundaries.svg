@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Stack trust boundaries</title>
-  <desc>A single request path runs downward from Registry Mint, which issues a short-lived access token, to the Caller, to Evidence, to a Registry Relay protected read API, to the registry sources Relay reads in place. Dashed rules mark the service edge in front of Evidence and in front of Relay, where every record- or assertion-bearing route is authenticated before responding. Caller to Evidence carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Evidence to its fixed sources is fixed by trusted configuration and executed only by the core, one request per evaluation. The Relay-protected source composition is two independent authorization decisions, neither widening the other. Registry Mint to Evidence runs one way: Evidence verifies tokens as an ordinary resource server and does not depend on Registry Mint. Relay to registry sources is fixed by a compiled integration. A separate lane runs operator to signing key material to Evidence to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Evidence edge.</desc>
+  <desc>One request path runs downward from Registry Mint, which issues a short-lived access token, to the caller, to Evidence Gateway, and to Evidence Gateway's configured authoritative HTTP source. Registry Relay has a separate protected-read path to its own registry sources. Dashed rules mark authenticated service edges. Caller to Evidence Gateway carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Evidence Gateway source access is fixed by trusted configuration and executed only by the core, one request per evaluation. Registry Mint to Evidence Gateway runs one way: Evidence Gateway verifies tokens as an ordinary resource server and does not depend on Registry Mint. A separate lane runs operator to signing key material to Evidence Gateway to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Evidence Gateway edge.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">TRUST BOUNDARIES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -18,23 +18,22 @@
   <g fill="#161616" font-size="12.5" font-weight="700">
     <text x="28" y="71">Registry Mint</text>
     <text x="28" y="145">Caller</text>
-    <text x="28" y="252">Evidence</text>
-    <text x="28" y="370">Registry Relay</text>
-    <text x="28" y="459">Registry sources</text>
+    <text x="28" y="252">Evidence Gateway</text>
+    <text x="28" y="370">Authoritative source</text>
+    <text x="28" y="459">Registry Relay</text>
   </g>
 
   <g fill="#6a6a6a" font-size="9.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
     <text x="28" y="85">registry-mint</text>
     <text x="28" y="266">registry-evidence</text>
-    <text x="28" y="384">registry-relay</text>
+    <text x="28" y="473">registry-relay</text>
   </g>
 
   <g fill="#6a6a6a" font-size="9">
     <text x="28" y="159">the client asking the question</text>
     <text x="28" y="279">one bounded question</text>
-    <text x="28" y="397">protected read API</text>
-    <text x="28" y="473">read in place</text>
+    <text x="28" y="397">fixed HTTP source</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
@@ -44,8 +43,6 @@
     <polyline points="97,224 101,230 105,224"/>
     <line x1="101" y1="286" x2="101" y2="348"/>
     <polyline points="97,342 101,348 105,342"/>
-    <line x1="101" y1="404" x2="101" y2="438"/>
-    <polyline points="97,432 101,438 105,432"/>
   </g>
 
   <g stroke="#161616" stroke-width="1.2" stroke-dasharray="6 4">
@@ -65,20 +62,20 @@
     <text x="124" y="217">revision, selectors</text>
     <text x="124" y="322">one fixed HTTP request</text>
     <text x="124" y="335">per evaluation</text>
-    <text x="124" y="424">deny-by-default read</text>
+    <text x="124" y="424">separate product path</text>
   </g>
 
   <g fill="#000091" font-size="10" font-weight="700" letter-spacing="0.04em">
-    <text x="270" y="66">REGISTRY MINT TO EVIDENCE</text>
-    <text x="270" y="128">CALLER TO EVIDENCE</text>
+    <text x="270" y="66">REGISTRY MINT TO EVIDENCE GATEWAY</text>
+    <text x="270" y="128">CALLER TO EVIDENCE GATEWAY</text>
     <text x="270" y="209">THE SERVICE EDGE (AUTHENTICATION)</text>
     <text x="270" y="277">EVIDENCE TO ITS FIXED SOURCES</text>
-    <text x="270" y="358">THE RELAY-PROTECTED SOURCE COMPOSITION</text>
-    <text x="270" y="439">RELAY TO REGISTRY SOURCES</text>
+    <text x="270" y="358">PRODUCT BOUNDARIES STAY SEPARATE</text>
+    <text x="270" y="439">RELAY'S SEPARATE SOURCE BOUNDARY</text>
   </g>
 
   <g fill="#3a3a3a" font-size="11">
-    <text x="270" y="80">One way. Registry Mint issues the token; Evidence verifies it as</text>
+    <text x="270" y="80">One way. Registry Mint issues the token; Evidence Gateway verifies it as</text>
     <text x="270" y="93">an ordinary resource server, knowing it as an issuer URL and a key</text>
     <text x="270" y="106">set. A deployment with an identity provider does not run Mint at all.</text>
 
@@ -88,7 +85,7 @@
     <text x="270" y="181">binds the whole tuple, and possession is never authority.</text>
 
     <text x="270" y="223">Every record- or assertion-bearing route is authenticated before</text>
-    <text x="270" y="236">responding. Evidence runs one OIDC bearer profile, one trusted</text>
+    <text x="270" y="236">responding. Evidence Gateway runs one OIDC bearer profile, one trusted</text>
     <text x="270" y="249">issuer, one principal claim, and no trust in proxy identity headers.</text>
 
     <text x="270" y="291">Origin, method, path, headers, credential, TLS, projection, redirect</text>
@@ -96,10 +93,10 @@
     <text x="270" y="317">configuration and executed only by the core. Lookup collapses to</text>
     <text x="270" y="330">match, no match, or ambiguous; raw responses are never logged.</text>
 
-    <text x="270" y="372">A common deployment makes the fixed source a Relay-protected read</text>
-    <text x="270" y="385">API. Read it as two independent authorization decisions: neither</text>
-    <text x="270" y="398">widens the other. Evidence holds a Relay client credential, custodied</text>
-    <text x="270" y="411">as key material. Relay authenticates the workload, not the caller.</text>
+    <text x="270" y="372">Evidence Gateway and Relay use independently configured sources.</text>
+    <text x="270" y="385">Neither product calls or authorizes the other. Each keeps its own</text>
+    <text x="270" y="398">source credentials, authorization decisions, audit trail, and</text>
+    <text x="270" y="411">readiness checks.</text>
 
     <text x="270" y="453">Relay owns its own source boundary: a compiled integration fixes the</text>
     <text x="270" y="466">origin, credential interface, method and path authority, and limits.</text>
@@ -111,27 +108,27 @@
 
   <g fill="#ffffff" stroke="#161616" stroke-width="1">
     <rect x="16" y="528" width="96" height="34"/>
-    <rect x="172" y="528" width="96" height="34"/>
+    <rect x="160" y="528" width="120" height="34"/>
     <rect x="344" y="528" width="96" height="34"/>
   </g>
 
   <g fill="#161616" font-size="12" font-weight="700">
     <text x="28" y="549">Operator</text>
-    <text x="184" y="549">Evidence</text>
+    <text x="170" y="549" font-size="10.5">Evidence Gateway</text>
     <text x="356" y="549">Verifier</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="112" y1="545" x2="170" y2="545"/>
-    <polyline points="164,541 170,545 164,549"/>
-    <line x1="268" y1="545" x2="342" y2="545"/>
+    <line x1="112" y1="545" x2="158" y2="545"/>
+    <polyline points="152,541 158,545 152,549"/>
+    <line x1="280" y1="545" x2="342" y2="545"/>
     <polyline points="336,541 342,545 336,549"/>
   </g>
 
   <g fill="#6a6a6a" font-size="9.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
     <text x="118" y="538">key file</text>
-    <text x="278" y="538">public JWKS</text>
+    <text x="288" y="538">public JWKS</text>
   </g>
 
   <g fill="#3a3a3a" font-size="11">
@@ -145,7 +142,7 @@
 
   <g fill="#6a6a6a" font-size="9.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="16" y="609">Unauthenticated at the Evidence edge: /health, /ready, /openapi.json, /.well-known/evidence/jwks.json,</text>
+    <text x="16" y="609">Unauthenticated at the Evidence Gateway edge: /health, /ready, /openapi.json, /.well-known/evidence/jwks.json,</text>
     <text x="16" y="622">/.well-known/jwt-vc-issuer. None reveals which evidence definitions are enabled or which requesters may invoke them.</text>
   </g>
 </svg>

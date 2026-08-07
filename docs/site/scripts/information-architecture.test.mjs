@@ -52,7 +52,7 @@ function assertOrdered(source, expectations, label) {
 test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Answer with Evidence',
+    'Answer with Evidence Gateway',
     'Connect an existing registry',
     'Operate',
     'Security',
@@ -63,7 +63,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
 test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Answer with Evidence', "slug: 'start/evidence-quickstart'"],
+    ['Answer with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
@@ -109,7 +109,7 @@ test('groups Relay tutorials under existing registries', () => {
   assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
 });
 
-test('gives Evidence a lane on both front doors without a retired Notary path', () => {
+test('gives Evidence Gateway a lane on both front doors without a retired Notary path', () => {
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
@@ -118,27 +118,26 @@ test('gives Evidence a lane on both front doors without a retired Notary path', 
   assert.doesNotMatch(quickstartSource, /Expose Notary|verify-claim-registry-api/);
 });
 
-test('ends the onboarding spine on Evidence answering over a Relay-protected API', () => {
-  // The two doors are only shown working together in one place: the composed
-  // lab, where Evidence answers over a Relay API rather than a local fixture.
-  // The chooser has to close there, and that page has to be published rather
-  // than redirected back to the chooser.
+test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
+  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence Gateway');
   assertOrdered(
-    quickstartSource,
+    evidence,
     [
-      'evidence-quickstart/',
-      'tutorials/first-evidence-assertion/',
-      'tutorials/first-run-with-solmara-lab/',
+      "label: 'Learn locally'",
+      "label: 'Connect a source'",
+      "label: 'Prepare and deploy'",
+      "label: 'Authenticate callers'",
+      "label: 'Verify and trust'",
+      "label: 'Operate Evidence Gateway'",
     ],
-    'quickstart lane',
+    'Evidence Gateway task group',
   );
-  assert.doesNotMatch(configSource, /'\/tutorials\/first-run-with-solmara-lab\/':/);
-  assert.ok(
-    hasDocForSlug('tutorials/first-run-with-solmara-lab'),
-    'the composed lab tutorial is still a draft',
+  assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
+  assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
+  assert.match(
+    configSource,
+    /'\/tutorials\/first-run-with-solmara-lab\/': internalRedirect\('\/start\/evidence-quickstart\/'\)/,
   );
-  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence');
-  assert.match(evidence, /slug: 'tutorials\/first-run-with-solmara-lab'/);
 });
 
 test('keeps validation on offline test and nested development commands', () => {

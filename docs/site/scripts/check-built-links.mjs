@@ -4,6 +4,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
 import { loadDocsets } from './docsets.mjs';
 import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
+import { publishedArchiveDocsets } from '../src/lib/docset-retention.mjs';
 
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
@@ -135,6 +136,12 @@ const archivedRoots = new Set(
     .filter((docset) => docset.status === 'archived')
     .map((docset) => docset.path),
 );
+const publishedArchivedRoots = new Set(
+  publishedArchiveDocsets(docsets).map((docset) => docset.path),
+);
+const retiredArchivedRoots = new Set(
+  [...archivedRoots].filter((root) => !publishedArchivedRoots.has(root)),
+);
 const declaredArchiveDestinations = new Set([
   CURRENT_PRODUCTION_DOCSET_PATH,
   LEGACY_PREVIEW_PATH,
@@ -154,9 +161,16 @@ for (const file of files) {
 
 for (const file of files) {
   const html = await readFile(file, 'utf8');
+  const sourcePath = pageUrl(file);
+  const sourceArchive = archiveRoot(file);
+  const isFrozenPublishedPage =
+    Boolean(sourceArchive) ||
+    (productionCurrentMountExists &&
+      !isWithinRoot(sourcePath, CURRENT_PRODUCTION_DOCSET_PATH) &&
+      !isWithinRoot(sourcePath, LEGACY_PREVIEW_PATH));
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
-    const root = archiveRoot(file);
+    const root = sourceArchive;
     const rawPath = splitUrl(raw)[0];
     if (
       root &&
@@ -184,6 +198,13 @@ for (const file of files) {
 
     checked += 1;
     const [path, fragment] = splitUrl(url);
+    if (
+      isFrozenPublishedPage &&
+      archivedRoot &&
+      retiredArchivedRoots.has(archivedRoot)
+    ) {
+      continue;
+    }
     const target = resolveTarget(path);
     if (!await exists(target)) {
       errors.push(`${relative('.', file)} links to missing ${raw}`);

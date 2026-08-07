@@ -97,6 +97,35 @@ async function fixture(t, { singleTree = true } = {}) {
   return { bundle, bundlePath, sourceRoot, targetRoot };
 }
 
+test('restores only the newest configured semantic archives', async (t) => {
+  const { bundlePath, targetRoot } = await fixture(t);
+  const manifestPath = resolve(targetRoot, 'src/data/docsets.yaml');
+  const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
+  const retained = manifest.docsets[1];
+  manifest.published_archive_limit = 1;
+  manifest.docsets.push({
+    ...retained,
+    id: 'v1.1.0',
+    label: 'v1.1.0',
+    path: '/v/1.1.0/',
+    source: 'registry-stack-v1.1.0',
+  });
+  await writeFile(manifestPath, YAML.stringify(manifest));
+  const lockPath = resolve(targetRoot, 'src/data/archive-lock.yaml');
+  const lock = YAML.parse(await readFile(lockPath, 'utf8'));
+  lock.archives['v1.1.0'] = { ...lock.archives['v1.2.3'] };
+  await writeFile(lockPath, YAML.stringify(lock));
+
+  const result = await assembleArchives({
+    docsRoot: targetRoot,
+    fetchImpl: async () => new Response(await readFile(bundlePath), { status: 200 }),
+    restoreGeneratedData: async () => {},
+  });
+
+  assert.deepEqual(result.omitted, ['v1.1.0']);
+  assert.deepEqual(Object.keys(result.sources), ['v1.2.3']);
+});
+
 test('restores a locked release bundle without rebuilding', async (t) => {
   const { bundlePath, targetRoot } = await fixture(t);
   const body = await readFile(bundlePath);

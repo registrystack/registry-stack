@@ -476,6 +476,8 @@ pub fn oidc_verifier_config(
         scope_separator: ' ',
         scope_map: None,
         allowed_clients: Vec::new(),
+        denied_kids: std::collections::HashSet::new(),
+        max_token_lifetime: None,
         leeway: Duration::from_secs(60),
     }
 }

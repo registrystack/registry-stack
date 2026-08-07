@@ -197,7 +197,7 @@ impl std::fmt::Debug for OfflineKernel {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OfflineKernel")
-            .field("configuration_revision", &self.bundle.revision())
+            .field("bundle_revision", &self.bundle.revision())
             .field("source_count", &self.extractions.len())
             .field("requirement_count", &self.derivations.len())
             .finish()
@@ -300,24 +300,37 @@ impl OfflineKernel {
         let requirement = self
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
+        let source_id = requirement.acquisition.initial_source();
+        self.prepare_source(source_id, selectors, &BTreeMap::new())
+    }
+
+    /// Run one source's reviewed preparation script with the closed adapter
+    /// context. Prior facts are empty for single and search calls and contain
+    /// only the schema-validated search `FactSet` for a fetch call.
+    pub fn prepare_source(
+        &self,
+        source_id: &str,
+        selectors: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<RequestParts, KernelError> {
         let source = self
             .bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let script = self
             .preparations
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let limits = self
             .request_parts_limits
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .map_err(|_| KernelError::Bundle)?;
         self.runtime
-            .prepare(script, selectors, &parameters, limits)
+            .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
             .map_err(|_| KernelError::Preparation)
     }
 
@@ -342,19 +355,28 @@ impl OfflineKernel {
         let requirement = self
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
-        let script = self
-            .extractions
-            .get(&requirement.source)
-            .ok_or(KernelError::Bundle)?;
+        let source_id = requirement.acquisition.initial_source();
+        self.extract_source(source_id, source_response, &BTreeMap::new())
+    }
+
+    /// Run one source's closed extraction ABI over one bounded projected JSON
+    /// response and the exact prior search facts supplied to that call.
+    pub fn extract_source(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<LookupResult, KernelError> {
+        let script = self.extractions.get(source_id).ok_or(KernelError::Bundle)?;
         let schema = self
             .fact_schemas
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         let source = self
             .bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         // The declared response shape is checked in Rust before any script sees
         // the response, so extraction maps a response it can rely on and a
@@ -362,20 +384,16 @@ impl OfflineKernel {
         // or not the script happens to test for it.
         let response_schema = self
             .response_schemas
-            .get(&requirement.source)
+            .get(source_id)
             .ok_or(KernelError::Bundle)?;
         if let Err(errors) = response_schema.validate(source_response) {
-            report_response_shape_rejection(
-                &requirement.source,
-                source.response_schema.as_str(),
-                errors,
-            );
+            report_response_shape_rejection(source_id, source.response_schema.as_str(), errors);
             return Err(KernelError::SourceProtocol);
         }
         let parameters = serde_json::to_value(&source.request.adapter_parameters)
             .map_err(|_| KernelError::Bundle)?;
         self.runtime
-            .extract(script, source_response, &parameters, schema)
+            .extract_with_prior_facts(script, source_response, &parameters, prior_facts, schema)
             .map_err(|error| match error {
                 RhaiRuntimeError::ExtractionResult | RhaiRuntimeError::FactSchema => {
                     KernelError::Extraction
@@ -535,7 +553,11 @@ impl OfflineKernel {
             valid_until,
             purpose: input.purpose.to_owned(),
             audience: input.audience.to_owned(),
-            configuration_revision: self.bundle.revision().to_owned(),
+            configuration_revision: self
+                .bundle
+                .configuration_revision(&requirement.id)
+                .ok_or(KernelError::Requirement)?
+                .to_owned(),
             subjects: input.subjects,
             supported_values: values.0,
         })
@@ -1181,7 +1203,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::Duration as StdDuration;
 
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
     use serde_json::json;
@@ -1193,7 +1214,8 @@ mod tests {
 
     const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
     const AUDIENCE: &str = "urn:example:fixture:audience";
-    const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"supported-values-fixture-key"}"#;
+    const SUPPORTED_VALUE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
+    const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
     fn projection() -> ValueProjection<'static> {
         ValueProjection {
@@ -1231,7 +1253,7 @@ mod tests {
             let source_config = bundle
                 .config
                 .sources
-                .get(&requirement.source)
+                .get(requirement.acquisition.initial_source())
                 .expect("requirement source exists");
             for test_case in fixture["cases"].as_array().expect("cases is an array") {
                 if test_case.get("source_failure").is_some()
@@ -1348,7 +1370,7 @@ mod tests {
         let source = bundle
             .config
             .sources
-            .get(&requirement.source)
+            .get(requirement.acquisition.initial_source())
             .expect("the requirement names a configured source");
         let schema = bundle
             .fact_schema(&source.response_schema)
@@ -1769,7 +1791,7 @@ mod tests {
         assert_eq!(first.supported_values[0].value, PublicValue::Boolean(false));
         assert_eq!(first.subjects[0].role, "child");
         assert_eq!(first.subjects[1].role, "candidate-parent");
-        assert_eq!(first.valid_until, "2026-08-03T00:00:01Z");
+        assert_eq!(first.valid_until, "2026-08-02T00:05:01Z");
     }
 
     #[tokio::test]
@@ -2249,7 +2271,7 @@ mod tests {
         let private = PrivateJwk::parse(SUPPORTED_VALUE_PRIVATE_JWK).expect("fixture key parses");
         let provider: Arc<dyn SigningProvider> =
             Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
-        EvidenceSigner::initialize(provider, "supported-values-fixture-key")
+        EvidenceSigner::initialize(provider, SUPPORTED_VALUE_KEY_ID)
             .await
             .expect("fixture signer initializes")
     }
@@ -2292,10 +2314,11 @@ mod tests {
             &EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
                 &evidence.request_nonce,
-                StdDuration::from_secs(48 * 60 * 60),
-                "2026-08-02T12:00:00Z".parse().expect("time"),
-                StdDuration::from_secs(30),
-            ),
+                48 * 60 * 60,
+                "2026-08-02T00:03:00Z".parse().expect("time"),
+                30,
+            )
+            .expect("the fixture policy states bounds the contract allows"),
         )
         .expect("signed Evidence verifies");
         assert_eq!(

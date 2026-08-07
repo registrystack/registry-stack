@@ -51,7 +51,7 @@ const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
-    #[error("the signing key could not be loaded: {0}")]
+    #[error("the token signing boundary could not be initialized: {0}")]
     Minter(#[from] MinterError),
     #[error("the client registry could not be loaded: {0}")]
     Registry(#[from] ClientRegistryError),
@@ -88,7 +88,7 @@ impl std::fmt::Debug for MintService {
 impl MintService {
     /// Load the keys, audit chain, and client registry described by `config`.
     pub async fn load(config: MintConfig) -> Result<Self, ServiceError> {
-        let minter = TokenMinter::new(&config)?;
+        let minter = TokenMinter::new(&config).await?;
         let registry = Arc::new(ClientRegistry::load(&config.clients.directory)?);
         check_delegations(&registry, minter.claims())?;
         let replay = Arc::new(ReplayCache::new(
@@ -96,7 +96,9 @@ impl MintService {
         ));
         let authenticator =
             ClientAuthenticator::new(registry, &config.client_assertion, Arc::clone(&replay));
-        let audit = MintAuditLog::initialize(&config.audit, &config.issuer).await?;
+        let audit =
+            MintAuditLog::initialize(&config.audit, &config.secret_providers, &config.issuer)
+                .await?;
         let metadata = build_metadata(&config);
         Ok(Self {
             config,
@@ -113,11 +115,11 @@ impl MintService {
     /// Everything [`MintService::load`] does except claiming the audit writer,
     /// so an operator can check an edited configuration against the deployment
     /// it is about to replace. Returns the number of registered clients.
-    pub fn check(config: &MintConfig) -> Result<usize, ServiceError> {
-        let minter = TokenMinter::new(config)?;
+    pub async fn check(config: &MintConfig) -> Result<usize, ServiceError> {
+        let minter = TokenMinter::new(config).await?;
         let registry = ClientRegistry::load(&config.clients.directory)?;
         check_delegations(&registry, minter.claims())?;
-        MintAuditLog::check(&config.audit)?;
+        MintAuditLog::check(&config.audit, &config.secret_providers)?;
         Ok(registry.len())
     }
 
@@ -221,7 +223,7 @@ impl MintService {
 
     #[must_use]
     async fn ready(&self) -> bool {
-        self.client_count() > 0 && self.audit.ready().await
+        self.client_count() > 0 && self.minter.ready().await && self.audit.ready().await
     }
 }
 

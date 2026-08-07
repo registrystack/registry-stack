@@ -1,6 +1,7 @@
 {
   "current": "latest",
   "released": "v0.15.2",
+  "published_archive_limit": 3,
   "docsets": [
     {
       "id": "latest",

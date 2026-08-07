@@ -245,10 +245,19 @@ fn every_sd_jwt_vc_profile_negative_is_bound_to_a_mapped_security_negative() {
 /// Prove that one mapped reference still names a real Rust test item, so a
 /// renamed, moved, or deleted test fails the traceability checker.
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
+    // Evidence security invariants may be implemented by the runtime, the
+    // portable verifier, or the narrowly shared platform primitives it uses.
+    let permitted_crate = [
+        "crates/registry-evidence/",
+        "crates/registry-evidence-verifier/",
+        "crates/registry-platform-audit/",
+        "crates/registry-platform-config/",
+        "crates/registry-platform-crypto/",
+    ]
+    .iter()
+    .any(|prefix| test.file.starts_with(prefix));
     assert!(
-        test.file.starts_with("crates/registry-evidence/")
-            && test.file.ends_with(".rs")
-            && !test.file.contains(".."),
+        permitted_crate && test.file.ends_with(".rs") && !test.file.contains(".."),
         "{entry_id} has an unsafe source reference"
     );
     let source = fs::read_to_string(root.join(&test.file))
@@ -289,7 +298,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         "registry.evidence.acceptance-test-traceability/v1"
     );
 
-    let expected = (1..=62)
+    let expected = (1..=64)
         .map(|row| format!("acceptance-row-{row:02}"))
         .collect::<Vec<_>>();
     let mapped = traceability
@@ -299,7 +308,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         .collect::<Vec<_>>();
     assert_eq!(
         mapped, expected,
-        "acceptance row mapping is not the 62 required rows in order"
+        "acceptance row mapping is not the 64 required rows in order"
     );
 
     for entry in &traceability.entries {

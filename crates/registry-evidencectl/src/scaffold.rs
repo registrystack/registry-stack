@@ -17,7 +17,6 @@ use clap::{Args, ValueEnum};
 use crate::{keygen, suggest};
 
 const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
-const SIGNING_KEY_ID: &str = "local-signing-key-1";
 
 #[derive(Clone, Debug, ValueEnum)]
 pub enum AuthoringProfile {
@@ -38,9 +37,9 @@ pub struct NewArgs {
     #[arg(long, value_enum, requires = "openapi")]
     pub profile: Option<AuthoringProfile>,
 
-    /// Generate disposable, unbound local signing and HMAC material.
-    #[arg(long, requires = "openapi")]
-    pub generate_keys: bool,
+    /// Compatibility flag; local projects now always generate disposable keys.
+    #[arg(long = "generate-keys", requires = "openapi", hide = true)]
+    pub _generate_keys: bool,
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
@@ -85,10 +84,8 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
 
-    if args.generate_keys {
-        keygen::generate_scaffold_key_material(&staged_root.join("secrets"), SIGNING_KEY_ID)
-            .context("generating unbound local authoring key material")?;
-    }
+    keygen::generate_scaffold_key_material(&staged_root.join("secrets"))
+        .context("generating unbound local authoring key material")?;
 
     fs::set_permissions(staged_root, fs::Permissions::from_mode(0o755))
         .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
@@ -116,12 +113,10 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         args.directory.join("derivations").display()
     );
     println!("  fixtures: {}", args.directory.join("fixtures").display());
-    if args.generate_keys {
-        println!(
-            "  keys: {} (owner-only, disposable, and unbound)",
-            args.directory.join("secrets").display()
-        );
-    }
+    println!(
+        "  keys: {} (owner-only, disposable, and unbound)",
+        args.directory.join("secrets").display()
+    );
     println!(
         "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
         args.directory.display()

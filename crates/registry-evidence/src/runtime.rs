@@ -6,12 +6,14 @@ use std::{
     path::Path,
     str,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
-use registry_platform_audit::{AuditError, AuditHashSecret};
-use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
+use registry_platform_audit::{AuditError, AuditProfile};
+use registry_platform_crypto::{
+    LocalJwkSigner, PrivateJwk, SigningProvider, TransitSigner, TransitSignerConfig,
+};
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
 
@@ -19,21 +21,22 @@ use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
-        EvidenceAuditLog, ResponseProtection,
+        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent, ResponseProtection,
     },
-    auth::{AuthenticatedContext, Authenticator},
+    auth::Authenticator,
     bundle::{Bundle, DeploymentInputs},
     config::{
-        AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind, ResponseFormat,
-        RuntimeConfig, SelectorField, SelectorInput, SubjectCardinality, ValueOrigin,
+        AcquisitionConfig, AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind,
+        ResponseFormat, RuntimeConfig, RuntimeSignerConfig, SelectorField, SelectorInput,
+        SubjectCardinality, ValueOrigin,
     },
     contracts::definitions_contract_accepts,
-    kernel::{EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection},
+    kernel::{EvidenceConstruction, KernelError, OfflineKernel, ValueProjection},
     model::{
         request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
         EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
-        EvidenceRequest, EvidenceSelectorField, FlattenedJws, JwksDocument, RequestedSelector,
-        RequestedSubject, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
+        EvidenceRequest, EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult,
+        RequestedSelector, RequestedSubject, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
         UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
     },
     problem::ProblemCode,
@@ -45,11 +48,12 @@ use crate::{
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
         ResolvedAuthorization, ResolvedSelectorValue,
     },
-    signing::{jwks_document, EvidenceSigner},
+    signing::EvidenceSigner,
     source::{ResolvedSourceSelector, SourceError, SourceExecutor},
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
+use zeroize::Zeroizing;
 
 const MAX_OPERATION_BYTES: usize = 128;
 
@@ -168,15 +172,21 @@ pub struct ValidatedVerificationMaterial {
 /// owns them.
 pub async fn validate_secret_material(
     bundle: &Bundle,
+    runtime: &RuntimeConfig,
     secrets: &SecretResolver,
 ) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
     let audit_secret = secrets
         .resolve(bundle.config.audit.hash_secret_ref.as_str())
         .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
-    AuditHashSecret::new(audit_secret.expose_secret().to_vec())
-        .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
+    AuditProfile::production_from_secret_bytes(Zeroizing::new(
+        audit_secret.expose_secret().to_vec(),
+    ))
+    .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
 
-    let verification = validate_verification_material(bundle, secrets).await?;
+    let verification = validate_verification_material(bundle, &runtime.signer, secrets).await?;
+    if audit_secret.expose_secret() == verification.subject_binding_secret.expose_secret() {
+        return Err(RuntimeInitializationError::Secrets);
+    }
 
     Ok(ValidatedSecretMaterial {
         audit_secret,
@@ -191,6 +201,7 @@ pub async fn validate_secret_material(
 /// source credentials and the audit boundary.
 pub async fn validate_verification_material(
     bundle: &Bundle,
+    signer_config: &RuntimeSignerConfig,
     secrets: &SecretResolver,
 ) -> Result<ValidatedVerificationMaterial, RuntimeInitializationError> {
     let subject_binding_secret = secrets
@@ -203,32 +214,52 @@ pub async fn validate_verification_material(
     )
     .map_err(|_| RuntimeInitializationError::Secrets)?;
 
-    let signing_secret = secrets
-        .resolve(bundle.config.signing.active_key_ref.as_str())
-        .map_err(|_| RuntimeInitializationError::Signing)?;
-    let signing_json = str::from_utf8(signing_secret.expose_secret())
-        .map_err(|_| RuntimeInitializationError::Signing)?;
-    let private_jwk =
-        PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
-    let provider = Arc::new(
-        LocalJwkSigner::new(private_jwk).map_err(|_| RuntimeInitializationError::Signing)?,
-    );
-    let signer = EvidenceSigner::initialize(provider, &bundle.config.signing.active_key_id)
+    let provider: Arc<dyn SigningProvider> = match signer_config {
+        RuntimeSignerConfig::LocalJwk { private_key_ref } => {
+            let signing_secret = secrets
+                .resolve(private_key_ref.as_str())
+                .map_err(|_| RuntimeInitializationError::Signing)?;
+            let signing_json = str::from_utf8(signing_secret.expose_secret())
+                .map_err(|_| RuntimeInitializationError::Signing)?;
+            let private_jwk =
+                PrivateJwk::parse(signing_json).map_err(|_| RuntimeInitializationError::Signing)?;
+            Arc::new(
+                LocalJwkSigner::new(private_jwk)
+                    .map_err(|_| RuntimeInitializationError::Signing)?,
+            )
+        }
+        RuntimeSignerConfig::Transit {
+            unix_socket_path,
+            mount,
+            key_name,
+            key_version,
+            timeout_milliseconds,
+        } => {
+            let config = TransitSignerConfig::new(
+                unix_socket_path,
+                mount,
+                key_name,
+                *key_version,
+                bundle.active_public_jwk.clone(),
+                Duration::from_millis(*timeout_milliseconds),
+            )
+            .map_err(|_| RuntimeInitializationError::Signing)?;
+            Arc::new(
+                TransitSigner::initialize(config)
+                    .await
+                    .map_err(|_| RuntimeInitializationError::Signing)?,
+            )
+        }
+    };
+    let signer = EvidenceSigner::initialize_governed(provider, &bundle.active_public_jwk)
         .await
         .map_err(|_| RuntimeInitializationError::Signing)?;
-    let retired = bundle
-        .retired_public_jwks
-        .values()
-        .map(|value| {
-            serde_json::to_string(value)
-                .map_err(|_| RuntimeInitializationError::Signing)
-                .and_then(|json| {
-                    PublicJwk::parse(&json).map_err(|_| RuntimeInitializationError::Signing)
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let jwks = jwks_document(signer.public_jwk(), retired)
-        .map_err(|_| RuntimeInitializationError::Signing)?;
+    let jwks = crate::signing::jwks_document_with_revocations(
+        signer.public_jwk(),
+        bundle.published_public_jwks.values().cloned(),
+        bundle.config.signing.revoked_key_ids.clone(),
+    )
+    .map_err(|_| RuntimeInitializationError::Signing)?;
 
     Ok(ValidatedVerificationMaterial {
         subject_binding_secret,
@@ -328,7 +359,7 @@ impl std::fmt::Debug for EvidenceRuntime {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EvidenceRuntime")
-            .field("configuration_revision", &self.kernel.bundle().revision())
+            .field("bundle_revision", &self.kernel.bundle().revision())
             .field("source_count", &self.sources.len())
             .field("signing_key_id", &self.signer.key_id())
             .finish_non_exhaustive()
@@ -370,7 +401,7 @@ impl EvidenceRuntime {
             .map_err(|_| RuntimeInitializationError::Secrets)?,
         );
 
-        let material = validate_secret_material(&bundle, &secrets).await?;
+        let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
         let audit = EvidenceAuditLog::initialize(
             &runtime_config.audit_storage.path,
             runtime_config.audit_storage.maximum_file_bytes,
@@ -486,7 +517,7 @@ impl EvidenceRuntime {
             &self.bundle().config.service.trust_domain,
         )
         .is_err()
-            || !self.signer.ready()
+            || !self.signer.ensure_ready().await
             || !self.audit.ready().await
         {
             return false;
@@ -573,7 +604,6 @@ impl EvidenceRuntime {
         let response = EvidenceDefinitions {
             schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle().config.assurance_profile,
-            configuration_revision: self.bundle().revision().to_owned(),
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
             definitions,
@@ -642,8 +672,15 @@ impl EvidenceRuntime {
             })
             .collect();
 
+        let configuration_revision = self
+            .bundle()
+            .configuration_revision(&requirement.id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-requirement"))?
+            .to_owned();
+
         Ok(EvidenceDefinition {
             requirement: requirement.id.clone(),
+            configuration_revision,
             kind: requirement_kind_name(requirement.kind).to_owned(),
             evidence_type: requirement.evidence_type.clone(),
             purpose: request.purpose.clone(),
@@ -806,14 +843,39 @@ impl EvidenceRuntime {
             .audit
             .pseudonym("requester", &scope, context.principal().as_bytes())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let actor_pseudonym = context
+            .actor()
+            .map(|actor| self.audit.pseudonym("actor", &scope, actor.as_bytes()))
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
-        let matched = match_entitlement(self.bundle(), request, &context).map_err(map_authority)?;
+        let matched = match match_entitlement(self.bundle(), request, &context) {
+            Ok(matched) => matched,
+            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                self.append_authorization_refusal(
+                    operation,
+                    requester_pseudonym,
+                    actor_pseudonym,
+                    started,
+                )
+                .await?;
+                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+            }
+            Err(error) => return Err(map_authority(error)),
+        };
         // The immutable bundle and the one complete matched grant must both
         // permit the requested format. API selection creates no permission,
         // and the denial does not reveal which layer withheld it.
         if !self.bundle().config.response_formats.contains(&format)
             || !matched.permits_response_format(format)
         {
+            self.append_authorization_refusal(
+                operation,
+                requester_pseudonym,
+                actor_pseudonym,
+                started,
+            )
+            .await?;
             return Err(failure(ProblemCode::NotAuthorized, "response-format"));
         }
         let selector_limit_input = canonical_pair(
@@ -831,6 +893,16 @@ impl EvidenceRuntime {
             .map_err(map_selector_limit)?;
         let resolved = match resolve_selectors(self.bundle(), request, &context, &matched) {
             Ok(resolved) => resolved,
+            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                self.append_authorization_refusal(
+                    operation,
+                    requester_pseudonym,
+                    actor_pseudonym,
+                    started,
+                )
+                .await?;
+                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+            }
             Err(error) => {
                 if error == AuthorizationError::Selector {
                     self.rate_limiter
@@ -842,82 +914,140 @@ impl EvidenceRuntime {
             }
         };
 
-        let material =
-            self.audit_material(&scope, requester_pseudonym, &context, &resolved, format)?;
-        let (source_id, adapter_id) = self.source_identity(&request.requirement)?;
-        let mut access_event = material.event(
-            operation,
-            AuditPhase::AccessAttempt,
-            AuditDecision::Authorized,
-            elapsed_millis(started),
-        );
-        access_event.source_id = Some(source_id.clone());
-        access_event.adapter_id = Some(adapter_id.clone());
-        self.audit
-            .append(access_event)
-            .await
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
-
-        let executor = self
-            .sources
-            .get(&source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let material = self.audit_material(
+            &scope,
+            requester_pseudonym,
+            actor_pseudonym,
+            &resolved,
+            format,
+        )?;
         let requirement = self
             .kernel
             .requirement(&request.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let source = self
-            .bundle()
-            .config
-            .sources
-            .get(&source_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let preparation_selector_value =
-            source_selector_input_value(&resolved, &source.request.selector_inputs)?;
-        let selectors = source_selectors(&resolved, &source.request.selector_inputs)?;
-        let request_parts = match self
-            .kernel
-            .prepare(&request.requirement, &preparation_selector_value)
-        {
-            Ok(parts) => parts,
-            Err(error) => {
-                let category = kernel_failure_category(error);
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::EvaluationFailure,
-                    category,
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(failure(kernel_failure_problem(error), category));
+        let acquisition = requirement.acquisition.clone();
+        let empty_facts = BTreeMap::new();
+        let (facts, source_id, adapter_id) = match acquisition {
+            AcquisitionConfig::Single { source } => {
+                let stage = self
+                    .execute_source_stage(
+                        &material,
+                        operation,
+                        &source,
+                        &resolved,
+                        &empty_facts,
+                        started,
+                    )
+                    .await?;
+                match stage.lookup {
+                    LookupResult::Match(facts) => (facts, stage.source_id, stage.adapter_id),
+                    LookupResult::NoMatch => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::NoMatch,
+                            "no-match",
+                            &stage.source_id,
+                            &stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                    LookupResult::Ambiguous => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::Ambiguous,
+                            "ambiguous",
+                            &stage.source_id,
+                            &stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                }
             }
-        };
-        let source_response = match executor.execute(&selectors, &request_parts).await {
-            Ok(response) => response,
-            Err(error) => {
-                let category = source_failure_category(&error);
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::DependencyFailure,
-                    category,
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(failure(source_failure_problem(&error), category));
+            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+                let search_stage = self
+                    .execute_source_stage(
+                        &material,
+                        operation,
+                        &search,
+                        &resolved,
+                        &empty_facts,
+                        started,
+                    )
+                    .await?;
+                let search_facts = match search_stage.lookup {
+                    LookupResult::Match(facts) => facts,
+                    LookupResult::NoMatch => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::NoMatch,
+                            "no-match",
+                            &search_stage.source_id,
+                            &search_stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                    LookupResult::Ambiguous => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::Ambiguous,
+                            "ambiguous",
+                            &search_stage.source_id,
+                            &search_stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                };
+                let fetch_stage = self
+                    .execute_source_stage(
+                        &material,
+                        operation,
+                        &fetch,
+                        &resolved,
+                        &search_facts,
+                        started,
+                    )
+                    .await?;
+                match fetch_stage.lookup {
+                    LookupResult::Match(facts) => {
+                        (facts, fetch_stage.source_id, fetch_stage.adapter_id)
+                    }
+                    LookupResult::NoMatch | LookupResult::Ambiguous => {
+                        // A unique search match that cannot be fetched through
+                        // the fixed second source is a dependency inconsistency,
+                        // not evidence that the subject is unresolved.
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::DependencyFailure,
+                            "fetch-result",
+                            &fetch_stage.source_id,
+                            &fetch_stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"));
+                    }
+                }
             }
         };
         let observed_at = evaluation_time.unwrap_or_else(Utc::now);
         let derivation_selectors =
             selector_input_value(&resolved, &requirement.derivation.selector_inputs)?;
-        let values = match self.kernel.evaluate_with_selectors(
+        let values = match self.kernel.derive_and_validate_with_selectors(
             &request.requirement,
-            &source_response,
+            &facts,
             &derivation_selectors,
             observed_at,
             ValueProjection {
@@ -926,33 +1056,7 @@ impl EvidenceRuntime {
                 binding_key_version: self.bundle().config.subject_binding.key_version,
             },
         ) {
-            Ok(KernelOutcome::Match(values)) => values,
-            Ok(KernelOutcome::NoMatch) => {
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::NoMatch,
-                    "no-match",
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(evidence_unavailable_failure());
-            }
-            Ok(KernelOutcome::Ambiguous) => {
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::Ambiguous,
-                    "ambiguous",
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(evidence_unavailable_failure());
-            }
+            Ok(values) => values,
             Err(error) => {
                 let category = kernel_failure_category(error);
                 let problem = kernel_failure_problem(error);
@@ -1150,8 +1254,9 @@ impl EvidenceRuntime {
                 )
             }
             ResponseFormat::UnsignedJson => {
-                // No signing operation runs, but the ordinary signing
-                // dependency must still be ready for the deployment.
+                // Unsigned output is never a recovery or fallback path for a
+                // failed signer. Signed requests still attempt the provider,
+                // which lets a recovered Transit dependency return to Ready.
                 if !self.signer.ready() {
                     self.append_failure(
                         &material,
@@ -1216,38 +1321,145 @@ impl EvidenceRuntime {
         })
     }
 
-    fn source_identity(&self, requirement_id: &str) -> Result<(String, String), RuntimeFailure> {
-        let requirement = self
-            .kernel
-            .requirement(requirement_id)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_source_stage(
+        &self,
+        material: &AuditMaterial,
+        operation: &str,
+        source_id: &str,
+        resolved: &ResolvedAuthorization,
+        prior_facts: &BTreeMap<String, Value>,
+        started: Instant,
+    ) -> Result<SourceStageOutcome, RuntimeFailure> {
+        let (source_id, adapter_id) = self.source_identity(source_id)?;
+        // Every actual evidence-data call has its own durable access event,
+        // written before preparation can acquire credentials or start I/O.
+        let mut access_event = material.event(
+            operation,
+            AuditPhase::AccessAttempt,
+            AuditDecision::Authorized,
+            elapsed_millis(started),
+        );
+        access_event.source_id = Some(source_id.clone());
+        access_event.adapter_id = Some(adapter_id.clone());
+        self.audit
+            .append(access_event)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
+
+        let executor = self
+            .sources
+            .get(&source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
         let source = self
             .bundle()
             .config
             .sources
-            .get(&requirement.source)
+            .get(&source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let preparation_selector_value =
+            source_selector_input_value(resolved, &source.request.selector_inputs)?;
+        let selectors = source_selectors(resolved, &source.request.selector_inputs)?;
+        let request_parts =
+            match self
+                .kernel
+                .prepare_source(&source_id, &preparation_selector_value, prior_facts)
+            {
+                Ok(parts) => parts,
+                Err(error) => {
+                    let category = kernel_failure_category(error);
+                    self.append_failure(
+                        material,
+                        operation,
+                        AuditDecision::EvaluationFailure,
+                        category,
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(kernel_failure_problem(error), category));
+                }
+            };
+        let source_response = match executor
+            .execute_with_prior_facts(&selectors, prior_facts, &request_parts)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let category = source_failure_category(&error);
+                self.append_failure(
+                    material,
+                    operation,
+                    AuditDecision::DependencyFailure,
+                    category,
+                    &source_id,
+                    &adapter_id,
+                    started,
+                )
+                .await?;
+                return Err(failure(source_failure_problem(&error), category));
+            }
+        };
+        let lookup = match self
+            .kernel
+            .extract_source(&source_id, &source_response, prior_facts)
+        {
+            Ok(lookup) => lookup,
+            Err(error) => {
+                let category = kernel_failure_category(error);
+                let problem = kernel_failure_problem(error);
+                let decision = match error {
+                    KernelError::Extraction | KernelError::DerivationInput => {
+                        AuditDecision::FactMissing
+                    }
+                    KernelError::SourceProtocol => AuditDecision::DependencyFailure,
+                    _ => AuditDecision::EvaluationFailure,
+                };
+                self.append_failure(
+                    material,
+                    operation,
+                    decision,
+                    category,
+                    &source_id,
+                    &adapter_id,
+                    started,
+                )
+                .await?;
+                return Err(failure(problem, category));
+            }
+        };
+
+        Ok(SourceStageOutcome {
+            lookup,
+            source_id,
+            adapter_id,
+        })
+    }
+
+    fn source_identity(&self, source_id: &str) -> Result<(String, String), RuntimeFailure> {
+        let source = self
+            .bundle()
+            .config
+            .sources
+            .get(source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
         let adapter_id = Path::new(source.extract_script.as_str())
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && name.len() <= 128)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "adapter-id"))?;
-        Ok((requirement.source.clone(), adapter_id.to_owned()))
+        Ok((source_id.to_owned(), adapter_id.to_owned()))
     }
 
     fn audit_material(
         &self,
         scope: &str,
         requester_pseudonym: String,
-        context: &AuthenticatedContext,
+        actor_pseudonym: Option<String>,
         resolved: &ResolvedAuthorization,
         format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
-        let actor_pseudonym = context
-            .actor()
-            .map(|actor| self.audit.pseudonym("actor", scope, actor.as_bytes()))
-            .transpose()
-            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
         let grant_pseudonym = resolved
             .grant_id
             .as_deref()
@@ -1286,6 +1498,33 @@ impl EvidenceRuntime {
             subjects,
             response_protection: map_response_protection(format),
         })
+    }
+
+    async fn append_authorization_refusal(
+        &self,
+        operation: &str,
+        requester_pseudonym: String,
+        actor_pseudonym: Option<String>,
+        started: Instant,
+    ) -> Result<(), RuntimeFailure> {
+        let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
+            self.bundle().config.assurance_profile,
+            operation.to_owned(),
+            self.bundle().revision().to_owned(),
+            requester_pseudonym,
+            elapsed_millis(started),
+        );
+        event.actor_pseudonym = actor_pseudonym;
+        self.audit
+            .append_authorization_refusal(event)
+            .await
+            .map(|_| ())
+            .map_err(|_| {
+                failure(
+                    ProblemCode::ServiceUnavailable,
+                    "authorization-refusal-audit",
+                )
+            })
     }
 
     fn subject_bindings(
@@ -1340,6 +1579,12 @@ impl EvidenceRuntime {
             .map(|_| ())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "failure-audit"))
     }
+}
+
+struct SourceStageOutcome {
+    lookup: LookupResult,
+    source_id: String,
+    adapter_id: String,
 }
 
 struct AuditMaterial {
@@ -1443,6 +1688,9 @@ fn source_selector_input_value(
     resolved: &ResolvedAuthorization,
     inputs: &[SelectorInput],
 ) -> Result<Value, RuntimeFailure> {
+    if inputs.is_empty() {
+        return Ok(Value::Object(JsonMap::new()));
+    }
     let active = inputs
         .iter()
         .filter(|input| {

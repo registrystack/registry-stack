@@ -16,10 +16,11 @@ The normative source set is:
 - `request.schema.yaml`, `definitions.schema.yaml`, `evidence.schema.yaml`, and
   `jws-profile.yaml`: public discovery, request, the required `requestNonce`
   and its echo in the Evidence payload, response-format negotiation, payload,
-  signing, rotation, and strict verifier rules;
+  ES256 service signing, RFC 7638 key identifiers, publication, revocation,
+  rotation, and strict verifier rules;
 - `sd-jwt-vc-profile.yaml`: the audience-scoped SD-JWT VC response format, its
   exact claim and disclosure mapping, the optional `cnf` holder key, the
-  issuer-metadata path, and its explicit profile non-goals. It adds a
+  issuer-metadata path, RFC 9901 and SD-JWT VC draft v18 pins, and its explicit profile non-goals. It adds a
   serialization of the same assertion and no credential lifecycle;
 - `verification-policy.schema.yaml`: the closed all-required relying-procedure
   policy document consumed by the offline `evidence verify` command, its frozen
@@ -30,9 +31,11 @@ The normative source set is:
 - `authority-context.schema.yaml` and `selector-contract.yaml`: normalized
   authority, one-decision authorization inputs, exact selector profiles, and
   value-origin rules;
-- `audit-event.schema.yaml`: the protected native audit record, including the
-  closed `responseProtection` mode carried by every event and the `signingKeyId`
-  required exactly for signed release;
+- `audit-event.schema.yaml`: the protected native audit-record union, with
+  distinct discriminators for mutually exclusive complete authorized-material
+  and minimal authenticated authorization-refusal shapes. Complete events carry
+  the closed `responseProtection` mode and require `signingKeyId` exactly for
+  cryptographically protected release; the refusal shape omits both;
 - `bundle.schema.yaml` and `runtime.schema.yaml`: the immutable governed bundle,
   its bundle-level and grant-level `responseFormats` permission, closed
   process-local runtime bindings, and their non-override boundary;
@@ -40,7 +43,8 @@ The normative source set is:
 - `rhai-abi.yaml` and `primitive-library.yaml`: the closed `prepare/2`,
   `extract/2`, and selector-aware `derive/3` entry points, domain-neutral
   primitive allowlist, and resource limits;
-- `source-contract.yaml`: the single fixed HTTP JSON source boundary; and
+- `source-contract.yaml`: the fixed HTTP JSON source boundary and closed
+  single or search-then-fetch acquisition; and
 - `security-invariant-matrix.yaml`: threat, enforcement point, and required
   negative test for every Version 1 trust and privacy invariant; and
 - `security-test-traceability.yaml`: exact executable Rust tests satisfying
@@ -89,8 +93,16 @@ Evidence vocabulary.
    protected value.
 7. The governed bundle and `runtime.yaml` are separate closed startup inputs.
    Runtime binds only process-local paths, listener bounds, audit storage,
-   file secrets, and logical private CAs and cannot override governed
-   semantics or source authority.
+   file secrets, signer transport and pinned version, and logical private CAs.
+   It cannot override governed semantics, source authority, or the governed
+   active public key.
+8. Service signing keys are exact ES256 P-256 public JWKs whose `kid` is their
+   RFC 7638 thumbprint. Production and evidence-grade signing uses a pinned
+   non-exportable Transit key through a workload-local Unix socket. Local
+   authoring alone may resolve a private JWK file.
+9. Active, published, and revoked key sets are explicit and disjoint. Denied
+   identifiers are checked before selecting a cached key, and configuration
+   changes take effect only through restart.
 
 Version 1 stops before documents, credential issuance protocols and credential
 lifecycle, replay or nonce state beyond the stateless request-nonce echo and

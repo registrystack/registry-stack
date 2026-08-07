@@ -1,4 +1,4 @@
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
     let total = source_response["total"];
     if total == 0 {
         if len(source_response) != 1 { throw("source_protocol_error"); }

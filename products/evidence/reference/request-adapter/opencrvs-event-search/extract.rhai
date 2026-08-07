@@ -7,7 +7,8 @@
 // records returned, which values must agree with the adapter parameters, and
 // how many distinct parent references a registered record must carry.
 
-fn extract(source_response, parameters) {
+fn extract(source_response, context) {
+    let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
     if results.len > parameters["resultLimit"] { throw("source_protocol_error"); }

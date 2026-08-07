@@ -1,11 +1,11 @@
 ---
-title: See Evidence refuse unsafe requests
+title: See Evidence Gateway refuse unsafe requests
 description: Cross the HTTP boundary with an unauthorized request, then prove that a modified assertion cannot be trusted.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -17,7 +17,7 @@ standards_referenced: []
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Return a governed value](../return-a-governed-value/) before starting this tutorial.
-You will reuse that project to observe two boundaries: Evidence denies a purpose the provider did
+You will reuse that project to observe two boundaries: Evidence Gateway denies a purpose the provider did
 not authorize, and the verifier rejects a response changed after signing.
 
 <QuickstartMeta
@@ -26,7 +26,7 @@ not authorize, and the verifier rejects a response changed after signing.
   level="Local development with synthetic data"
   prerequisites={[
     'The adult-status project after completing the governed-value tutorial',
-    'The registry.py source from the first Evidence tutorial',
+    'The registry.py source from the first Evidence Gateway tutorial',
     'Python 3 and curl',
   ]}
 />
@@ -48,7 +48,7 @@ evidencectl dev --detach
 ```
 
 ```text
-Evidence ready at http://127.0.0.1:8080
+Evidence Gateway ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
@@ -64,8 +64,9 @@ evidencectl request prepare age-bracket \
   --name refusal-check
 ```
 
-The provider authorized `service-path-selection`. Preparation also obtained short-lived local
-authorization for that exact authority path.
+The provider configured `service-path-selection` for this question. Preparation also obtained a
+short-lived local token carrying the tutorial caller's configured authority claims. The token does
+not authorize one exact request. Evidence Gateway applies those claims to the request it receives.
 
 ## Change the purpose after preparation
 
@@ -175,7 +176,7 @@ echo 'TAMPER REFUSED'
 ```
 
 ```text
-evidencectl: Evidence response verification failed
+evidencectl: Evidence Gateway response verification failed
 TAMPER REFUSED
 ```
 
@@ -202,5 +203,5 @@ Return to the registry terminal and press `Ctrl+C`.
 ## Next
 
 - [Connect an institution source](../connect-an-institution-source/)
-- [Configure Evidence](../../configure/evidence/)
-- [Review the Evidence security model](../../security/evidence/)
+- [Configure Evidence Gateway](../../configure/evidence/)
+- [Review the Evidence Gateway security model](../../security/evidence/)

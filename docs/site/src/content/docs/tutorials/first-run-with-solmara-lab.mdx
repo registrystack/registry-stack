@@ -1,7 +1,8 @@
 ---
-title: First run with Solmara Lab
-description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suites, and ask Registry Evidence one question over a Relay-protected API.
-status: current
+title: First run with Solmara Lab (historical)
+description: Historical Solmara Lab workflow that asked Evidence Gateway one question over a Relay-protected API.
+status: historical
+draft: true
 owner: registry-docs
 source_repos:
   - solmara-lab
@@ -22,16 +23,20 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 import { Steps } from '@astrojs/starlight/components';
 
+This unpublished page records a retired demo topology. Evidence Gateway no longer uses Registry
+Relay as a source. Use the [Evidence Gateway quickstart](../../start/evidence-quickstart/) for the
+current architecture and workflow.
+
 Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara: a
 whole country's worth of registry services over generated synthetic data, with a citizen portal and
 a public Visitor's Center in front of them. This tutorial brings that topology up with the lab's
 `just` recipes, verifies it with the smoke suites, and then asks
-[Registry Evidence](../../products/registry-evidence/) one question by hand: is this person an
+[Evidence Gateway](../../products/registry-evidence/) one question by hand: is this person an
 adult? The answer comes back signed, and the date of birth behind it never leaves the Civil
 Registration Authority.
 
 <QuickstartMeta
-  outcome="The full Solmara Lab topology running on your laptop, verified by both smoke suites, and one signed Evidence assertion you requested by hand over a Relay-protected API."
+  outcome="The full Solmara Lab topology running on your laptop, verified by both smoke suites, and one signed Evidence Gateway assertion you requested by hand over a Relay-protected API."
   time="About 30 minutes, most of it the first startup (image pulls plus local image builds)"
   level="Local multi-service demo"
   prerequisites={['Docker Compose', 'just', 'uv', 'python3 and openssl', 'pnpm 11.3.0 via corepack', 'git', 'curl', 'A clean Registry Stack checkout']}
@@ -42,7 +47,7 @@ Do not use the generated local keys in production.
 
 For a standalone local project, use
 [Build and run an HTTP registry project](../author-registry-project/).
-For Evidence on its own, review the [Evidence quickstart](../../start/evidence-quickstart/).
+For Evidence Gateway on its own, review the [Evidence Gateway quickstart](../../start/evidence-quickstart/).
 Clone Solmara Lab when you want the full multi-service country demo.
 
 ## Prerequisites
@@ -57,9 +62,9 @@ Clone Solmara Lab when you want the full multi-service country demo.
 - `pnpm` `11.3.0`, matching the `packageManager` field the portal and Visitor's Center pin. Run
   `corepack enable` first if `pnpm` is not already on your PATH.
 - `git`.
-- `curl`, for the direct Evidence call and the verify commands.
+- `curl`, for the direct Evidence Gateway call and the verify commands.
 - A clean checkout of the Registry Stack repository, named by the `REGISTRY_STACK_SOURCE_DIR`
-  environment variable. No Registry Stack release ships the Evidence or Mint binaries yet, so the
+  environment variable. No Registry Stack release ships the Evidence Gateway or Mint binaries yet, so the
   lab builds those two images from source; every other image it runs is a pinned digest. The
   checkout must have no uncommitted changes, because the build labels each image with the commit
   that produced it. This prerequisite goes away once a release publishes both images.
@@ -102,7 +107,7 @@ Run these from your Solmara Lab checkout, in order, with `REGISTRY_STACK_SOURCE_
     just smoke
     ```
 
-4. Run the Evidence smoke, which drives Mint, Relay, and Evidence end to end:
+4. Run the Evidence Gateway smoke, which drives Mint, Relay, and Evidence Gateway end to end:
 
     ```sh
     just smoke-evidence
@@ -112,12 +117,12 @@ Run these from your Solmara Lab checkout, in order, with `REGISTRY_STACK_SOURCE_
 
 `just generate` also writes `.env`, a Compose-required file of local demo credentials, and the
 lab's own certificate authority under `config/evidence/tls/`. Skipping it is the most common first
-failure; see the troubleshooting table. `just up-evidence` builds the Evidence and Mint images from
+failure; see the troubleshooting table. `just up-evidence` builds the Evidence Gateway and Mint images from
 your Registry Stack checkout, builds the `portal`, `home`, and `scenario-runner` images, and pulls
 the digest-pinned Relay and `registry-notary` images; expect the first run to take most of this
-tutorial's time. The lab still runs `registry-notary` containers alongside Evidence until its own
+tutorial's time. The lab still runs `registry-notary` containers alongside Evidence Gateway until its own
 migration lands, so they appear here and in the topology below. `just smoke` runs story-preview
-checks plus live checks against the running Relay, `registry-notary`, and portal services. `just smoke-evidence` runs four cases against the Evidence path: an adult, a
+checks plus live checks against the running Relay, `registry-notary`, and portal services. `just smoke-evidence` runs four cases against the Evidence Gateway path: an adult, a
 minor, a reference no record resolves, and an unusable access token.
 
 ## What is running
@@ -131,10 +136,10 @@ journeys work; this tutorial calls six of them.
   <img src="../../images/solmara-lab-topology.svg"
        alt="The five hops this tutorial makes. Your shell signs a request with the demo
             caller's own key and sends it to Registry Mint on host port 4341; Mint returns a
-            short-lived access token; your shell presents that token to Registry Evidence on
-            host port 4343 and asks whether the subject is an adult; Evidence reads two fields
+            short-lived access token; your shell presents that token to Evidence Gateway on
+            host port 4343 and asks whether the subject is an adult; Evidence Gateway reads two fields
             of one row from the Civil Registration Authority's records Relay on host port 4342
-            under the recorded purpose adult-status-verification; Evidence returns a signed
+            under the recorded purpose adult-status-verification; Evidence Gateway returns a signed
             answer carrying true or false and no record. A strip below lists the rest of the
             lab: six authority Relay instances on host ports 4311 to 4316, the citizen portal
             on 4300, the Visitor's Center on 4301, static metadata on 4331, Postgres on 54329,
@@ -146,15 +151,15 @@ The endpoints this tutorial uses:
 
 | Endpoint | Reaches | Role |
 | --- | --- | --- |
-| `https://127.0.0.1:4341` | `mint` | Registry Mint: issues the short-lived access token Evidence verifies. |
-| `https://127.0.0.1:4342` | `cra-records-relay` | Registry Relay over the civil register: the source Evidence reads. |
-| `https://127.0.0.1:4343` | `evidence` | Registry Evidence: answers adult status and signs the answer. |
+| `https://127.0.0.1:4341` | `mint` | Registry Mint: issues the short-lived access token Evidence Gateway verifies. |
+| `https://127.0.0.1:4342` | `cra-records-relay` | Registry Relay over the civil register: the source Evidence Gateway reads. |
+| `https://127.0.0.1:4343` | `evidence` | Evidence Gateway: answers adult status and signs the answer. |
 | `http://127.0.0.1:4300` | `portal` | Citizen portal: a SvelteKit application over the authority services. |
 | `http://127.0.0.1:4301` | `home` | Visitor's Center: the lab's public tour, including an Engineer door. |
 | `http://127.0.0.1:4331` | `static-metadata` | Unauthenticated multi-authority metadata bundle. |
 
 The three HTTPS endpoints terminate at `evidence-gateway`, a TLS proxy in front of Mint, the
-records Relay, and Evidence. Those three containers publish no host port of their own. The gateway
+records Relay, and Evidence Gateway. Those three containers publish no host port of their own. The gateway
 presents certificates from the lab's own certificate authority, which `just generate` writes to
 `config/evidence/tls/lab-ca.crt`; every command below passes it with `--cacert`.
 
@@ -165,7 +170,7 @@ The rest of the topology, which this tutorial does not call:
 | Public authority Relay instances | 6 | One per ministry authority, on host ports `4311` through `4316`. |
 | Consultation Relay instances | 6 | Private per-authority reads, on `4322`, `4323`, and `4325` through `4328`. |
 | Workload identity agents | 12 | One per Relay, issuing that Relay's short-lived caller credential. |
-| Evidence gateway service | 1 | The TLS proxy described above. |
+| Evidence Gateway TLS service | 1 | The TLS proxy described above. |
 | Records workload agent | 1 | The caller credential for `cra-records-relay`. |
 | `registry-notary` instances and the child benefit federator | 7 | The country's own evidence gateway services, on `4321` for the federator, still running a retired product the lab has not migrated off yet. |
 | Portal, Visitor's Center, static metadata | 3 | The experience layer. |
@@ -186,11 +191,11 @@ public tour, organized as three doors: visit as a citizen, as a relying agency r
 story, or as an engineer. Scroll to the Engineer door section for ready-made copy-as-curl examples
 against the running stack.
 
-## Ask Evidence one question
+## Ask Evidence Gateway one question
 
 A benefits desk needs to know one thing about an applicant: whether they are an adult. It does not
 need a date of birth, and the Civil Registration Authority would rather not hand one over. That is
-the question the Evidence overlay answers.
+the question the Evidence Gateway overlay answers.
 
 Getting an access token is the first hop. Registry Mint does not accept a password or a shared key:
 the caller proves who it is by signing a short-lived assertion with its own private key, and Mint
@@ -228,7 +233,7 @@ timestamps left as they came back:
   "schema": "registry.assertion-evidence/v1",
   "requestNonce": "7mfZrjyeJnBy3oAIPTwXgwnKFFY_KM-vg0-E9WhGMow",
   "id": "urn:ulid:01KZ3RHVZ4N3ETVVPQZ08A11KY",
-  "type": "Evidence",
+  "type": "Evidence Gateway",
   "supportsRequirement": "https://id.registrystack.org/solmara/requirement/adult-status/v1",
   "isConformantTo": "https://id.registrystack.org/solmara/evidence-type/adult-status/v1",
   "issuedBy": "https://id.registrystack.org/solmara/issuer/civil-registration-authority",
@@ -255,13 +260,13 @@ timestamps left as they came back:
 ```
 
 Read what is not in it. The UIN you sent is gone, replaced by an opaque `binding` that identifies
-the subject within this assertion and nowhere else. The date of birth Relay disclosed to Evidence
+the subject within this assertion and nowhere else. The date of birth Relay disclosed to Evidence Gateway
 is gone. What travels is one boolean against one named concept, plus enough provenance to check it
 later: who issued it, under which purpose, for which audience, against which configuration
 revision, and how long it stays valid. That is the whole product in one response.
 
 Repeat the call with `2300010248`, a fixture child born in 2022, and `value` comes back `false`
-with the same shape. Repeat it with `9900000001`, which no record resolves, and Evidence answers
+with the same shape. Repeat it with `9900000001`, which no record resolves, and Evidence Gateway answers
 `422` with the problem code `evidence_not_available`: one refusal for every reason a subject cannot
 be resolved, so a caller cannot use the refusal to probe who exists.
 
@@ -269,7 +274,7 @@ be resolved, so a caller cannot use the refusal to probe who exists.
 
 `just smoke` and `just smoke-evidence` (steps 3 and 4) are the authoritative checks. These commands
 confirm the country smoke's artifacts are on disk, and reproduce the call from
-[Ask Evidence one question](#ask-evidence-one-question) in a single command that also asserts what
+[Ask Evidence Gateway one question](#ask-evidence-gateway-one-question) in a single command that also asserts what
 the assertion does not carry.
 
 ```sh
@@ -294,17 +299,17 @@ date of birth behind it appears anywhere in the signed payload.
 ## What you built
 
 You brought up 41 services on your laptop from a single `just up-evidence`, and two smoke suites
-verified them. You then held a short-lived access token from Registry Mint, asked Registry Evidence
-one question about one person, and got a signed boolean back. Behind that boolean, Evidence read
+verified them. You then held a short-lived access token from Registry Mint, asked Evidence Gateway
+one question about one person, and got a signed boolean back. Behind that boolean, Evidence Gateway read
 two fields of one row from a Registry Relay deployment under a recorded purpose, and disclosed
 neither to you. The Civil Registration Authority answered the question without handing over the
 record, which is the point of the whole arrangement.
 
 ## Next
 
-- [Evidence quickstart](../../start/evidence-quickstart/): review the current Evidence authoring,
+- [Evidence Gateway quickstart](../../start/evidence-quickstart/): review the current Evidence Gateway authoring,
   operation, and verification material.
-- [Registry Evidence](../../products/registry-evidence/): the assertion contract, the acceptance
+- [Evidence Gateway](../../products/registry-evidence/): the assertion contract, the acceptance
   definition model, and the operator contract.
 - [Build and run an HTTP registry project](../author-registry-project/): create the maintained
   local project and verify its outcomes.
@@ -316,16 +321,16 @@ record, which is the point of the whole arrangement.
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `just up-evidence` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up-evidence` again. |
-| `just up-evidence` fails with `No Registry Stack release ships Registry Evidence or Registry Mint yet` | `REGISTRY_STACK_SOURCE_DIR` is unset. | Export it with the path to your Registry Stack checkout, then run `just up-evidence` again. |
+| `just up-evidence` fails with `No Registry Stack release ships Evidence Gateway or Registry Mint yet` | `REGISTRY_STACK_SOURCE_DIR` is unset. | Export it with the path to your Registry Stack checkout, then run `just up-evidence` again. |
 | `just up-evidence` fails with `Registry Stack source checkout must be clean` | The named checkout has uncommitted changes, so the built image could not be labelled with a real commit. | Commit or stash the changes, or point `REGISTRY_STACK_SOURCE_DIR` at a separate clean checkout or `git worktree`. |
 | `just up-evidence` fails with `service "registry-postgresql-bootstrap" didn't complete successfully: exit 2` | You ran `just generate` a second time. It rotates every local credential, including the Postgres password, and the data volume from your earlier run still holds the old one. | Run `just reset-evidence` to drop this checkout's volumes, then `just generate` and `just up-evidence` again. |
 | `docker compose` reports a port already allocated | Another process holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4323`, `4325` through `4328`, `4331`, `4341` through `4343`, or `54329`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up-evidence`. |
 | `curl` reports a certificate problem against `4341`, `4342`, or `4343` | The lab's certificate authority was not passed, or `just generate` never wrote it. | Pass `--cacert config/evidence/tls/lab-ca.crt`, and run `just generate` if that file is missing. |
-| `just evidence-token` reports `missing SOLMARA_EVIDENCE_CALLER_JWK` | `.env` predates the Evidence overlay, so it has no caller key. | Run `just gen-secrets`, then `just up-evidence` again so Mint picks up the new registration. |
+| `just evidence-token` reports `missing SOLMARA_EVIDENCE_CALLER_JWK` | `.env` predates the Evidence Gateway overlay, so it has no caller key. | Run `just gen-secrets`, then `just up-evidence` again so Mint picks up the new registration. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
 | `docker compose ps -a` lists lab containers you did not start | The lab derives a per-checkout Compose project name (`solmara-lab-` plus a hash of the checkout path), so two checkouts never share a project. Leftover containers come from a lab version that used the shared project name `solmara-lab`. | Inspect the old project with `docker compose -p solmara-lab ps`, then remove it with `docker compose -p solmara-lab down` (add `-v` only if you also want its volumes deleted). |
 | The Relay and `registry-notary` containers start slowly or show high CPU on Apple Silicon | Both pinned images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up-evidence`; later runs are faster once the images are cached. |
-| The first `just up-evidence` appears to hang | The first run compiles Evidence and Mint from source, pulls the pinned images, and builds the local application images. | Let it finish; do not interrupt it. |
+| The first `just up-evidence` appears to hang | The first run compiles Evidence Gateway and Mint from source, pulls the pinned images, and builds the local application images. | Let it finish; do not interrupt it. |
 
 ## Cleanup
 
@@ -336,7 +341,7 @@ just down-evidence
 ```
 
 `just down-evidence` runs `docker compose ... down`, keeping the Postgres data volume, the Relay
-and `registry-notary` state volumes, and the Evidence and Mint secret volumes, so a later `just up-evidence`
+and `registry-notary` state volumes, and the Evidence Gateway and Mint secret volumes, so a later `just up-evidence`
 resumes with the same data. Do not rerun `just generate` before that: it rotates the Postgres
 password, and the kept volume still holds the old one.
 

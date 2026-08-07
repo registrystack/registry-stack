@@ -1,11 +1,11 @@
 ---
 title: Connect an institution source from OpenAPI
-description: Retain an institution API contract, draft one bounded Evidence source, add a governed question, and run the editable project locally.
+description: Retain an institution API contract, draft one bounded Evidence Gateway source, add a governed question, and run the editable project locally.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 persona:
   - assertion provider
@@ -13,8 +13,8 @@ locale: en
 standards_referenced: []
 ---
 
-If this is your first Evidence project, complete
-[Get your first Evidence assertion](../first-evidence-assertion/) before adapting an institution
+If this is your first Evidence Gateway project, complete
+[Get your first Evidence Gateway assertion](../first-evidence-assertion/) before adapting an institution
 source. You will build one editable project from an institution's OpenAPI document and use the same
 retained contract for source drafting and local execution. You do not assemble a deployment bundle
 or copy a reference deployment.
@@ -22,7 +22,7 @@ or copy a reference deployment.
 ## Before you start
 
 You need an OpenAPI 3.0 or 3.1 document for an operation that performs one bounded lookup. The
-operation must let Evidence distinguish no match, one match, and several matches without paging
+operation must let Evidence Gateway distinguish no match, one match, and several matches without paging
 through a registry.
 
 Keep credentials, real responses, and personal data outside the tracked project. Use a sanitized
@@ -30,13 +30,12 @@ response sample only when the OpenAPI document omits a bound that a reviewer can
 
 ## Create the authoring project
 
-Retain the OpenAPI document and create disposable local Evidence keys:
+Retain the OpenAPI document and create disposable local Evidence Gateway keys:
 
 ```sh
 evidencectl new institution-evidence \
   --openapi <institution.openapi.yaml> \
-  --profile local \
-  --generate-keys
+  --profile local
 cd institution-evidence
 ```
 
@@ -117,6 +116,7 @@ request:
   pathTemplate: /people/{person_id}
   pathBindings:
     person_id:
+      from: selector
       role: person
       profile: person-reference-v1
       field: person_id
@@ -164,7 +164,7 @@ install -m 600 /dev/null secrets/registry-password
 ```
 
 Open each file in your editor and enter one credential value. `secret:file/...` values are logical
-references resolved beneath the project's owner-only `secrets` directory. Evidence does not read
+references resolved beneath the project's owner-only `secrets` directory. Evidence Gateway does not read
 credentials from the source YAML, a command argument, a request, or a log.
 
 ## Finish extraction and facts
@@ -210,12 +210,12 @@ fn answer(facts, selectors, context) {
 ```
 
 The question governs purpose, subject, concepts, derivation, and disclosure. The source governs
-how Evidence obtains the fixed facts. This separation lets another question reuse `people`
+how Evidence Gateway obtains the fixed facts. This separation lets another question reuse `people`
 without copying its transport or credential policy.
 
 ## Run the authored project
 
-Start the local Evidence and Registry Mint pair:
+Start the local Evidence Gateway and Registry Mint pair:
 
 ```sh
 evidencectl dev --detach
@@ -226,5 +226,5 @@ creates one private local generation, and runs the real `evidence check` gate be
 missing artifact, unresolved draft marker, invalid secret reference, unbounded schema, or
 inconsistent selector binding stops the generation.
 
-Continue with [Build and deploy an Evidence project](../build-and-deploy-evidence-project/) after the
+Continue with [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/) after the
 project's source, derivation, and synthetic acceptance cases have been independently reviewed.

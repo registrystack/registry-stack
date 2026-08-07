@@ -1,0 +1,719 @@
+---
+title: Request Evidence from your application
+description: Give an application its own identity, request an adult-status assertion with the Python Evidence client, and read the answer only after offline verification.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-06"
+doc_type: tutorial
+persona:
+  - consumer or verifier
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Complete [Get your first Evidence assertion](../first-evidence-assertion/) before starting this
+tutorial. There you drove the Evidence boundary from a terminal with `evidencectl` and `curl`. Here
+you move the same boundary into application code: your program obtains its own access token, sends
+one request, and refuses to read the answer until the signed response has satisfied expectations the
+program itself retained.
+
+<QuickstartMeta
+  outcome="A Python application that answers an adult-status question only from a verified assertion."
+  time="About 20 minutes"
+  level="Local development with synthetic data"
+  prerequisites={[
+    'The completed first Evidence assertion tutorial',
+    'Its adult-status project and its registry.py, which you restart here',
+    'Python 3.10 or later',
+    'A Rust toolchain and git, to build the client from source',
+  ]}
+/>
+
+## Understand what the client owns
+
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
+sequenceDiagram
+    participant A as Your application
+    participant M as Registry Mint
+    participant E as Evidence
+
+    A->>M: Signed client assertion
+    M-->>A: Short-lived access token
+    A->>E: One request, one fresh nonce
+    E-->>A: Signed response, still untrusted
+    A->>A: Verify against the retained procedure
+    Note over A: Only a verified payload reaches decision logic
+```
+
+The client library performs the token exchange, the request, and the verification. It does not
+decide what a valid answer is. Your application states that once, as a relying procedure, and the
+library refuses every response that does not match it.
+
+## Give the application its own identity
+
+Enter the existing project:
+
+```sh
+cd adult-status
+```
+
+An application authenticates as a registered client, not as the project owner. Define a policy for
+the question it may ask, then register the client:
+
+```sh
+evidencectl access policy add app-age-checks --question adult-status
+evidencectl access client add age-check-app \
+  --policy app-age-checks \
+  --generate-local-key
+```
+
+```text
+Added access policy app-age-checks for adult-status.
+Added client age-check-app with policy app-age-checks.
+```
+
+Both identifiers belong to this tutorial alone. Authoring refuses to overwrite an existing policy or
+client document, so a page that reused the ids from
+[Control who can request Evidence](../control-who-can-request-evidence/) would refuse for anyone who
+had followed it, and would inherit the client that tutorial revokes at its end. With their own ids,
+the two pages compose in one project in either order.
+
+The reviewable registration at `access/clients/age-check-app.yaml` carries the policy membership and
+the public key. The private key stays owner-only at `.evidence/clients/age-check-app/private.jwk`
+and is the application's identity. The registration also fixes the audience the application must
+state for itself:
+
+```sh
+grep evidenceAudience access/clients/age-check-app.yaml
+```
+
+```text
+evidenceAudience: urn:registrystack:evidence:local:client:age-check-app
+```
+
+A project with no access policy has an unnamed development caller. Registering the first policy
+removes it, so from now on every request in this project names a client.
+[Control who can request Evidence](../control-who-can-request-evidence/) covers policies, live
+onboarding, and revocation in full.
+
+## Pin the keys your application trusts
+
+The application must decide which signing keys it accepts before any response exists. Build a JWKS
+from the project's own retained public signing key:
+
+```sh
+evidencectl jwks --out trusted-issuer-keys.json secrets/signing-p256-public.jwk.json
+```
+
+```text
+wrote trusted-issuer-keys.json
+```
+
+In this tutorial the issuer and the relying party are the same person, so a local file stands in for
+what production requires: keys received over a channel independent of the responses they verify. The
+client never fetches trust from a response or from a discovery document. See
+[Manage verifier trust and key rotation](../manage-evidence-verifier-trust/) for the production
+handling.
+
+## Build the Python client
+
+The client is not published to a package index yet, so build the extension module from a checkout of
+the repository. Take the source at the version of the runtime you installed, not at the default
+branch. From inside the project directory:
+
+```sh
+installed="$(evidencectl --version | awk '{print $2}')"
+git clone --depth 1 --branch "v$installed" \
+  https://github.com/registrystack/registry-stack.git ../registry-stack
+cargo build --locked --manifest-path ../registry-stack/Cargo.toml \
+  -p registry-evidence-client-py --lib \
+  --features registry-evidence-client-py/extension-module
+```
+
+This project is pre-1.0, so its default branch may already carry request and response contract
+changes the installed runtime does not implement. Pinning the checkout to the installed version keeps
+the client and the deployment on one contract; a mismatch would surface as a discovery or
+verification failure that looks like a bug in your application. If the clone fails because that
+release does not carry the client yet, install a newer `evidencectl` and repeat the step. If you
+already have a checkout, point the two `../registry-stack` paths at it instead of cloning, after
+confirming its `version` in `Cargo.toml` matches `evidencectl --version`.
+
+Copy the compiled library into a directory the application imports from:
+
+```sh
+mkdir -p python-module
+case "$(uname -s)" in
+  Darwin) built=libregistry_evidence_client.dylib ;;
+  Linux) built=libregistry_evidence_client.so ;;
+esac
+cp "../registry-stack/target/debug/$built" python-module/registry_evidence_client.so
+```
+
+Python imports an extension module from a plain `.so` name on both platforms. macOS and Linux are
+the platforms this build path covers. The build needs `python3` on `PATH`, because the binding
+configures itself against the interpreter it will be imported by.
+
+## Start the local services
+
+Evidence reads the source record through the `registry.py` server from the first tutorial, whose
+cleanup told you to stop it. Start it again in its own terminal, from the project directory, and
+leave it running:
+
+```sh
+python3 registry.py
+```
+
+```text
+Registry listening on http://127.0.0.1:8000
+```
+
+Back in the first terminal, compile the question and the access policy into a fresh generation, and
+start Evidence and Registry Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+`evidencectl dev` reports ready without reaching the source, so a stopped registry surfaces only
+later, as a failed evidence request.
+
+The access policy is now part of the running generation, so a terminal request names a client too.
+Confirm that the project no longer accepts an unnamed one:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --name unnamed-caller
+```
+
+```text
+evidencectl: the active project requires a registered client selected with --client
+```
+
+## Read the definitions once
+
+Ask the deployment which complete request shapes this client may send, and keep the answer to
+review:
+
+```sh
+python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "python-module")
+
+from registry_evidence_client import EvidenceClient
+
+client = EvidenceClient(
+    base_url="http://127.0.0.1:8080",
+    trusted_jwks=json.loads(Path("trusted-issuer-keys.json").read_text()),
+    # This local project has no emergency revocations. In production, load the
+    # current governed denylist independently from the issuer's response.
+    revoked_key_ids=[],
+    token={
+        "private_key_jwt": {
+            "token_endpoint": "http://127.0.0.1:8081/token",
+            "client_id": "age-check-app",
+            "client_key": json.loads(
+                Path(".evidence/clients/age-check-app/private.jwk").read_text()
+            ),
+        },
+    },
+)
+document = json.dumps(client.discover(), indent=2, sort_keys=True)
+Path("discovery.json").write_text(document + "\n")
+print(document)
+PY
+```
+
+```json
+{
+  "assuranceProfile": "local",
+  "definitions": [
+    {
+      "concepts": [
+        {
+          "form": "boolean",
+          "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+        }
+      ],
+      "configurationRevision": "sha256:<revision>",
+      "evidenceType": "urn:registrystack:evidence:local:evidence-type:adult-status",
+      "kind": "criterion",
+      "purpose": "age-check",
+      "referenceFrameworks": [
+        "urn:registrystack:evidence:local:framework:adult-status"
+      ],
+      "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+      "subjects": [
+        {
+          "cardinality": "one",
+          "role": "person",
+          "selector": {
+            "fields": [
+              {
+                "maximumBytes": 200,
+                "minimumBytes": 1,
+                "name": "person_id",
+                "type": "string"
+              }
+            ],
+            "profile": "local-subject-adult-status-v1",
+            "valueOrigin": "request"
+          }
+        }
+      ]
+    }
+  ],
+  "issuedBy": "urn:registrystack:evidence:local:issuer",
+  "providedBy": "urn:registrystack:evidence:local:provider",
+  "schema": "registry.evidence-definitions/v1"
+}
+```
+
+Discovery is authenticated, and it grants no authority. It answers exactly one question: which
+complete request shapes this client may send. It is not a trust anchor, and a request must never
+take an expectation from a discovery response fetched alongside it.
+
+Read it here once, to author the procedure. From now on the procedure supplies every request's
+expectations.
+
+## Pin the procedure
+
+Write what you just reviewed into a file the application owns. This step makes no network call: it
+transforms the document you already read, so the identifiers and the revision are transcribed rather
+than copied by hand. The constants at the top are the application's own, stated rather than read:
+
+```sh
+python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+
+REQUIREMENT = "urn:registrystack:evidence:local:requirement:adult-status"
+
+# Chosen by this application, not published by the deployment.
+AUDIENCE = "urn:registrystack:evidence:local:client:age-check-app"
+RESPONSE_FORMAT = "signed-jws"
+EXPECTED_OUTPUTS = [
+    {
+        "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+        "form": "boolean",
+    },
+]
+MAXIMUM_LIFETIME_SECONDS = 300
+CLOCK_SKEW_SECONDS = 30
+
+published = json.loads(Path("discovery.json").read_text())
+shapes = [item for item in published["definitions"] if item["requirement"] == REQUIREMENT]
+if len(shapes) != 1:
+    sys.exit(f"expected exactly one published shape for {REQUIREMENT}, found {len(shapes)}")
+definition = shapes[0]
+
+# Fail here, at review time, rather than at verification time. Verification
+# requires the response's value set to match the expectation exactly, so a
+# concept this application does not expect is as disqualifying as a missing one.
+offered = {concept["id"]: concept["form"] for concept in definition["concepts"]}
+expected = {item["concept"]: item["form"] for item in EXPECTED_OUTPUTS}
+if offered.keys() != expected.keys():
+    missing = sorted(expected.keys() - offered.keys())
+    added = sorted(offered.keys() - expected.keys())
+    sys.exit(f"the published concept set moved: no longer published {missing}, now also {added}")
+
+# One subject, one string selector field, resolved from the request: the shape
+# this application is written for. A deployment may change any of it while
+# keeping the identifiers above.
+[subject] = definition["subjects"]
+selector = subject["selector"]
+fields = {field["name"] for field in selector["fields"]}
+if (
+    subject["cardinality"] != "one"
+    or subject["role"] != "person"
+    or selector["valueOrigin"] != "request"
+    or fields != {"person_id"}
+):
+    sys.exit(f"the published subject shape moved: {json.dumps(subject, sort_keys=True)}")
+
+document = json.dumps(
+    {
+        "requirement": definition["requirement"],
+        "purpose": definition["purpose"],
+        "evidence_type": definition["evidenceType"],
+        "issued_by": published["issuedBy"],
+        "provided_by": published["providedBy"],
+        # Published per requirement, so it is read from this definition. It
+        # covers only what this requirement depends on: an unrelated bundle edit
+        # leaves it unchanged, and this procedure keeps verifying.
+        "configuration_revision": definition["configurationRevision"],
+        "expected_assurance_profile": published["assuranceProfile"],
+        "audience": AUDIENCE,
+        "response_format": RESPONSE_FORMAT,
+        "expected_outputs": EXPECTED_OUTPUTS,
+        "maximum_assertion_lifetime_seconds": MAXIMUM_LIFETIME_SECONDS,
+        "clock_skew_seconds": CLOCK_SKEW_SECONDS,
+        # What the deployment published, so a later regeneration diffs it. The
+        # application reads the subject shape from here rather than restating it.
+        "published_shape": {
+            "concepts": offered,
+            "subject": {
+                "role": subject["role"],
+                "selector_profile": selector["profile"],
+                "selector_fields": sorted(fields),
+            },
+        },
+    },
+    indent=2,
+    sort_keys=True,
+)
+Path("procedure.json").write_text(document + "\n")
+print(document)
+PY
+```
+
+```json
+{
+  "audience": "urn:registrystack:evidence:local:client:age-check-app",
+  "clock_skew_seconds": 30,
+  "configuration_revision": "sha256:<revision>",
+  "evidence_type": "urn:registrystack:evidence:local:evidence-type:adult-status",
+  "expected_assurance_profile": "local",
+  "expected_outputs": [
+    {
+      "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+      "form": "boolean"
+    }
+  ],
+  "issued_by": "urn:registrystack:evidence:local:issuer",
+  "maximum_assertion_lifetime_seconds": 300,
+  "provided_by": "urn:registrystack:evidence:local:provider",
+  "published_shape": {
+    "concepts": {
+      "urn:registrystack:evidence:local:concept:adult-status:is_adult": "boolean"
+    },
+    "subject": {
+      "role": "person",
+      "selector_fields": [
+        "person_id"
+      ],
+      "selector_profile": "local-subject-adult-status-v1"
+    }
+  },
+  "purpose": "age-check",
+  "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+  "response_format": "signed-jws"
+}
+```
+
+`procedure.json` is the pinned procedure. In a real deployment you review it, commit it, and ship it
+with the application. You do not regenerate it at startup: an application that refreshes its
+expectations from the deployment it is checking has no expectations of its own.
+
+Four of those settings are the application's own judgement, and no deployment can supply them:
+
+- `audience` is the identifier the client registration assigned this application.
+- `response_format` explicitly selects the signed JWS response and the matching offline verifier.
+- `maximum_assertion_lifetime_seconds` and `clock_skew_seconds` are its own bounds on how stale an
+  answer it will accept.
+
+`expected_outputs` is stated by hand for a different reason. A concept's published `form` and a
+verification expectation's `form` are separate vocabularies: a boolean concept is expected as
+`boolean`, but controlled codes and bounded decimals are expected as `string`, bounded integers as
+`integer`, and the two list forms need explicit bounds. Deriving the expectation from the published
+form would work for this requirement and mislead you on the next one.
+
+The concept set is checked against discovery in both directions instead, because verification is
+exact: it requires the response's value set to match `expected_outputs` one for one. A deployment
+that stops publishing a concept and one that adds another both leave this application unable to
+verify any response, so both fail at review time here rather than at verification time later.
+
+`published_shape` is the part of the answer the deployment owns, kept in the file so the next review
+can see it move. The application reads the subject role and selector profile from it rather than
+restating them, so a changed request shape cannot pass review and then reach a request. The
+`concepts` map records the forms the deployment published beside the expectations authored from them.
+
+`subject_expectations` is absent from the file because it is per-request: it is what the application
+already knows about the subject in front of it.
+
+Regenerating this file is a review step, not a retry. The revision covers this requirement's own
+governed configuration, so it moves when an operator changes something this requirement depends on,
+and verification then fails until someone has looked at what changed. A change elsewhere in the
+deployment leaves it alone. When it does move, keep the reviewed copy, write a
+new one, and `diff` them before accepting: a changed revision alone is routine, while a changed
+`evidence_type`, `issued_by`, concept set, or `published_shape` means the question, or the way it
+must be asked, moved.
+
+## Write the relying procedure
+
+Open `age_check.py` in your editor and add the application. It loads the pinned procedure and never
+calls discovery again:
+
+```python
+import fcntl
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "python-module")
+
+from registry_evidence_client import (
+    DeniedError,
+    EvidenceClient,
+    EvidenceClientError,
+    NotAvailableError,
+    VerificationError,
+)
+
+# The reviewed procedure. This program never calls discovery: every expectation
+# comes from the file that was pinned when it was written.
+PROCEDURE = json.loads(Path("procedure.json").read_text())
+# The reviewed request shape. Removed from the procedure because `prepare` takes
+# the expectations and the subjects, and this is neither.
+SUBJECT = PROCEDURE.pop("published_shape")["subject"]
+IS_ADULT = "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+BINDINGS = Path("subject-bindings.json")
+BINDINGS_LOCK = Path("subject-bindings.lock")
+
+
+def build_client():
+    """Configure the one deployment this application talks to."""
+    return EvidenceClient(
+        base_url="http://127.0.0.1:8080",
+        trusted_jwks=json.loads(Path("trusted-issuer-keys.json").read_text()),
+        # This local project has no emergency revocations. In production, load
+        # the current governed denylist independently from the issuer response.
+        revoked_key_ids=[],
+        token={
+            "private_key_jwt": {
+                "token_endpoint": "http://127.0.0.1:8081/token",
+                "client_id": "age-check-app",
+                "client_key": json.loads(
+                    Path(".evidence/clients/age-check-app/private.jwk").read_text()
+                ),
+            },
+        },
+    )
+
+
+def expectations_for(person_id):
+    """Pin a binding this application has already seen, or accept first use."""
+    if BINDINGS.exists():
+        return json.loads(BINDINGS.read_text()).get(person_id, "accept_first_use")
+    return "accept_first_use"
+
+
+def remember(person_id, pinned):
+    """Add one binding under an exclusive lock, without dropping another run's."""
+    with BINDINGS_LOCK.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        store = json.loads(BINDINGS.read_text()) if BINDINGS.exists() else {}
+        store[person_id] = pinned
+        pending = BINDINGS.with_name(BINDINGS.name + ".pending")
+        document = json.dumps(store, indent=2, sort_keys=True) + "\n"
+        # The replacement is a new file, so its permissions come from this call
+        # and not from the store it replaces. Owner-only from creation, whatever
+        # umask the shell that runs this happens to carry.
+        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(descriptor, "w") as pending_file:
+            pending_file.write(document)
+        pending.replace(BINDINGS)
+
+
+def ask_is_adult(client, person_id):
+    spec = dict(
+        PROCEDURE,
+        subjects=[
+            {
+                "role": SUBJECT["role"],
+                "selector_profile": SUBJECT["selector_profile"],
+                "selector_values": {"person_id": person_id},
+            },
+        ],
+        subject_expectations=expectations_for(person_id),
+    )
+    verified = client.request_and_verify(client.prepare(spec))
+    answers = {
+        value["providesValueFor"]: value["value"]
+        for value in verified.evidence["supportedValues"]
+    }
+    return answers[IS_ADULT], verified.pinned_subject_expectations
+
+
+person_id = sys.argv[1] if len(sys.argv) > 1 else "person-123"
+try:
+    is_adult, pinned = ask_is_adult(build_client(), person_id)
+except VerificationError as error:
+    sys.exit(f"unverifiable response, nothing read ({error.code}): {error}")
+except DeniedError as error:
+    sys.exit(f"refused by the deployment (status {error.status}): {error}")
+except NotAvailableError as error:
+    sys.exit(f"no evidence available: {error}")
+except EvidenceClientError as error:
+    sys.exit(f"exchange did not complete ({error.kind}): {error}")
+
+remember(person_id, pinned)
+print(f"{person_id} is_adult={is_adult}")
+print(f"pinned binding recorded in {BINDINGS}")
+```
+
+Six properties of that code are the point of this tutorial:
+
+- Every expectation, and the request shape itself, comes from `procedure.json`. The program holds no
+  discovery client and cannot learn what to expect from the deployment it is checking.
+- `prepare` performs no network call. It closes the request, retains the explicit response format,
+  generates a fresh nonce, and builds the verification policy while the answer is still unknown. A
+  prepared request is good for one send.
+- `request_and_verify` returns only after the response satisfied the policy. There is no object in
+  this program that holds a decoded but unverified payload.
+- The answer is read from a mapping keyed by the concept identifier, never by position, so a
+  response carrying different values cannot be misread as this one.
+- Three failures get their own branch, and `EvidenceClientError` catches the rest. Every path exits.
+  Nothing falls through to a default answer.
+- `remember` reads and rewrites the whole store, so it holds an exclusive lock across both and
+  replaces the file atomically. Two runs finishing at once would otherwise each write what they read,
+  and the loser's subject would silently return to accepting a binding on first use. A file lock
+  covers one host; an application on more than one needs a transactional per-subject store.
+
+## Run it
+
+The recorded subject binding is scoped to this audience and purpose, so keep it owner-only:
+
+```sh
+umask 077
+python3 age_check.py
+```
+
+```text
+person-123 is_adult=True
+pinned binding recorded in subject-bindings.json
+```
+
+The first run had nothing to pin, so it accepted the binding on first use and recorded it. Run it
+again:
+
+```sh
+python3 age_check.py
+```
+
+```text
+person-123 is_adult=True
+pinned binding recorded in subject-bindings.json
+```
+
+The second run pinned the recorded binding, and the response had to carry that exact value. First use
+proves only that a response was signed for the request that was sent; pinning is what ties later
+answers to the same subject your application saw before.
+
+The binding is a keyed one-way value the deployment computes, so its stability has a scope. It is
+stable for the same subject while the audience, the purpose, the role, the selector profile, and the
+deployment's own binding key and key version are all unchanged, and it is unrelated for any other
+audience or purpose. An operator who rotates that key, or increments its version, changes every
+binding the deployment issues. Treat that as a coordinated event rather than a mismatch: the
+deployment announces it, and each application re-enrolls by discarding its stored bindings and
+accepting first use once more per subject. Discarding them without that announcement gives up exactly
+the continuity the pinning provides, and a changed selector profile has the same effect, which is why
+the review step above refuses one.
+
+Ask about a different record:
+
+```sh
+python3 age_check.py person-456
+```
+
+```text
+person-456 is_adult=False
+pinned binding recorded in subject-bindings.json
+```
+
+The registry holds a name and a date of birth for both people. Neither answer contains either.
+
+## Refuse before reading
+
+Change one stored binding to prove that the application, not the deployment, decides what it
+accepts:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+store = json.loads(Path("subject-bindings.json").read_text())
+store["person-123"] = store["person-456"]
+Path("subject-bindings.json").write_text(json.dumps(store, indent=2, sort_keys=True) + "\n")
+PY
+python3 age_check.py person-123
+```
+
+```text
+unverifiable response, nothing read (policy): the Evidence response failed verification: Evidence payload does not match the relying procedure
+```
+
+Evidence answered the request successfully. The client discarded the response because it did not
+match the retained expectation, and `age_check.py` exited without reading a value. Editing the
+`configuration_revision` in `procedure.json` fails the same way, and for the same reason.
+
+Delete `subject-bindings.json` to start the pinning over.
+
+Branch on the exception class or on `kind`, never on the message text, which is not frozen:
+
+| `kind` | Class | Meaning |
+| --- | --- | --- |
+| `configuration` | `ConfigurationError` | The client cannot be used as configured, or a prepared request was already sent. |
+| `nonce` | `NonceError` | The request nonce could not be generated. |
+| `token` | `TokenError` | No credential could be obtained. Read `token_kind`. |
+| `transport` | `TransportError` | The exchange failed below the HTTP layer. Read `transport_kind`. |
+| `denied` | `DeniedError` | The deployment refused with a coded problem response. |
+| `not_available` | `NotAvailableError` | The deployment answered that no evidence is available. |
+| `protocol` | `ProtocolError` | The deployment answered outside its contract, or the response could not be parsed. |
+| `verification` | `VerificationError` | A signed response failed offline verification. Read `code`. |
+
+Every class above inherits from `EvidenceClientError`, which carries `kind`. The status and the body's
+`code` decide the class together, and only for the pairs the problem contract registers: HTTP 401,
+403, and 429 map to `denied`, and 422 carrying the contract's no-evidence code maps to
+`not_available`. Every other status maps to `protocol`, as does any of those four statuses carrying a
+code the contract does not register for it, because that is a body the deployment did not promise. So
+`not_available` is the branch for a request that was answered and had no evidence to report, not a
+protocol failure. No exception carries response bytes, a credential, a header value, a selector
+value, or a subject binding.
+
+Two failures sit outside that hierarchy, because neither is a mapped failure of the exchange: the
+client's internal runtime failing to start raises `RuntimeError`, and a serialization failure on a
+value the client itself built raises `ValueError`.
+
+## Stop the local services
+
+```sh
+evidencectl dev stop
+evidencectl dev clean
+```
+
+```text
+Local Evidence stopped
+Removed stopped local Evidence state
+```
+
+This keeps `age_check.py`, `discovery.json`, `procedure.json`, the pinned JWKS, the recorded
+bindings, and the client's private key.
+Return to the first terminal and press `Ctrl+C` to stop `registry.py`.
+
+## Next
+
+- [Verify Evidence as a consumer](../verify-an-assertion-as-a-consumer/), for re-verifying a stored
+  response at the recorded decision time
+- [Control who can request Evidence](../control-who-can-request-evidence/), for policies and
+  revocation
+- [Request an access token from your own code](../../configure/request-an-access-token/), for the
+  token exchange without the client library
+- [Review the Evidence Gateway API](../../reference/apis/registry-evidence/)

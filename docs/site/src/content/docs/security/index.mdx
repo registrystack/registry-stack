@@ -68,23 +68,23 @@ authenticate, authorize, serve, audit.
 Every route that returns person-level records or an evidence assertion requires authentication.
 Operational probes, public verification keys, issuer metadata, and docs or OpenAPI when configured
 may be public because they carry no person-level data.
-Evidence exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata
+Evidence Gateway exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata
 document; both its assertion route and its evidence-definition discovery route require a verified
 access token (REQ-SEC-G-006).
 Issuers sign with asymmetric keys and publish only the public half, so any verifier can check a
 signed artifact without holding a credential of its own (REQ-SEC-G-007).
 
-Evidence can serialize the same signed assertion as an SD-JWT VC, where the signed body carries
+Evidence Gateway can serialize the same signed assertion as an SD-JWT VC, where the signed body carries
 hashes of each disclosable field rather than the values.
 That is a second encoding of one response, not a credential lifecycle: there is no issuance
 session, holder-binding ceremony, status list, revocation, or presentation verification.
-A request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence issues no
+A request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence Gateway issues no
 key-binding JWT, requires none, and verifies none, so `cnf` is an unverified caller-supplied
 convenience for whatever presentation layer the operator runs elsewhere.
 The subject identifier stays an audience-scoped pseudonym, so the same person requested for a
 different audience yields a different identifier.
 
-Where a deployment has no identity provider, Registry Mint issues the access tokens Evidence
+Where a deployment has no identity provider, Registry Mint issues the access tokens Evidence Gateway
 verifies. Mint authenticates each registered client with an asymmetric client assertion, checked
 only against the keys registered for the client the assertion names, and reads the minted token's
 authority from its own server-side client registry rather than from the assertion. Its token
@@ -123,7 +123,7 @@ the deployment's actual state is inspectable rather than asserted. The default t
 metadata.
 The gate catalogs are documented in the
 [Registry Relay configuration reference](../products/registry-relay/configuration/).
-Evidence states its own operator obligations in its operator contract rather than through this
+Evidence Gateway states its own operator obligations in its operator contract rather than through this
 posture block.
 
 ## What stays with the operator
@@ -137,7 +137,7 @@ primitives; the operator provisions, configures, and operates them.
 Record those responsibilities in the
 [operator handoff checklist](../operate/) before activation.
 
-## Evidence for reviewers
+## Evidence Gateway for reviewers
 
 Public, checkable evidence, from most to least formal:
 

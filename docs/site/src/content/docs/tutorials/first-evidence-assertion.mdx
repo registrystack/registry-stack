@@ -1,11 +1,11 @@
 ---
-title: Get your first Evidence assertion
-description: Run a local registry and verify a signed adult-status answer without copying the source record.
+title: Get your first Evidence Gateway assertion
+description: Run a local registry and verify one adult-status answer as signed JWS and SD-JWT VC without copying the source record.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -15,13 +15,13 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Evidence reads an authorized source record, answers a preconfigured question, and signs only the
+Evidence Gateway reads an authorized source record, answers a preconfigured question, and signs only the
 governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
 person's name or date of birth.
 
 <QuickstartMeta
-  outcome="A verified assertion containing an adult-status answer, but not the source record."
-  time="About 15 minutes"
+  outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
+  time="About 20 minutes"
   level="Local development with synthetic data"
   prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
 />
@@ -32,7 +32,7 @@ person's name or date of birth.
 %%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
     participant C as Tutorial caller
-    participant E as Evidence
+    participant E as Evidence Gateway
     participant R as Tutorial registry
 
     C->>E: Authorized request<br/>adult-status, person_id=person-123
@@ -44,19 +44,19 @@ sequenceDiagram
 ```
 
 Before the request, Registry Mint gives the tutorial caller short-lived local authorization.
-Evidence and the registry process the identifier and date of birth to answer the question, but the
+Evidence Gateway and the registry process the identifier and date of birth to answer the question, but the
 released assertion contains only the governed answer and an opaque subject binding.
 
-## Install Evidence
+## Install Evidence Gateway
 
-Install the latest Evidence toolset:
+Install the latest Evidence Gateway toolset:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 evidencectl --version
 ```
 
-The installer provides `evidencectl` and the local Evidence and Registry Mint runtimes used later
+The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
 in the tutorial.
 
 ## Start a small registry
@@ -144,11 +144,11 @@ print("Registry listening on http://127.0.0.1:8000", flush=True)
 ThreadingHTTPServer(("127.0.0.1", 8000), Registry).serve_forever()
 ```
 
-You do not need to understand every line of the server. Three details connect it to Evidence:
+You do not need to understand every line of the server. Three details connect it to Evidence Gateway:
 
 - `/people/{person_id}` returns a complete person record.
 - `/openapi.json` describes that endpoint and its response.
-- `getPerson` is the OpenAPI operation that the Evidence question will select.
+- `getPerson` is the OpenAPI operation that the Evidence Gateway question will select.
 
 In one terminal, start the registry and leave it running:
 
@@ -178,20 +178,19 @@ curl -s http://127.0.0.1:8000/people/person-123 | python3 -m json.tool
 The registry returns an identifier, a name, and a date of birth. The verified assertion will contain
 none of those source values.
 
-## Create the Evidence project
+## Create the Evidence Gateway project
 
 Create a local project from the registry's OpenAPI description:
 
 ```sh
 evidencectl new adult-status \
   --openapi http://127.0.0.1:8000/openapi.json \
-  --profile local \
-  --generate-keys
+  --profile local
 cd adult-status
 ```
 
 `--profile local` creates a loopback-only development project, not a production deployment.
-`--generate-keys` creates owner-only local keys for signing, subject binding, and audit integrity.
+The command creates owner-only local keys for signing, subject binding, and audit integrity.
 OpenAPI describes the source, but you still decide the question and what the answer may disclose.
 
 The new project separates those decisions from the retained API description:
@@ -233,6 +232,7 @@ source:
 answers:
   - concept: is_adult
     type: boolean
+responseFormats: [signed-jws, sd-jwt-vc]
 derivation: derivations/adult-status.rhai
 disclosure:
   allow: [is_adult]
@@ -244,6 +244,8 @@ The definition closes four decisions:
 - `source` selects `getPerson` and allows only `date_of_birth` to reach the derivation. It does not
   change the complete record returned by the registry.
 - `answers` declares one permitted result, a boolean named `is_adult`.
+- `responseFormats` keeps signed JWS as the default and also permits the same answer to be returned
+  as SD-JWT VC.
 - `disclosure` is the explicit release boundary. It must name exactly the answers returned by the
   derivation.
 
@@ -254,7 +256,7 @@ matching the purpose declared here.
 ### `derivations/adult-status.rhai`
 
 Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
-scripting language Evidence uses for requirement-specific derivations:
+scripting language Evidence Gateway uses for requirement-specific derivations:
 
 ```rhai
 fn answer(facts, selectors, context) {
@@ -268,13 +270,13 @@ The derivation performs four operations:
 
 1. Require and parse the selected date of birth.
 2. Calculate the eighteenth birthday using calendar arithmetic.
-3. Compare it with `context.legal_local_date`, which Evidence derives from the observation instant
+3. Compare it with `context.legal_local_date`, which Evidence Gateway derives from the observation instant
    in the configured timezone.
 4. Return a map containing exactly the declared `is_adult` answer.
 
-Evidence validates the returned name and boolean form before signing.
+Evidence Gateway validates the returned name and boolean form before signing.
 
-Start Evidence and Registry Mint:
+Start Evidence Gateway and Registry Mint:
 
 ```sh
 evidencectl dev --detach
@@ -285,7 +287,7 @@ Evidence ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-This command starts Evidence and Mint only. The Python registry remains the process you started in
+This command starts Evidence Gateway and Mint only. The Python registry remains the process you started in
 the first terminal.
 
 ## Request an assertion
@@ -299,9 +301,10 @@ evidencectl request prepare adult-status \
   --name first-assertion
 ```
 
-Preparation asks the local Mint for short-lived authorization and records the verification
-expectations before a response exists. It does not send the request to Evidence or contact the
-registry. It creates exactly these owner-only artifacts:
+The Evidence client prepares the request and closes its pinned verification expectations locally,
+before a response exists. `evidencectl` separately asks the local Mint for short-lived
+authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
+command creates exactly these owner-only artifacts:
 
 ```text
 Prepared request: .evidence/requests/first-assertion/request.json
@@ -333,8 +336,10 @@ curl --silent --show-error --fail-with-body \
 HTTP 200
 ```
 
-`curl` called Evidence, Evidence called the registry, and the HTTP response is a signed flattened
-JSON Web Signature (JWS). A successful HTTP response is not yet a trusted assertion.
+`curl` made the one `POST /v1/evidence` assertion request, Evidence Gateway called the registry, and
+the HTTP response is a signed flattened JSON Web Signature (JWS). A successful HTTP response is not
+yet a trusted assertion. Preparation made zero Evidence Gateway HTTP requests, and the verification
+step below is offline, so one assertion requires one request to Evidence Gateway rather than two.
 
 ## Verify before reading
 
@@ -389,13 +394,75 @@ answers the authored question without becoming another copy of the registry reco
 
 The owner-only `request.json` still records that this transaction concerned `person-123`, while
 `verification.json` records the expected opaque subject binding and request nonce. Retain those
-files with the signed response when you need to [verify Evidence later as a
+files with the signed response when you need to [verify Evidence Gateway later as a
 consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
 assertion alone.
 
+## Try the SD-JWT VC serialization
+
+Prepare a second request for the same governed question, this time recording SD-JWT VC as the
+expected response format:
+
+```sh
+evidencectl request prepare adult-status \
+  --purpose age-check \
+  --subject person_id=person-123 \
+  --format sd-jwt-vc \
+  --name first-vc
+```
+
+```text
+Prepared request: .evidence/requests/first-vc/request.json
+Prepared verification context: .evidence/requests/first-vc/verification.json
+Prepared authorization: .evidence/requests/first-vc/authorization.curl
+```
+
+Send the request with the exact SD-JWT VC media type:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/first-vc/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @.evidence/requests/first-vc/request.json \
+  --output assertion.sd-jwt \
+  --write-out 'HTTP %{http_code}\n'
+```
+
+```text
+HTTP 200
+```
+
+Treat the compact credential as opaque until verification succeeds:
+
+```sh
+evidencectl verify assertion.sd-jwt \
+  --context .evidence/requests/first-vc/verification.json \
+  --output verified-vc.json
+```
+
+```text
+VERIFIED
+```
+
+Now inspect the verified Evidence payload:
+
+```sh
+python3 -m json.tool verified-vc.json
+```
+
+It has the same governed `is_adult: true` answer and minimum-disclosure boundary as the signed JWS
+response. Only the serialization changed. This is a stateless credential response, not a wallet
+issuance, revocation, or presentation workflow.
+
+Continue with [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/) to inspect disclosures,
+issuer metadata, tamper refusal, and structured-field projection.
+
 ## Stop the local services
 
-Stop Evidence and Mint before reading the completed audit chain:
+Stop Evidence Gateway and Mint before reading the completed audit chain:
 
 ```sh
 evidencectl dev stop
@@ -424,7 +491,7 @@ record or access token.
 
 ## Clean up
 
-Remove the stopped local generation, including the sealed bundle that Evidence used:
+Remove the stopped local generation, including the sealed bundle that Evidence Gateway used:
 
 ```sh
 evidencectl dev clean
@@ -452,8 +519,8 @@ Choose two different unused ports when you start the local services:
 evidencectl dev --detach --evidence-port 8180 --mint-port 8181
 ```
 
-Evidence uses the selected ports consistently in its runtime, Mint authorization, readiness
-checks, and generated request artifacts. Send the assertion request to the selected Evidence port,
+Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
+checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
 such as `http://127.0.0.1:8180/v1/evidence`.
 
 The development profile binds both services to loopback in the environment where the command
@@ -463,7 +530,8 @@ loopback.
 
 ## Next
 
+- [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
 - [Return a governed value](../return-a-governed-value/)
 - [Bind two people to one relationship assertion](../assert-a-role-bound-relationship/)
-- [Review the Evidence overview](../../start/evidence-quickstart/)
-- [Evaluate Evidence's operating requirements](../../start/evaluate-evidence/)
+- [Review the Evidence Gateway overview](../../start/evidence-quickstart/)
+- [Evaluate Evidence Gateway's operating requirements](../../start/evaluate-evidence/)

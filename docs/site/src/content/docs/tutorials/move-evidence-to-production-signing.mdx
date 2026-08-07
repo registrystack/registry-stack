@@ -1,11 +1,11 @@
 ---
-title: Rotate Evidence signing keys
-description: Stage a new Evidence signing key, publish an overlap set through the runtime JWKS endpoint, and retire the old key after consumers can verify both generations.
+title: Configure Transit signing for Evidence Gateway and Registry Mint
+description: Configure non-exportable P-256 signing through a workload-local Vault or OpenBao Transit proxy without giving provider credentials to either service.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-06"
 doc_type: how-to
 persona:
   - operator
@@ -13,108 +13,241 @@ locale: en
 standards_referenced: []
 ---
 
-Use this procedure after [Build and deploy an Evidence project](../build-and-deploy-evidence-project/).
-Coordinate the rotation with consumers through
-[Manage Evidence verifier trust](../manage-evidence-verifier-trust/) before activation. Evidence
-signs with one active Ed25519 key. Rotation is a reviewed, startup-only configuration change. There
-is no hot-rotation endpoint or standby-key field. Publishing a new public key makes it discoverable;
-it does not make independently operated consumers trust it.
+Use this procedure to move Evidence Gateway or Registry Mint from disposable local signing to a
+strict deployment. Each service signs through its own workload-local Unix-socket proxy. The service
+process receives no Vault or OpenBao token, and the provider retains the private key.
 
-## Stage a new keypair
+## Prerequisites
 
-Generate the replacement in a new owner-only staging directory on the host responsible for key
-custody:
+You need:
+
+- A Vault or OpenBao Transit mount administered outside the application workload.
+- A separate provider identity and Transit key for each service and environment.
+- An auto-auth method appropriate for the deployment platform.
+- A reviewed deployment target based on the ready-to-copy templates under
+  `products/evidence/reference/deployment-targets/`.
+- An approved tool that can convert a P-256 public key from PEM to JWK and calculate its RFC 7638
+  SHA-256 thumbprint.
+
+The commands use a Transit mount named `transit`. Change the mount consistently when your provider
+uses another name.
+
+## Create one key per service
+
+Run the provider administration commands through an authenticated operator session, not from the
+Evidence Gateway or Mint container. Create non-derived, non-exportable P-256 keys with plaintext
+backup disabled:
 
 ```sh
-evidencectl keygen signing \
-  --out-dir "<owner-only-staging-directory>" \
-  --kid "<new-production-kid>"
+vault write transit/keys/evidence-signing \
+  type=ecdsa-p256 \
+  derived=false \
+  exportable=false \
+  allow_plaintext_backup=false
+
+vault write transit/keys/mint-signing \
+  type=ecdsa-p256 \
+  derived=false \
+  exportable=false \
+  allow_plaintext_backup=false
 ```
 
-The command writes a private and public JWK without printing private bytes. Provision the private
-JWK into the deployment's secret root under a new logical filename. Keep the public JWK
-as a separately approved distribution artifact for consumers. The active public key does not need
-to be copied into the closed bundle because Evidence derives it from the active private JWK.
+Use the equivalent `bao` commands for OpenBao. The
+[Vault Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) and
+[OpenBao Transit API](https://openbao.org/api-docs/secret/transit/) define the same fields used by
+the runtime checks.
 
-Do not overwrite the active private key in place. A candidate revision must be complete and
-checkable before it becomes active.
+Read each key's metadata and record the nonzero version that the application will pin:
 
-## Build the overlap revision
+```sh
+vault read -format=json transit/keys/evidence-signing > "<operator-review-path>/evidence-key.json"
+vault read -format=json transit/keys/mint-signing > "<operator-review-path>/mint-key.json"
+```
 
-In the candidate `bundle/evidence.yaml`, point the active fields at the replacement. Copy the old
-public JWK into the bundle, then reference it as a retired artifact:
+The reviewed metadata must report `type: ecdsa-p256`, `derived: false`, `exportable: false`,
+`allow_plaintext_backup: false`, and signing support. Remove the local review files after recording
+the approved public projection and controls. Do not commit provider responses.
+
+## Publish the exact public projections
+
+Convert the selected version's public PEM to an exact public JSON Web Key (JWK). Compute the RFC
+7638 thumbprint from `crv`, `kty`, `x`, and `y`, then use that 43-character value as both `kid` and
+the filename:
+
+```json
+{
+  "kty": "EC",
+  "crv": "P-256",
+  "x": "<base64url-x-coordinate>",
+  "y": "<base64url-y-coordinate>",
+  "alg": "ES256",
+  "kid": "<rfc7638-thumbprint>"
+}
+```
+
+The object must contain exactly those six members and no private member. Put each service's public
+JWK in its complete environment target:
+
+```text
+environments/<environment>/
+  evidence/public-keys/<evidence-thumbprint>.jwk.json
+  mint/public-keys/<mint-thumbprint>.jwk.json
+```
+
+Keep Evidence Gateway signing, Mint signing, Evidence Gateway audit, Mint audit, subject binding,
+and client keys distinct. Run the target's `check-public-key-separation.sh` before review when you
+start from the maintained deployment-target templates.
+
+## Configure the governed key and runtime signer
+
+Reference the Evidence Gateway public JWK from `governance.yaml`:
 
 ```yaml
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: <new-production-kid>
-  activeKeyRef: secret:file/<new-private-key-name>
-  retiredPublicJwkFiles:
-    - keys/<old-production-kid>.public.jwk.json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/<evidence-thumbprint>.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 ```
 
-`activeKeyId` must exactly match the private JWK's `kid`. Each retired file contains public material
-only. Evidence assembles its JWKS endpoint from the active private key's public half and the
-configured retired public files. You do not publish a separate operator-built JWKS beside it.
+Bind the matching provider key and version in `runtime.yaml`:
 
-## Validate and coordinate consumer approval
-
-Run the project fixtures and `evidence check` against the candidate revision:
-
-```sh
-evidencectl fixtures run --project "<evidence-project>"
-evidence check --runtime "<evidence-project>/runtime.yaml"
+```yaml
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: <nonzero-version>
+  timeoutMilliseconds: 2000
 ```
 
-Give consumers the new public key, `kid`, provider identity, activation window, and overlap period
-through your governed onboarding channel. Consumers are expected to add the new key to a candidate
-pinned trust set and prove both an old-key and a new-key synthetic response before accepting the
-change.
+Registry Mint keeps both blocks in `mint.yaml`:
 
-The [verifier trust procedure](../manage-evidence-verifier-trust/) covers that independent side of
-the rotation.
+```yaml
+validationMode: strict
+signing:
+  algorithm: ES256
+  activePublicJwkFile: public-keys/<mint-thumbprint>.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-mint/transit-proxy.sock
+  mount: transit
+  keyName: mint-signing
+  keyVersion: <nonzero-version>
+  timeoutMilliseconds: 2000
+```
 
-## Activate and observe
+Do not put a provider token, auto-auth credential, or private JWK in either configuration.
 
-Deploy the exact checked revision and restart Evidence. Confirm readiness, then inspect the public
+## Isolate provider access in local proxies
+
+Give each proxy identity only read access to its named key metadata and update access to its sign
 endpoint:
 
+```hcl
+path "transit/keys/evidence-signing" {
+  capabilities = ["read"]
+}
+
+path "transit/sign/evidence-signing/sha2-256" {
+  capabilities = ["update"]
+  required_parameters = ["input", "key_version", "marshaling_algorithm", "prehashed"]
+  allowed_parameters = {
+    "input"                 = []
+    "key_version"           = [<nonzero-version>]
+    "marshaling_algorithm" = ["jws"]
+    "prehashed"             = [true]
+  }
+}
+```
+
+Use a corresponding policy for `mint-signing`. The parameter constraints make the service identity
+usable only for the pinned version and exact JWS signing request shape. During a planned rotation,
+temporarily allow the old and new numeric versions, for example `"key_version" = [7, 8]`, then
+remove the retired version after the overlap window. The provider's `min_encryption_version`
+provides a second retirement control.
+
+The Evidence Gateway proxy's core boundary is:
+
+```hcl
+vault {
+  address = "https://vault.example.com:8200"
+  retry {
+    num_retries = -1
+  }
+}
+
+api_proxy {
+  use_auto_auth_token = "force"
+}
+
+listener "unix" {
+  address                = "/run/registry-evidence/transit-proxy.sock"
+  tls_disable            = true
+  socket_mode            = "0660"
+  socket_user            = "<proxy-user>"
+  socket_group           = "<evidence-group>"
+  require_request_header = true
+}
+```
+
+Add the deployment's reviewed `auto_auth` method and provider trust settings. Use a separate socket,
+identity, and configuration for Mint.
+
+Configure one proxy per service to:
+
+- Listen only on the service-specific Unix socket.
+- Force its auto-auth token for proxied requests.
+- Require the `X-Vault-Request` header.
+- Set `retry.num_retries` to `-1` and leave `VAULT_MAX_RETRIES` unset.
+- Set socket ownership so only the intended workload can connect.
+
+These settings make one application signing attempt one provider signing request. The application
+timeout remains the outer bound. The
+[Vault API proxy documentation](https://developer.hashicorp.com/vault/docs/agent-and-proxy/proxy/apiproxy)
+describes forced auto-auth, and the
+[Vault Agent configuration](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent)
+defines the retry and request-header controls. OpenBao deployments use the corresponding
+[OpenBao Agent configuration](https://openbao.org/docs/agent-and-proxy/agent/).
+
+## Verify before routing traffic
+
+Start each proxy before checking its service. Run the checks from the final execution context so
+the commands see the same socket, public keys, paths, ownership, and secret roots as the service:
+
 ```sh
-curl --fail --silent --show-error \
-  "https://<evidence-host>/.well-known/evidence/jwks.json"
+evidence check --runtime "<candidate>/runtime.yaml"
+mint check --config "<mint-directory>/mint.yaml"
 ```
 
-The JWKS contains the new active public key and the old retired public key, with no private
-members. Send one authorized synthetic request and verify its `kid` with the consumer's approved
-overlap set.
+Each check reads provider metadata, verifies the pinned version and custody controls, compares the
+provider public key with the governed JWK, and performs a sign-and-verify self-test. A mismatch,
+timeout, malformed response, or unavailable proxy fails the check.
 
-Missing, unreadable, or mismatched signing material fails closed. Evidence never falls back to an
-unsigned success.
+Start the services only after the checks pass. Route requests only after both `/ready` endpoints
+report ready. If provider access fails later, signing fails closed and readiness reports the signer
+unavailable. Readiness recovers after a successful provider self-test.
 
-## Retire the old public key
+## Troubleshooting
 
-Keep the old public key published for at least:
+- If metadata validation fails, compare the key type, custody controls, signing support, and pinned
+  version with the governed configuration.
+- If public-key matching fails, regenerate the JWK from the pinned provider version. Do not edit
+  `x`, `y`, or `kid` by hand.
+- If the proxy refuses requests, check the named-key policy, forced auto-auth state, socket
+  ownership, and required request header.
+- If checks time out, inspect the workload-local proxy and provider path. Do not add application or
+  proxy retries.
 
-```text
-maximumAssertionValiditySeconds + verifierClockSkewSeconds
-```
+## Next
 
-Count from the last instant the old private key could have signed. Retain it longer when consumers
-must re-verify historical decisions.
-
-Remove the retired public file and its `retiredPublicJwkFiles` entry only in a later reviewed bundle
-revision. Run fixtures and `evidence check` again, coordinate consumer removal, deploy, and confirm
-the JWKS no longer carries the old key.
-
-Removing a verification key is not selective assertion revocation. Evidence has no credential
-status or revocation lifecycle. It only changes which signatures a current trust set can verify.
-
-## Related guidance
-
-- [Build and deploy an Evidence project](../build-and-deploy-evidence-project/)
-- [Evidence security model](../../security/evidence/)
-- [Configure Evidence](../../configure/evidence/)
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)

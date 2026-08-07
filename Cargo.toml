@@ -2,6 +2,10 @@
 members = [
     "crates/registry-config-report",
     "crates/registry-evidence",
+    "crates/registry-evidence-client",
+    "crates/registry-evidence-client-node",
+    "crates/registry-evidence-client-py",
+    "crates/registry-evidence-verifier",
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
@@ -42,6 +46,10 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 registry-config-report = { path = "crates/registry-config-report", version = "0.17.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.17.0" }
+registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.17.0" }
+registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.17.0" }
+registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.17.0" }
+registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.17.0" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.17.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.17.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.17.0" }
@@ -98,14 +106,22 @@ hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 inquire = { version = "0.9.4" }
 insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
-jsonschema = { version = "0.18", features = ["draft202012"] }
+# Default features pull an HTTP client for remote $ref resolution and a command
+# line parser for the bundled CLI. Every consumer here compiles schemas it
+# already holds in memory, so neither belongs in the dependency graph.
+jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+napi = { version = "3.12.0", features = ["async", "serde-json"] }
+napi-build = { version = "2.4.0" }
+napi-derive = { version = "3.6.2" }
 native-tls = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", features = ["features"] }
 p256 = { version = "0.13", features = ["ecdsa"] }
 pkcs1 = { version = "0.7", features = ["alloc"] }
 postgres-native-tls = { version = "0.5" }
 proptest = { version = "1" }
+pyo3 = { version = "0.29.1", features = ["abi3-py310"] }
+pyo3-build-config = { version = "0.29.1" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }

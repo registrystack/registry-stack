@@ -6,7 +6,7 @@
   source_of_truth:
     label: Registry Platform crates
     url: https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates
-  consumer_note: Relay, Evidence, Registry Mint, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
+  consumer_note: Relay, Evidence Gateway, Registry Mint, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
 - id: registry-platform.ops-posture-v1
   name: Registry Ops Posture v1
   owner: registry-platform

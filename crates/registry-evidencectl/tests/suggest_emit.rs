@@ -371,7 +371,7 @@ fn extract_script_uses_get_path_for_every_selected_leaf_with_wildcard_substituti
     assert!(script.contains("for element_1 in items_1 {"));
     assert!(!script.contains(r#"source_response["total"]"#));
 
-    assert!(script.contains("fn extract(source_response, parameters) {"));
+    assert!(script.contains("fn extract(source_response, context) {"));
 }
 
 /// The commented loop sketch is read by an operator and then pasted, so it may

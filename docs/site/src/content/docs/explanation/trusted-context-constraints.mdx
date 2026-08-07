@@ -1,12 +1,12 @@
 ---
 title: Trusted context constraints
-description: How Registry Relay and Evidence each preserve policy facts such as legal basis, consent, jurisdiction, assurance, and source freshness at their own separate boundaries.
+description: How Registry Relay and Evidence Gateway each preserve policy facts such as legal basis, consent, jurisdiction, assurance, and source freshness at their own separate boundaries.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-07"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -18,10 +18,9 @@ caller, the product that answers the caller, and the source registry behind it. 
 supplies shared types and redacted reporting conventions to the products that use them. Each
 product still owns the decision made at its own boundary.
 
-Read one thing before the rest: Registry Relay and Evidence do not share an authorization model.
-No service in this stack authorizes a caller and then consults another service on its behalf.
-Evidence enforces its own boundary, and when it reads a Relay-protected API it does so as an
-ordinary fixed HTTP source, no differently from any other client of that API.
+Read one thing before the rest: Registry Relay and Evidence Gateway do not share an authorization model
+or a source path. No service in this stack authorizes a caller and then consults another service on
+its behalf. Each product enforces its own boundary against its own configured sources.
 
 ## The shared vocabulary
 
@@ -34,7 +33,7 @@ Registry Platform's policy vocabulary covers five families:
 - Source freshness limits the accepted age of an observation.
 
 That vocabulary lives in `registry-platform-pdp` and is reported through `registry-config-report`.
-Registry Relay uses it. Evidence does not: Evidence enforces its own constraints under its own
+Registry Relay uses it. Evidence Gateway does not: Evidence Gateway enforces its own constraints under its own
 frozen contract names, which are described below and specified in
 `products/evidence/contracts/`.
 
@@ -55,14 +54,14 @@ declares that meaning and its fixtures prove it.
 If the observation-time contract is not proven, diagnostics must report it as unknown. They must
 not reinterpret a domain date as source freshness.
 
-## Evidence owns its own boundary
+## Evidence Gateway owns its own boundary
 
-Evidence authenticates the caller itself. It validates the bearer token against exactly one
+Evidence Gateway authenticates the caller itself. It validates the bearer token against exactly one
 configured issuer with exact audience, token type, and algorithm allowlists, and it reads the
 principal from one configured claim with no `client_id`, `azp`, header, or request fallback.
 Unsigned headers and caller request fields never substitute for authenticated authority, even
 behind a gateway (invariant `V1-I04`,
-[Evidence operator contract](../../products/registry-evidence/operator-contract/)).
+[Evidence Gateway operator contract](../../products/registry-evidence/operator-contract/)).
 
 Authorization is a single decision, not a series of separately satisfied checks. One exact
 entitlement match binds requester, optional actor, requirement revision, purpose, every
@@ -80,24 +79,23 @@ authorization is most often assumed rather than enforced:
   identifiers are accepted only from authenticated context and must be bound to the complete
   entitlement (invariant `V1-I07`).
 
-Evidence does not pin a Relay consultation by contract hash, and it has no notion of a compiled
-evidence mode selecting one. It declares an HTTP source with a fixed origin, method, fixed or
-selector-bound path, fixed non-secret headers, denied redirects, and client-side response
-projection, all executed by the core rather than by a script (invariant `V1-I09`). If that origin
-happens to be a Relay-protected API, Relay evaluates its own policy against the request Evidence
-makes, under the credentials Evidence was configured with. Neither product sees the other's
-authorization decision.
+Evidence Gateway has no notion of a Relay consultation or a compiled evidence mode selecting one. It
+declares a closed single or search-then-fetch acquisition over HTTP sources with fixed origins,
+methods, fixed or tagged selector or prior-fact-bound paths, fixed non-secret headers, denied
+redirects, and client-side response projection. The core, not a script or response, executes the
+sequence and enforces one request per configured stage (invariants `V1-I09` and `V1-I40`). The source
+boundary belongs entirely to Evidence Gateway and its authoritative sources.
 
-## Freshness has no Evidence counterpart
+## Freshness has no Evidence Gateway counterpart
 
-An assertion carries `observedAt`, which is when Evidence evaluated the requirement. It is not a
-source-declared observation time, and Evidence Version 1 has no source freshness family: there is
+An assertion carries `observedAt`, which is when Evidence Gateway evaluated the requirement. It is not a
+source-declared observation time, and Evidence Gateway Version 1 has no source freshness family: there is
 no maximum accepted observation age, no freshness field, and no configuration for one. The request
 nonce is uninterpreted correlation data and is explicitly not a freshness proof
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
-A deployment that needs an age bound on the underlying record has to obtain it from the source
-contract on the Relay side. An assertion on its own does not carry one.
+A deployment that needs an age bound on the underlying record has to define and enforce it in the
+authoritative source contract. An assertion on its own does not carry one.
 
 ## Reports and audit evidence
 
@@ -117,10 +115,10 @@ distinct from an assurance value asserted in authorization context.
 ## Review questions
 
 - Is source freshness derived from a proven Relay observation contract rather than a domain date?
-- Does Evidence deny an unauthorized request before it contacts any source?
-- Is every dimension of the Evidence entitlement matched as one decision rather than one at a time?
-- Where Evidence reads a Relay-protected API, is Relay's own policy still evaluated for the
-  credentials Evidence presents?
+- Does Evidence Gateway deny an unauthorized request before it contacts any source?
+- Is every dimension of the Evidence Gateway entitlement matched as one decision rather than one at a time?
+- Are Registry Relay and Evidence Gateway sources, credentials, authorization decisions, and audit
+  trails kept separate?
 - Are reports bounded and redacted at both product boundaries?
 
 ## Related pages

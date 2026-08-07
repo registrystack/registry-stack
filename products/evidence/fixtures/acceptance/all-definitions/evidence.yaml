@@ -9,25 +9,27 @@ authentication:
   issuer: https://identity.invalid
   audiences: [evidence-fixture]
   tokenTypes: [at+jwt]
-  algorithms: [EdDSA]
+  algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
   grantIdClaim: evidence_grant_id
   grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
 audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 
 signing:
   format: flattened-jws-json
-  algorithm: EdDSA
-  activeKeyId: fixture-key-2026-01
-  activeKeyRef: secret:file/signing-key
-  retiredPublicJwkFiles: []
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
   jwksPath: /.well-known/evidence/jwks.json
-  maximumAssertionValiditySeconds: 86400
+  maximumAssertionValiditySeconds: 300
   verifierClockSkewSeconds: 30
 
 # The acceptance deployment deliberately enables the governed unsigned format
@@ -204,14 +206,16 @@ authorityProfiles:
 requirements:
   - id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
-    source: source-a
+    acquisition:
+      kind: single
+      source: source-a
     purposes: [fixture-eligibility]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [person-demographics-v1]}
     referenceFrameworks: [urn:example:fixture:framework:adult-status:v1]
     evidenceType: urn:example:fixture:evidence-type:adult-status:v1
     observationTimezone: Asia/Bangkok
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/adult-status.rhai
       parameters: {minimum_age_years: 18}
@@ -223,13 +227,15 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
-    source: source-b
+    acquisition:
+      kind: single
+      source: source-b
     purposes: [fixture-routing]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [residence-record-v1]}
     referenceFrameworks: [urn:example:fixture:framework:residence-region:v1]
     evidenceType: urn:example:fixture:evidence-type:residence-region:v1
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/residence-region.rhai
       parameters: {}
@@ -244,14 +250,16 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
-    source: source-c
+    acquisition:
+      kind: single
+      source: source-c
     purposes: [fixture-registration]
     subjectRoles:
       - {role: subject, cardinality: one, selectorProfiles: [licence-register-v1]}
     referenceFrameworks: [urn:example:fixture:framework:professional-licence:v1]
     evidenceType: urn:example:fixture:evidence-type:professional-licence-status:v1
     observationTimezone: Africa/Nairobi
-    validitySeconds: 43200
+    validitySeconds: 300
     derivation:
       script: derivations/professional-licence.rhai
       parameters:
@@ -273,14 +281,16 @@ requirements:
     existenceDisclosure: collapse-unresolved
   - id: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
-    source: source-d
+    acquisition:
+      kind: single
+      source: source-d
     purposes: [fixture-enrolment]
     subjectRoles:
       - {role: child, cardinality: one, selectorProfiles: [civil-record-reference-v1]}
       - {role: candidate-parent, cardinality: one, selectorProfiles: [person-reference-v1]}
     referenceFrameworks: [urn:example:fixture:framework:legal-parent-relationship:v1]
     evidenceType: urn:example:fixture:evidence-type:legal-parent-relationship:v1
-    validitySeconds: 86400
+    validitySeconds: 300
     derivation:
       script: derivations/legal-parent-relationship.rhai
       selectorInputs:
