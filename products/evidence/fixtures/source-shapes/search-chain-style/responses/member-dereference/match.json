@@ -1,0 +1,9 @@
+{
+  "matched": 1,
+  "record": {
+    "id": "00000000-0000-4000-8000-000000000201",
+    "status.setCompleteness": "attested-complete",
+    "status.updatedAt": "2026-01-31",
+    "holder.name": {"display": "SOURCE-HOLDER-CANARY-DO-NOT-LOG"}
+  }
+}

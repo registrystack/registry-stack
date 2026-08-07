@@ -1,0 +1,41 @@
+# Shape of the projected register-search response, checked before extraction
+# runs. The two selected declaration keys are literally dotted names, so each is
+# one whole property here and never a nesting level.
+type: object
+additionalProperties: false
+required: [total, results]
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000000
+  results:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [declaration]
+      properties:
+        declaration:
+          type: object
+          additionalProperties: false
+          required: []
+          properties:
+            # A dotted key holding a string.
+            "subject.reference":
+              type: string
+              minLength: 1
+              maxLength: 64
+            # A dotted key holding an object, whose code is a real nesting level
+            # beneath it.
+            "subject.origin":
+              type: object
+              additionalProperties: false
+              required: []
+              properties:
+                code:
+                  type: string
+                  minLength: 1
+                  maxLength: 64

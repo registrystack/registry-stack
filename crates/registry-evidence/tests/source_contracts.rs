@@ -15,7 +15,7 @@ use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
     AcquisitionPosture, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy, PreparationLimits,
-    SourceConfig, RESERVED_HEADER_CONTRACT_CASES,
+    SourceConfig, StageInputs, RESERVED_HEADER_CONTRACT_CASES,
 };
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
@@ -248,8 +248,17 @@ fn request_limits(config: &PreparationLimits) -> RequestPartsLimits {
     .expect("fixture preparation limits satisfy the production ABI")
 }
 
+/// Resolve the selector material one shape stage is entitled to.
+///
+/// The argument is a stage label, which is the profile id for a single-stage
+/// profile and `profile/stage` for a multi-stage one. A stage that declares no
+/// selector inputs receives none: a fetch-set member is reached from an
+/// allowlisted prior fact, never from the original selector.
 fn shape_selectors(shape: &str) -> (Value, Vec<ResolvedSourceSelector>) {
     let (profile, values, resolved) = match shape {
+        "search-chain-json/member-dereference" | "search-chain-json/member-count" => {
+            return (json!({}), Vec::new())
+        }
         "flat-rest" => (
             "opaque-coordinates-v1",
             json!({"alpha": "synthetic-alpha", "delta": 42}),
@@ -277,7 +286,18 @@ fn shape_selectors(shape: &str) -> (Value, Vec<ResolvedSourceSelector>) {
                 SelectorValue::String("TRACKING-CANARY-0001".into()),
             )]),
         ),
-        _ => panic!("source-shape index contains an unknown profile"),
+        // The committed selector value differs from the search fact the members
+        // then carry, so a member request that echoed the selector instead of
+        // the allowlisted fact would be visible on the wire.
+        "search-chain-json/search" => (
+            "civil-record-reference-v1",
+            json!({"record_reference": "REF-SELECTOR-CANARY-0001"}),
+            BTreeMap::from([(
+                "record_reference".into(),
+                SelectorValue::String("REF-SELECTOR-CANARY-0001".into()),
+            )]),
+        ),
+        _ => panic!("source-shape index contains an unknown profile stage"),
     };
     (
         json!({"subject": {"profile": profile, "values": values}}),
@@ -292,6 +312,220 @@ fn shape_selectors(shape: &str) -> (Value, Vec<ResolvedSourceSelector>) {
 fn source_shape_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/evidence/fixtures/source-shapes")
+}
+
+/// One executable stage of a source-shape profile.
+///
+/// A single-source profile is the one-stage case of the same structure, so the
+/// harness reads both from one shape rather than from two code paths: a profile
+/// either declares an ordered `stages` list or carries its single stage inline.
+struct ShapeStage {
+    /// Profile id for a single-stage profile, `profile/stage` otherwise.
+    label: String,
+    source: SourceConfig,
+    authentication: Value,
+    expected_request: Value,
+    responses: std::path::PathBuf,
+    /// The projection of the search FactSet this stage is entitled to read.
+    inputs: StageInputs,
+}
+
+fn shape_stages(
+    profile_id: &str,
+    directory: &Path,
+    contract: &Value,
+    base_url: &str,
+) -> Vec<ShapeStage> {
+    let declared = match contract["stages"].as_array() {
+        Some(stages) => stages.clone(),
+        None => vec![json!({
+            "id": profile_id,
+            "role": "initial",
+            "responses": "responses",
+            "validated_source_definition": contract["validated_source_definition"],
+            "request": contract["request"],
+        })],
+    };
+    assert!(
+        !declared.is_empty(),
+        "{profile_id}: a source-shape profile declares at least one stage"
+    );
+    declared
+        .iter()
+        .map(|stage| {
+            let stage_id = stage["id"].as_str().expect("stage id");
+            let label = if declared.len() == 1 {
+                profile_id.to_owned()
+            } else {
+                format!("{profile_id}/{stage_id}")
+            };
+            let mut source_value = stage["validated_source_definition"].clone();
+            source_value["baseUrl"] = json!(base_url);
+            if source_value["authentication"]["kind"] == json!("oauth2-client-credentials") {
+                let endpoint = source_value["authentication"]["tokenEndpoint"]
+                    .as_str()
+                    .expect("token endpoint");
+                let token_path = url::Url::parse(endpoint)
+                    .expect("declared token endpoint parses")
+                    .path()
+                    .to_owned();
+                source_value["authentication"]["tokenEndpoint"] =
+                    json!(format!("{base_url}{token_path}"));
+            }
+            let inputs = match stage["role"].as_str().expect("stage role") {
+                "member" => StageInputs::Declared(
+                    stage["fact_inputs"]
+                        .as_array()
+                        .expect("a member stage declares its fact inputs")
+                        .iter()
+                        .map(|name| name.as_str().expect("fact input name").to_owned())
+                        .collect(),
+                ),
+                _ => StageInputs::None,
+            };
+            ShapeStage {
+                label,
+                authentication: source_value["authentication"].clone(),
+                source: serde_json::from_value(source_value)
+                    .expect("validated source definition is typed"),
+                expected_request: stage["request"].clone(),
+                responses: directory.join(stage["responses"].as_str().expect("stage responses")),
+                inputs,
+            }
+        })
+        .collect()
+}
+
+/// The synthetic credential material one stage needs, derived from the
+/// authentication it declares rather than from a table keyed on the profile.
+struct StageCredentials {
+    secrets: Vec<(String, String)>,
+    expected_authorization: String,
+    oauth: Option<OauthBootstrap>,
+}
+
+struct OauthBootstrap {
+    token_path: String,
+    access_token: String,
+    scope: String,
+    client_id: String,
+    client_secret: String,
+}
+
+fn secret_file_name(reference: &str) -> String {
+    reference
+        .strip_prefix("secret:file/")
+        .expect("shape secret references resolve through the file provider")
+        .to_owned()
+}
+
+/// A canary keyed to the secret reference, so two stages that name different
+/// references cannot pass each other's credential and a profile that names a
+/// new reference needs no harness change.
+fn secret_canary(reference: &str) -> String {
+    format!("shape-{}-canary", secret_file_name(reference))
+}
+
+fn stage_credentials(label: &str, authentication: &Value) -> StageCredentials {
+    let reference = |field: &str| {
+        authentication[field]
+            .as_str()
+            .expect("declared secret reference")
+            .to_owned()
+    };
+    let entry = |reference: &str| (secret_file_name(reference), secret_canary(reference));
+    match authentication["kind"]
+        .as_str()
+        .expect("declared authentication kind")
+    {
+        "static-bearer" => {
+            let token = reference("tokenRef");
+            StageCredentials {
+                expected_authorization: format!("Bearer {}", secret_canary(&token)),
+                secrets: vec![entry(&token)],
+                oauth: None,
+            }
+        }
+        "basic" => {
+            let username = reference("usernameRef");
+            let password = reference("passwordRef");
+            StageCredentials {
+                expected_authorization: format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(format!(
+                        "{}:{}",
+                        secret_canary(&username),
+                        secret_canary(&password)
+                    ))
+                ),
+                secrets: vec![entry(&username), entry(&password)],
+                oauth: None,
+            }
+        }
+        "oauth2-client-credentials" => {
+            let client_id = reference("clientIdRef");
+            let client_secret = reference("clientSecretRef");
+            let access_token = format!("shape-{}-access-token-canary", label.replace('/', "-"));
+            StageCredentials {
+                expected_authorization: format!("Bearer {access_token}"),
+                secrets: vec![entry(&client_id), entry(&client_secret)],
+                oauth: Some(OauthBootstrap {
+                    token_path: url::Url::parse(
+                        authentication["tokenEndpoint"]
+                            .as_str()
+                            .expect("declared token endpoint"),
+                    )
+                    .expect("declared token endpoint parses")
+                    .path()
+                    .to_owned(),
+                    access_token,
+                    scope: authentication["scope"]
+                        .as_str()
+                        .expect("declared token scope")
+                        .to_owned(),
+                    client_id: secret_canary(&client_id),
+                    client_secret: secret_canary(&client_secret),
+                }),
+            }
+        }
+        kind => panic!("{label}: source-shape profiles declare no {kind} authentication yet"),
+    }
+}
+
+fn expected_query_pairs(expected_request: &Value) -> Vec<(String, String)> {
+    expected_request["query_order"]
+        .as_array()
+        .map(|order| {
+            order
+                .iter()
+                .map(|name| {
+                    let name = name.as_str().expect("query-order name");
+                    (
+                        name.to_owned(),
+                        expected_request["query"][name]
+                            .as_str()
+                            .expect("query value")
+                            .to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn response_fixture_paths(directory: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths = fs::read_dir(directory)
+        .expect("response fixture directory is readable")
+        .map(|entry| entry.expect("response fixture entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).expect("response fixture is readable"))
+        .expect("response fixture is JSON")
 }
 
 fn copy_fixture_tree(source: &Path, target: &Path) {
@@ -836,6 +1070,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             "flat-rest",
             "nested-paged-rest",
             "opencrvs-event-search-json",
+            "search-chain-json",
         ])
     );
 
@@ -851,361 +1086,439 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
         .expect("source-shape contract parses");
         assert_eq!(contract["synthetic_only"], json!(true));
         let server = MockServer::start().await;
-        let mut source_value = contract["validated_source_definition"].clone();
-        source_value["baseUrl"] = json!(server.uri());
-        if id == "opencrvs-event-search-json" {
-            source_value["authentication"]["tokenEndpoint"] =
-                json!(format!("{}/oauth/token", server.uri()));
-        }
-        let source: SourceConfig =
-            serde_json::from_value(source_value).expect("validated source definition is typed");
-        let preparation = runtime
-            .compile_preparation(
-                &fs::read_to_string(directory.join(source.request.prepare_script.as_str()))
-                    .expect("preparation script is readable"),
-            )
-            .expect("preparation script compiles");
-        let extraction = runtime
-            .compile_extraction(
-                &fs::read_to_string(directory.join(source.extract_script.as_str()))
-                    .expect("extraction script is readable"),
-            )
-            .expect("extraction script compiles");
-        let fact_schema_value: Value = serde_norway::from_str(
-            &fs::read_to_string(directory.join(source.fact_schema.as_str()))
-                .expect("fact schema is readable"),
-        )
-        .expect("fact schema parses");
-        let fact_schema =
-            jsonschema::JSONSchema::compile(&fact_schema_value).expect("fact schema compiles");
-        let response_schema_value: Value = serde_norway::from_str(
-            &fs::read_to_string(directory.join(source.response_schema.as_str()))
-                .expect("response schema is readable"),
-        )
-        .expect("response schema parses");
-        let response_schema = jsonschema::JSONSchema::options()
-            .should_validate_formats(true)
-            .compile(&response_schema_value)
-            .expect("response schema compiles");
-        let parameters = serde_json::to_value(&source.request.adapter_parameters)
-            .expect("adapter parameters serialize");
-        let (script_selectors, transport_selectors) = shape_selectors(id);
-        let prepared = runtime
-            .prepare(
-                &preparation,
-                &script_selectors,
-                &parameters,
-                &request_limits(&source.request.preparation_limits),
-            )
-            .expect("shape request preparation succeeds");
-        let expected_request = &contract["request"];
+        let stages = shape_stages(id, &directory, &contract, &server.uri());
+        let credentials = stages
+            .iter()
+            .map(|stage| stage_credentials(&stage.label, &stage.authentication))
+            .collect::<Vec<_>>();
+        let secret_entries = credentials
+            .iter()
+            .flat_map(|credential| credential.secrets.iter().cloned())
+            .collect::<Vec<_>>();
         assert_eq!(
-            prepared.body.as_ref(),
-            match expected_request["body"].as_str() {
-                Some("absent") => None,
-                _ => Some(&expected_request["body"]),
-            },
-            "{id}: prepared body differs from the committed contract"
-        );
-        let expected_query = expected_request["query_order"]
-            .as_array()
-            .map(|order| {
-                order
-                    .iter()
-                    .map(|name| {
-                        let name = name.as_str().expect("query-order name");
-                        (
-                            name.to_owned(),
-                            expected_request["query"][name]
-                                .as_str()
-                                .expect("query value")
-                                .to_owned(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        assert!(
-            prepared
-                .query
+            secret_entries
                 .iter()
-                .map(|pair| (pair.name.clone(), pair.value.clone()))
-                .eq(expected_query.clone()),
-            "{id}: prepared query differs from the committed contract"
+                .map(|(name, _)| name.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            secret_entries.len(),
+            "{id}: every stage resolves its own secret references"
         );
-        let (secret_entries, expected_authorization) = match id {
-            "flat-rest" => (
-                vec![("fixture-flat-rest-token", "shape-static-bearer-canary")],
-                "Bearer shape-static-bearer-canary".to_owned(),
-            ),
-            "nested-paged-rest" => (
-                vec![
-                    ("fixture-nested-rest-username", "shape-basic-user-canary"),
-                    (
-                        "fixture-nested-rest-password",
-                        "shape-basic-password-canary",
-                    ),
-                ],
-                format!(
-                    "Basic {}",
-                    base64::engine::general_purpose::STANDARD
-                        .encode("shape-basic-user-canary:shape-basic-password-canary")
-                ),
-            ),
-            "opencrvs-event-search-json" => (
-                vec![
-                    (
-                        "fixture-event-search-client-id",
-                        "shape-oauth-client-canary",
-                    ),
-                    (
-                        "fixture-event-search-client-secret",
-                        "shape-oauth-secret-canary",
-                    ),
-                ],
-                "Bearer shape-oauth-access-token-canary".to_owned(),
-            ),
-            _ => unreachable!("closed source-shape profiles"),
-        };
-        let (_secret_root, secrets) = resolver(&secret_entries);
-        let executor = SourceExecutor::new(&source, secrets).expect("source plan compiles");
-        let match_response: Value = serde_json::from_slice(
-            &fs::read(directory.join("responses/match.json"))
-                .expect("match response fixture is readable"),
-        )
-        .expect("match response fixture is JSON");
-        if id == "opencrvs-event-search-json" {
-            // The reference shape returns only access_token and token_type.
-            // Adding a lifetime here would make the mock more compliant than
-            // the provider it models and hide the assumed-lifetime path.
-            Mock::given(method("POST"))
-                .and(path("/oauth/token"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "access_token": "shape-oauth-access-token-canary",
-                    "token_type": "Bearer"
-                })))
-                .expect(1)
-                .mount(&server)
-                .await;
-        }
-        Mock::given(method(
-            expected_request["method"].as_str().expect("request method"),
-        ))
-        .and(path(
-            expected_request["path"].as_str().expect("request path"),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(match_response))
-        .expect(1)
-        .mount(&server)
-        .await;
-        let materialized = executor
-            .materialize_request(&transport_selectors, &prepared)
-            .expect("production request materialization succeeds");
-        assert_eq!(
-            materialized.path(),
-            expected_request["path"].as_str().expect("request path")
+        let (_secret_root, secrets) = resolver(
+            &secret_entries
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect::<Vec<_>>(),
         );
-        assert_eq!(
-            materialized.query().map(|query| {
-                url::form_urlencoded::parse(query.as_bytes())
-                    .map(|(name, value)| (name.into_owned(), value.into_owned()))
-                    .collect::<Vec<_>>()
-            }),
-            (!expected_query.is_empty()).then_some(expected_query.clone()),
-            "{id}: production query materialization drifted"
-        );
-        assert_eq!(materialized.body(), prepared.body.as_ref());
-
-        let projected = executor
-            .execute(&transport_selectors, &prepared)
-            .await
-            .expect("frozen shape executes through the production transport");
-        // Every committed cardinality response of the shape has to sit inside the
-        // declared response schema, because the runtime refuses the response
-        // before extraction otherwise.
-        for case in ["match", "no-match", "ambiguous", "missing-fact"] {
-            let recorded: Value = serde_json::from_slice(
-                &fs::read(directory.join(format!("responses/{case}.json")))
-                    .expect("cardinality response fixture is readable"),
-            )
-            .expect("cardinality response fixture is JSON");
-            let recorded = project_fixture_response(&source, &recorded)
-                .expect("cardinality response fixture projects");
-            assert!(
-                response_schema.is_valid(&recorded),
-                "{id}: committed {case} response is outside the declared response schema"
-            );
-        }
+        let token_paths = credentials
+            .iter()
+            .filter_map(|credential| credential.oauth.as_ref())
+            .map(|oauth| oauth.token_path.clone())
+            .collect::<BTreeSet<_>>();
+        let stage_paths = stages
+            .iter()
+            .map(|stage| {
+                stage.expected_request["path"]
+                    .as_str()
+                    .expect("request path")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
         assert!(
-            response_schema.is_valid(&projected),
-            "{id}: transport-backed response is outside the declared response schema"
+            stage_paths.iter().collect::<BTreeSet<_>>().len() == stage_paths.len()
+                && stage_paths.iter().all(|path| !token_paths.contains(path)),
+            "{id}: every stage is separable in the request journal by its own path"
         );
-        let facts = match runtime
-            .extract(&extraction, &projected, &parameters, &fact_schema)
-            .expect("projected transport response extracts")
-        {
-            LookupResult::Match(facts) => facts,
-            _ => panic!("{id}: transport-backed match returned a non-match outcome"),
-        };
-        matched_facts.insert(id.to_owned(), facts.clone());
+
+        for (stage, credential) in stages.iter().zip(&credentials) {
+            if let Some(oauth) = &credential.oauth {
+                // The reference shape returns only access_token and token_type.
+                // Adding a lifetime here would make the mock more compliant than
+                // the provider it models and hide the assumed-lifetime path.
+                Mock::given(method("POST"))
+                    .and(path(oauth.token_path.clone()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "access_token": oauth.access_token,
+                        "token_type": "Bearer"
+                    })))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method(
+                stage.expected_request["method"]
+                    .as_str()
+                    .expect("request method"),
+            ))
+            .and(path(
+                stage.expected_request["path"]
+                    .as_str()
+                    .expect("request path"),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(read_json(&stage.responses.join("match.json"))),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        }
+
+        // The search FactSet a member may read, and the union the derivation
+        // receives. They are different sets: a member sees only its own declared
+        // allowlist, and no member ever sees another member's facts.
+        let mut search_facts: BTreeMap<String, Value> = BTreeMap::new();
+        let mut union_facts: BTreeMap<String, Value> = BTreeMap::new();
+        for (stage, credential) in stages.iter().zip(&credentials) {
+            let label = &stage.label;
+            let source = &stage.source;
+            let expected_request = &stage.expected_request;
+            let preparation = runtime
+                .compile_preparation(
+                    &fs::read_to_string(directory.join(source.request.prepare_script.as_str()))
+                        .expect("preparation script is readable"),
+                )
+                .expect("preparation script compiles");
+            let extraction = runtime
+                .compile_extraction(
+                    &fs::read_to_string(directory.join(source.extract_script.as_str()))
+                        .expect("extraction script is readable"),
+                )
+                .expect("extraction script compiles");
+            let fact_schema_value: Value = serde_norway::from_str(
+                &fs::read_to_string(directory.join(source.fact_schema.as_str()))
+                    .expect("fact schema is readable"),
+            )
+            .expect("fact schema parses");
+            let fact_schema =
+                jsonschema::JSONSchema::compile(&fact_schema_value).expect("fact schema compiles");
+            let response_schema_value: Value = serde_norway::from_str(
+                &fs::read_to_string(directory.join(source.response_schema.as_str()))
+                    .expect("response schema is readable"),
+            )
+            .expect("response schema parses");
+            let response_schema = jsonschema::JSONSchema::options()
+                .should_validate_formats(true)
+                .compile(&response_schema_value)
+                .expect("response schema compiles");
+            let parameters = serde_json::to_value(&source.request.adapter_parameters)
+                .expect("adapter parameters serialize");
+            let (script_selectors, transport_selectors) = shape_selectors(label);
+            let prior_facts = stage.inputs.project(&search_facts);
+            let withheld = search_facts
+                .iter()
+                .filter(|(name, _)| !prior_facts.contains_key(name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let prepared = runtime
+                .prepare_with_prior_facts(
+                    &preparation,
+                    &script_selectors,
+                    &parameters,
+                    &prior_facts,
+                    &request_limits(&source.request.preparation_limits),
+                )
+                .expect("shape request preparation succeeds");
+            assert_eq!(
+                prepared.body.as_ref(),
+                match expected_request["body"].as_str() {
+                    Some("absent") => None,
+                    _ => Some(&expected_request["body"]),
+                },
+                "{label}: prepared body differs from the committed contract"
+            );
+            let expected_query = expected_query_pairs(expected_request);
+            assert!(
+                prepared
+                    .query
+                    .iter()
+                    .map(|pair| (pair.name.clone(), pair.value.clone()))
+                    .eq(expected_query.clone()),
+                "{label}: prepared query differs from the committed contract"
+            );
+            let executor =
+                SourceExecutor::new(source, secrets.clone()).expect("source plan compiles");
+            let materialized = executor
+                .materialize_request_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+                .expect("production request materialization succeeds");
+            assert_eq!(
+                materialized.path(),
+                expected_request["path"].as_str().expect("request path")
+            );
+            assert_eq!(
+                materialized.query().map(|query| {
+                    url::form_urlencoded::parse(query.as_bytes())
+                        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+                        .collect::<Vec<_>>()
+                }),
+                (!expected_query.is_empty()).then_some(expected_query.clone()),
+                "{label}: production query materialization drifted"
+            );
+            assert_eq!(materialized.body(), prepared.body.as_ref());
+
+            let projected = executor
+                .execute_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+                .await
+                .expect("frozen shape executes through the production transport");
+            let response_files = response_fixture_paths(&stage.responses);
+            // Every committed response of the stage other than the error
+            // envelope has to sit inside the declared response schema, because
+            // the runtime refuses the response before extraction otherwise.
+            for response_path in &response_files {
+                let name = response_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .expect("response fixture name");
+                if name == "error-envelope.json" {
+                    continue;
+                }
+                let recorded = project_fixture_response(source, &read_json(response_path))
+                    .expect("committed response fixture projects");
+                assert!(
+                    response_schema.is_valid(&recorded),
+                    "{label}: committed {name} is outside the declared response schema"
+                );
+            }
+            assert!(
+                response_schema.is_valid(&projected),
+                "{label}: transport-backed response is outside the declared response schema"
+            );
+            let facts = match runtime
+                .extract_with_prior_facts(
+                    &extraction,
+                    &projected,
+                    &parameters,
+                    &prior_facts,
+                    &fact_schema,
+                )
+                .expect("projected transport response extracts")
+            {
+                LookupResult::Match(facts) => facts,
+                _ => panic!("{label}: transport-backed match returned a non-match outcome"),
+            };
+            for (name, value) in &facts {
+                assert!(
+                    union_facts.insert(name.clone(), value.clone()).is_none(),
+                    "{label}: chain fact names are pairwise disjoint"
+                );
+            }
+
+            let requests = server
+                .received_requests()
+                .await
+                .expect("source-shape request journal is available");
+            let data_requests = requests
+                .iter()
+                .filter(|request| {
+                    request.url.path() == expected_request["path"].as_str().expect("request path")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(data_requests.len(), 1, "{label}: exact evidence-data count");
+            let data_request = data_requests[0];
+            assert_eq!(
+                data_request.method.as_str(),
+                expected_request["method"].as_str().expect("request method")
+            );
+            assert_eq!(
+                query_parameters(&data_request.url),
+                expected_query,
+                "{label}: exact data query"
+            );
+            assert!(
+                data_request
+                    .headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value == credential.expected_authorization),
+                "{label}: exact evidence-data authentication"
+            );
+            for (name, value) in expected_request["headers"]
+                .as_object()
+                .expect("reviewed request headers are an object")
+            {
+                if name == "authorization" {
+                    continue;
+                }
+                assert!(
+                    data_request
+                        .headers
+                        .get(name)
+                        .and_then(|actual| actual.to_str().ok())
+                        .is_some_and(|actual| actual == value.as_str().expect("header value")),
+                    "{label}: exact reviewed header {name}"
+                );
+            }
+            match prepared.body.as_ref() {
+                Some(expected) => assert_eq!(
+                    serde_json::from_slice::<Value>(&data_request.body)
+                        .expect("evidence-data body is JSON"),
+                    *expected,
+                    "{label}: exact evidence-data body"
+                ),
+                None => assert!(data_request.body.is_empty(), "{label}: body remains absent"),
+            }
+            // A search fact this stage did not declare has to be absent from
+            // every channel of the request it actually sent, the body its own
+            // prepare/2 built included.
+            let wire = format!(
+                "{} {} {}",
+                data_request.url.path(),
+                data_request.url.query().unwrap_or_default(),
+                String::from_utf8_lossy(&data_request.body)
+            );
+            for (name, value) in &withheld {
+                if let Some(text) = value.as_str() {
+                    assert!(
+                        !wire.contains(text),
+                        "{label}: withheld prior fact {name} reached this stage's request"
+                    );
+                }
+            }
+
+            if let Some(oauth) = &credential.oauth {
+                let token_requests = requests
+                    .iter()
+                    .filter(|request| request.url.path() == oauth.token_path)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    token_requests.len(),
+                    1,
+                    "{label}: exact OAuth bootstrap count"
+                );
+                // The reference shape accepts the client credentials in the token
+                // request body, so no credential may appear in the token URL.
+                assert!(
+                    query_parameters(&token_requests[0].url).is_empty(),
+                    "{label}: OAuth bootstrap URL carries no query"
+                );
+                let form = encoded_parameters(&token_requests[0].body);
+                assert!(
+                    form.len() == 4
+                        && contains_parameter(&form, "grant_type", "client_credentials")
+                        && contains_parameter(&form, "scope", &oauth.scope)
+                        && contains_parameter(&form, "client_id", &oauth.client_id)
+                        && contains_parameter(&form, "client_secret", &oauth.client_secret),
+                    "{label}: OAuth bootstrap body is the exact reviewed shape"
+                );
+                assert!(token_requests[0].headers.get("authorization").is_none());
+                assert_eq!(
+                    token_requests[0]
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("application/x-www-form-urlencoded")
+                );
+                assert_eq!(
+                    token_requests[0]
+                        .headers
+                        .get("accept")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("application/json")
+                );
+            }
+
+            let names = response_files
+                .iter()
+                .map(|path| {
+                    path.file_name()
+                        .and_then(|value| value.to_str())
+                        .expect("response fixture name")
+                })
+                .collect::<BTreeSet<_>>();
+            for required in [
+                "ambiguous.json",
+                "error-envelope.json",
+                "match.json",
+                "missing-fact.json",
+                "no-match.json",
+            ] {
+                assert!(
+                    names.contains(required),
+                    "{label}: required outcome {required} is absent"
+                );
+            }
+
+            for response_path in &response_files {
+                let name = response_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .expect("response fixture name");
+                let projected = project_fixture_response(source, &read_json(response_path));
+                if name == "error-envelope.json" {
+                    assert_eq!(projected, Err(SourceError::ErrorEnvelope));
+                    continue;
+                }
+                let projected = projected.expect("response projection succeeds");
+                let lookup = runtime.extract_with_prior_facts(
+                    &extraction,
+                    &projected,
+                    &parameters,
+                    &prior_facts,
+                    &fact_schema,
+                );
+                match name {
+                    "match.json" => match lookup.expect("match extraction succeeds") {
+                        LookupResult::Match(direct_facts) => assert_eq!(
+                            direct_facts, facts,
+                            "{label}: direct fixture and real transport extraction drifted"
+                        ),
+                        _ => panic!("{label}: match fixture returned a non-match outcome"),
+                    },
+                    "no-match.json" => assert!(matches!(lookup, Ok(LookupResult::NoMatch))),
+                    "ambiguous.json" => assert!(matches!(lookup, Ok(LookupResult::Ambiguous))),
+                    // A provider that silently ignored a filter clause still
+                    // reports its own count, and the bounded result page it
+                    // returned anyway must never be read as the answer.
+                    "widened-query.json" => assert!(
+                        matches!(lookup, Ok(LookupResult::Ambiguous)),
+                        "{label}: a silently widened query has to reach ambiguous"
+                    ),
+                    // A counted zero is the register's own answer, licensed by an
+                    // earlier stage having resolved the subject with a real
+                    // match, so it stays a match carrying the zero.
+                    "counted-zero.json" => {
+                        match lookup.expect("counted-zero extraction succeeds") {
+                            LookupResult::Match(counted) => assert!(
+                                counted.values().any(|value| value == &json!(0)),
+                                "{label}: a counted zero has to stay a match carrying the zero"
+                            ),
+                            _ => panic!("{label}: a counted zero degraded to a non-match outcome"),
+                        }
+                    }
+                    "missing-fact.json" => {
+                        assert_eq!(lookup, Err(RhaiRuntimeError::FactSchema));
+                    }
+                    "inconsistent-cardinality.json" => {
+                        assert_eq!(lookup, Err(RhaiRuntimeError::SourceProtocol));
+                    }
+                    _ => panic!("{label}: unclassified response fixture {name}"),
+                }
+            }
+
+            if matches!(stage.inputs, StageInputs::None) {
+                search_facts = facts;
+            }
+        }
 
         let requests = server
             .received_requests()
             .await
             .expect("source-shape request journal is available");
-        let data_requests = requests
-            .iter()
-            .filter(|request| {
-                request.url.path() == expected_request["path"].as_str().expect("request path")
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(data_requests.len(), 1, "{id}: exact evidence-data count");
-        let data_request = data_requests[0];
         assert_eq!(
-            data_request.method.as_str(),
-            expected_request["method"].as_str().expect("request method")
+            requests.len(),
+            stages.len() + token_paths.len(),
+            "{id}: exact request count, one per declared stage plus one credential bootstrap each"
         );
         assert_eq!(
-            query_parameters(&data_request.url),
-            expected_query,
-            "{id}: exact data query"
-        );
-        assert!(
-            data_request
-                .headers
-                .get("authorization")
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value == expected_authorization),
-            "{id}: exact evidence-data authentication"
-        );
-        for (name, value) in expected_request["headers"]
-            .as_object()
-            .expect("reviewed request headers are an object")
-        {
-            if name == "authorization" {
-                continue;
-            }
-            assert!(
-                data_request
-                    .headers
-                    .get(name)
-                    .and_then(|actual| actual.to_str().ok())
-                    .is_some_and(|actual| actual == value.as_str().expect("header value")),
-                "{id}: exact reviewed header {name}"
-            );
-        }
-        match prepared.body.as_ref() {
-            Some(expected) => assert_eq!(
-                serde_json::from_slice::<Value>(&data_request.body)
-                    .expect("evidence-data body is JSON"),
-                *expected,
-                "{id}: exact evidence-data body"
-            ),
-            None => assert!(data_request.body.is_empty(), "{id}: body remains absent"),
-        }
-        if id == "opencrvs-event-search-json" {
-            let token_requests = requests
+            requests
                 .iter()
-                .filter(|request| request.url.path() == "/oauth/token")
-                .collect::<Vec<_>>();
-            assert_eq!(token_requests.len(), 1, "exact OAuth bootstrap count");
-            // The reference shape accepts the client credentials in the token
-            // request body, so no credential may appear in the token URL.
-            assert!(
-                query_parameters(&token_requests[0].url).is_empty(),
-                "OAuth bootstrap URL carries no query"
-            );
-            let form = encoded_parameters(&token_requests[0].body);
-            assert!(
-                form.len() == 4
-                    && contains_parameter(&form, "grant_type", "client_credentials")
-                    && contains_parameter(&form, "scope", "fixture.read")
-                    && contains_parameter(&form, "client_id", "shape-oauth-client-canary")
-                    && contains_parameter(&form, "client_secret", "shape-oauth-secret-canary"),
-                "OAuth bootstrap body is the exact reviewed shape"
-            );
-            assert!(token_requests[0].headers.get("authorization").is_none());
-            assert_eq!(
-                token_requests[0]
-                    .headers
-                    .get("content-type")
-                    .and_then(|value| value.to_str().ok()),
-                Some("application/x-www-form-urlencoded")
-            );
-            assert_eq!(
-                token_requests[0]
-                    .headers
-                    .get("accept")
-                    .and_then(|value| value.to_str().ok()),
-                Some("application/json")
-            );
-            assert_eq!(requests.len(), 2);
-        } else {
-            assert_eq!(requests.len(), 1);
-        }
-
-        let mut response_files = fs::read_dir(directory.join("responses"))
-            .expect("response fixture directory is readable")
-            .map(|entry| entry.expect("response fixture entry").path())
-            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
-            .collect::<Vec<_>>();
-        response_files.sort();
-        let names = response_files
-            .iter()
-            .map(|path| {
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .expect("response fixture name")
-            })
-            .collect::<BTreeSet<_>>();
-        for required in [
-            "ambiguous.json",
-            "error-envelope.json",
-            "match.json",
-            "missing-fact.json",
-            "no-match.json",
-        ] {
-            assert!(
-                names.contains(required),
-                "{id}: required outcome {required} is absent"
-            );
-        }
-
-        for response_path in response_files {
-            let name = response_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .expect("response fixture name");
-            let response: Value = serde_json::from_slice(
-                &fs::read(&response_path).expect("response fixture is readable"),
-            )
-            .expect("response fixture is JSON");
-            let projected = project_fixture_response(&source, &response);
-            if name == "error-envelope.json" {
-                assert_eq!(projected, Err(SourceError::ErrorEnvelope));
-                continue;
-            }
-            let projected = projected.expect("response projection succeeds");
-            let lookup = runtime.extract(&extraction, &projected, &parameters, &fact_schema);
-            match name {
-                "match.json" => match lookup.expect("match extraction succeeds") {
-                    LookupResult::Match(direct_facts) => assert_eq!(
-                        direct_facts, facts,
-                        "{id}: direct fixture and real transport extraction drifted"
-                    ),
-                    _ => panic!("{id}: match fixture returned a non-match outcome"),
-                },
-                "no-match.json" => assert!(matches!(lookup, Ok(LookupResult::NoMatch))),
-                "ambiguous.json" => assert!(matches!(lookup, Ok(LookupResult::Ambiguous))),
-                "missing-fact.json" => {
-                    assert_eq!(lookup, Err(RhaiRuntimeError::FactSchema));
-                }
-                "inconsistent-cardinality.json" => {
-                    assert_eq!(lookup, Err(RhaiRuntimeError::SourceProtocol));
-                }
-                _ => panic!("{id}: unclassified response fixture {name}"),
-            }
-        }
+                .map(|request| request.url.path().to_owned())
+                .filter(|path| !token_paths.contains(path))
+                .collect::<Vec<_>>(),
+            stage_paths,
+            "{id}: evidence-data requests reached the wire in the declared stage order"
+        );
+        matched_facts.insert(id.to_owned(), union_facts);
     }
 
     let acceptance_copy = tempfile::tempdir().expect("temporary acceptance bundle root");
@@ -1305,6 +1618,96 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             PublicValue::String("REGION-NORTH".to_owned())
         );
     }
+}
+
+/// A filter on a field the deployment did not index presents as an ordinary
+/// provider outage, not as a distinguishable configuration fault: which fields
+/// are filterable is a provider-side deployment precondition Evidence cannot
+/// validate offline. The declared chain has to stop at the stage that failed.
+#[tokio::test]
+async fn an_unindexed_filter_field_presents_as_an_ordinary_source_outage_and_stops_the_chain() {
+    let directory = source_shape_root().join("search-chain-style");
+    let contract: Value = serde_norway::from_str(
+        &fs::read_to_string(directory.join("contract.yaml"))
+            .expect("source-shape contract is readable"),
+    )
+    .expect("source-shape contract parses");
+    let server = MockServer::start().await;
+    let stages = shape_stages("search-chain-json", &directory, &contract, &server.uri());
+    let credentials = stages
+        .iter()
+        .map(|stage| stage_credentials(&stage.label, &stage.authentication))
+        .collect::<Vec<_>>();
+    let (_secret_root, secrets) = resolver(
+        &credentials
+            .iter()
+            .flat_map(|credential| credential.secrets.iter())
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect::<Vec<_>>(),
+    );
+
+    let search = &stages[0];
+    assert_eq!(search.label, "search-chain-json/search");
+    let search_path = search.expected_request["path"]
+        .as_str()
+        .expect("request path")
+        .to_owned();
+    Mock::given(method(
+        search.expected_request["method"]
+            .as_str()
+            .expect("request method"),
+    ))
+    .and(path(search_path.clone()))
+    .respond_with(
+        ResponseTemplate::new(500).set_body_string("source-response-canary unindexed-filter-field"),
+    )
+    .expect(1)
+    .mount(&server)
+    .await;
+
+    let runtime = RhaiRuntime::new();
+    let preparation = runtime
+        .compile_preparation(
+            &fs::read_to_string(directory.join(search.source.request.prepare_script.as_str()))
+                .expect("preparation script is readable"),
+        )
+        .expect("preparation script compiles");
+    let parameters = serde_json::to_value(&search.source.request.adapter_parameters)
+        .expect("adapter parameters serialize");
+    let (script_selectors, transport_selectors) = shape_selectors(&search.label);
+    let prior_facts = BTreeMap::new();
+    let prepared = runtime
+        .prepare_with_prior_facts(
+            &preparation,
+            &script_selectors,
+            &parameters,
+            &prior_facts,
+            &request_limits(&search.source.request.preparation_limits),
+        )
+        .expect("shape request preparation succeeds");
+    let error = SourceExecutor::new(&search.source, secrets)
+        .expect("search stage compiles")
+        .execute_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+        .await
+        .expect_err("a filter on an unindexed field cannot succeed");
+    assert_eq!(error, SourceError::Status(SourceStatus::ServerError));
+    let diagnostic = format!("{error:?} {error}");
+    assert!(
+        !diagnostic.contains("source-response-canary"),
+        "outage diagnostics remain value-free"
+    );
+
+    // An execution is always a prefix of the declared sequence, so a search that
+    // failed leaves every declared member unreached.
+    let requests = server.received_requests().await.expect("request journal");
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.url.path().to_owned())
+            .collect::<Vec<_>>(),
+        vec![search_path],
+        "a failed search stops the declared chain before any member request"
+    );
 }
 
 #[tokio::test]

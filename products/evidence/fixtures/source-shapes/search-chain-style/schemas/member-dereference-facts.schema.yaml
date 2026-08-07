@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [related_set_attested_complete]
+properties:
+  related_set_attested_complete: {type: boolean}

@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [subject_reference, register_origin_code]
+properties:
+  subject_reference: {type: string, minLength: 1, maxLength: 64}
+  register_origin_code: {type: string, minLength: 1, maxLength: 64}

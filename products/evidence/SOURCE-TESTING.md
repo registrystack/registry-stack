@@ -24,6 +24,14 @@ correct.
 | `flat-rest` | Reviewed JSON preparation with identifier or compound selectors | Flat JSON object | Static Bearer | Closed selector inputs and direct fact extraction |
 | `dhis2-tracker` | `GET` with prepared filters, fixed `fields`, and `pageSize` | Pager, `trackedEntities` collection, nested attributes | HTTP Basic | Query rendering, encoding, cardinality, collection handling, and controlled codes |
 | `opencrvs-event-search` | Prepared bounded JSON `POST` for one tracking ID | Nested event index and country-configured declaration | OAuth 2.0 client credentials, then Bearer | Credential bootstrap, exact event lookup, nested extraction, and relational derivation |
+| `search-chain` | One fixed JSON `POST` search, then two declared members in declared order: one path-bound dereference, one filtered search in a JSON body | Flat dotted response keys, a provider count, and a bounded result page per stage | Static Bearer per stage, and per-source OAuth 2.0 client credentials for the dereference member | Ordered multi-stage acquisition, per-member allowlisted projection, a provider count consumed as a value, and silently widened queries |
+
+A single-stage row and a multi-stage row are different claims about the same
+product. The first says one bounded request shape still works. The second says
+an ordered chain still works, that each later stage receives only its own
+allowlisted projection of the validated search FactSet, and that a stage which
+does not resolve stops the acquisition. Passing either never implies the other,
+and neither may be reported as the other.
 
 The product names identify compatibility-shaped test profiles. They do not
 promise a maintained vendor connector, reproduce a whole server, or certify
@@ -46,6 +54,49 @@ short-lived system-client token, then submit one bounded JSON search for an
 exact child tracking ID. Malformed envelopes, zero results, multiple
 results, and incomplete configured declaration facts all fail according to the
 reviewed requirement rule.
+
+The `search-chain` profile is named for its shape, not for a product. It models
+one fixed search followed by two declared fetch members against a single mock.
+Its response keys are literally dotted strings, so a projection segment is the
+whole dotted string and both the projection and the extract treat the dot as
+data rather than as a path separator. One member takes its whole input through a
+path binding, the other through the JSON body its own preparation builds, and
+one response carries a provider count consumed as a value rather than as a
+cardinality guard.
+
+A multi-stage shape has more than one way to be right, so the profile states
+which cell of this table it occupies. Naming an uncovered cell is worth more
+than a matrix that reads as complete.
+
+| Property | Instances |
+|---|---|
+| Member request kind | path-bound dereference (covered) / filtered search in a JSON body (covered) |
+| Search fact kind | reference (covered), count (not covered), completeness attestation (not covered) |
+| Member fact kind | reference (not covered), count (covered), attested boolean (covered) |
+| Negative capability | attested set completeness (covered), or none, in which case zero stays `no_match` (covered at the search stage only, never as a whole chain) |
+| Credential | static bearer (covered) / per-source OAuth client credentials (covered) |
+
+The uncovered cells are deliberate. No profile yet carries a search whose own
+fact is a count or a completeness attestation, a member whose fact is a
+reference a further stage would dereference, or a chain in which no stage
+attests set completeness at all. A dereference-shaped chain over the
+`dhis2-tracker` profile is a deliberate follow-up rather than part of this row.
+
+Which fields a deployment made filterable is a provider-side precondition
+Evidence cannot validate offline, so a mis-declared member field does not
+present as a configuration error. It presents as `ambiguous` when the provider
+silently ignores the unknown clause, widens the request, and answers with a
+count far above one; as `no_match` when the widened or narrowed request answers
+with zero; and as an ordinary source outage when the field is known but
+unindexed and the deployment answers `5xx`. The `total > 1` to `ambiguous`
+extract rule is the guard that keeps the first case honest: an extract that took
+the first result of a widened page would turn a mis-declared field into a
+confident wrong answer instead of a refusal.
+
+The chain adds no absence-as-fact rule. Zero results stay `no_match` and can
+never be read as a conclusive negative. The one sanctioned reading of zero as a
+counted zero is a later stage consuming a provider count after an earlier stage
+established the subject in that same register with a real `match`.
 
 The matrix includes four generic selector contracts independent of those
 product-shaped profiles:
@@ -109,6 +160,13 @@ Profile-specific cases include:
 - OpenCRVS token expiry, malformed token response, exact child-event body,
   bounded event result, configured declaration fields, and missing or malformed
   parent references.
+- `search-chain` stage ordering, one request per declared stage plus one
+  credential bootstrap each, a dotted key whose value is an object, a silently
+  widened query reaching `ambiguous` without reading the first result, a filter
+  on an unindexed field presenting as a source outage that stops the chain
+  before any member request, a counted zero staying a `match`, and proof that a
+  search fact a member did not declare reaches neither its path, its query, nor
+  the body its preparation built.
 - fixed and tagged selector/prior-fact-bound path expansion, fixed headers, Basic, static Bearer,
   static API-key, OAuth client credentials, system-root and private-CA TLS,
   projection conflicts, and proof that ambient proxy variables are ignored.
@@ -119,8 +177,11 @@ The mocks assert every received wire request. Preparation Rhai sees only the
 source-required authorized selectors and the exact context containing closed
 parameters and `prior_facts`. Extraction Rhai sees only the bounded projected
 JSON response and that same context. `prior_facts` is empty for a single or
-search call and is exactly the validated search FactSet for a fetch. Neither
-script can inspect credentials, request headers, URLs, or the source client.
+search call and is exactly the validated search FactSet for a fetch. Under a
+declared member set it is instead the projection of that validated search
+FactSet onto the member's own allowlist, so no member sees a search fact it did
+not declare or any fact produced by another member. Neither script can inspect
+credentials, request headers, URLs, or the source client.
 
 Extraction maps the response to exactly `match(FactSet)`, `no_match`, or
 `ambiguous`. It may interpret a provider result count or at most two minimally
@@ -130,7 +191,10 @@ runs only on `match` and may compare the facts with only its declared
 authorized selector inputs using the reviewed requirement rule. Search
 `ambiguous` stops without derivation, fetch, page traversal, or a success
 response in any format. A single acquisition makes one request; a
-search-then-fetch acquisition makes at most its two fixed audited requests.
+search-then-fetch acquisition makes at most its two fixed audited requests; a
+declared member set makes at most one plus its declared member count, and an
+execution is always a prefix of the declared sequence because a stage that does
+not resolve stops the acquisition.
 
 The same suite runs every initial assertion case from `CONCEPT.md` through the
 complete Evidence service. At least one case runs against two mock source
@@ -159,10 +223,12 @@ required order is:
 cargo test --locked -p registry-evidence
 cargo test --locked -p registry-evidence --test live_sources dhis2 -- --ignored
 cargo test --locked -p registry-evidence --test live_sources opencrvs -- --ignored
+cargo test --locked -p registry-evidence --test live_sources opencrvs_chain -- --ignored
 ```
 
-The package test includes `source_contracts`; it must be green before either
-live command is run.
+The package test includes `source_contracts`; it must be green before any live
+command is run. The `opencrvs` filter is a substring and therefore also selects
+`opencrvs_chain`; append `--exact` to run only the single-stage check.
 
 The live target requires an explicit profile name and local configuration. It
 must skip, rather than improvise, when required values or an approved synthetic
@@ -223,12 +289,27 @@ and then makes one bounded, exact event lookup that consumes only the count and
 facts needed by the test. It does not retrieve a certificate or perform a
 broad person search.
 
+`opencrvs_chain` is the multi-stage companion. It reads the same owner-only file
+and requires no additional key: every later stage takes its input from the
+validated search FactSet rather than from configuration. It reuses the same
+strict token bootstrap, then makes one bounded search followed by its declared
+members in the declared order, each carrying only the record reference the
+search produced. It asserts wire shape, stage ordering, and body-channel
+minimization only: that each member request opens no query channel, that its
+body is the exact bounded clause shape, and that a country-configured
+declaration field the members did not declare appears nowhere in those bytes.
+It never asserts that an assertion is produced. This demo data set has no union
+register, so a member returning zero results is a passing outcome, and a
+demo record that is not in the state a member filters for is likewise expected.
+
 These live checks prove only that the selected demo version still accepts the
 documented authentication and bounded lookup shape. The DHIS2 check does not
 run the deployable adult-status derivation or prove its complete minimization
 and response-protection path. The OpenCRVS check does not prove country-specific parent
 reference fields, authoritative relationship-set completeness, parent
-membership semantics, or the deployable family requirements. Deterministic
+membership semantics, or the deployable family requirements. The chain check
+proves only ordering and body-channel minimization on the wire; it proves no
+assertion, no derivation, and no negative capability. Deterministic
 mocks and executable project fixtures own those contracts. A passing live
 check must not be described as certification of a complete deployment project.
 
@@ -398,6 +479,8 @@ The live runner must:
 | Mock passes, live response shape differs | Possible upstream version or configuration drift; inspect public documentation before changing fixtures |
 | Live server is unavailable, rate-limited, or times out | Inconclusive public-demo result, not a product failure |
 | Live test returns more data than configured | Minimization failure; stop and review before retaining any output |
+| Live chain member returns zero results | Expected on a demo without the register the member searches; not a product failure and not a negative fact |
+| Live chain stages reach the wire out of the declared order | Ordering failure; stop and review before any deployment relies on the chain |
 
 Any upstream-driven contract change is first represented as a new sanitized
 mock case. Only then may the source configuration or Rhai adapter change. Core
