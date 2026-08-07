@@ -365,6 +365,8 @@ jobs:
 
       - name: Build native platform payload once
         shell: bash
+        env:
+          REGISTRY_RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           rustup toolchain install 1.95.0 \

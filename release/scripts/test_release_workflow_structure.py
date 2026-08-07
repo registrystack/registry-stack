@@ -152,6 +152,29 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         self.assertIn("EVIDENCECTL_ASSET_DIR", smoke)
         self.assertIn("bash development-assets/evidencectl-install.sh", smoke)
 
+    def test_development_binaries_report_a_development_version(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        build = step_run(
+            document,
+            "build",
+            "Build native Evidence development binaries",
+        )
+        smoke = step_run(
+            document,
+            "assemble",
+            "Smoke the development installer before publication",
+        )
+        expected = (
+            'test "${observed}" = '
+            '"${binary} ${{ needs.validate.outputs.version }}-dev"'
+        )
+        self.assertIn(expected, build)
+        self.assertIn(expected, smoke)
+        # These assets are development builds, so the build must stay unmarked:
+        # the suffix above is the proof a tester cannot mistake one for the
+        # eventual release of the same version.
+        self.assertNotIn("REGISTRY_RELEASE_TAG", build)
+
     def test_builds_and_smokes_the_relying_party_client_packages(self) -> None:
         _, document = workflow("evidence-dev.yml")
         clients = document["jobs"]["clients"]
@@ -333,6 +356,24 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Seal compact candidate manifest and bundle", text)
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
+
+    def test_every_published_binary_is_built_as_a_release_build(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        native = next(
+            step
+            for step in document["jobs"]["build-platforms"]["steps"]
+            if step.get("name") == "Build native platform payload once"
+        )
+        self.assertEqual(
+            native.get("env"),
+            {"REGISTRY_RELEASE_TAG": "${{ needs.validate.outputs.tag }}"},
+        )
+        # The canonical Linux payload carries the same marker through
+        # build-release-binaries.sh rather than a step-level environment.
+        canonical = step_run(
+            document, "build-canonical", "Build canonical Linux payload once"
+        )
+        self.assertIn("release/scripts/build-release-binaries.sh", canonical)
 
     def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
