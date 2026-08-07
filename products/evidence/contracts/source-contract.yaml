@@ -185,7 +185,7 @@ acquisition_postures:
   record-transformed:
     meaning: A broader legacy record is transiently transformed in memory.
     claim: Disclosure minimization only.
-  chained_rule: A search-then-fetch requirement has the weaker of its two declared source postures; chaining never upgrades a minimization claim.
+  chained_rule: A multi-stage requirement has the weakest of every declared source posture it may call, whether that is two sources or five; chaining never upgrades a minimization claim, and adding a stage can only weaken one.
 failure_classes:
   transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]

@@ -45,7 +45,7 @@ invariants:
   - id: V1-I09
     rule: Source calls are fixed by trusted configuration and executed only by the core.
     threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
-    enforcement: Generic fixed HTTPS executor owns the closed single or search-then-fetch source sequence, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
     negative_test: sec-source-request-immutable
   - id: V1-I10
     rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
@@ -198,9 +198,9 @@ invariants:
     enforcement: The core derives requester and optional actor pseudonyms scoped by operator trust domain, requested purpose, and authenticated audience, while request-rate accounting remains principal-scoped. It constructs the closed refusal branch under its distinct registry.evidence.audit.authorization-refusal/v1 discriminator with operation, assurance profile, bundle revision, denial category and decision, timestamp and duration, durably appends it before the response, and omits every request-derived, authority, selector, response-protection, source, and evaluation field. Authentication, malformed-request, and invalid-selector failures remain operational-only.
     negative_test: sec-authenticated-authorization-refusal-audited
   - id: V1-I40
-    rule: A chained acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
+    rule: A search-then-fetch acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
     threat: Provider-controlled response data becomes a workflow plan, redirects credentials to an unreviewed endpoint, expands one authorized evaluation into unbounded reads, or leaks an intermediate record identifier through audit.
-    enforcement: The closed requirement acquisition enum contains only single and search-then-fetch with distinct startup-validated source ids. Rust owns the two-stage state machine, validates search facts before fetch preparation or path materialization, permits prior-fact bindings only on fetch sources and only for scalar properties required by the search fact schema, rate-limits once, durably audits every actual source call, and records no prior fact or path value.
+    enforcement: The requirement acquisition enum is closed, and this kind's two source ids are distinct and validated at startup. Rust owns the two-stage state machine, validates search facts before fetch preparation or path materialization, permits prior-fact bindings only on fetch sources and only for scalar properties required by the search fact schema, rate-limits once, durably audits every actual source call, and records no prior fact or path value. A wider kind exists only where the bundle declares it and the operator enabled it, and carries its own invariant rather than relaxing this one.
     negative_test: sec-search-then-fetch-bounded
 cross_cutting:
   config_trust:
