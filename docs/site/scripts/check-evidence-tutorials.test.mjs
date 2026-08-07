@@ -23,6 +23,15 @@ async function runGate(env = {}, args = ['--dry-run']) {
   }
 }
 
+async function runShell(script) {
+  try {
+    const { stdout, stderr } = await execFileAsync('bash', ['-c', script]);
+    return { code: 0, output: `${stdout}${stderr}` };
+  } catch (error) {
+    return { code: error.code ?? 1, output: `${error.stdout}${error.stderr}` };
+  }
+}
+
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
@@ -194,6 +203,69 @@ async function fenceScratch() {
   await writeFile(join(root, 'tutorial.mdx'), fenceFixture);
   return root;
 }
+
+// Run the gate's own run-fails emitter over one fence, and return the journey
+// lines it emits. The function is lifted out of the gate rather than restated
+// here, so this exercises the shipped code: sourcing the gate would run it.
+async function emitRunFailsStep(fenceBody) {
+  const source = await readFile(gate, 'utf8');
+  const emitter = source.match(/\nemit_run_fails_step\(\) \{\n[\s\S]*?\n\}\n/u)?.[0];
+  assert.ok(emitter, 'the run-fails emitter must exist');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-refusal-test-'));
+  await writeFile(join(root, 'fence-09.sh'), fenceBody);
+  const harness = join(root, 'emit.sh');
+  await writeFile(
+    harness,
+    ['#!/usr/bin/env bash', 'set -euo pipefail', emitter, 'emit_run_fails_step tutorial 9 "$1"', ''].join('\n'),
+  );
+  const { stdout } = await execFileAsync('bash', [harness, root]);
+  return { root, journey: `set -euo pipefail\n${stdout}` };
+}
+
+// A refusal fence that prints after the command that refuses is the shape the
+// pages actually carry: the reader sees the error, then the state it left
+// behind. Bash suppresses errexit for everything inside an `if` condition,
+// subshells included, so an emitter that tested the fence there would run the
+// trailing line, read the whole fence as a success, and report drift on a
+// tutorial that is doing exactly what it documents.
+test('a documented refusal is accepted even when the fence prints after it', async () => {
+  const { root, journey } = await emitRunFailsStep(
+    'false\nprintf "kept going\\n"\n',
+  );
+  try {
+    const { code, output } = await runShell(journey);
+    assert.equal(code, 0, output);
+    assert.doesNotMatch(output, /kept going/u);
+    assert.doesNotMatch(output, /tutorial drift/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a refusal fence that starts succeeding is reported as drift', async () => {
+  const { root, journey } = await emitRunFailsStep('true\n');
+  try {
+    const { code, output } = await runShell(journey);
+    assert.notEqual(code, 0, 'a fence that no longer refuses must fail the gate');
+    assert.match(output, /tutorial drift/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The steps after a documented refusal still run under the journey's errexit,
+// so a later failure ends the journey where it happened instead of being
+// carried past.
+test('errexit is back in force after a documented refusal', async () => {
+  const { root, journey } = await emitRunFailsStep('false\n');
+  try {
+    const { code, output } = await runShell(`${journey}\nfalse\nprintf "past it\\n"\n`);
+    assert.notEqual(code, 0, 'the journey must stop at the failure after the refusal');
+    assert.doesNotMatch(output, /past it/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('write-fence extracts one fence by heading, language and occurrence', async () => {
   const root = await fenceScratch();

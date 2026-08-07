@@ -526,6 +526,13 @@ emit_run_step() {
 # A refusal the tutorial teaches is as much a documented outcome as a success,
 # so replaying it means asserting the non-zero exit rather than tolerating it:
 # a fence that starts succeeding has stopped teaching what the page says.
+#
+# The fence runs on its own line rather than as an `if` condition, because bash
+# suppresses errexit throughout a condition, subshells included, even one that
+# sets it itself. A fence that refuses on its first command and then prints
+# would run that print and report success, which is neither what the reader
+# sees nor what the page documents. `set +e` around the run keeps the failure
+# from ending the journey, and reinstates errexit for the steps after it.
 emit_run_fails_step() {
 	local slug="$1" number="$2" fence_dir="$3"
 	local fence
@@ -536,9 +543,11 @@ emit_run_fails_step() {
 		exit 2
 	fi
 	printf '\nprintf "==> %s fence %02d (documented refusal)\\n"\n' "$slug" "$number"
-	printf 'if ( set -e\n'
+	printf 'set +e\n'
+	printf '( set -e\n'
 	cat "$fence"
-	printf ')\nthen\n'
+	printf ')\nrefusal_status=$?\nset -e\n'
+	printf 'if ((refusal_status == 0))\nthen\n'
 	printf '  printf "tutorial drift in %s: fence %02d succeeded, but the page documents a refusal\\n" >&2\n' \
 		"$slug" "$number"
 	printf '  exit 1\n'
