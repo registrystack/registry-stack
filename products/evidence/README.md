@@ -191,6 +191,9 @@ packages enter the signed release checksum closure.
 
 Install the Node package from the matching
 `evidence-client-node-<tag>-<platform>.tgz` asset with `npm install <path>`.
+The Node platform labels are `linux-amd64-glibc`, `linux-arm64-glibc`, and
+`macos-arm64`; musl-based Linux distributions such as Alpine are not
+supported by these packages.
 Install the matching `registry_evidence_client-<version>-<wheel-tag>.whl`
 asset with `python -m pip install <path>`. Linux wheels use the build runner's
 glibc baseline or newer. Registry Stack does not publish these packages to npm

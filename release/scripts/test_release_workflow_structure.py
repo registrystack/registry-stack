@@ -363,8 +363,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 for entry in matrix
             },
             {
-                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
-                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
+                (
+                    "linux-amd64-glibc",
+                    "cp310-abi3-linux_x86_64",
+                    "linux-x64-gnu",
+                ),
+                (
+                    "linux-arm64-glibc",
+                    "cp310-abi3-linux_aarch64",
+                    "linux-arm64-gnu",
+                ),
                 ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
             },
         )
@@ -375,6 +383,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         wheel = step_run(document, "clients", "Build the Python client wheel")
         self.assertIn("--compatibility linux", wheel)
         self.assertIn("expected exactly one wheel", wheel)
+        self.assertIn("--require-hashes --only-binary=:all:", wheel)
+        self.assertIn("release/requirements/maturin-1.9.6.txt", wheel)
         node = step_run(document, "clients", "Build the Node client package")
         self.assertIn(
             "package/evidence-client.${{ matrix.napi_platform }}.node",

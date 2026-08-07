@@ -11,7 +11,9 @@ scope for this crate. Registry Stack GitHub releases starting at v0.17.0 carry
 one native tarball per supported platform, named
 `evidence-client-node-<tag>-<platform>.tgz`. Download the package matching the
 target platform, verify it through the release's signed `SHA256SUMS`, then
-install the local file with `npm install <path-to-tarball>`.
+install the local file with `npm install <path-to-tarball>`. The supported
+labels are `linux-amd64-glibc`, `linux-arm64-glibc`, and `macos-arm64`; the
+Linux packages do not support musl-based distributions such as Alpine.
 
 ## JS surface
 
