@@ -4619,6 +4619,11 @@ mod tests {
             include_bytes!("../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/professional-licence/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml").as_slice(),
+            // A profile bundle rather than a fifth coequal acceptance
+            // definition, so it belongs here, where the claim is only that a
+            // complete bundle satisfies the published contract, and not in the
+            // coequal-definition list next door.
+            include_bytes!("../../../products/evidence/fixtures/acceptance/surviving-spouse-status/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/conformance/selectors/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/bundle/evidence.yaml").as_slice(),
