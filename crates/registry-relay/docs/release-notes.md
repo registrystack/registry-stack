@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.17.0
+
+- Attribute-release claims now accept scalar values only. A required object or
+  array claim denies release, an optional one is omitted, and diagnostics do
+  not contain the value. Move structured minimum-disclosure assertions to
+  Registry Evidence.
+- Sensitive dataset aggregates now report the
+  `relay.aggregates.privacy_budget_untracked` deployment warning because
+  aggregate routes apply per-result suppression without tracking a
+  longitudinal query budget.
+- SP DCI response schemas remain self-contained. Relay never resolves remote
+  or file references from `response_schema_path`.
+
 ## 0.16.3
 
 - Registry Relay has no user-visible changes relative to v0.16.2. That

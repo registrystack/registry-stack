@@ -32,6 +32,47 @@
       }
     },
     {
+      "id": "v0.17.0",
+      "label": "v0.17.0",
+      "path": "/v/0.17.0/",
+      "status": "archived",
+      "availability": "candidate",
+      "source": "registry-stack-v0.17.0",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-08-07",
+      "description": "Registry Stack v0.17.0 beta-27 candidate documentation set with Evidence and without the retired Notary product.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "registry-platform": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "registry-manifest": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "registry-relay": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "registry-registryctl": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "registry-evidence": {
+          "version": "v0.17.0",
+          "ref": "v0.17.0"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        }
+      }
+    },
+    {
       "id": "v0.16.3",
       "label": "v0.16.3",
       "path": "/v/0.16.3/",

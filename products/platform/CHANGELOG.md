@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.17.0 - 2026-08-07
+
+- Registry Platform carries the shared audit, HTTP security, OpenID Connect,
+  cryptographic, and operations primitives used by Registry Relay and
+  Evidence. There is no separately versioned Registry Platform API release.
+
 ## v0.16.3 - 2026-08-01
 
 - No user-visible Registry Platform changes. The v0.16.2 workflow stopped at
