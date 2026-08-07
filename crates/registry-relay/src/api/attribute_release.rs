@@ -38,7 +38,7 @@ use crate::api::governed::{
     require_governed_read_access, GovernedAccessError, GovernedRedactionProjection,
     GovernedRequestInfo,
 };
-use crate::attribute_release::AttributeReleaseEvaluator;
+use crate::attribute_release::{AttributeReleaseError, AttributeReleaseEvaluator};
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
@@ -444,7 +444,8 @@ async fn run_resolve(
 
     // 9: project the claim bundle field-by-field. Required claim missing ⇒
     // ClaimUnavailable; optional missing ⇒ omit; a claim whose source field is
-    // dropped by governed redaction is treated as unavailable.
+    // dropped by governed redaction is treated as unavailable, as is any claim
+    // whose value is not a scalar (see `scalar_claim_value`).
     //
     // Governed redaction is field-layer: `claim_is_redacted` gates direct
     // claims, while computed claims evaluate over the already-redacted row.
@@ -463,7 +464,13 @@ async fn run_resolve(
             }
             continue;
         }
-        match claim_value(&route.evaluator, claim, &projection_row) {
+        match claim_value(
+            &route.evaluator,
+            claim,
+            route.profile.id.as_str(),
+            route.profile.version.as_str(),
+            &projection_row,
+        ) {
             Some(value) => {
                 released.insert(claim.name.clone(), value);
             }
@@ -654,23 +661,121 @@ fn redact_row(row: &Value, redaction_fields: &BTreeSet<String>) -> Value {
 }
 
 /// Compute a single claim value from the projected subject row. A direct claim
-/// reads its source field (absent ⇒ `None`); a computed claim evaluates its CEL
-/// scalar (any failure ⇒ `None`, so a required computed claim fails closed).
+/// reads its source field (absent ⇒ `None`) and is held to the scalar-only
+/// claim contract by [`scalar_claim_value`]. A computed claim evaluates its
+/// CEL scalar, whose evaluator enforces the same contract itself: a structured
+/// result comes back as a `TypeMismatch` and is warned about here, and any
+/// other failure ⇒ `None`, so a required computed claim fails closed.
 fn claim_value(
     evaluator: &AttributeReleaseEvaluator,
     claim: &ReleaseClaimConfig,
+    profile_id: &str,
+    profile_version: &str,
     row: &Value,
 ) -> Option<Value> {
     if let Some(field) = claim.source_field.as_deref() {
-        return match row.get(field) {
-            Some(Value::Null) | None => None,
-            Some(value) => Some(value.clone()),
-        };
+        let value = row.get(field).cloned()?;
+        return scalar_claim_value(evaluator, value, profile_id, profile_version, &claim.name);
     }
-    if let Some(expression) = claim.expression.as_ref() {
-        return evaluator.evaluate_release_scalar(&expression.cel, row).ok();
+    let expression = claim.expression.as_ref()?;
+    match evaluator.evaluate_release_scalar(&expression.cel, row) {
+        Ok(value) => Some(value),
+        Err(AttributeReleaseError::TypeMismatch(diagnostic)) => {
+            warn_non_scalar_once(
+                evaluator,
+                profile_id,
+                profile_version,
+                &claim.name,
+                type_mismatch_kind(&diagnostic),
+            );
+            None
+        }
+        Err(_) => None,
     }
-    None
+}
+
+/// Accept only scalar claim values (string/number/bool), mirroring
+/// [`scalar_subject_value`] on the request side. Released claim values are
+/// scalar-only in v1: an object or array value is never released, whether it
+/// came from a structured source column or from a CEL expression that returned
+/// a list or a map. Null is equally unavailable, so a computed claim and a
+/// direct claim over a null column behave identically and a claim is never
+/// emitted as a literal `null`. The caller applies the usual required ⇒
+/// `ClaimUnavailable` / optional ⇒ omit handling, so this fails closed.
+fn scalar_claim_value(
+    evaluator: &AttributeReleaseEvaluator,
+    value: Value,
+    profile_id: &str,
+    profile_version: &str,
+    claim_name: &str,
+) -> Option<Value> {
+    match value {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) => Some(value),
+        Value::Null => None,
+        structured => {
+            warn_non_scalar_once(
+                evaluator,
+                profile_id,
+                profile_version,
+                claim_name,
+                claim_value_kind(&structured),
+            );
+            None
+        }
+    }
+}
+
+/// A structured value is an operator-visible profile configuration signal, so
+/// it is logged once per profile version and claim for the life of one
+/// runtime snapshot's evaluator, not once per request: steady traffic over a
+/// misconfigured claim must not flood the operator log, while a registry-wide
+/// reload re-arms the warning instead of staying silent for the life of the
+/// process. Profiles are globally identified by `(id, version)` and each
+/// version carries its own claims config, so the version is part of both the
+/// dedupe key and the record. The record carries structural locators only —
+/// profile id, profile version, claim name, JSON type tag — never the value,
+/// the row, or the expression text, matching the value-free diagnostics
+/// discipline of `crate::attribute_release`.
+fn warn_non_scalar_once(
+    evaluator: &AttributeReleaseEvaluator,
+    profile_id: &str,
+    profile_version: &str,
+    claim_name: &str,
+    kind: &str,
+) {
+    if evaluator.first_non_scalar_sighting(profile_id, profile_version, claim_name) {
+        tracing::warn!(
+            code = "attribute_release.claim.non_scalar_value",
+            profile_id = profile_id,
+            profile_version = profile_version,
+            claim = claim_name,
+            kind = kind,
+            "attribute-release claim value is not a scalar and was not released"
+        );
+    }
+}
+
+/// Extract the JSON type tag from an evaluator `TypeMismatch` diagnostic
+/// (`field=value expected=scalar kind=array`). Both sides of the contract
+/// live in this crate; a diagnostic without a tag falls back to the
+/// value-free label `structured`.
+fn type_mismatch_kind(diagnostic: &str) -> &str {
+    diagnostic
+        .rsplit_once("kind=")
+        .map_or("structured", |(_, kind)| kind)
+}
+
+/// PII-free JSON type tag for a claim value. Carries the shape only, never the
+/// value itself.
+fn claim_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 async fn read_subject_rows(route: &RouteState, subject_value: Value) -> Result<Vec<Value>, Error> {
@@ -931,6 +1036,8 @@ fn with_audit_context(mut response: Response, route: &RouteState, audit: Resolve
 mod tests {
     use super::*;
 
+    use crate::config::ReleaseExpressionConfig;
+
     #[test]
     fn subject_audit_raw_canonicalizes_every_accepted_scalar() {
         assert_eq!(
@@ -961,6 +1068,148 @@ mod tests {
             ResolveRunError::governed_request(AuthError::PurposeDenied, Some(audit.clone()));
         assert_eq!(error.error.code(), "auth.purpose_denied");
         assert_eq!(error.audit.pdp_audit, Some(audit));
+    }
+
+    fn direct_claim(name: &str, source_field: &str) -> ReleaseClaimConfig {
+        ReleaseClaimConfig {
+            name: name.to_string(),
+            source_field: Some(source_field.to_string()),
+            expression: None,
+            required: false,
+            sensitivity: None,
+            format: None,
+            locale: None,
+        }
+    }
+
+    #[test]
+    fn direct_claim_releases_only_scalar_row_values() {
+        // The scalar-only claim contract: a direct claim clones whatever the row
+        // holds, so the gate is what keeps a structured source column from being
+        // released. Required claims turn `None` into ClaimUnavailable upstream.
+        let evaluator = AttributeReleaseEvaluator::new();
+        let claim = direct_claim("attribute", "attribute");
+        for scalar in [json!("Ada"), json!(42), json!(true)] {
+            let row = json!({ "attribute": scalar });
+            assert_eq!(
+                claim_value(&evaluator, &claim, "civil_identity", "v1", &row),
+                Some(scalar.clone()),
+                "scalar claim value {scalar} must be released"
+            );
+        }
+        for non_scalar in [
+            json!({"region": "Wonderland"}),
+            json!(["a", "b"]),
+            json!(null),
+        ] {
+            let row = json!({ "attribute": non_scalar });
+            assert_eq!(
+                claim_value(&evaluator, &claim, "civil_identity", "v1", &row),
+                None,
+                "non-scalar claim value {non_scalar} must be unavailable"
+            );
+        }
+        // An absent field is unavailable too.
+        assert_eq!(
+            claim_value(&evaluator, &claim, "civil_identity", "v1", &json!({})),
+            None
+        );
+    }
+
+    #[test]
+    fn scalar_claim_value_matches_the_subject_side_scalar_rule() {
+        // Claim values and subject values share one definition of "scalar", so a
+        // profile cannot release a shape the request side would have rejected.
+        let evaluator = AttributeReleaseEvaluator::new();
+        for value in [json!("Ada"), json!(42), json!(true)] {
+            assert_eq!(
+                scalar_claim_value(
+                    &evaluator,
+                    value.clone(),
+                    "civil_identity",
+                    "v1",
+                    "attribute"
+                )
+                .is_some(),
+                scalar_subject_value(&value).is_some(),
+                "claim and subject scalar rules disagree on {value}"
+            );
+        }
+        for value in [json!({}), json!([]), json!(null)] {
+            assert!(scalar_claim_value(
+                &evaluator,
+                value.clone(),
+                "civil_identity",
+                "v1",
+                "attribute"
+            )
+            .is_none());
+            assert!(scalar_subject_value(&value).is_none());
+        }
+    }
+
+    #[test]
+    fn computed_claim_with_structured_result_is_unavailable() {
+        // The evaluator rejects a structured computed value as a TypeMismatch;
+        // the handler treats that claim as unavailable, identically to a
+        // structured direct projection, so both paths honor one contract.
+        let evaluator = AttributeReleaseEvaluator::new();
+        let structured = ReleaseClaimConfig {
+            name: "names".to_string(),
+            source_field: None,
+            expression: Some(ReleaseExpressionConfig {
+                cel: "[source.given_name]".to_string(),
+            }),
+            required: false,
+            sensitivity: None,
+            format: None,
+            locale: None,
+        };
+        let row = json!({ "given_name": "Ada" });
+        assert_eq!(
+            claim_value(&evaluator, &structured, "civil_identity", "v1", &row),
+            None
+        );
+        let scalar = ReleaseClaimConfig {
+            name: "given".to_string(),
+            source_field: None,
+            expression: Some(ReleaseExpressionConfig {
+                cel: "source.given_name".to_string(),
+            }),
+            required: false,
+            sensitivity: None,
+            format: None,
+            locale: None,
+        };
+        assert_eq!(
+            claim_value(&evaluator, &scalar, "civil_identity", "v1", &row),
+            Some(json!("Ada"))
+        );
+    }
+
+    #[test]
+    fn type_mismatch_kind_extracts_the_type_tag() {
+        assert_eq!(
+            type_mismatch_kind("field=value expected=scalar kind=array"),
+            "array"
+        );
+        assert_eq!(
+            type_mismatch_kind("field=value expected=scalar kind=object"),
+            "object"
+        );
+        // A diagnostic without a kind tag stays value-free and non-empty.
+        assert_eq!(type_mismatch_kind("unstructured detail"), "structured");
+    }
+
+    #[test]
+    fn claim_value_kind_carries_only_a_type_tag() {
+        // The only claim-value detail that may reach a log line is its JSON type.
+        assert_eq!(claim_value_kind(&json!({"region": "Wonderland"})), "object");
+        assert_eq!(claim_value_kind(&json!(["ada@example.test"])), "array");
+        assert_eq!(claim_value_kind(&json!("Ada")), "string");
+        assert_eq!(claim_value_kind(&json!(42)), "number");
+        assert_eq!(claim_value_kind(&json!(true)), "bool");
+        assert_eq!(claim_value_kind(&json!(null)), "null");
     }
 
     #[test]

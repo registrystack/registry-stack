@@ -1153,6 +1153,62 @@ datasets: []
         assert!(ids.contains(&"relay.ingress.rate_limit_missing"));
     }
 
+    /// A sensitive dataset with an aggregate-only-execution aggregate surfaces
+    /// `relay.aggregates.privacy_budget_untracked` on the posture surface at
+    /// `finding_warn`, the same generic path every other catalog gate takes.
+    #[test]
+    fn deployment_summary_reports_untracked_privacy_budget_finding() {
+        let yaml = r#"
+server:
+  bind: "127.0.0.1:8080"
+catalog:
+  title: "Test Registry"
+  base_url: "https://data.example.test"
+  publisher: "Test Ministry"
+auth:
+  mode: api_key
+  api_keys: []
+audit:
+  sink: stdout
+datasets:
+  - id: sensitive_ds
+    title: "Sensitive Dataset"
+    description: "desc"
+    owner: "owner"
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+    tables:
+      - id: t1
+        source:
+          type: file
+          path: "data/t1.csv"
+        refresh:
+          mode: manual
+        schema:
+          fields: []
+    aggregates:
+      - id: agg1
+        description: "test aggregate"
+        source_entity: record
+        disclosure_control:
+          min_group_size: 2
+        access:
+          aggregate_only_execution: true
+"#;
+        let mut config = parse_minimal_config(yaml);
+        config.deployment.profile = Some(DeploymentProfile::HostedLab);
+        let summary = deployment_summary(&config, ConfigSource::LocalFile);
+        let finding = summary["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .find(|finding| finding["id"] == "relay.aggregates.privacy_budget_untracked")
+            .expect("privacy-budget finding is reported");
+        assert_eq!(finding["severity"], "finding_warn");
+        assert_eq!(finding["status"], "active");
+    }
+
     /// The full posture document is schema-valid for every declared profile and
     /// for the undeclared default. `evidence_grade` from a local file would
     /// trip a startup gate at load time, so its posture is exercised with a

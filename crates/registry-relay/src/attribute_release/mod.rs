@@ -66,7 +66,7 @@ mod enabled {
 
     use cel::common::ast::{EntryExpr, Expr, IdedExpr};
     use std::collections::{BTreeSet, HashMap};
-    use std::sync::{Arc, RwLock};
+    use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
     use serde_json::{json, Value};
 
@@ -85,6 +85,7 @@ mod enabled {
     pub struct AttributeReleaseEvaluator {
         runtime: Arc<MappingRuntime>,
         cache: RwLock<HashMap<String, Arc<CompiledMapping>>>,
+        non_scalar_sightings: Mutex<BTreeSet<(String, String, String)>>,
     }
 
     impl std::fmt::Debug for AttributeReleaseEvaluator {
@@ -108,6 +109,7 @@ mod enabled {
             Self {
                 runtime: Arc::new(MappingRuntime::new(RuntimeOptions::default())),
                 cache: RwLock::new(HashMap::new()),
+                non_scalar_sightings: Mutex::new(BTreeSet::new()),
             }
         }
 
@@ -151,7 +153,10 @@ mod enabled {
         /// the raw [`Value`]. Fails closed: a missing or erroring expression
         /// returns `Err` rather than silently dropping the claim. A JSON `null`
         /// result is treated as a missing value (fail-closed) so an absent
-        /// computed claim is never silently emitted as `null`.
+        /// computed claim is never silently emitted as `null`. A structured
+        /// (array or object) result is a `TypeMismatch`: released claim values
+        /// are scalar-only, and the invariant is enforced here so this public
+        /// evaluator can never disagree with the HTTP response contract.
         pub fn evaluate_release_scalar(
             &self,
             cel: &str,
@@ -163,7 +168,36 @@ mod enabled {
                     "field=value kind=null".to_string(),
                 ));
             }
+            if value.is_array() || value.is_object() {
+                return Err(AttributeReleaseError::TypeMismatch(scalar_type_diagnostic(
+                    &value,
+                )));
+            }
             Ok(value)
+        }
+
+        /// Records a non-scalar claim sighting for a (profile id, version,
+        /// claim) triple and reports whether it is the first seen by this
+        /// evaluator, so the caller's warn line fires once per triple. The
+        /// evaluator lives exactly as long as one validated runtime snapshot:
+        /// a registry-wide reload builds a fresh evaluator, which re-arms the
+        /// warning for corrected-then-reintroduced configuration and drops
+        /// dedupe state for profiles that no longer exist, keeping the set
+        /// bounded by the active snapshot's profile-version/claim cardinality.
+        pub fn first_non_scalar_sighting(
+            &self,
+            profile_id: &str,
+            profile_version: &str,
+            claim_name: &str,
+        ) -> bool {
+            self.non_scalar_sightings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((
+                    profile_id.to_string(),
+                    profile_version.to_string(),
+                    claim_name.to_string(),
+                ))
         }
 
         /// Synthesize the one-field document, compile it into this snapshot's
@@ -238,13 +272,53 @@ mod enabled {
         }
     }
 
-    /// Compile-only validation hook used at config load. Fails closed: an
-    /// expression that does not compile is rejected before the runtime serves
-    /// any request.
+    /// Validation hook used at config load (and by `registryctl check`, which
+    /// calls this function for authored profiles). Fails closed: an expression
+    /// that does not compile, escapes the `source` authority, or is statically
+    /// guaranteed to produce a structured value is rejected before the runtime
+    /// serves any request.
     pub fn validate_release_expression(cel: &str) -> Result<(), AttributeReleaseError> {
         validate_expression_authority(cel)?;
+        validate_expression_shape(cel)?;
         let runtime = MappingRuntime::new(RuntimeOptions::default());
         compile(&runtime, cel).map(|_| ())
+    }
+
+    /// Reject expressions whose top-level result is statically known to be
+    /// structured. A list literal, a map or message literal, or a `map()` /
+    /// `filter()` comprehension always produces a list or map, which the
+    /// scalar-only claim contract can never release and a release predicate
+    /// can never accept, so the authoring mistake surfaces at config load
+    /// instead of at resolve time. Shapes that depend on data (member selects,
+    /// conditionals, function results) cannot be decided here and stay guarded
+    /// by the resolve-time scalar enforcement in `evaluate_release_scalar`.
+    fn validate_expression_shape(cel: &str) -> Result<(), AttributeReleaseError> {
+        let program = cel::Program::compile(cel)
+            .map_err(|_| AttributeReleaseError::Compile("kind=parse".to_string()))?;
+        if statically_structured_result(program.expression()) {
+            return Err(AttributeReleaseError::Compile(
+                "kind=structured_shape".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// True when the expression's result is a list or map on its face. The
+    /// comprehension arm matches the `map()`/`filter()` macro expansion (a
+    /// list-literal accumulator returned as the result) without catching the
+    /// bool-valued `all()`/`exists()` macros, whose accumulator is a scalar.
+    fn statically_structured_result(expression: &IdedExpr) -> bool {
+        match &expression.expr {
+            Expr::List(_) | Expr::Map(_) | Expr::Struct(_) => true,
+            Expr::Comprehension(comprehension) => {
+                matches!(comprehension.accu_init.expr, Expr::List(_))
+                    && matches!(
+                        &comprehension.result.expr,
+                        Expr::Ident(name) if *name == comprehension.accu_var
+                    )
+            }
+            _ => false,
+        }
     }
 
     /// Restrict release expressions to the projected `source` object. The
@@ -482,15 +556,27 @@ mod enabled {
     /// PII-free diagnostic for a predicate that resolved to a non-boolean value.
     /// Carries only the JSON type tag, never the value itself.
     fn predicate_type_diagnostic(value: &Value) -> String {
-        let kind = match value {
+        format!("field=value expected=bool kind={}", value_kind(value))
+    }
+
+    /// PII-free diagnostic for a claim expression that produced a structured
+    /// value where the scalar-only contract requires a string, number, or
+    /// boolean. Shape only, never the value.
+    fn scalar_type_diagnostic(value: &Value) -> String {
+        format!("field=value expected=scalar kind={}", value_kind(value))
+    }
+
+    /// PII-free JSON type tag for a produced value: the shape only, never the
+    /// content.
+    fn value_kind(value: &Value) -> &'static str {
+        match value {
             Value::Null => "null",
             Value::Bool(_) => "bool",
             Value::Number(_) => "number",
             Value::String(_) => "string",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
-        };
-        format!("field=value expected=bool kind={kind}")
+        }
     }
 
     #[cfg(test)]
@@ -525,6 +611,93 @@ mod enabled {
                 .evaluate_release_scalar("source.given_name + ' ' + source.surname", &record)
                 .expect("scalar evaluates");
             assert_eq!(value, json!("Ada Lovelace"));
+        }
+
+        #[test]
+        fn scalar_rejects_structured_values() {
+            // The public evaluator enforces the scalar-only release contract
+            // itself: an expression that produces a list or a map is a
+            // TypeMismatch, never a successfully returned structured value,
+            // so the Rust API cannot disagree with the HTTP response contract.
+            let record = json!({ "given_name": "Ada", "surname": "Lovelace" });
+            let evaluator = AttributeReleaseEvaluator::new();
+            let err = evaluator
+                .evaluate_release_scalar("[source.given_name, source.surname]", &record)
+                .expect_err("list result must be a type mismatch");
+            assert!(matches!(
+                &err,
+                AttributeReleaseError::TypeMismatch(detail) if detail.contains("kind=array")
+            ));
+            let err = evaluator
+                .evaluate_release_scalar("{'name': source.given_name}", &record)
+                .expect_err("map result must be a type mismatch");
+            assert!(matches!(
+                &err,
+                AttributeReleaseError::TypeMismatch(detail) if detail.contains("kind=object")
+            ));
+        }
+
+        #[test]
+        fn validation_rejects_statically_structured_shapes() {
+            // A top-level list literal, map literal, or map()/filter()
+            // comprehension always produces a structured value the scalar-only
+            // claim contract can never release and a release predicate can
+            // never accept, so the authoring mistake fails at config load (and
+            // through `registryctl check`, which calls this validator) instead
+            // of resolving ambiguously in production.
+            for expression in [
+                "[source.given_name, source.surname]",
+                "{'name': source.given_name}",
+                "source.items.map(item, item.name)",
+                "source.items.filter(item, item.active)",
+            ] {
+                let err = match validate_release_expression(expression) {
+                    Err(err) => err,
+                    Ok(()) => panic!("structured shape must be rejected: {expression}"),
+                };
+                assert!(
+                    matches!(
+                        &err,
+                        AttributeReleaseError::Compile(detail)
+                            if detail.as_str() == "kind=structured_shape"
+                    ),
+                    "wrong rejection for {expression}: {err:?}"
+                );
+            }
+            // Bool-valued macros and data-dependent shapes stay accepted: they
+            // are guarded by the resolve-time scalar enforcement instead.
+            for expression in [
+                "source.given_name + ' ' + source.surname",
+                "source.items.exists(item, item.active)",
+                "source.active ? source.given_name : source.surname",
+            ] {
+                validate_release_expression(expression).unwrap_or_else(|_| {
+                    panic!("scalar-shaped expression must validate: {expression}")
+                });
+            }
+        }
+
+        #[test]
+        fn non_scalar_sightings_reset_with_the_evaluator() {
+            // Warn-once dedupe lives on the evaluator, which is built per
+            // runtime snapshot: a registry-wide reload re-arms the warning for
+            // corrected-then-reintroduced configuration and drops dedupe state
+            // for profiles that no longer exist, instead of accumulating
+            // process-lived state. Profiles are globally identified by
+            // `(id, version)` and each version carries its own claims config,
+            // so a different version of the same profile id is a distinct
+            // signal, as is a different claim or profile.
+            let first = AttributeReleaseEvaluator::new();
+            assert!(first.first_non_scalar_sighting("profile", "v1", "claim_a"));
+            assert!(!first.first_non_scalar_sighting("profile", "v1", "claim_a"));
+            assert!(first.first_non_scalar_sighting("profile", "v2", "claim_a"));
+            assert!(first.first_non_scalar_sighting("profile", "v1", "claim_b"));
+
+            let reloaded = AttributeReleaseEvaluator::new();
+            assert!(
+                reloaded.first_non_scalar_sighting("profile", "v1", "claim_a"),
+                "a fresh evaluator must re-arm the warning"
+            );
         }
 
         #[test]

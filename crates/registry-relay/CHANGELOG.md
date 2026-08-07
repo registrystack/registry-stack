@@ -21,6 +21,26 @@
   the unresolved reference instead fails every record at request time, so SP DCI
   generic search, details, and support answer `500 internal.unhandled` for any
   non-empty result.
+- BREAKING: Attribute-release claim values are scalar-only: a string, a
+  number, or a boolean. The stable v0.15.0 contract accepted arbitrary JSON
+  claim values; a claim whose projected or computed value is an object or an
+  array is now treated as unavailable instead of being released, so a
+  required claim of that shape denies the release and an optional one is
+  omitted, with a value-free warning naming the profile, version, and claim.
+  A claim expression that always produces a list or map (a top-level literal
+  or a `map()`/`filter()` comprehension) is rejected at configuration
+  validation and by `registryctl check`. Profiles that need structured
+  values should model them in Registry Evidence, whose signed,
+  minimum-disclosure assertions carry explicit output schemas and limits.
+  The OpenAPI contract documents the scalar-only claim bundle and
+  top-level-only claim selection.
+- A dataset classified `personal`, `confidential`, or `secret` with a
+  dataset-level `access.aggregate_only_execution` aggregate now raises the
+  `relay.aggregates.privacy_budget_untracked` deployment finding (warn at
+  every bound profile) and a dedicated boot-log warning, surfacing that
+  aggregate routes track no longitudinal privacy budget. The warning may be
+  left active as an accepted-limitation signal or acknowledged with a
+  deployment waiver naming the finding.
 
 ## 0.16.3 - 2026-08-01
 

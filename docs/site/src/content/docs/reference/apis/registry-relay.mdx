@@ -69,6 +69,12 @@ For setup steps, scope strings, and credential configuration, see
   Their source and all-feature tests remain available. Governed attribute release is stable and
   included in the canonical binary. Relay does not issue response credentials or host issuer DID
   documents.
+- **Structured attribute-release claim values.** Released claim values are scalar-only in v1: a
+  string, a number, or a boolean. A claim whose projected or computed value is an object or an
+  array is treated as unavailable, an expression that always produces one is rejected at
+  configuration validation, and claim selection matches whole top-level claim names. Structured
+  and nested claim values are out of scope for 1.0; model them in Evidence Gateway, whose
+  signed, minimum-disclosure assertions carry explicit output schemas and limits.
 - **Link-free Records metadata.** Stable link-free OGC Records bodies under
   `/metadata/ogc/records` are portable metadata. They are separate from the experimental live
   adapter under `/ogc/v1/records`.
