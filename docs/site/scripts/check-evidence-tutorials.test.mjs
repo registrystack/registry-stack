@@ -28,12 +28,18 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.equal(code, 0, output);
   assert.match(output, /first-evidence-assertion: 18 sh fences, 16 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
+  // Two of its sixteen are the documented clone and build of the client, which
+  // the replay substitutes with a build of this checkout.
+  assert.match(
+    output,
+    /request-evidence-from-an-application: 16 sh fences, 14 executed/u,
+  );
   assert.match(output, /return-a-governed-value: 10 sh fences, 10 executed/u);
   assert.match(output, /assert-a-role-bound-relationship: 9 sh fences, 9 executed/u);
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
   assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
   assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
-  assert.match(output, /Checked 7 tutorials\./u);
+  assert.match(output, /Checked 8 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -46,30 +52,6 @@ test('--only accepts the current first Evidence tutorial', async () => {
   assert.match(output, /Checked 1 tutorial\./u);
 });
 
-test('--only accepts the governed-value follow-up', async () => {
-  const { code, output } = await runGate({}, [
-    '--dry-run',
-    '--only',
-    'return-a-governed-value',
-  ]);
-  assert.equal(code, 0, output);
-  assert.match(output, /Checked 1 tutorial\./u);
-});
-
-test('--only includes the local SD-JWT VC prerequisite', async () => {
-  const { code, output } = await runGate({}, [
-    '--dry-run',
-    '--only',
-    'request-evidence-as-sd-jwt-vc',
-  ]);
-  assert.equal(code, 0, output);
-  const prerequisite = output.indexOf('first-evidence-assertion:');
-  const followUp = output.indexOf('request-evidence-as-sd-jwt-vc:');
-  assert.notEqual(prerequisite, -1, output);
-  assert.ok(followUp > prerequisite, output);
-  assert.match(output, /Checked 2 tutorials\./u);
-});
-
 test('--only accepts the role-bound relationship follow-up', async () => {
   const { code, output } = await runGate({}, [
     '--dry-run',
@@ -80,34 +62,43 @@ test('--only accepts the role-bound relationship follow-up', async () => {
   assert.match(output, /Checked 1 tutorial\./u);
 });
 
-test('--only accepts the refusal follow-up', async () => {
-  const { code, output } = await runGate({}, [
-    '--dry-run',
-    '--only',
-    'refuse-unsafe-evidence-requests',
-  ]);
-  assert.equal(code, 0, output);
-  assert.match(output, /Checked 1 tutorial\./u);
-});
+// Every follow-up below begins from the project first-evidence-assertion
+// builds. A full run gets that from the registration order, so a --only that
+// skipped it would fail on the reader directory rather than on the tutorial,
+// and only for the person running one slug by hand.
+for (const slug of [
+  'request-evidence-as-sd-jwt-vc',
+  'request-evidence-from-an-application',
+  'return-a-governed-value',
+  'refuse-unsafe-evidence-requests',
+  'verify-an-assertion-as-a-consumer',
+  'control-who-can-request-evidence',
+]) {
+  test(`--only runs the starter project before ${slug}`, async () => {
+    const { code, output } = await runGate({}, ['--dry-run', '--only', slug]);
+    assert.equal(code, 0, output);
+    const prerequisite = output.indexOf('first-evidence-assertion:');
+    const followUp = output.indexOf(`${slug}:`);
+    assert.notEqual(prerequisite, -1, output);
+    assert.ok(followUp > prerequisite, output);
+    assert.match(output, /Checked 2 tutorials\./u);
+  });
+}
 
-test('--only accepts the consumer follow-up', async () => {
-  const { code, output } = await runGate({}, [
-    '--dry-run',
-    '--only',
-    'verify-an-assertion-as-a-consumer',
-  ]);
-  assert.equal(code, 0, output);
-  assert.match(output, /Checked 1 tutorial\./u);
-});
-
-test('--only accepts the caller-access follow-up', async () => {
-  const { code, output } = await runGate({}, [
-    '--dry-run',
-    '--only',
-    'control-who-can-request-evidence',
-  ]);
-  assert.equal(code, 0, output);
-  assert.match(output, /Checked 1 tutorial\./u);
+// The application tutorial is the only registered replay that reaches the
+// Evidence client SDK, and it reaches it through the Python binding. Losing
+// either the registration or the substituted build would leave that path
+// unproven while the gate still reported PASS.
+test('the application tutorial replays the Python client from this checkout', async () => {
+  const source = await readFile(gate, 'utf8');
+  assert.match(source, /^\trequest-evidence-from-an-application$/mu);
+  const branch = source.match(
+    /\n\trequest-evidence-from-an-application\)[\s\S]*?\n\t\t;;/u,
+  )?.[0];
+  assert.ok(branch, 'the application replay spec must exist');
+  assert.match(branch, /"python-client"/u);
+  assert.match(branch, /"private_key_jwt"/u);
+  assert.match(branch, /person-123 is_adult=True/u);
 });
 
 test('the caller-access replay expects the privacy-safe refusal audit line', async () => {
@@ -146,6 +137,11 @@ test('the gate depends on no interpreter beyond the replay userland', async () =
   const offenders = source
     .split('\n')
     .map((line, index) => [index + 1, line])
+    // `python-client` is a step name and `python-module` is the directory the
+    // application tutorial imports from. Both are data the gate writes or
+    // matches, never an interpreter it runs, so they are removed before the
+    // line is judged rather than exempting whole lines that carry them.
+    .map(([number, line]) => [number, line.replaceAll(/python-(?:client|module)/gu, '')])
     .filter(([, line]) => /\b(?:node|npm|npx|python3?|ruby|perl)\b/u.test(line))
     // A save step names the Markdown fence language as data. It extracts that
     // fence with the shell helper and does not execute the named interpreter.
