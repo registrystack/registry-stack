@@ -56,10 +56,14 @@ Those conclusions require an approved immunization schedule, the child's age, a 
 and rules for exceptional or late doses.
 
 The summary also reports the record's current state, not the state of a closed visit.
-DHIS2 stores an immunization reading on its event when a health worker enters the reading, and
-keeps a Child Programme event `ACTIVE` until the whole visit is closed.
-Reading only `COMPLETED` events would discard most of the readings the public demo holds, so the
-source adapter accepts Birth and Baby Postnatal events in both statuses.
+The [DHIS2 Tracker API](https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/tracker.html)
+gives an event the `ACTIVE` status by default, and states that only a super user or a user
+holding the `F_UNCOMPLETE_EVENT` authority can modify a completed event.
+`COMPLETED` therefore marks an event closed to further editing, not an event whose data values
+are the only recorded ones.
+In the public demo, the Child Programme's immunization readings sit almost entirely on `ACTIVE`
+events, so a `COMPLETED`-only rule returns no assertion for effectively every child.
+The source adapter accepts Birth and Baby Postnatal events in both statuses.
 Each assertion describes the record at the time of the request, and a later correction to an
 event changes what the next assertion says.
 
@@ -411,10 +415,10 @@ fn extract(source_response, context) {
                     let stage = event["programStage"];
                     let accepted_stage =
                         stage == "A03MvHHogjR" || stage == "ZzYYXq4fJie";
-                    // DHIS2 stores a reading on its event when a health worker
-                    // enters the reading, and keeps the event ACTIVE until the
-                    // whole visit is closed. Both statuses carry a recorded
-                    // reading, so the extractor reads both.
+                    // A DHIS2 event is ACTIVE by default, and COMPLETED marks
+                    // it closed to further editing rather than marking its
+                    // readings final. Both statuses carry recorded data
+                    // values, so the extractor reads both.
                     let status = event["status"];
                     let accepted_status =
                         status == "COMPLETED" || status == "ACTIVE";
