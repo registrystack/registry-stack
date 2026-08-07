@@ -40,20 +40,28 @@ The demo maintainers can reset its data, credentials, and synthetic subjects.
 
 The DHIS2 Child Programme records several immunization readings across its Birth and Baby
 Postnatal events.
-The assertion will return five governed concepts:
+The assertion returns five governed concepts:
 
 | Concept | Form | Meaning |
 |---|---|---|
-| BCG recorded as administered | Boolean | The completed events explicitly record whether a BCG dose was administered. |
-| OPV dose count | Bounded integer | The recorded oral polio vaccine dose number, from 0 through 3. |
-| Pentavalent dose count | Bounded integer | The recorded pentavalent vaccine dose number, from 0 through 3. |
-| Measles recorded as administered | Boolean | The completed events explicitly record whether a measles dose was administered. |
-| Yellow fever recorded as administered | Boolean | The completed events explicitly record whether a yellow fever dose was administered. |
+| BCG recorded as administered | Boolean | What the record currently shows for a BCG dose, administered or not. |
+| OPV dose count | Bounded integer | The oral polio vaccine dose number the record currently shows, from 0 through 3. |
+| Pentavalent dose count | Bounded integer | The pentavalent vaccine dose number the record currently shows, from 0 through 3. |
+| Measles recorded as administered | Boolean | What the record currently shows for a measles dose, administered or not. |
+| Yellow fever recorded as administered | Boolean | What the record currently shows for a yellow fever dose, administered or not. |
 
 This is a recorded immunization summary, not a conclusion that the child is fully vaccinated or
 up to date.
 Those conclusions require an approved immunization schedule, the child's age, a jurisdiction,
 and rules for exceptional or late doses.
+
+The summary also reports the record's current state, not the state of a closed visit.
+DHIS2 stores an immunization reading on its event when a health worker enters the reading, and
+keeps a Child Programme event `ACTIVE` until the whole visit is closed.
+Reading only `COMPLETED` events would discard most of the readings the public demo holds, so the
+source adapter accepts Birth and Baby Postnatal events in both statuses.
+Each assertion describes the record at the time of the request, and a later correction to an
+event changes what the next assertion says.
 
 The source adapter also applies two conservative readings:
 
@@ -73,8 +81,9 @@ Password: district
 ```
 
 In Tracker Capture, select the `Child Programme` and the `Ngelehun CHC` organisation unit.
-Choose a synthetic child with completed `Birth` and `Baby Postnatal` events whose five
-immunization fields contain values.
+Choose a synthetic child whose `Birth` and `Baby Postnatal` events carry a value in all five
+immunization fields.
+Those events may be `ACTIVE` or `COMPLETED`.
 
 Note its tracked entity identifier and keep it out of tracked files.
 The identifier selects the source record.
@@ -402,7 +411,14 @@ fn extract(source_response, context) {
                     let stage = event["programStage"];
                     let accepted_stage =
                         stage == "A03MvHHogjR" || stage == "ZzYYXq4fJie";
-                    if accepted_stage && event["status"] == "COMPLETED" {
+                    // DHIS2 stores a reading on its event when a health worker
+                    // enters the reading, and keeps the event ACTIVE until the
+                    // whole visit is closed. Both statuses carry a recorded
+                    // reading, so the extractor reads both.
+                    let status = event["status"];
+                    let accepted_status =
+                        status == "COMPLETED" || status == "ACTIVE";
+                    if accepted_stage && accepted_status {
                         for reading in event["dataValues"] {
                             let element = reading["dataElement"];
                             let value = reading["value"];
@@ -440,8 +456,11 @@ fn extract(source_response, context) {
 ```
 
 The extractor reads every bounded event and data value.
-It accepts only completed Birth and Baby Postnatal events, converts DHIS2 strings into typed
-facts, and refuses conflicting readings.
+It accepts `ACTIVE` and `COMPLETED` Birth and Baby Postnatal events, converts DHIS2 strings into
+typed facts, and refuses conflicting readings.
+Reading both statuses widens what `merge_reading` compares: a concept recorded once on an
+`ACTIVE` event and again on a `COMPLETED` event must carry the same value, or the source record
+is inconsistent and Evidence Gateway returns no assertion.
 Unrelated data elements are never added to `facts`.
 
 Replace `schemas/child-tracker-facts.schema.yaml` with the closed extraction result:
