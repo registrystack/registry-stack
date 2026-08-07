@@ -83,19 +83,26 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
 
 # Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
 # their own source is covered by check-source-neutrality.sh, and that is what
-# makes `evidence_contracts` run the neutrality check against them. A binding
-# is excluded from the tutorial trigger only while no tutorial runs it: the
-# Python binding is what `request-evidence-from-an-application` imports, so a
-# change to it has to replay that tutorial. Move a binding out of this set as
-# soon as a registered tutorial exercises it, or its regressions reach readers
-# before they reach CI.
-EVIDENCE_BINDING_PACKAGES = frozenset({"registry-evidence-client-node"})
+# makes `evidence_contracts` run the neutrality check against them. Every
+# binding also selects its own job, whose npm, type-drift and unittest suites
+# are the only cover its full API gets.
+EVIDENCE_BINDING_PACKAGES = frozenset(
+    {"registry-evidence-client-node", "registry-evidence-client-py"}
+)
+
+# A binding is exempt from the tutorial trigger only while no tutorial runs it.
+# The Python binding is what `request-evidence-from-an-application` imports, so
+# a change to it has to replay that tutorial and is not listed here. Move a
+# binding out of this set as soon as a registered tutorial exercises it, or its
+# regressions reach readers before they reach CI. Exemption is from the tutorial
+# trigger alone, never from EVIDENCE_BINDING_PACKAGES above.
+EVIDENCE_TUTORIAL_EXEMPT_BINDINGS = frozenset({"registry-evidence-client-node"})
 
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
-EVIDENCE_TUTORIAL_PACKAGES = (EVIDENCE_PACKAGES - EVIDENCE_BINDING_PACKAGES) | frozenset(
-    SHARDS["mint"]
-)
+EVIDENCE_TUTORIAL_PACKAGES = (
+    EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_BINDINGS
+) | frozenset(SHARDS["mint"])
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
