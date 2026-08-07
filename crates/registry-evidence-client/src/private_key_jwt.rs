@@ -62,6 +62,13 @@ pub const DEFAULT_ASSERTION_LIFETIME_SECONDS: i64 = 60;
 /// that bound is refused with a code that says nothing about the reason.
 pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: i64 = 300;
 
+/// What the constructor signs to prove the client key can sign at all.
+///
+/// It carries a space and no `.`, so it cannot be read as the
+/// `base64url(header).base64url(claims)` a client assertion is signed over. The
+/// signature is discarded, and could not stand in for one even if it were not.
+const CLIENT_KEY_PROBE: &[u8] = b"registry-evidence-client client key usability probe";
+
 /// How much of an access token's remaining life is treated as already spent.
 pub const DEFAULT_REFRESH_MARGIN_SECONDS: i64 = 30;
 
@@ -333,6 +340,19 @@ impl PrivateKeyJwt {
             .clone()
             .filter(|kid| !kid.trim().is_empty())
             .ok_or_else(|| refuse("the client key must carry a key identifier"))?;
+        // Stating an algorithm is not the same as being able to sign with it. A
+        // P-256 scalar of zero and an RSA key whose components disagree are both
+        // well-formed enough to parse, and are rejected only where the key is
+        // imported, which is at signing time. Signing once here keeps the promise
+        // this constructor makes: a key that cannot sign is refused now rather
+        // than once per request, as an authentication failure that names nothing.
+        // EdDSA never reaches this, since every 32-byte string is a valid Ed25519
+        // seed, which is why signing with EdDSA alone hid the gap.
+        //
+        // The probe is deliberately not shaped like a JWS signing input, so the
+        // signature it discards could not be presented as a client assertion.
+        registry_platform_crypto::sign(CLIENT_KEY_PROBE, &config.client_key)
+            .map_err(|_| refuse("the client key cannot sign a client assertion"))?;
         // Ties the message below to the constant, so the constant cannot drift
         // from the number the message states.
         const _: () = assert!(MAXIMUM_ASSERTION_LIFETIME_SECONDS == 300);
@@ -755,6 +775,26 @@ mod tests {
 
     fn rs256_client_key() -> PrivateJwk {
         PrivateJwk::parse(RSA_CLIENT_JWK).expect("the test key parses")
+    }
+
+    /// An ES256 key that parses and states its algorithm, yet cannot sign: zero
+    /// is a well-formed 32-byte scalar and an invalid P-256 private key.
+    ///
+    /// There is no EdDSA counterpart, because every 32-byte string is a valid
+    /// Ed25519 seed. That asymmetry is why signing with EdDSA alone never
+    /// exposed the gap this case covers.
+    fn unsignable_es256_client_key() -> PrivateJwk {
+        let mut key = es256_client_key(Some(KEY_ID));
+        key.d = Some(URL_SAFE_NO_PAD.encode([0u8; 32]));
+        key
+    }
+
+    /// An RS256 key that parses and states its algorithm, yet cannot sign: each
+    /// component is well-formed on its own, but `p` no longer divides `n`.
+    fn unsignable_rs256_client_key() -> PrivateJwk {
+        let mut key = rs256_client_key();
+        key.p = key.q.clone();
+        key
     }
 
     fn endpoint(base: &str) -> Url {
@@ -1488,6 +1528,20 @@ mod tests {
                     client_key(Some(KEY_ID)),
                 )
                 .with_request_timeout(Duration::ZERO),
+            ),
+            (
+                "the client key cannot sign a client assertion",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    unsignable_es256_client_key(),
+                ),
+            ),
+            (
+                "the client key cannot sign a client assertion",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    unsignable_rs256_client_key(),
+                ),
             ),
             (
                 "the pinned certificate authority bundle carries no certificate",
