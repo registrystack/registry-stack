@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required:
+  - deathRegisterContract
+properties:
+  deathRegisterContract: {const: urn:example:fixture:death-register:v1}

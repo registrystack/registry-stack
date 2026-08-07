@@ -1,0 +1,28 @@
+type: object
+additionalProperties: false
+# Only the resolution flag is guaranteed. A register that cannot resolve the
+# reference the search just produced sends nothing else, and the script decides
+# what a resolved record must carry.
+required: [record_found]
+properties:
+  record_found: {type: boolean}
+  union_events:
+    type: array
+    minItems: 0
+    maxItems: 8
+    items:
+      type: object
+      additionalProperties: false
+      # An event is a whole record or it is not one. There is no page to decide
+      # before reading it, so a partial event is a protocol failure in Rust and
+      # never reaches the script.
+      required: [union_start_date, union_end_reason, union_recognized]
+      properties:
+        union_start_date: {type: string, format: date}
+        # Deliberately wider than the governed fact enum: a reason code this
+        # profile does not govern must reach the closed fact schema, not be
+        # silently reshaped by the response gate.
+        union_end_reason: {type: string, minLength: 1, maxLength: 32}
+        union_recognized: {type: boolean}
+  union_set_contract: {type: string, minLength: 1, maxLength: 128}
+  union_set_complete: {type: boolean}
