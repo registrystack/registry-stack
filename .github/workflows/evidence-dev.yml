@@ -330,6 +330,7 @@ jobs:
               ]
           }
           SPEC = {
+              "response_format": "signed-jws",
               "requirement": "urn:example:requirement:v1",
               "purpose": "example-purpose",
               "audience": "urn:example:audience",
@@ -443,6 +444,7 @@ jobs:
             ],
           };
           const spec = {
+            responseFormat: 'signed-jws',
             requirement: 'urn:example:requirement:v1',
             purpose: 'example-purpose',
             audience: 'urn:example:audience',
