@@ -1,0 +1,7 @@
+type: object
+additionalProperties: false
+required: [completenessAttested, completenessPartial, maximumMatched]
+properties:
+  completenessAttested: {const: attested-complete}
+  completenessPartial: {const: partial}
+  maximumMatched: {const: 2}

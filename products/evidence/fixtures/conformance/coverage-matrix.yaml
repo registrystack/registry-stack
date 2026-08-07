@@ -120,6 +120,16 @@ source_shapes:
     authentication: oauth2-client-credentials
     posture: record-transformed
     outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality]
+  - profile: search-chain-json
+    request: fixed JSON POST search, then one path-bound fetch and one JSON POST fetch, in declared order
+    authentication: static-bearer per stage, one stage after an oauth2-client-credentials bootstrap
+    posture: record-transformed
+    outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality, counted-zero]
+    note: >-
+      The only multi-stage profile. Its member count carries two provider integers
+      with different jobs: the cardinality guard, which stays a closed outcome and
+      reaches nothing, and a separate register-supplied count consumed as a bounded
+      integer value.
   common_failures: [401, 403, 429, 5xx, timeout, redirect, invalid-json, wrong-media-type, oversized-response]
   common_invariants:
     - only the acquisition kind the bundle configures, from the closed set the operator enabled, and no page traversal

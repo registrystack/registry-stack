@@ -1,0 +1,8 @@
+type: object
+additionalProperties: false
+required: [registerScope, recordStatus, resultLimit, resultOffset]
+properties:
+  registerScope: {const: REGISTER-FIXTURE}
+  recordStatus: {const: ACTIVE}
+  resultLimit: {const: 2}
+  resultOffset: {const: 0}

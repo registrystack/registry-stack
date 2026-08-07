@@ -1,0 +1,5 @@
+type: object
+additionalProperties: false
+required: [related_record_count]
+properties:
+  related_record_count: {type: integer, minimum: 0, maximum: 64}

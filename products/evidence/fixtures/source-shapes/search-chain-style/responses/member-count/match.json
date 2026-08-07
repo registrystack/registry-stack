@@ -1,0 +1,10 @@
+{
+  "total": 1,
+  "results": [
+    {
+      "holder.reference": "REF-CANARY-0001",
+      "holder.relatedTotal": 3,
+      "holder.name": {"display": "SOURCE-HOLDER-CANARY-DO-NOT-LOG"}
+    }
+  ]
+}
