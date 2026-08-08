@@ -11,7 +11,7 @@ use tower_lsp_server::ls_types::{
     DiagnosticSeverity, Position, Range, SymbolKind as LspSymbolKind,
 };
 
-use crate::relay;
+use crate::{relay, workspace::ProjectFamily};
 
 /// The kind of a symbol, qualified by the document family that declares it. Keys, queries, and
 /// diagnostics compare whole kinds, so one family's names never resolve another family's
@@ -19,18 +19,21 @@ use crate::relay;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SymbolKind {
     Relay(RelayKind),
+    Evidence(EvidenceKind),
 }
 
 impl SymbolKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Relay(kind) => kind.label(),
+            Self::Evidence(kind) => kind.label(),
         }
     }
 
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
             Self::Relay(kind) => kind.lsp_kind(),
+            Self::Evidence(kind) => kind.lsp_kind(),
         }
     }
 }
@@ -38,6 +41,12 @@ impl SymbolKind {
 impl From<RelayKind> for SymbolKind {
     fn from(kind: RelayKind) -> Self {
         Self::Relay(kind)
+    }
+}
+
+impl From<EvidenceKind> for SymbolKind {
+    fn from(kind: EvidenceKind) -> Self {
+        Self::Evidence(kind)
     }
 }
 
@@ -73,6 +82,57 @@ impl RelayKind {
             Self::Consultation => LspSymbolKind::FUNCTION,
             Self::Fixture => LspSymbolKind::EVENT,
             Self::Environment => LspSymbolKind::PACKAGE,
+        }
+    }
+}
+
+/// What an Evidence authoring project names.
+///
+/// These are the names one document writes and another document spells back, which is the only
+/// reason a name is worth indexing. A question names the concept it answers, the source it reads,
+/// the selector profile it picks a subject with, the schema its output is checked against, the
+/// derivation file that computes it, and the fixtures that exercise it, and an access policy names
+/// the questions it admits.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EvidenceKind {
+    Question,
+    Concept,
+    Source,
+    SelectorProfile,
+    DerivationFile,
+    SchemaFile,
+    FixtureFile,
+    AccessPolicy,
+}
+
+impl EvidenceKind {
+    /// The word an author reads in "Unknown {label} reference" and "Duplicate {label} definition",
+    /// which is why these are the authoring form's own words rather than the variant names.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::Concept => "concept",
+            Self::Source => "source",
+            Self::SelectorProfile => "selector profile",
+            Self::DerivationFile => "derivation file",
+            Self::SchemaFile => "schema file",
+            Self::FixtureFile => "fixture file",
+            Self::AccessPolicy => "access policy",
+        }
+    }
+
+    /// The icon an editor draws beside the name. A question is asked and answered like a call, a
+    /// concept is a property of the subject the assertion is about, a source is a unit the project
+    /// reads from, a selector profile is the contract for picking one subject, the three file kinds
+    /// are files, and an access policy collects the questions one caller may ask.
+    pub fn lsp_kind(self) -> LspSymbolKind {
+        match self {
+            Self::Question => LspSymbolKind::FUNCTION,
+            Self::Concept => LspSymbolKind::FIELD,
+            Self::Source => LspSymbolKind::MODULE,
+            Self::SelectorProfile => LspSymbolKind::INTERFACE,
+            Self::DerivationFile | Self::SchemaFile | Self::FixtureFile => LspSymbolKind::FILE,
+            Self::AccessPolicy => LspSymbolKind::PACKAGE,
         }
     }
 }
@@ -163,23 +223,29 @@ pub struct ProjectIndex {
 }
 
 impl ProjectIndex {
+    /// Loads and indexes one Relay project. The multi-family path runs through
+    /// [`crate::workspace`], which knows which family a root belongs to; this entry point serves
+    /// callers that already have a Relay project in hand and asks nothing of them.
     pub fn load(root: &Path) -> Result<Self> {
         let root = root
             .canonicalize()
             .with_context(|| format!("failed to resolve project root {}", root.display()))?;
         let loaded = relay::load_project_documents(&root)?;
         Ok(Self::from_documents_with_diagnostics(
+            ProjectFamily::Relay,
             &root,
             &loaded.documents,
             loaded.diagnostics,
         ))
     }
 
+    /// Indexes documents already in memory as a Relay project, for the same reason as [`Self::load`].
     pub fn from_documents(root: &Path, documents: &BTreeMap<PathBuf, String>) -> Self {
-        Self::from_documents_with_diagnostics(root, documents, Vec::new())
+        Self::from_documents_with_diagnostics(ProjectFamily::Relay, root, documents, Vec::new())
     }
 
     pub(crate) fn from_documents_with_diagnostics(
+        family: ProjectFamily,
         root: &Path,
         documents: &BTreeMap<PathBuf, String>,
         mut diagnostics: Vec<IndexedDiagnostic>,
@@ -202,7 +268,7 @@ impl ProjectIndex {
             .filter_map(|(path, document)| document.syntax_error.map(|range| (path.clone(), range)))
             .collect::<BTreeMap<_, _>>();
 
-        let (symbols, references, semantic_diagnostics) = relay::build_index(&root, &parsed);
+        let (symbols, references, semantic_diagnostics) = family.build_index(&root, &parsed);
 
         let mut index = Self {
             root,

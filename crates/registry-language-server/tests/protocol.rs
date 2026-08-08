@@ -326,7 +326,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
                 initial_log
                     .pointer("/params/message")
                     .and_then(Value::as_str),
-                Some("No registry-stack.yaml project found in the workspace")
+                Some("No Relay or Evidence project found in the workspace")
             );
             fs::write(&manifest, [0xff, 0xfe]).unwrap();
             send(
@@ -357,7 +357,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
             .and_then(Value::as_str)
             .unwrap();
         assert!(message.starts_with("Could not index Registry Stack project:"));
-        assert!(!message.contains("No registry-stack.yaml project found"));
+        assert!(!message.contains("No Relay or Evidence project found"));
         assert!(
             message.len() <= 560,
             "load error was not bounded: {message}"
@@ -426,6 +426,134 @@ fn publishes_malformed_project_document_diagnostics() {
             .pointer("/message")
             .and_then(Value::as_str)
             .is_some_and(|message| message.contains("Invalid YAML syntax")))));
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null }),
+    );
+    receive_response(&mut stdout, 2);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+/// Two projects of different families, each with a document that stops parsing, in one session. A
+/// reader has to be able to tell which tool is reporting, so each diagnostic carries the name of
+/// the family that produced it.
+#[test]
+fn diagnostics_name_the_family_that_produced_them() {
+    use std::collections::BTreeMap;
+
+    use registry_evidence_authoring::{
+        layout::QUESTIONS_DIRECTORY,
+        marker::{default_project_marker_document, PROJECT_MARKER_FILE},
+    };
+
+    let workspace = TempDir::new().unwrap();
+    let relay = workspace.path().join("relay");
+    let evidence = workspace.path().join("evidence");
+    fs::create_dir_all(&relay).unwrap();
+    fs::create_dir_all(evidence.join(QUESTIONS_DIRECTORY)).unwrap();
+    fs::write(relay.join("registry-stack.yaml"), "registry: [\n").unwrap();
+    fs::write(
+        evidence.join(PROJECT_MARKER_FILE),
+        default_project_marker_document(),
+    )
+    .unwrap();
+    let question = evidence.join(QUESTIONS_DIRECTORY).join("adult-status.yaml");
+    fs::write(&question, "id: [\n").unwrap();
+
+    let uri_of = |path: &std::path::Path| {
+        Uri::from_file_path(path.canonicalize().unwrap())
+            .unwrap()
+            .to_string()
+    };
+    let manifest_uri = uri_of(&relay.join("registry-stack.yaml"));
+    let question_uri = uri_of(&question);
+    let relay_folder_uri = uri_of(&relay);
+    let evidence_folder_uri = uri_of(&evidence);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-language-server"))
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "capabilities": {},
+                "workspaceFolders": [
+                    { "uri": relay_folder_uri, "name": "relay" },
+                    { "uri": evidence_folder_uri, "name": "evidence" }
+                ]
+            }
+        }),
+    );
+    receive_response(&mut stdout, 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+
+    let mut sources = BTreeMap::new();
+    for _ in 0..50 {
+        let message = receive(&mut stdout);
+        if message.get("method").and_then(Value::as_str) != Some("textDocument/publishDiagnostics")
+        {
+            continue;
+        }
+        let uri = message
+            .pointer("/params/uri")
+            .and_then(Value::as_str)
+            .expect("a published document names its URI")
+            .to_owned();
+        for diagnostic in message
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .expect("a published document carries a diagnostics array")
+        {
+            if diagnostic
+                .pointer("/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("Invalid YAML syntax"))
+            {
+                sources.insert(
+                    uri.clone(),
+                    diagnostic
+                        .pointer("/source")
+                        .and_then(Value::as_str)
+                        .expect("a diagnostic names its source")
+                        .to_owned(),
+                );
+            }
+        }
+        if sources.len() == 2 {
+            break;
+        }
+    }
+
+    assert_eq!(
+        sources.get(&manifest_uri).map(String::as_str),
+        Some("registry-stack"),
+        "{sources:?}"
+    );
+    assert_eq!(
+        sources.get(&question_uri).map(String::as_str),
+        Some("evidence"),
+        "{sources:?}"
+    );
 
     send(
         &mut stdin,

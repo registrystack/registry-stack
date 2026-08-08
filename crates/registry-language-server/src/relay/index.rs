@@ -15,13 +15,19 @@ use crate::{
         bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
         IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
     },
-    safety::{secure_directory, secure_regular_file},
+    safety::{plain_file, secure_directory, secure_regular_file},
     workspace::LoadedProjectDocuments,
     yaml::{ParsedDocument, YamlValue},
 };
 
 pub(crate) const PROJECT_FILE: &str = "registry-stack.yaml";
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
+
+/// Whether a directory is a Relay project root. The manifest is the whole answer, and a symbolic
+/// link wearing its name is not an answer at all.
+pub(crate) fn declares_root(directory: &Path) -> bool {
+    plain_file(&directory.join(PROJECT_FILE))
+}
 
 pub(crate) fn is_project_document(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {

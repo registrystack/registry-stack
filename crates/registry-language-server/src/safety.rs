@@ -32,6 +32,21 @@ pub(crate) fn is_safe_authored_file(root: &Path, path: &Path) -> bool {
     secure_regular_file(root, path).is_ok_and(|metadata| metadata.is_some())
 }
 
+/// Whether a path is a regular file, following nothing to decide it.
+///
+/// This is the question asked of a name before a root exists to contain it, so it cannot go through
+/// the walk above. A path that is itself a symbolic link is not a plain file, whatever it points
+/// at: a link is how a directory borrows a shape it does not have, and a borrowed shape must not
+/// declare a project root that the server will then read files from.
+pub(crate) fn plain_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+/// Whether a path is a directory, following nothing to decide it, for the same reason.
+pub(crate) fn plain_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
 /// The metadata of `path`, but only once the walk from `root` down to it has proved that every
 /// layer is an ordinary directory entry and that the result still resolves inside `root`.
 fn secure_path_metadata(root: &Path, path: &Path) -> Result<Option<fs::Metadata>> {

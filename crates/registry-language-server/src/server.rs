@@ -67,7 +67,9 @@ impl Backend {
                             diagnostic.range,
                             Some(diagnostic.severity),
                             None,
-                            Some("registry-stack".to_owned()),
+                            // The root says which tool is talking, so a reader of a mixed workspace
+                            // can tell one family's diagnostics from another's.
+                            Some(root.diagnostic_source().to_owned()),
                             diagnostic.message.clone(),
                             None,
                             None,
@@ -252,7 +254,7 @@ impl LanguageServer for Backend {
             } else {
                 (
                     MessageType::INFO,
-                    "No registry-stack.yaml project found in the workspace".to_owned(),
+                    "No Relay or Evidence project found in the workspace".to_owned(),
                 )
             }
         };

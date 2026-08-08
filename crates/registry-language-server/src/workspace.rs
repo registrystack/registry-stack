@@ -11,8 +11,10 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-    refs::{document_diagnostic, IndexedDiagnostic, ProjectIndex},
+    evidence,
+    refs::{document_diagnostic, IndexedDiagnostic, IndexedReference, IndexedSymbol, ProjectIndex},
     relay,
+    yaml::ParsedDocument,
 };
 
 /// How many roots one session indexes. A client that reaches across many unrelated projects stops
@@ -29,37 +31,73 @@ pub(crate) struct LoadedProjectDocuments {
     pub(crate) diagnostics: Vec<IndexedDiagnostic>,
 }
 
-/// A family of project documents, named by the file that marks a root of that family.
+/// A family of project documents. Each one answers for its own roots, its own documents, and its
+/// own diagnostics, and never for another family's.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProjectFamily {
     Relay,
+    Evidence,
 }
 
 impl ProjectFamily {
-    /// Every family discovery tests, in the order it tests them.
-    const ALL: &'static [Self] = &[Self::Relay];
+    /// Every family discovery tests, in the order it tests them. The order decides a directory that
+    /// somehow answers for two families, so it is fixed here rather than left to whichever test
+    /// runs first.
+    const ALL: &'static [Self] = &[Self::Relay, Self::Evidence];
 
-    fn marker_file(self) -> &'static str {
+    /// Whether this family claims a directory as one of its roots.
+    fn declares_root(self, directory: &Path) -> bool {
         match self {
-            Self::Relay => relay::PROJECT_FILE,
+            Self::Relay => relay::declares_root(directory),
+            Self::Evidence => evidence::declares_root(directory),
         }
     }
 
     fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
             Self::Relay => relay::load_project_documents(root),
+            Self::Evidence => evidence::load_project_documents(root),
         }
     }
 
     fn owns_document(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => relay::is_project_document(root, path),
+            Self::Evidence => evidence::is_project_document(root, path),
         }
     }
 
     fn is_safe_authored_file(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => relay::is_safe_authored_file(root, path),
+            Self::Evidence => evidence::is_safe_authored_file(root, path),
+        }
+    }
+
+    pub(crate) fn build_index(
+        self,
+        root: &Path,
+        parsed: &BTreeMap<PathBuf, ParsedDocument>,
+    ) -> (
+        Vec<IndexedSymbol>,
+        Vec<IndexedReference>,
+        Vec<IndexedDiagnostic>,
+    ) {
+        match self {
+            Self::Relay => relay::build_index(root, parsed),
+            Self::Evidence => evidence::build_index(root, parsed),
+        }
+    }
+
+    /// The name this family's diagnostics are published under.
+    ///
+    /// An editor groups and filters by this string, and a reader has to be able to tell which tool
+    /// is talking. A project that holds both families would otherwise show one undifferentiated
+    /// list, so each family says who it is.
+    pub(crate) fn diagnostic_source(self) -> &'static str {
+        match self {
+            Self::Relay => "registry-stack",
+            Self::Evidence => "evidence",
         }
     }
 }
@@ -81,6 +119,7 @@ impl RootState {
         let root = root.canonicalize()?;
         let loaded = family.load_documents(&root)?;
         let index = ProjectIndex::from_documents_with_diagnostics(
+            family,
             &root,
             &loaded.documents,
             loaded.diagnostics.clone(),
@@ -97,6 +136,11 @@ impl RootState {
 
     pub(crate) fn index(&self) -> &ProjectIndex {
         &self.index
+    }
+
+    /// The name the diagnostics of this root are published under.
+    pub(crate) fn diagnostic_source(&self) -> &'static str {
+        self.family.diagnostic_source()
     }
 
     pub(crate) fn open_versions(&self) -> &BTreeMap<PathBuf, i32> {
@@ -168,6 +212,7 @@ impl RootState {
 
     fn rebuild(&mut self) {
         self.index = ProjectIndex::from_documents_with_diagnostics(
+            self.family,
             &self.root,
             &self.documents,
             self.disk_diagnostics.clone(),
@@ -290,14 +335,11 @@ impl Workspace {
         }
     }
 
-    /// Tests one directory for a project marker. This never walks anywhere: a workspace folder is
+    /// Tests one directory against every family. This never walks anywhere: a workspace folder is
     /// a root or it is not.
     fn root_at(&self, directory: &Path) -> Option<(PathBuf, ProjectFamily)> {
         for family in ProjectFamily::ALL {
-            let marker = directory.join(family.marker_file());
-            // A marker that is itself a symbolic link, or that is not a regular file, does not
-            // declare a root.
-            if !fs::symlink_metadata(&marker).is_ok_and(|metadata| metadata.file_type().is_file()) {
+            if !family.declares_root(directory) {
                 continue;
             }
             let Ok(root) = directory.canonicalize() else {
@@ -350,16 +392,45 @@ fn canonical_path(path: &Path) -> PathBuf {
 mod tests {
     use std::fs;
 
+    use registry_evidence_authoring::{
+        layout::{OPENAPI_FILE, QUESTIONS_DIRECTORY},
+        marker::{default_project_marker_document, PROJECT_MARKER_FILE},
+    };
     use tempfile::TempDir;
     use tower_lsp_server::ls_types::Position;
 
     use super::*;
 
     const MANIFEST: &str = "version: 1\nregistry: { id: demo }\nservices: {}\n";
+    const QUESTION: &str = "version: 1\nid: adult-status\n";
 
     fn project_in(directory: &Path) {
         fs::create_dir_all(directory).unwrap();
         fs::write(directory.join("registry-stack.yaml"), MANIFEST).unwrap();
+    }
+
+    /// An authoring project as `evidencectl` leaves it: a marker over the description and the
+    /// questions.
+    fn evidence_project_in(directory: &Path) {
+        evidence_project_without_marker_in(directory);
+        fs::write(
+            directory.join(PROJECT_MARKER_FILE),
+            default_project_marker_document(),
+        )
+        .unwrap();
+    }
+
+    /// The same project as written before the marker existed.
+    fn evidence_project_without_marker_in(directory: &Path) {
+        fs::create_dir_all(directory.join(QUESTIONS_DIRECTORY)).unwrap();
+        fs::write(directory.join(OPENAPI_FILE), "openapi: 3.1.0\n").unwrap();
+        fs::write(
+            directory
+                .join(QUESTIONS_DIRECTORY)
+                .join("adult-status.yaml"),
+            QUESTION,
+        )
+        .unwrap();
     }
 
     fn workspace_over(folders: &[&Path]) -> Workspace {
@@ -464,6 +535,146 @@ mod tests {
         let workspace = workspace_over(&[&decoy]);
 
         assert_eq!(workspace.roots().count(), 0);
+    }
+
+    #[test]
+    fn an_evidence_marker_declares_an_evidence_root() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+
+        let workspace = Workspace::default();
+
+        assert_eq!(
+            workspace.root_at(temp.path()),
+            Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
+        );
+    }
+
+    #[test]
+    fn an_evidence_project_without_a_marker_is_declared_by_its_description_and_questions() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_without_marker_in(temp.path());
+        assert!(
+            !temp.path().join(PROJECT_MARKER_FILE).exists(),
+            "the fixture must leave the project unmarked"
+        );
+
+        let workspace = Workspace::default();
+
+        assert_eq!(
+            workspace.root_at(temp.path()),
+            Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_evidence_marker_does_not_declare_a_root() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real");
+        let decoy = temp.path().join("decoy");
+        evidence_project_in(&real);
+        fs::create_dir_all(&decoy).unwrap();
+        std::os::unix::fs::symlink(
+            real.join(PROJECT_MARKER_FILE),
+            decoy.join(PROJECT_MARKER_FILE),
+        )
+        .unwrap();
+
+        let workspace = Workspace::default();
+
+        assert_eq!(workspace.root_at(&decoy), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unmarked_evidence_project_reached_through_a_symbolic_link_does_not_declare_a_root() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real");
+        evidence_project_without_marker_in(&real);
+
+        let linked_questions = temp.path().join("linked-questions");
+        fs::create_dir_all(&linked_questions).unwrap();
+        fs::write(linked_questions.join(OPENAPI_FILE), "openapi: 3.1.0\n").unwrap();
+        std::os::unix::fs::symlink(
+            real.join(QUESTIONS_DIRECTORY),
+            linked_questions.join(QUESTIONS_DIRECTORY),
+        )
+        .unwrap();
+
+        let linked_description = temp.path().join("linked-description");
+        fs::create_dir_all(linked_description.join(QUESTIONS_DIRECTORY)).unwrap();
+        std::os::unix::fs::symlink(
+            real.join(OPENAPI_FILE),
+            linked_description.join(OPENAPI_FILE),
+        )
+        .unwrap();
+
+        let workspace = Workspace::default();
+
+        assert_eq!(workspace.root_at(&linked_questions), None);
+        assert_eq!(workspace.root_at(&linked_description), None);
+    }
+
+    #[test]
+    fn an_evidence_root_loads_its_documents_and_declares_nothing_yet() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+
+        let workspace = workspace_over(&[temp.path()]);
+
+        let root = workspace.roots().next().expect("the project is a root");
+        let question = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml");
+        assert!(root.index().document_paths().any(|path| path == question));
+        assert!(root.index().workspace_symbols("adult-status").is_empty());
+        assert_eq!(root.index().diagnostics().len(), 0);
+    }
+
+    #[test]
+    fn sibling_roots_of_two_families_each_answer_for_their_own_documents() {
+        let temp = TempDir::new().unwrap();
+        let relay = temp.path().join("relay");
+        let evidence = temp.path().join("evidence");
+        project_in(&relay);
+        evidence_project_in(&evidence);
+
+        let workspace = workspace_over(&[&relay, &evidence]);
+        assert_eq!(workspace.roots().count(), 2);
+
+        let manifest = relay.join("registry-stack.yaml").canonicalize().unwrap();
+        let question = evidence
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml")
+            .canonicalize()
+            .unwrap();
+        let relay_root = workspace.root_for(&manifest).unwrap();
+        let evidence_root = workspace.root_for(&question).unwrap();
+
+        assert_eq!(relay_root.family, ProjectFamily::Relay);
+        assert_eq!(evidence_root.family, ProjectFamily::Evidence);
+        assert_eq!(relay_root.diagnostic_source(), "registry-stack");
+        assert_eq!(evidence_root.diagnostic_source(), "evidence");
+        assert!(relay_root
+            .index()
+            .document_paths()
+            .any(|path| path == manifest));
+        assert!(!relay_root
+            .index()
+            .document_paths()
+            .any(|path| path == question));
+        assert!(evidence_root
+            .index()
+            .document_paths()
+            .any(|path| path == question));
+        assert!(!evidence_root
+            .index()
+            .document_paths()
+            .any(|path| path == manifest));
     }
 
     #[test]

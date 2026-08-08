@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+registry-evidence-authoring.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 tower-lsp-server.workspace = true
