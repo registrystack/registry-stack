@@ -123,6 +123,14 @@ const FORBIDDEN: &[(&str, &str)] = &[
         "FileModuleResolver",
         "resolves an imported module by reading a file",
     ),
+    // Every other way of getting an engine. `Engine::default` is `Engine::new`
+    // (rhai 1.25.1, `src/engine.rs`), so it arrives carrying the file-reading
+    // resolver under a name the guard below does not read; the raw pair arrives
+    // without one, which is safe but equally unread. Leaving one spelling is
+    // what lets the guard speak for every engine this crate builds.
+    ("Engine::default", "builds an engine the guard cannot read"),
+    ("Engine::new_raw", "builds an engine the guard cannot read"),
+    ("Engine::RAW", "builds an engine the guard cannot read"),
 ];
 
 /// Every crate this library may link. Each one is a parser, an error type, or
@@ -448,6 +456,9 @@ let real = path.canonicalize().unwrap();
 let target = path.read_link().unwrap();
 include!("../../shared/io_helpers.rs");
 #[path = "../../shared/io_helpers.rs"]
+let engine = rhai::Engine::default();
+let engine = rhai::Engine::new_raw();
+let engine = rhai::Engine::RAW;
 "#;
 
 /// Ordinary lines lifted from this crate's own sources, so that the sweep is
@@ -549,13 +560,24 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
 /// So the engine is built without that capability rather than merely never
 /// using it, and any engine this crate builds later has to disarm itself the
 /// same way.
+///
+/// `Engine::new(` is the only construction spelling the forbidden list leaves,
+/// so counting it counts the engines. The count is a bound rather than a proof:
+/// nothing here follows a value from where it is built to where it is disarmed,
+/// so a file that disarmed one engine twice and left a second alone would
+/// satisfy it. What it does hold is the shape a second engine actually arrives
+/// in, which is a second call site next to a first that already disarms.
+fn disarms_every_engine(text: &str) -> bool {
+    named_at(text, "set_module_resolver").len() >= named_at(text, "Engine::new(").len()
+}
+
 #[test]
 fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
     let armed = rust_sources()
         .into_iter()
         .filter(|path| {
             let text = fs::read_to_string(path).expect("crate sources are readable");
-            text.contains("Engine::new(") && !text.contains("set_module_resolver")
+            !disarms_every_engine(&text)
         })
         .map(|path| {
             path.file_name()
@@ -569,6 +591,26 @@ fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
         "these sources build a rhai engine and leave its file-reading module \
          resolver in place: {armed:?}"
     );
+}
+
+#[test]
+fn the_engine_guard_reads_every_engine_a_file_builds() {
+    let disarmed = "fn parser() -> Engine {\n    let mut engine = Engine::new();\n\
+                    \n    engine.set_module_resolver(DummyModuleResolver::new());\n\
+                    \n    engine\n}\n";
+    assert!(disarms_every_engine(disarmed));
+    // A second call site, added the way a second call site gets added: the
+    // first engine is still disarmed, and the file still says so, so a guard
+    // that asks whether the file mentions disarming at all reads this as clean.
+    let second = format!("{disarmed}\nfn schema_parser() -> Engine {{\n    Engine::new()\n}}\n");
+    assert!(!disarms_every_engine(&second));
+    // The synonym this guard cannot see, and the division of labour that makes
+    // that all right: counting cannot tell `Engine::default` from no engine at
+    // all, so the forbidden list is what leaves one construction spelling for
+    // the counting to be about.
+    let synonym = "fn parser() -> Engine {\n    Engine::default()\n}\n";
+    assert!(disarms_every_engine(synonym));
+    assert!(!refusals(synonym).is_empty());
 }
 
 /// A directory of this test's own, under the system temporary directory.
