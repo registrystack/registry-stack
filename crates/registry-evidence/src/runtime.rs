@@ -545,6 +545,25 @@ impl EvidenceRuntime {
         self.authenticator.announce_key_source().await;
     }
 
+    /// The sources whose mounted extract is already older than they allow.
+    ///
+    /// Startup names these for the same reason it names an unusable `jwksUri`,
+    /// and with the same standing: it reports, it does not refuse to start, and
+    /// it does not decide readiness. Age is an evaluation-time question, asked
+    /// against the instant each evaluation carries, so this is a startup
+    /// snapshot rather than a second authority over it. An extract that goes
+    /// stale later, or one republished under the running process, is answered
+    /// by that per-evaluation check and by the `source-extract-stale` audit
+    /// category, never by this.
+    pub fn stale_extract_sources(&self) -> Vec<&str> {
+        let instant = Utc::now();
+        self.sources
+            .iter()
+            .filter(|(_, source)| source.extract_is_stale(instant))
+            .map(|(source_id, _)| source_id.as_str())
+            .collect()
+    }
+
     /// List only the complete request shapes that the authenticated caller can
     /// currently invoke. Discovery performs no source access, credential
     /// resolution, signing, or evidence-data audit.

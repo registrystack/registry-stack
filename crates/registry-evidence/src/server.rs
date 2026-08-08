@@ -259,6 +259,17 @@ where
     // operator reads as a bad token. Reported, not fatal: readiness is what
     // withholds traffic until the key set is in hand.
     startup_runtime.announce_key_source().await;
+    // Same standing as the key set above. An extract this old refuses every
+    // evaluation that reads it, and republishing it is the only cure, so the
+    // operator is told while the deploy is still in front of them rather than
+    // through a dependency failure per request.
+    for source_id in startup_runtime.stale_extract_sources() {
+        tracing::warn!(
+            target: "registry_evidence::startup",
+            source_id,
+            "the mounted extract is older than this source allows"
+        );
+    }
     let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
     let metrics_server = metrics_listener.map(|listener| {
         let mut stopped = metrics_stopped;

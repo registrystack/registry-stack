@@ -403,6 +403,12 @@ async fn an_extract_older_than_the_source_allows_fails_before_a_row_is_read() {
         "the staleness check did not run first: {stale}"
     );
     assert!(artifact_fault_text(&stale).contains(cause::EXTRACT_TOO_OLD));
+
+    // The same fact, asked the way startup asks it. Startup only says it out
+    // loud; the refusal above is what withholds an answer, and readiness does
+    // not consult either.
+    assert!(!executor.extract_is_stale(instant(EVALUATED_AT)));
+    assert!(executor.extract_is_stale(instant("2026-08-07T04:00:01Z")));
 }
 
 #[tokio::test]
@@ -641,6 +647,8 @@ async fn a_source_compiled_without_an_extract_materializes_but_refuses_to_run() 
         run(&executor, &selectors, &prepared(&[]), EVALUATED_AT).await,
         Err(SourceError::StatementUnavailable)
     );
+    // Nothing was mounted, so there is no file whose age startup could report.
+    assert!(!executor.extract_is_stale(instant("2027-01-01T00:00:00Z")));
 }
 
 #[tokio::test]
