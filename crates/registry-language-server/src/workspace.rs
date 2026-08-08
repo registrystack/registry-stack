@@ -21,6 +21,14 @@ pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
 
 const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 
+/// What one family's loader found under a root: the documents it read, and the reasons it could
+/// not read the rest.
+#[derive(Debug)]
+pub(crate) struct LoadedProjectDocuments {
+    pub(crate) documents: BTreeMap<PathBuf, String>,
+    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+}
+
 /// A family of project documents, named by the file that marks a root of that family.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProjectFamily {
@@ -37,7 +45,7 @@ impl ProjectFamily {
         }
     }
 
-    fn load_documents(self, root: &Path) -> Result<relay::LoadedProjectDocuments> {
+    fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
             Self::Relay => relay::load_project_documents(root),
         }

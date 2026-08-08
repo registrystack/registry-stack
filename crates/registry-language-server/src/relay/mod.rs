@@ -4,7 +4,7 @@
 
 pub(crate) mod index;
 
-pub(crate) use index::{
-    build_index, is_project_document, is_safe_authored_file, load_project_documents,
-    LoadedProjectDocuments, PROJECT_FILE,
-};
+pub(crate) use index::{build_index, is_project_document, load_project_documents, PROJECT_FILE};
+// Every path a Relay project reads is answered by the shared containment rule; Relay adds nothing
+// of its own to it.
+pub(crate) use crate::safety::is_safe_authored_file;

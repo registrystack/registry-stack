@@ -3,6 +3,7 @@
 
 mod refs;
 mod relay;
+mod safety;
 mod server;
 mod workspace;
 mod yaml;

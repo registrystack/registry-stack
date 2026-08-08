@@ -15,6 +15,8 @@ use crate::{
         bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
         IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
     },
+    safety::{secure_directory, secure_regular_file},
+    workspace::LoadedProjectDocuments,
     yaml::{ParsedDocument, YamlValue},
 };
 
@@ -51,12 +53,6 @@ pub(crate) fn is_project_document(root: &Path, path: &Path) -> bool {
         }
         _ => false,
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct LoadedProjectDocuments {
-    pub(crate) documents: BTreeMap<PathBuf, String>,
-    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
 }
 
 pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocuments> {
@@ -147,53 +143,6 @@ fn add_yaml_files(root: &Path, directory: &Path, candidates: &mut Vec<PathBuf>) 
         }
     }
     Ok(())
-}
-
-fn secure_directory(root: &Path, path: &Path) -> Result<bool> {
-    Ok(secure_path_metadata(root, path)?.is_some_and(|metadata| metadata.is_dir()))
-}
-
-fn secure_regular_file(root: &Path, path: &Path) -> Result<Option<fs::Metadata>> {
-    Ok(secure_path_metadata(root, path)?.filter(|metadata| metadata.file_type().is_file()))
-}
-
-pub(crate) fn is_safe_authored_file(root: &Path, path: &Path) -> bool {
-    secure_regular_file(root, path).is_ok_and(|metadata| metadata.is_some())
-}
-
-fn secure_path_metadata(root: &Path, path: &Path) -> Result<Option<fs::Metadata>> {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return Ok(None);
-    };
-    if relative
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Ok(None);
-    }
-
-    let mut candidate = root.to_path_buf();
-    let mut metadata = fs::symlink_metadata(root)
-        .with_context(|| format!("failed to inspect project root {}", root.display()))?;
-    for component in relative.components() {
-        candidate.push(component.as_os_str());
-        metadata = match fs::symlink_metadata(&candidate) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).context("failed to inspect a project path"),
-        };
-        if metadata.file_type().is_symlink() {
-            return Ok(None);
-        }
-    }
-
-    let canonical = candidate
-        .canonicalize()
-        .context("failed to prove project path containment")?;
-    if !canonical.starts_with(root) || canonical != candidate {
-        return Ok(None);
-    }
-    Ok(Some(metadata))
 }
 
 /// Walks the parsed Relay documents of one project root into symbols, references, and the
