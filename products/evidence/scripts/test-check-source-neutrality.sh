@@ -20,10 +20,25 @@ trap 'rm -rf "$sandbox_root"' EXIT HUP INT TERM
 
 failures=0
 
-# The sandbox mirrors only what the gate reads: the six production source roots,
-# the shipped binding surface, the Cargo and package manifests, and the published
+# The sandbox mirrors only what the gate reads: every production source root, the
+# shipped binding surface, the Cargo and package manifests, and the published
 # configuration. `pristine` is rebuilt for every case, so no case can see
 # another's planting.
+#
+# One list drives both the directories and the manifests, because the gate hard
+# fails on a named path that is not there: a crate added to the gate and not here
+# fails every case at once rather than the one it belongs to.
+swept_crates=(
+  registry-evidence
+  registry-evidence-authoring
+  registry-evidence-client
+  registry-evidence-client-node
+  registry-evidence-client-py
+  registry-evidence-verifier
+  registry-evidencectl
+  registry-language-server
+)
+
 build_pristine_tree() {
   local root="$sandbox_root/pristine"
   rm -rf "$root"
@@ -31,24 +46,13 @@ build_pristine_tree() {
     "$root/products/evidence/scripts" \
     "$root/products/evidence/generated" \
     "$root/products/evidence/contracts" \
-    "$root/crates/registry-evidence/src" \
-    "$root/crates/registry-evidence-client/src" \
-    "$root/crates/registry-evidence-client-node/src" \
-    "$root/crates/registry-evidence-client-py/src" \
-    "$root/crates/registry-evidence-verifier/src" \
-    "$root/crates/registry-evidencectl/src" \
     "$root/crates/registry-evidence-client-py/python/registry_evidence_client"
 
   cp "$gate_under_test" "$root/products/evidence/scripts/check-source-neutrality.sh"
 
   local crate
-  for crate in \
-    registry-evidence \
-    registry-evidence-client \
-    registry-evidence-client-node \
-    registry-evidence-client-py \
-    registry-evidence-verifier \
-    registry-evidencectl; do
+  for crate in "${swept_crates[@]}"; do
+    mkdir -p "$root/crates/$crate/src"
     printf 'pub fn evaluate() -> bool {\n    true\n}\n' >"$root/crates/$crate/src/lib.rs"
     printf '[package]\nname = "%s"\nlicense = "Apache-2.0"\n' "$crate" >"$root/crates/$crate/Cargo.toml"
   done
