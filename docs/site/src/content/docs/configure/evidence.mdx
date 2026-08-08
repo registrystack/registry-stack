@@ -251,8 +251,29 @@ an authorization server that refuses replays has an identifier to record
 
 Evidence Gateway sets the assertion's `aud` to the configured `tokenEndpoint`, which is the value
 SMART App Launch requires. RFC 7523 section 3 asks only that the audience identify the authorization
-server, so a server that expects a different identifier, such as its issuer URL, cannot be configured
-in Evidence Gateway Version 1.
+server and says the token endpoint URL MAY be used, so a server that expects a different identifier
+states it in `clientAssertionAudience`:
+
+```yaml
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://gateway.example.gov/oauth2/token
+  clientIdRef: secret:file/source-client-id
+  clientAssertionKeyRef: secret:file/source-client-key
+  clientAssertionAudience: https://auth.example.gov/realms/main
+  maximumCacheSeconds: 300
+```
+
+Two kinds of server need it: one reached through a proxy or load balancer, where the URL Evidence
+Gateway dials is not the one the authorization server knows itself by, and one that expects its
+issuer identifier. RFC 8414 does not require an issuer identifier to share an origin with the token
+endpoint, so Evidence Gateway imposes no relationship between the two. RFC 7523 section 3 has the
+authorization server compare the value by Simple String Comparison, so what you write is signed byte
+for byte: a default port or a trailing slash survives into the claim rather than being normalized
+away. The key is accepted only beside `clientAssertionKeyRef`, since a client secret carries no
+assertion to hold the claim, and it changes only who may accept the assertion, never where the token
+request goes. Register one assertion key per authorization server: a key registered at two servers is
+what would let an assertion audienced for one be presented to the other.
 
 ## Immutability
 
