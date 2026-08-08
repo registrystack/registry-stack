@@ -42,6 +42,7 @@ registry-platform-sdjwt.workspace = true
 reqwest.workspace = true
 rand_core.workspace = true
 rhai.workspace = true
+rusqlite.workspace = true
 rustix.workspace = true
 schemars = { workspace = true, features = ["chrono04"] }
 serde.workspace = true
@@ -65,6 +66,7 @@ assert-json-diff.workspace = true
 axum-test.workspace = true
 criterion.workspace = true
 rcgen.workspace = true
+serde_norway.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true

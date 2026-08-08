@@ -1,0 +1,39 @@
+version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file:
+    root: /run/secrets/registry-evidence
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+# This project makes no outbound request at all, so no trust profile is
+# declared and no source names one. The block stays because a deployment that
+# later adds an HTTP source alongside the extract needs somewhere to put one.
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+# The operator binds the bundle's logical extract name to a file on this host.
+# The file name carries the snapshot it holds, because publishing a new extract
+# means mounting a new file and restarting rather than writing over this one:
+# the runtime opens it immutable, which is sound only while nothing can change
+# it. Startup digests the bound file, so a replacement shows up in the runtime
+# digest instead of passing silently.
+sourceExtracts:
+  licence-register-extract:
+    path: /var/lib/registry-evidence/extracts/licence-register-2026-08-01.sqlite

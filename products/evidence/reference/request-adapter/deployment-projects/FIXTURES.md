@@ -72,6 +72,50 @@ the harness expects Rust to supply to `derive/3`. It must equal the bundle's
 closed derivation selector-input declaration. Omit it when derivation receives
 an empty map.
 
+`extract` is required of a fixture whose source reads a SQLite extract, and
+forbidden of one whose source answers over a network. It states the world the
+cases run against as the SQL that builds it rather than as a database file, so
+it is reviewable in a diff and no table name arrives in this tree inside an
+opaque binary. The harness materializes it into a temporary read-only file and
+binds that file in place of the operator's path before the project's own
+runtime document loads. It carries the reserved `evidence_extract` metadata row
+that `CONFIG.md` requires of any extract, because the fixture builds a real one
+and startup refuses a file without it.
+
+```yaml
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: record-reference-v1
+      values: {record_reference: REC-0001}
+  extract: |
+    CREATE TABLE evidence_extract (
+      published_at TEXT NOT NULL,
+      publisher    TEXT NOT NULL,
+      extract_id   TEXT NOT NULL
+    );
+    INSERT INTO evidence_extract (published_at, publisher, extract_id) VALUES
+      ('2026-08-01T00:00:00Z', 'urn:example:publisher', '2026-08-01-snapshot');
+    CREATE TABLE records (reference TEXT NOT NULL);
+    INSERT INTO records (reference) VALUES ('REC-0001'), ('REC-0002');
+  expectedRequestParts:
+    parameters: {}
+  expectedTransport:
+    statement: queries/source-b-lookup.sql
+```
+
+Every case of that fixture answers from the one extract and picks its subject
+with `selectors`, because that is what a published snapshot is: one file
+holding many records, not one file per outcome. The statement runs for real
+against it, which is the one asymmetry in the harness. An HTTP call needs a
+network, a credential, and a live third party, so it cannot run offline and its
+cases carry the response the provider returned. Reading a local SQLite file
+needs none of those, so fixtures stay hermetic, deterministic, and offline
+while executing the statement for real. A recorded result would leave the
+statement itself, which is the part most likely to be wrong, as the one thing
+no case covers.
+
 `purpose` names which of the requirement's declared purposes a case exercises,
 and may be stated in `common`, in a case, or in both. A requirement declaring
 exactly one purpose may omit it. A requirement declaring more than one must
@@ -87,6 +131,15 @@ authorized selectors through the production request materializer and compares
 the path, encoded query, and JSON body. There is no case-level
 `expectedRequestParts` override.
 
+`query` and `body` are the channels an HTTP request is prepared into. A
+statement request has neither, so its fixture states `parameters` instead: the
+map preparation produced, which is `{}` for a source with no preparation
+script, and stating the empty map is what proves no script added a parameter of
+its own. The two shapes are exclusive rather than optional keys of one shape,
+so a fixture cannot state the parts of a transport its source does not have and
+an HTTP fixture that omits `query` fails to parse instead of defaulting to
+empty.
+
 A `search-then-fetch` fixture also supplies
 `common.expectedFetchRequestParts` and `common.expectedFetchTransport`. The
 harness validates them only after the search returns a unique schema-valid
@@ -99,9 +152,19 @@ headers are checked by dedicated redacted transport assertions, never copied
 into fixture YAML. A case-level `expected.expectedTransport` may add an exact
 encoded query and normalized body for an encoding-focused case.
 
+A statement source crosses its boundary as a statement and the values bound
+into it, so its `expectedTransport` states `statement`, the bundle-relative
+artifact the source declares. The statement is named rather than restated: its
+text is a reviewed artifact hashed with the rest of the bundle, so a second
+copy in the fixture would only be something to drift from. A case-level
+`expected.expectedTransport` may add `parameters`, the exact map bound into
+that statement, which is where a case pins what a caller-supplied value became.
+The reserved `evidence_now` is bound by Rust at execution time and is not part
+of that map.
+
 ## Case input vocabulary
 
-Every case has a required `id` and exactly one of these eight tagged forms:
+Every case has a required `id` and exactly one of these ten tagged forms:
 
 - `response`: raw provider JSON returned by the local mock. Rust applies the
   configured projection before extraction. The fixture never pre-projects or
@@ -109,15 +172,27 @@ Every case has a required `id` and exactly one of these eight tagged forms:
 - `responses`: the exact search-source and fetch-source response map for a
   `search-then-fetch` requirement. An unresolved search stops before fetch;
   the fetch response is evaluated only after a unique search match.
-- `sourceFailure`: one closed mock failure, currently `timeout`,
-  `connection-refused`, `invalid-media-type`, `oversized`, or `malformed-json`.
+- `selectors`: the authorized role map this case picks out of the fixture's own
+  extract, replacing `common.selectors` for the case. The statement runs, so
+  the case states which record it is about rather than what the source returned.
+- `sourceFailure`: one closed source failure from the table below, naming a way
+  the source did not complete.
 - `bundleMutation`: one named startup mutation below.
+- `statementMutation`: one named mutation of a disposable copy of the reviewed
+  statement, checked while the source compiles.
 - `requestMutation`: one named authorization/request mutation below.
 - `derivationMutation`: one named script-output mutation below.
 - `derivationParameterMutation`: one closed mutation of a disposable copy of
   the requirement's derivation parameters before startup validation.
 - `selectorOverrides`: one closed selector-input replacement that exercises
   preparation rejection or exact transport materialization.
+
+A form belongs to the transport its source has. `response` and `responses`
+state what a network returned and are refused for a statement source;
+`selectors` and `statementMutation` describe an extract and the statement that
+reads it, and are refused for a source that answers over a network. The
+remaining forms describe the bundle or the authorized request and read the same
+on either transport.
 
 The optional inputs shared by applicable forms are:
 
@@ -130,11 +205,37 @@ The closed mutation names used by these projects are:
 | Field and name | Exact harness action |
 |---|---|
 | `bundleMutation: duplicate-disclosure-family` | Give two enabled requirements the same unsafe disclosure family and require startup rejection. |
+| `statementMutation: attach-external-database` | Compile a disposable statement that attaches a second database and require the authorizer to refuse it. |
 | `requestMutation: swap-subject-roles` | Exchange the child and candidate-parent role assignments without changing their profiles or origins. |
 | `requestMutation: supply-grant-derived-candidate` | Add caller material for a role whose configured origin is the authenticated grant. |
 | `derivationMutation: return-raw-reference` | Replace the disposable fixture derivation with one that returns the synthetic raw reference as a public value. |
 
 Mutation cases never alter the reviewed project files on disk.
+
+The closed `sourceFailure` names are per transport, because a failure of one
+transport is not a thing that can happen to the other. A refused connection is
+not a statement about a local file, and a refused SQL statement is not a
+statement about a network. Naming a failure the source cannot have fails the
+fixture rather than passing a case that could never occur:
+
+| Name | Transport | The source did not complete because |
+|---|---|---|
+| `timeout` | both | The bounded wait elapsed before a result was assembled. |
+| `oversized` | both | The assembled result exceeded the declared response size. |
+| `connection-refused` | `http-json` | The origin could not be reached. |
+| `invalid-media-type` | `http-json` | The response carried a media type the source does not accept. |
+| `malformed-json` | `http-json` | The response body was not the JSON the source requires. |
+| `extract-unavailable` | `sqlite-extract` | The bound extract could not be opened at request time. |
+| `extract-too-old` | `sqlite-extract` | The extract's published instant is older than the declared bound. |
+| `statement-refused` | `sqlite-extract` | The authorizer refused an action while the statement was prepared. |
+| `statement-parameter` | `sqlite-extract` | The statement names a parameter nothing bound. |
+| `statement-budget` | `sqlite-extract` | The statement exceeded its declared step budget. |
+| `statement-result` | `sqlite-extract` | The result exceeded `maximumRows` or `maximumCellBytes`. |
+| `statement-unavailable` | `sqlite-extract` | No concurrency permit was available within the timeout. |
+
+Every one of them collapses into the same `dependency_unavailable` public
+class, which is the point: what a caller learns from a source that did not
+answer is that it did not answer.
 
 ## Expected vocabulary
 
@@ -159,15 +260,16 @@ those stages apply. Omission is not treated as a wildcard.
 | `outputGate` | `accepted` or `rejected` | Derived-value gate result. |
 | `rejectedBefore` | `credential`, `source`, `derivation`, or `signing` | Latest boundary that must not be crossed. |
 | `sourceRequestCount` | integer | Exact number of evidence-data requests. Version 1 permits `0`, `1`, or `2` according to the requirement's acquisition. |
-| `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case. |
+| `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case, or the exact statement artifact and bound parameters where the source reads an extract. |
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.
-Successful `response` and `responses` cases require `lookup: match`, `derivationRuns: true`,
-and `signed: true`. The harness creates a fresh in-memory P-256 key for the
-evaluation, signs the constructed Evidence, and verifies the JWS and exact
-payload policy. The private key is never read from deployment secrets, written
-to disk, or included in output. Unresolved and failing cases require
-`signed: false` and the exact `derivationRuns` value.
+Successful `response`, `responses`, and `selectors` cases require
+`lookup: match`, `derivationRuns: true`, and `signed: true`. The harness
+creates a fresh in-memory P-256 key for the evaluation, signs the constructed
+Evidence, and verifies the JWS and exact payload policy. The private key is
+never read from deployment secrets, written to disk, or included in output.
+Unresolved and failing cases require `signed: false` and the exact
+`derivationRuns` value.
 
 Every `facts` expectation is exact. If a test cares about only two of four
 facts, it must still list all four. This prevents fixtures from silently
@@ -191,7 +293,7 @@ noticed.
 | `adapter_input_error` | `service_unavailable`, HTTP 503 | Trusted preparation or its closed inputs violate the adapter contract. Credential acquisition and source access must not occur. |
 | `source_protocol_error` | `dependency_unavailable`, HTTP 503 | The projected provider response violates its protocol, type, count, completeness, or fact-shape contract. |
 | `derivation_input_error` | `evidence_not_available`, HTTP 422 | Matched facts, returned-subject binding, governed namespace/contract, or derivation parameters are inconsistent. A returned-child mismatch is this class. It collapses publicly with the unresolved classes so a caller cannot learn that a record exists, and it is never an authoritative no-match or a signed `false`. |
-| Source transport failure | `dependency_unavailable`, HTTP 503 | Credential, concurrency, timeout, redirect, status, media type, size, JSON, projection, or source transport failure stopped the lookup. |
+| Source transport failure | `dependency_unavailable`, HTTP 503 | Credential, concurrency, timeout, redirect, status, media type, size, JSON, projection, or source transport failure stopped the lookup. An unopenable or too-old extract, and a statement the authorizer refused, that lacked a parameter, that exceeded a budget, or whose result exceeded a declared bound, are this class. |
 | Audit, signing, output-gate, or other script failure | `service_unavailable`, HTTP 503 | Evidence failed closed within the Evidence service or one of its required release dependencies. A script fault raised while derivation is running reports the internal `derivation_input_error` category and stays in this public class. |
 
 Each 503 class is pinned by the fixture's exact `publicProblem` expectation.

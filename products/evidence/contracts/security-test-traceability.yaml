@@ -311,3 +311,28 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it}
       - {file: crates/registry-evidence/tests/cli.rs, name: check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class}
       - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_gated_acquisition_kind_the_operator_enabled}
+  - id: sec-statement-source-bounded
+    tests:
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: every_write_action_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: attaching_and_detaching_a_database_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_pragma_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_non_deterministic_function_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_clock_function_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_reserved_parameter_carries_the_evaluation_instant}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_second_statement_in_the_artifact_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_declared_columns_must_match_the_result_columns}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: statement_parameters_and_declared_bindings_must_agree}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_step_budget_stops_an_expensive_statement}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_time_budget_stops_a_slow_statement}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: one_row_beyond_the_row_bound_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_value_beyond_the_cell_bound_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: an_extract_without_its_metadata_table_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_configured_age_bound_refuses_a_stale_extract}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_located_syntax_fault_carries_no_statement_text}
+      - {file: crates/registry-evidence/src/config.rs, name: statement_parameters_are_named_selector_bindings_and_the_runtime_instant_is_reserved}
+      - {file: crates/registry-evidence/src/config.rs, name: statement_source_bounds_reject_zero_and_an_oversized_value}
+      - {file: crates/registry-evidence/src/config.rs, name: statement_preparation_stands_or_falls_with_a_prepared_parameter}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: a_parameter_is_filled_from_its_one_declared_origin}
+      - {file: crates/registry-evidence/src/bundle.rs, name: every_unusable_extract_is_refused_by_its_own_name_and_cause}
+      - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}

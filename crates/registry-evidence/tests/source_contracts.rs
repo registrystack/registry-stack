@@ -11,11 +11,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
+use chrono::Utc;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
-    AcquisitionPosture, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy, PreparationLimits,
-    SourceConfig, StageInputs, RESERVED_HEADER_CONTRACT_CASES,
+    AcquisitionPosture, FixedRequest, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy,
+    PreparationLimits, SourceConfig, StageInputs, RESERVED_HEADER_CONTRACT_CASES,
 };
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
@@ -29,7 +30,8 @@ use registry_evidence::rhai_runtime::{
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
 use registry_evidence::source::{
-    project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
+    project_fixture_response, PreparedSourceRequest, ResolvedSourceSelector, SourceError,
+    SourceExecutor, SourceStatus,
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
@@ -113,6 +115,49 @@ fn source_config(
     .expect("source config deserializes")
 }
 
+/// Every source in this file reaches an HTTP/JSON API, which is the contract
+/// under test, so a source on another transport is a mistake in the fixture
+/// rather than a case these tests cover.
+const NOT_HTTP_JSON: &str = "the fixture source does not use the http-json transport";
+
+fn http_request(source: &SourceConfig) -> &FixedRequest {
+    let SourceConfig::HttpJson { request, .. } = source else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    request
+}
+
+fn http_request_mut(source: &mut SourceConfig) -> &mut FixedRequest {
+    let SourceConfig::HttpJson { request, .. } = source else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    request
+}
+
+fn base_url_mut(source: &mut SourceConfig) -> &mut String {
+    let SourceConfig::HttpJson { base_url, .. } = source else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    base_url
+}
+
+fn posture_mut(source: &mut SourceConfig) -> &mut AcquisitionPosture {
+    let SourceConfig::HttpJson { posture, .. } = source else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    posture
+}
+
+fn tls_trust_profile_mut(source: &mut SourceConfig) -> &mut Option<String> {
+    let SourceConfig::HttpJson {
+        tls_trust_profile, ..
+    } = source
+    else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    tls_trust_profile
+}
+
 fn fixed_source(base_url: &str, authentication: Value) -> SourceConfig {
     let mut source = source_config(
         base_url,
@@ -121,10 +166,11 @@ fn fixed_source(base_url: &str, authentication: Value) -> SourceConfig {
         json!([]),
         json!(["/ok"]),
     );
-    source.request.path = Some("/data".into());
-    source.request.path_template = None;
-    source.request.path_bindings = Default::default();
-    source.request.method = registry_evidence::config::HttpMethod::POST;
+    let request = http_request_mut(&mut source);
+    request.path = Some("/data".into());
+    request.path_template = None;
+    request.path_bindings = Default::default();
+    request.method = registry_evidence::config::HttpMethod::POST;
     source
 }
 
@@ -171,6 +217,11 @@ fn selector(value: &str) -> ResolvedSourceSelector {
         profile: "record-v1".into(),
         values: BTreeMap::from([("record_id".into(), SelectorValue::String(value.into()))]),
     }
+}
+
+/// One prepared HTTP request, in the shape the executor consumes.
+fn prepared_http_request(parts: &RequestParts) -> PreparedSourceRequest {
+    PreparedSourceRequest::Http(parts.clone())
 }
 
 fn parts() -> RequestParts {
@@ -736,7 +787,11 @@ async fn exact_request_applies_path_query_body_headers_auth_and_projection_once(
     );
     let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
     let response = executor
-        .execute(&[selector("A B")], &parts())
+        .execute(
+            &[selector("A B")],
+            &prepared_http_request(&parts()),
+            Utc::now(),
+        )
         .await
         .expect("source succeeds");
     assert_eq!(
@@ -784,9 +839,9 @@ fn materialized_request_reuses_path_template_query_and_body_without_auth_materia
     );
     let executor = SourceExecutor::new(&source, secrets).expect("executor builds without secrets");
     let materialized = executor
-        .materialize_request(&[selector("A B")], &parts())
+        .materialize_request(&[selector("A B")], &prepared_http_request(&parts()))
         .expect("request materializes without credential access");
-    assert_eq!(materialized.path(), "/v1/records/A%20B");
+    assert_eq!(materialized.path(), Some("/v1/records/A%20B"));
     assert_eq!(
         materialized.query(),
         Some("filter=first%20value&filter=second%2Fvalue%25")
@@ -837,7 +892,11 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
     );
 
     let response = executor
-        .execute(&[selector("synthetic")], &parts())
+        .execute(
+            &[selector("synthetic")],
+            &prepared_http_request(&parts()),
+            Utc::now(),
+        )
         .await
         .expect("local source request succeeds");
     assert_eq!(response, json!({"ok": true}));
@@ -892,10 +951,11 @@ async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and
         let error = executor
             .execute(
                 &[selector(hostile)],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: None,
-                },
+                }),
+                Utc::now(),
             )
             .await
             .expect_err("hostile path value fails");
@@ -906,13 +966,14 @@ async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and
     let error = executor
         .execute(
             &[selector("safe")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![QueryPair {
                     name: "x\r\nInjected".into(),
                     value: "v".into(),
                 }],
                 body: None,
-            },
+            }),
+            Utc::now(),
         )
         .await
         .expect_err("header-style query injection fails");
@@ -940,7 +1001,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
         ("extra-binding", "/v1/records"),
     ] {
         let mut source = base.clone();
-        source.request.path_template = Some(template.to_owned());
+        http_request_mut(&mut source).path_template = Some(template.to_owned());
         assert_eq!(
             SourceExecutor::new(&source, Arc::clone(&empty_secrets)).err(),
             Some(SourceError::InvalidPlan),
@@ -950,7 +1011,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
 
     let server = MockServer::start().await;
     let mut source = base;
-    source.base_url = server.uri();
+    *base_url_mut(&mut source) = server.uri();
     let executor = SourceExecutor::new(&source, empty_secrets).expect("valid path plan compiles");
     let mut missing_field = selector("unused");
     missing_field.values.clear();
@@ -997,10 +1058,11 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
         let error = executor
             .execute(
                 &selectors,
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: None,
-                },
+                }),
+                Utc::now(),
             )
             .await
             .expect_err("invalid path material fails before credentials");
@@ -1026,18 +1088,20 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
         &data_server.uri(),
         json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
     );
-    static_source.request.method = HttpMethod::GET;
-    static_source.request.preparation_limits.json_body = PreparationChannelPolicy::Forbidden;
+    let static_request = http_request_mut(&mut static_source);
+    static_request.method = HttpMethod::GET;
+    static_request.preparation_limits.json_body = PreparationChannelPolicy::Forbidden;
     let static_executor =
         SourceExecutor::new(&static_source, Arc::clone(&empty_secrets)).expect("valid GET builds");
     assert_eq!(
         static_executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({"prohibited": true})),
-                },
+                }),
+                Utc::now()
             )
             .await,
         Err(SourceError::InvalidPlan)
@@ -1049,18 +1113,20 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
         "form-body",
         60,
     );
-    oauth.request.method = HttpMethod::GET;
-    oauth.request.preparation_limits.json_body = PreparationChannelPolicy::Forbidden;
+    let oauth_request = http_request_mut(&mut oauth);
+    oauth_request.method = HttpMethod::GET;
+    oauth_request.preparation_limits.json_body = PreparationChannelPolicy::Forbidden;
     let oauth_executor =
         SourceExecutor::new(&oauth, empty_secrets).expect("valid OAuth GET builds");
     assert_eq!(
         oauth_executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({"prohibited": true})),
-                },
+                }),
+                Utc::now()
             )
             .await,
         Err(SourceError::InvalidPlan)
@@ -1077,7 +1143,9 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
         .is_empty());
 
     let mut invalid_get = static_source;
-    invalid_get.request.preparation_limits.json_body = PreparationChannelPolicy::Allowed;
+    http_request_mut(&mut invalid_get)
+        .preparation_limits
+        .json_body = PreparationChannelPolicy::Allowed;
     assert_eq!(
         SourceExecutor::new(&invalid_get, resolver(&[]).1).err(),
         Some(SourceError::InvalidPlan)
@@ -1209,25 +1277,32 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             let expected_request = &stage.expected_request;
             let preparation = runtime
                 .compile_preparation(
-                    &fs::read_to_string(directory.join(source.request.prepare_script.as_str()))
-                        .expect("preparation script is readable"),
+                    &fs::read_to_string(
+                        directory.join(
+                            source
+                                .prepare_script()
+                                .expect("shape source prepares its request")
+                                .as_str(),
+                        ),
+                    )
+                    .expect("preparation script is readable"),
                 )
                 .expect("preparation script compiles");
             let extraction = runtime
                 .compile_extraction(
-                    &fs::read_to_string(directory.join(source.extract_script.as_str()))
+                    &fs::read_to_string(directory.join(source.extract_script().as_str()))
                         .expect("extraction script is readable"),
                 )
                 .expect("extraction script compiles");
             let fact_schema_value: Value = serde_norway::from_str(
-                &fs::read_to_string(directory.join(source.fact_schema.as_str()))
+                &fs::read_to_string(directory.join(source.fact_schema().as_str()))
                     .expect("fact schema is readable"),
             )
             .expect("fact schema parses");
             let fact_schema =
                 jsonschema::JSONSchema::compile(&fact_schema_value).expect("fact schema compiles");
             let response_schema_value: Value = serde_norway::from_str(
-                &fs::read_to_string(directory.join(source.response_schema.as_str()))
+                &fs::read_to_string(directory.join(source.response_schema().as_str()))
                     .expect("response schema is readable"),
             )
             .expect("response schema parses");
@@ -1235,7 +1310,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                 .should_validate_formats(true)
                 .compile(&response_schema_value)
                 .expect("response schema compiles");
-            let parameters = serde_json::to_value(&source.request.adapter_parameters)
+            let parameters = serde_json::to_value(source.adapter_parameters())
                 .expect("adapter parameters serialize");
             let (script_selectors, transport_selectors) = shape_selectors(label);
             let prior_facts = stage.inputs.project(&search_facts);
@@ -1250,7 +1325,7 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                     &script_selectors,
                     &parameters,
                     &prior_facts,
-                    &request_limits(&source.request.preparation_limits),
+                    &request_limits(&http_request(source).preparation_limits),
                 )
                 .expect("shape request preparation succeeds");
             assert_eq!(
@@ -1273,11 +1348,15 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             let executor =
                 SourceExecutor::new(source, secrets.clone()).expect("source plan compiles");
             let materialized = executor
-                .materialize_request_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+                .materialize_request_with_prior_facts(
+                    &transport_selectors,
+                    &prior_facts,
+                    &prepared_http_request(&prepared),
+                )
                 .expect("production request materialization succeeds");
             assert_eq!(
                 materialized.path(),
-                expected_request["path"].as_str().expect("request path")
+                Some(expected_request["path"].as_str().expect("request path"))
             );
             assert_eq!(
                 materialized.query().map(|query| {
@@ -1291,7 +1370,12 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             assert_eq!(materialized.body(), prepared.body.as_ref());
 
             let projected = executor
-                .execute_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+                .execute_with_prior_facts(
+                    &transport_selectors,
+                    &prior_facts,
+                    &prepared_http_request(&prepared),
+                    Utc::now(),
+                )
                 .await
                 .expect("frozen shape executes through the production transport");
             let response_files = response_fixture_paths(&stage.responses);
@@ -1702,11 +1786,19 @@ async fn an_unindexed_filter_field_presents_as_an_ordinary_source_outage_and_sto
     let runtime = RhaiRuntime::new();
     let preparation = runtime
         .compile_preparation(
-            &fs::read_to_string(directory.join(search.source.request.prepare_script.as_str()))
-                .expect("preparation script is readable"),
+            &fs::read_to_string(
+                directory.join(
+                    search
+                        .source
+                        .prepare_script()
+                        .expect("search stage prepares its request")
+                        .as_str(),
+                ),
+            )
+            .expect("preparation script is readable"),
         )
         .expect("preparation script compiles");
-    let parameters = serde_json::to_value(&search.source.request.adapter_parameters)
+    let parameters = serde_json::to_value(search.source.adapter_parameters())
         .expect("adapter parameters serialize");
     let (script_selectors, transport_selectors) = shape_selectors(&search.label);
     let prior_facts = BTreeMap::new();
@@ -1716,12 +1808,17 @@ async fn an_unindexed_filter_field_presents_as_an_ordinary_source_outage_and_sto
             &script_selectors,
             &parameters,
             &prior_facts,
-            &request_limits(&search.source.request.preparation_limits),
+            &request_limits(&http_request(&search.source).preparation_limits),
         )
         .expect("shape request preparation succeeds");
     let error = SourceExecutor::new(&search.source, secrets)
         .expect("search stage compiles")
-        .execute_with_prior_facts(&transport_selectors, &prior_facts, &prepared)
+        .execute_with_prior_facts(
+            &transport_selectors,
+            &prior_facts,
+            &prepared_http_request(&prepared),
+            Utc::now(),
+        )
         .await
         .expect_err("a filter on an unindexed field cannot succeed");
     assert_eq!(error, SourceError::Status(SourceStatus::ServerError));
@@ -1806,8 +1903,8 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
             &server.uri(),
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
-        source.posture = posture;
-        source.request.projection = std::iter::once("/total".to_owned())
+        *posture_mut(&mut source) = posture;
+        http_request_mut(&mut source).projection = std::iter::once("/total".to_owned())
             .chain(declared_facts.iter().map(|fact| format!("/result/{fact}")))
             .collect();
         let prepared = runtime
@@ -1815,12 +1912,16 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
                 &preparation,
                 &json!({}),
                 &json!({}),
-                &request_limits(&source.request.preparation_limits),
+                &request_limits(&http_request(&source).preparation_limits),
             )
             .expect("common posture preparation succeeds");
         let projected = SourceExecutor::new(&source, secrets)
             .expect("posture source compiles")
-            .execute(&[selector("record")], &prepared)
+            .execute(
+                &[selector("record")],
+                &prepared_http_request(&prepared),
+                Utc::now(),
+            )
             .await
             .expect("posture source request succeeds");
         assert!(!serde_json::to_string(&projected)
@@ -1939,10 +2040,11 @@ async fn basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_reda
         executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now(),
             )
             .await
             .expect("authenticated request succeeds");
@@ -1989,10 +2091,11 @@ async fn assert_oauth_success_matrix_case(placement: &str, maximum_cache_seconds
         executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now(),
             )
             .await
             .expect("OAuth-authenticated source request succeeds");
@@ -2112,10 +2215,11 @@ async fn oauth_assumed_lifetime_caches_an_omitted_provider_lifetime_and_stays_cl
             executor
                 .execute(
                     &[selector("record")],
-                    &RequestParts {
+                    &prepared_http_request(&RequestParts {
                         query: vec![],
                         body: Some(json!({})),
-                    },
+                    }),
+                    Utc::now(),
                 )
                 .await
                 .expect("assumed lifetime authorizes the request");
@@ -2294,16 +2398,17 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
             assumed_lifetime_seconds,
         );
         if case_id == "transport-timeout" {
-            source.request.timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds = 20;
         }
         let executor = SourceExecutor::new(&source, secrets).expect("OAuth executor builds");
         let result = executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now(),
             )
             .await;
         let expects_success = matches!(
@@ -2408,16 +2513,17 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
             &server.uri(),
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
-        source.request.projection = vec!["/results/*/optional".into()];
+        http_request_mut(&mut source).projection = vec!["/results/*/optional".into()];
         let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
         assert_eq!(
             executor
                 .execute(
                     &[selector("record")],
-                    &RequestParts {
+                    &prepared_http_request(&RequestParts {
                         query: vec![],
                         body: Some(json!({}))
-                    }
+                    }),
+                    Utc::now()
                 )
                 .await,
             expected
@@ -2486,19 +2592,20 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         if case_id == "timeout" {
-            source.request.timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds = 20;
         }
         if case_id == "raw-oversized-before-projection" {
-            source.request.maximum_response_bytes = 64;
+            http_request_mut(&mut source).maximum_response_bytes = 64;
         }
         let error = SourceExecutor::new(&source, secrets)
             .expect("failure-matrix source compiles")
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now(),
             )
             .await
             .expect_err("failure-matrix case cannot succeed");
@@ -2617,7 +2724,7 @@ fn an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused() {
         json!(["/ok"]),
     );
     // The template binds `subject`; `parent` is declared but never bound.
-    source.request.selector_inputs = serde_json::from_value(json!([
+    http_request_mut(&mut source).selector_inputs = serde_json::from_value(json!([
         {"role": "subject", "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]},
         {"role": "parent", "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]}
     ]))
@@ -2673,7 +2780,7 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
         &format!("https://127.0.0.1:{}", address.port()),
         json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
-    source.tls_trust_profile = Some("private-pki".into());
+    *tls_trust_profile_mut(&mut source) = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
     let mut captured = BTreeMap::from([("private-pki".into(), ca_pem)]);
     let executor = SourceExecutor::new_with_selector_sets_and_tls(
@@ -2681,6 +2788,7 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
         &[vec![("subject".into(), "record-v1".into())]],
         &tls,
         &captured,
+        None,
         Arc::clone(&secrets),
     )
     .expect("private CA source compiles");
@@ -2694,10 +2802,11 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
         executor
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now()
             )
             .await,
         Ok(json!({"ok": true}))
@@ -2707,22 +2816,24 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     let (mismatch_address, mismatch_ca, mismatch_server) =
         spawn_private_ca_tls_server("localhost").await;
     let mut mismatch_source = source;
-    mismatch_source.base_url = format!("https://127.0.0.1:{}", mismatch_address.port());
+    *base_url_mut(&mut mismatch_source) = format!("https://127.0.0.1:{}", mismatch_address.port());
     let mismatch_captured = BTreeMap::from([("private-pki".into(), mismatch_ca)]);
     let mismatch = SourceExecutor::new_with_selector_sets_and_tls(
         &mismatch_source,
         &[vec![("subject".into(), "record-v1".into())]],
         &tls,
         &mismatch_captured,
+        None,
         secrets,
     )
     .expect("hostname-mismatch source compiles")
     .execute(
         &[selector("record")],
-        &RequestParts {
+        &prepared_http_request(&RequestParts {
             query: vec![],
             body: Some(json!({})),
-        },
+        }),
+        Utc::now(),
     )
     .await;
     assert_eq!(mismatch, Err(SourceError::Transport));
@@ -2743,10 +2854,11 @@ async fn a_reset_transport_failure_yields_exactly_one_connection_attempt() {
         .expect("reset-transport source compiles")
         .execute(
             &[selector("record")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![],
                 body: Some(json!({})),
-            },
+            }),
+            Utc::now(),
         )
         .await;
     assert_eq!(result, Err(SourceError::Transport));
@@ -2774,7 +2886,7 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
         "https://127.0.0.1:443",
         json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
-    source.tls_trust_profile = Some("private-pki".into());
+    *tls_trust_profile_mut(&mut source) = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
     let allowed = [vec![("subject".into(), "record-v1".into())]];
     let no_bindings = OutboundTlsConfig {
@@ -2787,7 +2899,8 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
             &allowed,
             &no_bindings,
             &BTreeMap::new(),
-            Arc::clone(&secrets),
+            None,
+            Arc::clone(&secrets)
         )
         .err(),
         Some(SourceError::InvalidPlan)
@@ -2798,7 +2911,8 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
             &allowed,
             &tls,
             &BTreeMap::new(),
-            Arc::clone(&secrets),
+            None,
+            Arc::clone(&secrets)
         )
         .err(),
         Some(SourceError::InvalidPlan)
@@ -2809,7 +2923,8 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
             &allowed,
             &tls,
             &BTreeMap::from([("private-pki".into(), b"not-a-certificate".to_vec())]),
-            secrets,
+            None,
+            secrets
         )
         .err(),
         Some(SourceError::InvalidPlan)
@@ -2941,10 +3056,11 @@ async fn ambient_proxy_child() {
         .expect("executor builds")
         .execute(
             &[selector("record")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![],
                 body: Some(json!({})),
-            },
+            }),
+            Utc::now(),
         )
         .await
         .expect("ambient proxy is ignored");
@@ -2958,10 +3074,11 @@ async fn ambient_proxy_child() {
         .expect("OAuth executor builds")
         .execute(
             &[selector("record")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![],
                 body: Some(json!({})),
-            },
+            }),
+            Utc::now(),
         )
         .await
         .expect("ambient proxy is ignored for token and evidence-data requests");
@@ -3003,10 +3120,11 @@ async fn a_static_authorization_source_sends_the_scheme_it_declares() {
             .expect("static executor builds")
             .execute(
                 &[selector("record")],
-                &RequestParts {
+                &prepared_http_request(&RequestParts {
                     query: vec![],
                     body: Some(json!({})),
-                },
+                }),
+                Utc::now(),
             )
             .await
             .unwrap_or_else(|error| panic!("{declared:?} scheme request failed: {error:?}"));
@@ -3059,10 +3177,11 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
         .expect("assertion executor builds")
         .execute(
             &[selector("record")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![],
                 body: Some(json!({})),
-            },
+            }),
+            Utc::now(),
         )
         .await
         .expect("assertion-authenticated source request succeeds");
@@ -3182,10 +3301,11 @@ async fn a_private_key_jwt_source_signs_the_configured_assertion_audience() {
         .expect("assertion executor builds")
         .execute(
             &[selector("record")],
-            &RequestParts {
+            &prepared_http_request(&RequestParts {
                 query: vec![],
                 body: Some(json!({})),
-            },
+            }),
+            Utc::now(),
         )
         .await
         .expect("assertion-authenticated source request succeeds");

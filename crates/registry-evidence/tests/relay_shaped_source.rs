@@ -21,24 +21,30 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use chrono::Utc;
 use registry_evidence::bundle::Bundle;
 use registry_evidence::config::{PreparationChannelPolicy, PreparationLimits, SourceConfig};
 use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
 use registry_evidence::rhai_runtime::{
-    RequestPartRequirement, RequestPartsBounds, RequestPartsLimits, RhaiRuntime,
+    RequestPartRequirement, RequestParts, RequestPartsBounds, RequestPartsLimits, RhaiRuntime,
     MAXIMUM_ARRAY_ITEMS, MAXIMUM_JSON_BODY_DEPTH, MAXIMUM_QUERY_NAME_BYTES, MAXIMUM_QUERY_PAIRS,
     MAXIMUM_QUERY_VALUE_BYTES, MAXIMUM_REQUEST_PARTS_BYTES, MAXIMUM_STRING_BYTES,
 };
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
-use registry_evidence::source::{ResolvedSourceSelector, SourceExecutor};
+use registry_evidence::source::{PreparedSourceRequest, ResolvedSourceSelector, SourceExecutor};
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// One prepared HTTP request, in the shape the executor consumes.
+fn prepared_http_request(parts: &RequestParts) -> PreparedSourceRequest {
+    PreparedSourceRequest::Http(parts.clone())
+}
 
 /// The Relay-shaped protected read for one synthetic record: the templated
 /// `/v1/datasets/{dataset_id}/entities/{entity}/records/{id}` path with
@@ -306,6 +312,13 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         &records_server.uri(),
         &format!("{}/oauth/token", token_server.uri()),
     );
+    let SourceConfig::HttpJson {
+        request: source_request,
+        ..
+    } = &source
+    else {
+        panic!("the declared source does not use the http-json transport");
+    };
 
     // Bounded request preparation through the production Rhai runtime.
     let runtime = RhaiRuntime::new();
@@ -315,8 +328,8 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     let extraction = runtime
         .compile_extraction(EXTRACT_SCRIPT)
         .expect("extraction script compiles");
-    let parameters = serde_json::to_value(&source.request.adapter_parameters)
-        .expect("adapter parameters serialize");
+    let parameters =
+        serde_json::to_value(source.adapter_parameters()).expect("adapter parameters serialize");
     let script_selectors = json!({
         "subject": {
             "profile": "residence-record-v1",
@@ -328,7 +341,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             &preparation,
             &script_selectors,
             &parameters,
-            &request_limits(&source.request.preparation_limits),
+            &request_limits(&source_request.preparation_limits),
         )
         .expect("fixed Relay read preparation succeeds");
 
@@ -343,16 +356,20 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     }];
     let executor = SourceExecutor::new(&source, secrets).expect("Relay-shaped source compiles");
     let materialized = executor
-        .materialize_request(&transport_selectors, &prepared)
+        .materialize_request(&transport_selectors, &prepared_http_request(&prepared))
         .expect("Relay-shaped request materializes");
-    assert_eq!(materialized.path(), RECORD_PATH);
+    assert_eq!(materialized.path(), Some(RECORD_PATH));
     assert_eq!(materialized.query(), None);
     assert_eq!(materialized.body(), None);
 
     // One end-to-end source execution: token acquisition, the authenticated
     // record read, and the Rust projection boundary.
     let projected = executor
-        .execute(&transport_selectors, &prepared)
+        .execute(
+            &transport_selectors,
+            &prepared_http_request(&prepared),
+            Utc::now(),
+        )
         .await
         .expect("Relay-shaped source read succeeds");
     assert_eq!(projected, json!({"region": RAW_REGION_CODE}));

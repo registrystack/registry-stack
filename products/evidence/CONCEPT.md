@@ -24,7 +24,7 @@ identifier is one possible selector, not a prerequisite.
 
 The service is deliberately narrower than a data governance platform, API gateway, identity-matching service, workflow engine, credential suite, or policy decision platform. One service process may host many evidence definitions when they share one operator-controlled trust domain. Governed configuration, scripts, schemas, codelists, and fixtures form one trusted, atomic evidence bundle. A separate closed runtime file binds that bundle to process-local listener, filesystem, audit-storage, secret-mount, signer transport and pinned version, and TLS-trust paths without overriding evidence semantics or the governed active public key.
 
-JSON is the native API and evidence representation. Requirements and evidence are aligned with CCCEV, using a documented Evidence JSON profile rather than RDF or XML. YAML declares fixed requirements, authorization conditions, source requests, trusted derivation parameters, concepts, and disclosure forms. Trusted Rhai scripts execute inside the process to extract typed facts and derive declared concept values from a deterministic evaluation context. Rust retains control of authentication, authorization, networking, credentials, script capabilities and limits, output validation, disclosure enforcement, evidence construction, signing, and audit.
+JSON is the native API and evidence representation. Requirements and evidence are aligned with CCCEV, using a documented Evidence JSON profile rather than RDF or XML. YAML declares fixed requirements, authorization conditions, source requests, trusted derivation parameters, concepts, and disclosure forms. A fixed source request reaches its source over one of two coequal transports: a fixed HTTP JSON request, or one reviewed SQL statement executed against a read-only SQLite extract file mounted beside the process. Trusted Rhai scripts execute inside the process to extract typed facts and derive declared concept values from a deterministic evaluation context. Rust retains control of authentication, authorization, networking, extract-file access, credentials, script capabilities and limits, output validation, disclosure enforcement, evidence construction, signing, and audit.
 
 Version one produces assertion evidence with signed flattened JWS as the
 default and durable-verification format. A governed authority grant may also
@@ -71,7 +71,7 @@ The core product is government-first and sector-neutral.
 
 ### Native government deployment
 
-One binary runs on modest infrastructure, uses locally controlled configuration and audit sinks, and integrates with existing registries. It does not require Kubernetes, a message broker, a database, OPA, or a service mesh.
+One binary runs on modest infrastructure, uses locally controlled configuration and audit sinks, and integrates with existing registries. It does not require Kubernetes, a message broker, a database server, OPA, or a service mesh. Reading a mounted SQLite extract needs none of those either: the file is opened read-only in process, Evidence stores nothing in it, and no database credential exists to be held.
 
 ### Enterprise and private-sector deployment
 
@@ -129,6 +129,17 @@ Version one is not:
 - an OOTS Evidence Broker, Data Service Directory, Semantic Repository, Preview Space, or AS4 Access Point;
 - a replacement for source-system access control.
 
+The query-platform line deserves stating precisely, because a source may
+execute a reviewed SQL statement against a mounted extract. A query platform is
+a system whose purpose is to accept a query at request time; Evidence accepts
+none, over any transport. A statement is written into the bundle, covered by
+the bundle hash, and reviewed as part of one disclosure surface. A caller
+cannot write one, name a table or a column, add a predicate, widen a join, or
+choose among statements beyond selecting a requirement it is already authorized
+to invoke. This is the same reasoning that already admits a fixed HTTP request:
+a bundle-fixed instruction to a source that no request input may reshape is not
+a query language, whatever syntax it happens to be written in.
+
 Document evidence, multi-verifier holder credentials, credential status and revocation, transaction-bound replay protection, OOTS execution, public or federated catalogs, response-led multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. A fixed set of sources the bundle declares and orders is not response-led and is included under section 15.7. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source.
 
 ## 5. Design principles
@@ -170,6 +181,14 @@ posture; a search-then-fetch requirement takes the weaker posture of its two
 sources. `record-transformed` is a legitimate migration state, but it must not
 be described as full lifecycle minimization.
 
+Posture describes what crosses the boundary between a source and the evaluator.
+For a source that runs a reviewed statement against a published extract, that
+boundary is the statement's result set, so a statement computing the final fact
+is `source-derived` on the same terms as an API returning it. What the extract
+itself contains is an acquisition decision the publisher made once, before any
+request and outside Evidence. Section 9.2 states what that moves and what it
+leaves in place.
+
 For every posture:
 
 1. Request only configured fields and selectors.
@@ -200,15 +219,18 @@ One process may serve many definitions, sources, and evidence types only when th
 ### 5.7 Prove generality at the source boundary
 
 Evidence must not be validated only against one idealized `person-facts` API.
-The same Rust source executor and Rhai interfaces must handle materially
-different JSON contracts without adding source-product concepts to the core.
+The same Rust source layer and Rhai interfaces must handle materially different
+source contracts, over both transports, without adding source-product concepts
+to the core.
 
 Version one proves this with small, sanitized compatibility mocks for:
 
 - a flat REST JSON response;
 - a paged, nested DHIS2 Tracker-style REST response;
 - an OpenCRVS Version 2 Event Search-style JSON response using OAuth 2.0
-  client credentials.
+  client credentials;
+- a SQLite extract carrying a reserved publication table and the tables one
+  reviewed statement reads.
 
 These mocks reproduce only the boundary behavior Evidence consumes. They are
 not emulators, conformance claims, or bundled vendor connectors. Optional
@@ -217,9 +239,10 @@ and never gate ordinary CI.
 
 DHIS2 and OpenCRVS names, data shapes, and behaviors are test concerns only.
 Production Rust, Cargo features and dependencies, public configuration schemas,
-routes, and CLI options remain source-product neutral. The runtime sees only
-generic fixed HTTP requests, generic authentication profiles, bounded JSON,
-and Rhai extraction.
+routes, and CLI options remain source-product neutral. The runtime sees only a
+generic fixed source request, a generic authentication profile or a read-only
+file handle, bounded JSON, and Rhai extraction. A transport changes how facts
+arrive and nothing else about what the core knows.
 
 ## 6. CCCEV-aligned assertion model
 
@@ -563,20 +586,35 @@ requirements:
 
 ### 9.1 Fixed source execution with reviewed request rendering
 
-Rust owns scheme, host, method, the fixed path or closed tagged selector or
-fetch prior-fact-bound path
-template, permitted query and body channels, fixed headers, credentials, TLS
-trust, redirect policy, timeouts, response limits, concurrency limits, and the
-one-request-per-stage ceiling.
+Rust owns everything that decides which source is reached, what is asked of it,
+and how much may come back. The mechanisms differ by transport and the boundary
+does not: a caller, a response, and a script hold authority over none of it,
+and the one-request-per-stage ceiling and per-stage timeouts bind both. What
+follows names each transport's instantiation of that one ownership rule.
+
+For an `http-json` source, Rust owns scheme, host, method, the fixed path or
+closed tagged selector or fetch prior-fact-bound path template, permitted query
+and body channels, fixed headers, credentials, TLS trust, redirect policy,
+response limits, and concurrency limits.
+
+For a `sqlite-extract` source, Rust owns the extract file handle and the
+read-only opening that produced it, the statement text, the authorizer verdict
+on that statement, the binding of values into its declared parameters, the row
+and step bounds it runs under, and the mapping of its result set into the
+bounded JSON an extraction script receives.
 
 After authorization and durable access-attempt audit, Rust supplies only the
 source-required authorized selectors and the exact closed adapter context of
 non-secret parameters plus empty or schema-validated prior facts to a reviewed
-preparation script. The script renders ordered query pairs and at most one JSON
-body. It cannot choose the source, origin, path template or path-binding
-origin, method, headers, credentials, redirects, retries, pagination traversal,
-or another request.
-Rust validates and encodes the complete result before credential acquisition.
+preparation script. The script renders the one request channel its transport
+permits: ordered query pairs and at most one JSON body for `http-json`, or the
+values of the parameters the statement declares it prepares for
+`sqlite-extract`. It cannot choose the source, origin, path template or
+path-binding origin, method, headers, credentials, redirects, retries,
+pagination traversal, statement text, a parameter the statement fills from an
+authorized selector, or another request.
+Rust validates and encodes the complete result before any credential is
+acquired and before any row is read.
 This is deterministic request rendering, not caller-supplied templating or
 dynamic source planning.
 
@@ -586,7 +624,12 @@ array order and length are preserved, and missing leaves remain missing. The
 acquisition posture still describes the pre-projection wire response. Exact
 projection grammar and conflict rules are part of the reviewed adapter ABI.
 
-Rust then validates the projected tree against the source's required response
+An extract source needs no separate projection step, because the statement's
+select list is its projection. Rust maps the bounded result set into a JSON
+tree of the declared column names, and nothing the statement did not select
+exists to be removed from it.
+
+Rust then validates the resulting tree against the source's required response
 schema, a closed JSON Schema in the same subset as the adapter-parameter and
 fact schemas. A response outside the shape the adapter was reviewed against is
 a source-protocol failure and no script runs, so hand-written protocol checking
@@ -598,8 +641,13 @@ agree with the closed adapter parameters.
 A Version 1 source must provide a bounded lookup that can establish zero, one,
 or multiple results from the configured selector. If an existing system cannot
 do that safely, a governed intermediary such as an existing integration layer
-may expose the bounded lookup. Evidence does not download a registry or a broad
-candidate set to compensate.
+may expose the bounded lookup, and a published extract read through one
+reviewed statement is such an intermediary. What Evidence does not do is
+retrieve a registry or a broad candidate set at request time to compensate for
+a source that cannot answer narrowly. An extract is written by its publisher,
+on the publisher's schedule and by the publisher's decision; Evidence only
+reads it, and section 9.2 states plainly what that arrangement moves and what
+it does not.
 
 The initial generic source-authentication profiles are HTTP Basic, a static
 Authorization header, a static API-key header, and OAuth 2.0 client
@@ -628,7 +676,175 @@ Hostname verification and fixed-origin verification remain mandatory; there is
 no insecure or trust-all mode. Version 1 ignores ambient HTTP proxy environment
 variables and has no application-level proxy configuration.
 
-### 9.2 Rhai extraction and derivation
+Those profiles and protections belong to `http-json`. An extract source has no
+origin to reach and presents no credential, which the next section treats as
+the point of the transport rather than a gap in it.
+
+### 9.2 Reviewed read statements over a mounted extract
+
+A `sqlite-extract` source executes one reviewed SQL statement against a
+read-only SQLite file mounted beside the process. It is a coequal peer of
+`http-json`, not a reduced mode of it. The same authorization decision precedes
+it, the same durable access-attempt audit precedes its first row, it yields the
+same closed lookup outcomes, and the same derivation, output validation,
+signing, and release audit follow. A requirement acquires through one transport
+or the other, and every rule outside acquisition reads the same either way.
+
+Three properties decide SQLite rather than a client/server database.
+
+Evidence never holds a database credential. The registry publishes a file and
+Evidence opens it read-only. There is no grant to administer, no network path
+from Evidence into a registry data tier, and no connection string in a secret
+mount. A credential that does not exist cannot leak, expire unnoticed, or be
+widened by a well-meaning administrator.
+
+A statement can be proven safe before any row moves. SQLite's authorizer
+callback runs while the statement is prepared and decides every action the
+compiled statement would take, so Rust establishes that a statement cannot
+write and cannot reach outside the file it was prepared against, rather than
+trusting a reviewer to have noticed. No client/server database offers an
+equivalent the client side can enforce.
+
+One transport covers every source shape a registry actually holds. A CSV
+export, a columnar file, a spreadsheet, or a dump from a general-purpose
+relational database is one conversion command from an extract file, and none of
+those formats becomes Evidence's problem. The conversion is the publisher's
+step, run with the publisher's tools, on the publisher's side of the boundary.
+
+Illustrative YAML, beside the HTTP source of the same bundle:
+
+```yaml
+sources:
+  subject-extract:
+    transport: sqlite-extract
+    extract_profile: subject-registry-extract
+    posture: source-derived
+    maximum_extract_age_seconds: 86400
+    request:
+      statement: queries/subject-facts.sql
+      selector_inputs:
+        - role: subject
+          alternatives:
+            - profile: person-demographics-v1
+              fields: [given_name, family_name, birth_date]
+      parameter_bindings:
+        birth_date:
+          kind: selector
+          role: subject
+          profile: person-demographics-v1
+          field: birth_date
+      maximum_rows: 2
+    response_schema: schemas/subject-extract-response.schema.yaml
+    extract_script: adapters/subject-extract-extract.rhai
+    fact_schema: schemas/subject-extract-facts.schema.yaml
+```
+
+The statement is a bundle artifact covered by the bundle hash. The file is not:
+the bundle names a logical extract and the closed runtime file binds it to a
+path, exactly as it binds a private certificate authority. Republishing an
+extract therefore leaves the bundle revision a relying party pinned unchanged,
+which is why publication metadata and a declared maximum age are mandatory
+rather than advisory. Binding a path is not a capability gate: a deployment
+that mounts no extract runs no extract source, and no runtime switch turns this
+transport on or off.
+
+#### Full SQL is in scope
+
+A statement may join, group, aggregate, use common table expressions, and use
+window functions. What settles this is the category the statement belongs to.
+It is a trusted, hash-identified bundle artifact reviewed as part of one
+disclosure surface, in the same category as a Rhai derivation, and its
+expressive power is bounded by review rather than by grammar. No invariant in
+section 13 limits what a trusted bundle artifact may contain. Those that bound
+what may be asked of a source bound what a caller may supply, so a reviewed
+statement of any shape violates none of them. Invariant 8 anticipates this by
+denying callers a query plan: a bundle-fixed statement is precisely the thing
+the caller is denied a say in.
+
+Pushing joins and aggregation into the statement improves minimum disclosure
+rather than eroding it. A statement returning one count moves one number across
+the process boundary. Fetching five hundred rows so that a script can count
+them moves five hundred records into the process, into its memory, and into
+whatever a later defect exposes. A join behaves the same way: the narrow answer
+computed inside the extract is smaller than the two wide inputs that would
+otherwise have to cross.
+
+#### The authorizer is a safety boundary, not a disclosure declaration
+
+Rust installs an authorizer that denies unconditionally: every write action,
+`ATTACH` and `DETACH`, every `PRAGMA`, extension loading, non-deterministic
+functions, and time functions. A denied action fails the bundle at load, before
+the deployment serves anything. It is never a request-time failure, because
+nothing at request time can change which actions a statement takes.
+
+There is deliberately no per-table or per-column read allowlist. Review of the
+statement is the disclosure control. A second list of readable tables would be
+a weaker restatement of what the reviewed statement already says, held
+somewhere else and free to drift from it. The authorizer answers whether a
+statement can do harm; review answers whether it should be asked at all.
+
+#### One clock
+
+`date('now')`, `time('now')`, and every other ambient time function are denied.
+Rust binds its own evaluation instant to the reserved `evidence_now` parameter,
+and a statement needing the current instant reads that parameter.
+
+Evidence has exactly one clock. A second clock inside SQL would not honour the
+pinned evaluation instant that offline fixture runs depend on, so identical
+inputs could produce different assertions on two runs and a fixture could pass
+in the morning and fail at midnight with nothing having changed. This is the
+rule that already keeps ambient time out of Rhai, applied to the transport that
+would otherwise reintroduce it.
+
+#### An extract is a published snapshot
+
+An extract is a snapshot its publisher released, not a live authoritative read.
+An assertion derived from one is exactly as current as the file, and the design
+states that rather than papering over it.
+
+Every extract carries a reserved metadata table declaring `publishedAt`,
+`publisher`, and `extractId`. A file without it is refused at startup. The
+table is required rather than inferred, because a filesystem modification time
+is an artifact of the filesystem: a copy, a restore, a container image build,
+or a backup agent rewrites it, and none of those events is a statement by the
+publisher about when the data was true. `extractId` names the snapshot in audit
+and operator diagnostics without describing its contents.
+
+A bundle declares `maximumExtractAgeSeconds` for each extract source. The
+runtime compares it against `publishedAt` and refuses before any row is read,
+so an extract past its declared age fails as an unavailable dependency under
+its own safe category instead of yielding a confidently signed assertion about
+a world that has moved. The comparison runs for every evaluation, not only at
+startup, so a process that has been running longer than its own tolerance
+refuses rather than serving out of a file it has already outlived.
+
+Staleness tolerance is bundle-declared because it is a property of the
+question, not of the deployment. A fact that cannot change once it is recorded
+is indifferent to a file published a week ago. A status that can be revoked at
+any moment is not, and the same week makes the same answer wrong. An
+operator-tuned tolerance would let a deployment quietly widen the window on the
+questions least able to afford it, so the requirement that knows why the window
+exists is the thing that declares it.
+
+#### What mounting an extract moves
+
+An extract on the deployment host is registry data outside the registry, and no
+amount of statement review changes that. What the transport does is move the
+acquisition decision to the publisher and make it explicit: the publisher
+chooses what the file contains, releases it under a stated identity and
+instant, and hands over nothing else. Evidence never retrieves the file, never
+reads more than the statement selects, and never writes to it.
+
+The consequences belong to the deployment that mounts it. An extract carrying
+columns no statement reads is a publication defect the runtime cannot detect
+and review must catch, and it belongs to the same combined disclosure review as
+the bundle that reads it. Host-level protection of the file is an operator
+obligation of the same weight as protection of the audit store and the signing
+path. Saying so is the honest alternative to claiming that a read-only mount
+minimizes acquisition. It does not, and this transport does not pretend
+otherwise.
+
+### 9.3 Rhai extraction and derivation
 
 Version one uses two small Rhai interfaces in the same process:
 
@@ -692,7 +908,7 @@ Scripts compile at startup and are identified by bundle hash. Each invocation re
 
 A future `plan(context) -> SourceCall` hook requires a separate design and a demonstrated source that cannot use a fixed request. It is not a hidden extension point in version one.
 
-### 9.3 Rhai primitives
+### 9.4 Rhai primitives
 
 Rust supplies a small standard library of pure, deterministic, bounded primitives to Rhai. Initial primitives cover:
 
@@ -707,7 +923,7 @@ Primitive names and behavior are domain-neutral. Rust does not expose operations
 
 Primitives perform no I/O, authorization, logging, audit, signing, or response construction. New primitives require a generic need demonstrated by more than one definition shape, bounded behavior, and focused tests. Adding a new evidence definition should normally require no Rust change.
 
-### 9.4 Output validation
+### 9.5 Output validation
 
 Rust accepts a derivation result only when its concept identifiers exactly match the selected requirement's permitted output set and every value satisfies its declared type, codelist, cardinality, and size. Arbitrary JSON objects and undeclared metadata are rejected.
 
@@ -719,13 +935,20 @@ readiness. The explicit local authoring profile may omit a fixture reference;
 it retains the real authenticated, bounded-source, signed, and audited runtime
 and marks every result as local.
 
-### 9.5 Source compatibility contract
+### 9.6 Source compatibility contract
 
-The source layer is accepted only when the same core passes all three reference
-shapes described in section 5.7. The contract suite verifies:
+The source layer is accepted only when the same core passes every reference
+shape described in section 5.7, across both transports. The contract suite
+verifies:
 
 - exact Rust-owned method, URL, selector, projection, headers, body, timeout,
-  redirect, and response-size behavior;
+  redirect, and response-size behavior for an HTTP source;
+- exact Rust-owned statement text, authorizer verdict, parameter binding, row
+  and step bounds, and result-to-JSON mapping for an extract source, including
+  bundle-load refusal of a denied action, startup refusal of a file without
+  publication metadata, refusal of an extract past its declared maximum age
+  before any row is read, and the reserved evaluation instant standing in for
+  every ambient time function;
 - authentication injection without exposing credentials to YAML values, Rhai,
   logs, audit, errors, or test output;
 - zero, one, and multiple-match behavior without an unintended existence
@@ -735,9 +958,10 @@ shapes described in section 5.7. The contract suite verifies:
 - flat objects, nested attribute arrays, pagination metadata, event-index
   declarations, provider error envelopes, and missing or malformed facts;
 - safe handling of `401`, `403`, `429`, `5xx`, timeout, redirect, invalid JSON,
-  wrong media type, and oversized responses;
+  wrong media type, and oversized responses, and of a missing, unreadable, or
+  corrupt extract, an exhausted row or step bound, and a stale extract;
 - no change to the Evidence API, model, evaluator, signing, or audit path when
-  the source shape changes.
+  the source shape or the transport changes.
 
 Compatibility fixtures are hand-authored from public API documentation and use
 invented subjects and values. Live responses, public-demo subject identifiers,
@@ -753,7 +977,10 @@ The executor prefers count plus one minimized result when a provider supports
 it. Otherwise it may request at most two minimally projected results so the
 adapter can distinguish a unique match from ambiguity. It never follows pages
 or performs broad candidate retrieval. Rhai must return `ambiguous` when two
-results are present and cannot compare them to choose one.
+results are present and cannot compare them to choose one. An extract source
+reaches the same place through its declared row bound: a statement bounded at
+two rows separates a unique match from ambiguity without a candidate set ever
+existing.
 
 ## 10. Policy model
 
@@ -1604,12 +1831,17 @@ mandatory default and includes:
 - all four initial assertion cases as complete test-only acceptance bundles;
 - conformance fixtures for every Version 1 Supported Value form;
 - multiple enabled evidence definitions in one process;
-- one generic fixed HTTP JSON evidence-data request executor;
+- two coequal generic evidence-data transports: one fixed HTTP JSON request
+  executor, and one reviewed-statement executor over a read-only mounted SQLite
+  extract with a prepare-time authorizer verdict, required publication
+  metadata, a bundle-declared maximum extract age, declared row and step
+  bounds, and the reserved evaluation instant in place of an ambient clock;
 - generic Basic, static Authorization header, static API-key header, and OAuth
-  2.0 client-credentials source authentication using secret references, the
-  OAuth client authenticating by secret or by private-key JWT assertion;
-- credential-free source access only for explicit local authoring at a
-  canonical numeric-loopback HTTP origin;
+  2.0 client-credentials authentication for HTTP sources using secret
+  references, the OAuth client authenticating by secret or by private-key JWT
+  assertion, and no credential of any kind for an extract source;
+- credential-free HTTP source access only for explicit local authoring at a
+  canonical numeric-loopback origin;
 - fixed non-secret request headers, Rust-owned tagged selector/prior-fact path templates,
   and logical private-CA trust profiles without script transport authority;
 - explicit `source-derived`, `field-projected`, and `record-transformed`
@@ -1644,7 +1876,7 @@ mandatory default and includes:
 - a documented Docker Compose adapter that mounts the candidate bundle
   unchanged without generating Compose, container, or cloud deployment output;
 - deterministic source-contract mocks for flat REST, DHIS2 Tracker-style REST,
-  and OpenCRVS Version 2 Event Search-style JSON;
+  OpenCRVS Version 2 Event Search-style JSON, and a sanitized SQLite extract;
 - generated JSON Schema and OpenAPI artifacts;
 - focused authorization, minimization, existence, isolation, signing-failure,
   signature-verification, codelist, multi-concept, multi-subject, and
@@ -1675,7 +1907,9 @@ It does not include:
 - application-level or ambient-environment HTTP proxy routing;
 - federation;
 - runtime configuration mutation;
-- an application database unless the selected audit sink requires an external durable service.
+- an application database unless the selected audit sink requires an external
+  durable service; a mounted extract is a read-only source input, never a store
+  the service owns, writes, or keeps state in.
 
 ## 18. Delivery sequence
 
@@ -1694,8 +1928,8 @@ The complete Version 1 sequence is:
 - Define the flattened JWS profile, signer identity, key discovery, rotation, and verifier rules.
 - Create golden fixtures for boolean, code, category, and role-bound relationship assertions.
 - Define negative fixtures for bundle-level inference and existence disclosure.
-- Define the three source-shape compatibility mocks and their exact request,
-  authentication, cardinality, and failure expectations.
+- Define the source-shape compatibility mocks for both transports and their
+  exact request, authentication, cardinality, and failure expectations.
 - Define identifier-only, compound no-identifier, additional-disambiguator,
   and multi-role selector fixtures with authorization and redaction
   expectations.
@@ -1721,8 +1955,11 @@ The complete Version 1 sequence is:
   fact path templates, private-CA trust profiles, and generic Basic, static
   Authorization header, static API-key header, and OAuth 2.0 client-credentials
   authentication in both its client-secret and private-key JWT forms.
-- Run flat REST, paged nested REST, and OpenCRVS Event Search-shaped contracts
-  through one source executor.
+- Add reviewed-statement execution over a read-only mounted extract, with the
+  prepare-time authorizer, the bound evaluation instant, publication-metadata
+  and maximum-age refusals, and declared row and step bounds.
+- Run flat REST, paged nested REST, OpenCRVS Event Search-shaped contracts, and
+  a sanitized extract file through one source layer.
 - Prove the selector matrix, zero, one, and multiple lookup outcomes, and no
   broad candidate retrieval or candidate choice.
 - Prove at least one definition can change source shapes using YAML and Rhai
@@ -1798,8 +2035,11 @@ The concept succeeds if:
   recording the untrusted request tuple or fabricating a matched authority;
 - one process safely serves multiple definitions within one trust domain;
 - adding a code or relationship assertion requires no new subsystem;
-- flat REST, paged nested REST, and event-index source shapes require no
-  source-product domain code in Rust;
+- flat REST, paged nested REST, event-index source shapes, and a mounted
+  extract require no source-product domain code in Rust;
+- an extract source holds no credential, refuses a file without publication
+  metadata, refuses an extract past its declared maximum age before reading a
+  row, and cannot load a bundle whose statement the authorizer denies;
 - all four initial assertion cases pass the complete production path on the
   same revision before public contracts freeze;
 - production code, dependencies, features, configuration schemas, routes, and
@@ -1825,7 +2065,7 @@ A valid JWS can be mistaken for legal notarization or proof that the underlying 
 
 ### False minimization claims
 
-Redacting after fetching a complete record minimizes disclosure but not acquisition. Every definition declares its source-access posture.
+Redacting after fetching a complete record minimizes disclosure but not acquisition. Every definition declares its source-access posture. A mounted extract moves the acquisition decision to its publisher rather than removing it, and section 9.2 states what that leaves on the deployment host.
 
 ### Cross-definition inference
 
@@ -1879,7 +2119,7 @@ This concept fixes the following decisions:
 5. Definitions and authorization declarations use startup-only YAML.
 6. Rhai performs source extraction and requirement-specific derivation.
 7. Rust provides only bounded, deterministic, domain-neutral Rhai primitives.
-8. Rust owns networking, credentials, authorization, output validation, evidence construction, projection, signing, and audit.
+8. Rust owns networking, extract-file access, credentials, authorization, output validation, evidence construction, projection, signing, and audit.
 9. Version one has no policy engine.
 10. Signed flattened JWS over the exact Evidence payload is mandatory and the
     default. Exact API negotiation may select a distinctly typed unsigned
@@ -1900,8 +2140,9 @@ This concept fixes the following decisions:
     legal-parent relationship are coequal full-path acceptance definitions,
     not Rust product concepts or implementation phases.
 16. Source independence is proven in tests with flat REST, DHIS2 Tracker-style
-    REST, and OpenCRVS Version 2 Event Search-style JSON mocks before any live demo
-    test. No named source product enters production code or public contracts.
+    REST, and OpenCRVS Version 2 Event Search-style JSON mocks and with a
+    sanitized SQLite extract, before any live demo test. No named source
+    product enters production code or public contracts.
 17. Public demo tests are read-only, explicit, local-only, and non-gating;
     credentials, tokens, live responses, and demo-subject identifiers are not
     repository artifacts.
@@ -1937,6 +2178,12 @@ This concept fixes the following decisions:
     standalone minimal native audit event. Authentication, malformed-request,
     and invalid-selector failures remain operational-only, and audit failure
     changes the outward refusal result from `403` to `503`.
+26. A source uses one of two coequal transports: a fixed HTTP JSON request, or
+    one reviewed SQL statement executed against a read-only mounted SQLite
+    extract. The statement is a bundle artifact, a prepare-time authorizer
+    proves it cannot write or leave its file, Rust supplies the only clock
+    through a reserved parameter, and an extract without publication metadata
+    or past its bundle-declared maximum age is refused before any row is read.
 
 ## 22. Production deployment decisions
 
@@ -1961,6 +2208,9 @@ semantics:
 10. How will relying parties obtain and pin the Evidence provider's verification trust?
 11. Which permitted existence-disclosure behavior applies to each enabled
     requirement under the closed public problem contract?
+12. For each extract source, who publishes the extract, on what cadence, and to
+    which mounted path, so that publication reliably stays inside the maximum
+    age its requirement declares?
 
 Item 7 chooses where a deployment puts durable storage, not which sink to
 build. The chain head is recovered from local segments at startup and held in

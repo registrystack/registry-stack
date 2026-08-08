@@ -210,8 +210,9 @@ properties:
     additionalProperties:
       description: >-
         One fixed source referenced by this map key from a requirement's `acquisition` field,
-        combining a fixed origin, transport, and minimization posture with the extraction
-        script and schemas that turn the source's response into facts.
+        combining a transport, the fixed request that transport carries, and a minimization
+        posture with the extraction script and schemas that turn the source's response into
+        facts.
       $ref: '#/$defs/source'
   authorityProfiles:
     description: >-
@@ -373,6 +374,9 @@ $defs:
   relative-path:
     type: string
     pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$
+  statement-path:
+    type: string
+    pattern: ^queries/[A-Za-z0-9._/-]+\.sql$
   public-jwk-path:
     type: string
     pattern: ^public-keys/[A-Za-z0-9._-]+\.jwk\.json$
@@ -719,6 +723,10 @@ $defs:
             minimum: 1
             maximum: 8192
   source:
+    oneOf:
+      - $ref: '#/$defs/http-json-source'
+      - $ref: '#/$defs/sqlite-extract-source'
+  http-json-source:
     type: object
     additionalProperties: false
     required:
@@ -733,9 +741,10 @@ $defs:
     properties:
       transport:
         description: >-
-          Selects the source's transport implementation. Version 1 defines exactly one, so
-          every source uses the same HTTP-plus-JSON request and response contract for method,
-          media type, and body shape.
+          Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the
+          network under one request and response contract for method, media type, and body
+          shape. The tag chooses the shape of the whole source, so a key belonging to another
+          transport is an unknown key here rather than an ignored one.
         const: http-json
       baseUrl:
         description: >-
@@ -818,6 +827,79 @@ $defs:
           not:
             required:
               - tlsTrustProfile
+  sqlite-extract-source:
+    type: object
+    additionalProperties: false
+    required:
+      - transport
+      - posture
+      - extractProfile
+      - request
+      - maximumExtractAgeSeconds
+      - responseSchema
+      - extractScript
+      - factSchema
+    properties:
+      transport:
+        description: >-
+          Selects the statement transport, which runs one reviewed SQL statement against a
+          read-only SQLite extract file mounted beside the process. There is no origin, no
+          credential, and no network hop, so the keys the HTTP transport needs for those are
+          unknown keys here rather than ignored ones.
+        const: sqlite-extract
+      posture:
+        description: >-
+          Describes how much of the underlying record crosses the source boundary, weakest at
+          `record-transformed` and strongest at `source-derived`. A statement that aggregates
+          in SQL claims `source-derived` honestly, because only the aggregate leaves the
+          statement.
+        enum:
+          - source-derived
+          - field-projected
+          - record-transformed
+      extractProfile:
+        description: >-
+          Logical name resolved to an exact extract file bound in `runtime.yaml` under
+          `sourceExtracts`. The bundle never names a filesystem location, and startup refuses
+          a profile no runtime binds as well as a bound profile no source reads.
+        $ref: '#/$defs/local-id'
+      request:
+        description: >-
+          The one fixed statement plan for this source; a preparation script, a caller, and
+          the extract itself hold no authority over the statement text, the declared columns,
+          the parameters, or the bounds.
+        $ref: '#/$defs/statement-request'
+      maximumExtractAgeSeconds:
+        description: >-
+          Bounds how far the extract's published instant may lag the evaluation instant before
+          the request fails as stale. Staleness tolerance belongs to the bundle because it is a
+          property of the concept being asserted rather than of the deployment, and the runtime
+          reads the published instant from the extract's reserved metadata table, never from
+          the file's modification time.
+        type: integer
+        minimum: 1
+        maximum: 2592000
+      responseSchema:
+        description: >-
+          Bundle-relative closed JSON Schema the projected statement result must satisfy before
+          `sources.*.extractScript` runs; a result outside this shape fails as a source-protocol
+          error and no script runs. Unlike `sources.*.factSchema`, this schema may require
+          fewer members than it declares and may mark a leaf nullable, because a declared column
+          may legitimately be null in the extract.
+        $ref: '#/$defs/relative-path'
+      extractScript:
+        description: >-
+          Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated
+          projected result and adapter context to a match, no-match, or ambiguous outcome.
+          The script never selects a candidate among multiple rows and never turns protocol
+          inconsistency into a closed lookup outcome.
+        $ref: '#/$defs/relative-path'
+      factSchema:
+        description: >-
+          Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly
+          satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates
+          what the script returns, not what the statement returned.
+        $ref: '#/$defs/relative-path'
   source-authentication:
     oneOf:
       - type: object
@@ -1213,6 +1295,312 @@ $defs:
               properties:
                 jsonBody:
                   const: forbidden
+  statement-request:
+    type: object
+    additionalProperties: false
+    required:
+      - statement
+      - columns
+      - selectorInputs
+      - projection
+      - maximumRows
+      - maximumCellBytes
+      - maximumStatementSteps
+      - timeoutMilliseconds
+      - maximumResponseBytes
+      - concurrencyLimit
+    properties:
+      statement:
+        description: >-
+          Bundle-relative SQL file holding exactly one statement, hash-identified like every
+          other bundle artifact and reviewed with the bundle. A second statement in the file
+          fails the request, and the statement text is fixed: no caller, script, or extract
+          contributes to it.
+        $ref: '#/$defs/statement-path'
+      columns:
+        description: >-
+          Closes the result shape by naming every column the statement returns and the type
+          each carries, in order. A result whose column count, names, or value types differ
+          fails as a source-protocol error, so a statement edited without its declaration
+          cannot silently change what the extraction script sees.
+        type: array
+        minItems: 1
+        maxItems: 64
+        items:
+          description: >-
+            One declared result column, whose name is unique across the declaration and opaque
+            to Rust.
+          $ref: '#/$defs/statement-column'
+      selectorInputs:
+        description: >-
+          Closes the minimized authorized selector alternatives this source's parameter bindings
+          may draw on; an empty array is accepted only on a source that binds no selector.
+        type: array
+        minItems: 0
+        maxItems: 8
+        items:
+          description: >-
+            One subject role together with the alternative profiles and exact field sets a
+            binding may name for that role.
+          $ref: '#/$defs/selector-input'
+      parameterBindings:
+        description: >-
+          States where each named statement parameter's value comes from, so no value reaches
+          the statement by string substitution. A parameter has one origin and exactly one: a
+          `selector` parameter is filled from the authorized selector field it names and from
+          nothing else, and a `prepared` parameter is filled by the preparation script and by
+          nothing else. A parameter the statement uses and no binding supplies fails the
+          request, as does a binding the statement never names. The reserved name `evidence_now`
+          may not be bound, because Rust binds it.
+        type: object
+        maxProperties: 64
+        propertyNames:
+          $ref: '#/$defs/parameter-key'
+        additionalProperties:
+          description: >-
+            One parameter's tagged binding, filling exactly one named statement parameter from
+            a value Rust has already validated.
+          $ref: '#/$defs/statement-parameter-binding'
+      prepareScript:
+        description: >-
+          Bundle-relative Rhai script implementing `prepare/2`. A statement source usually
+          declares neither this nor `preparationLimits`, because most parameters name the
+          selector field they come from; a source declares both together or neither, and only
+          where it also declares a `prepared` parameter for the script to fill.
+        $ref: '#/$defs/relative-path'
+      adapterParameters:
+        description: >-
+          Closed non-secret constants supplied to the extraction script, and to the preparation
+          script when one is declared, rejected at bundle load when they fall outside
+          `adapterParametersSchema`.
+        type: object
+        maxProperties: 64
+        propertyNames:
+          $ref: '#/$defs/parameter-key'
+        additionalProperties:
+          description: >-
+            One constant read by the scripts, which may itself nest further parameter values.
+          $ref: '#/$defs/adapter-parameter-value'
+      adapterParametersSchema:
+        description: >-
+          Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties
+          rule turns an undeclared or missing parameter into a startup failure. A non-empty
+          `adapterParameters` without it fails startup.
+        $ref: '#/$defs/relative-path'
+      preparationLimits:
+        description: >-
+          Output bounds Rust applies to what a preparation script returns, declared with
+          `prepareScript` and never alone.
+        $ref: '#/$defs/statement-preparation-limits'
+      projection:
+        description: >-
+          Allowlist of result leaves Rust retains, alongside the containers needed to reach
+          them, so an extraction script never observes a value the statement returned but the
+          bundle did not select.
+        type: array
+        minItems: 1
+        maxItems: 64
+        uniqueItems: true
+        items:
+          description: >-
+            One extended JSON Pointer whose `*` segment visits every element of the current
+            array, with no numeric index, recursive descent, filter, predicate, union, or
+            script-computed path admitted.
+          type: string
+          minLength: 2
+          maxLength: 256
+          pattern: ^/(?!/)([^/~]|~[01]|/|\*)+$
+      maximumRows:
+        description: >-
+          Caps the rows the statement may return before the request fails, so a statement that
+          matches more broadly than intended fails rather than moving a bulk result into the
+          runtime.
+        type: integer
+        minimum: 1
+        maximum: 256
+      maximumCellBytes:
+        description: >-
+          Caps one returned value, so a single oversized cell fails the request rather than
+          being read.
+        type: integer
+        minimum: 1
+        maximum: 65536
+      maximumStatementSteps:
+        description: >-
+          Caps the virtual-machine steps the statement may take, which bounds work the wall
+          clock does not: a scan that is slow because it is large is stopped by this bound
+          rather than by the timeout.
+        type: integer
+        minimum: 1
+        maximum: 1000000
+      timeoutMilliseconds:
+        description: >-
+          Bounds one attempt at this source end to end, covering concurrency admission and
+          statement execution.
+        type: integer
+        minimum: 1
+        maximum: 30000
+      maximumResponseBytes:
+        description: >-
+          Caps the assembled result before projection, so an oversized result fails rather
+          than being projected.
+        type: integer
+        minimum: 1
+        maximum: 1048576
+      concurrencyLimit:
+        description: >-
+          Bounds how many evaluations may hold a statement against this extract at once, and
+          waiting for that admission is bounded by `timeoutMilliseconds`.
+        type: integer
+        minimum: 1
+        maximum: 256
+    oneOf:
+      - required:
+          - prepareScript
+          - preparationLimits
+      - not:
+          anyOf:
+            - required:
+                - prepareScript
+            - required:
+                - preparationLimits
+    allOf:
+      - if:
+          required:
+            - adapterParameters
+          properties:
+            adapterParameters:
+              type: object
+              minProperties: 1
+        then:
+          required:
+            - adapterParametersSchema
+      # `evidence_now` is the runtime's own evaluation instant, so a bundle that
+      # bound the name would be choosing a second clock.
+      - properties:
+          parameterBindings:
+            not:
+              required:
+                - evidence_now
+      # A preparation script and a prepared parameter exist for each other. A
+      # script with nothing prepared to fill could only ever return a name the
+      # source refuses, and a prepared parameter with no script could never be
+      # filled, so each is stated only with the other. JSON Schema can say "at
+      # least one binding is prepared" about an object only by refusing the case
+      # where every binding is a selector one, which is what the negations below
+      # are doing.
+      - if:
+          required:
+            - prepareScript
+        then:
+          required:
+            - parameterBindings
+          properties:
+            parameterBindings:
+              not:
+                additionalProperties:
+                  $ref: '#/$defs/statement-selector-parameter-binding'
+      - if:
+          required:
+            - parameterBindings
+          properties:
+            parameterBindings:
+              not:
+                additionalProperties:
+                  $ref: '#/$defs/statement-selector-parameter-binding'
+        then:
+          required:
+            - prepareScript
+  statement-column:
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - type
+    properties:
+      name:
+        description: >-
+          Name this column carries into the result object, unique across the declaration and
+          opaque to Rust; it need not equal the column's name in the extract.
+        type: string
+        pattern: ^[a-z][a-z0-9._-]{0,63}$
+      type:
+        description: >-
+          Exact value type Rust admits for this column. A null is admitted for any declared
+          type, and any other mismatch fails as a source-protocol error rather than being
+          coerced.
+        enum:
+          - string
+          - integer
+          - number
+          - boolean
+  statement-parameter-binding:
+    oneOf:
+      - $ref: '#/$defs/statement-selector-parameter-binding'
+      - $ref: '#/$defs/statement-prepared-parameter-binding'
+  statement-selector-parameter-binding:
+    type: object
+    additionalProperties: false
+    required:
+      - kind
+      - role
+      - profile
+      - field
+    properties:
+      kind:
+        description: >-
+          Selects the binding origin. This parameter is filled from the authorized selector
+          field named below and from nothing else, so the preparation script cannot stand in
+          for it.
+        const: selector
+      role:
+        description: >-
+          Subject role the value is taken from, which must be one the request's `selectorInputs`
+          declares.
+        $ref: '#/$defs/local-id'
+      profile:
+        description: >-
+          Selector profile the value is taken from, which must be an alternative that role
+          declares.
+        $ref: '#/$defs/local-id'
+      field:
+        description: >-
+          Exact field of that profile whose resolved value Rust binds to the parameter.
+        type: string
+        pattern: ^[a-z][a-z0-9._-]{0,63}$
+  statement-prepared-parameter-binding:
+    type: object
+    additionalProperties: false
+    required:
+      - kind
+    properties:
+      kind:
+        description: >-
+          Selects the binding origin. This parameter is filled by the preparation script and by
+          nothing else, which is how a value no selector holds, such as a normalized reference
+          or a derived bound, reaches the statement. It names no selector, because naming one
+          would give the parameter a second origin, and the request fails if the script returns
+          no value for it.
+        const: prepared
+  statement-preparation-limits:
+    type: object
+    additionalProperties: false
+    required:
+      - maximumParameters
+      - maximumParameterValueBytes
+    properties:
+      maximumParameters:
+        description: >-
+          Caps how many parameters a preparation script may return.
+        type: integer
+        minimum: 1
+        maximum: 64
+      maximumParameterValueBytes:
+        description: >-
+          Caps one returned parameter value.
+        type: integer
+        minimum: 1
+        maximum: 4096
   selector-input:
     type: object
     additionalProperties: false

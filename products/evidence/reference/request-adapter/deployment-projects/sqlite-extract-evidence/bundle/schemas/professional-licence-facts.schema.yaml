@@ -1,0 +1,11 @@
+# One number is the whole fact set. The extract holds licence records, dates,
+# and issuing offices; none of them are here, because the statement counted
+# inside the extract rather than handing rows out to be counted.
+type: object
+additionalProperties: false
+required: [active_licence_count]
+properties:
+  active_licence_count:
+    type: integer
+    minimum: 0
+    maximum: 1000000

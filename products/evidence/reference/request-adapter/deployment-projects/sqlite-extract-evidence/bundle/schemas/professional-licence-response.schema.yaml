@@ -1,0 +1,21 @@
+# Shape of the projected statement result, checked before extraction runs.
+# The declared row bound is two, so a third row never reaches this schema: the
+# transport refuses the result first. Two rows still arrive, because that is the
+# ambiguity the extraction script is there to read.
+type: object
+additionalProperties: false
+required: [rows]
+properties:
+  rows:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [active_licence_count]
+      properties:
+        active_licence_count:
+          type: integer
+          minimum: 0
+          maximum: 1000000
