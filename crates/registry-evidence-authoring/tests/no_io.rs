@@ -13,11 +13,16 @@
 //! behalf, because a rule that only searched source text would be satisfied by
 //! a crate that called an HTTP client in one line.
 //!
-//! Neither sweep is a sandbox. `rhai` can read a file when a program it is
-//! running imports a module, and it is on this crate never to run one: only
-//! `Engine::compile` is called, which parses text and resolves nothing.
+//! Neither sweep is a sandbox, and the dependency that could read a file on
+//! this crate's behalf is `rhai`: an engine straight from `Engine::new` opens
+//! whatever path a program's `import` statement names. The engine this crate
+//! builds gives that resolver up, so the capability is absent rather than
+//! merely unused, and the sweep refuses the entry points that would want it
+//! back.
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
+
+use registry_evidence_authoring::validate_authored_answer;
 
 /// Spellings that would take this crate outside its own arguments, each with
 /// the reason it is refused.
@@ -55,7 +60,19 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("include_str!", "reads a file at build time"),
     ("include_bytes!", "reads a file at build time"),
     ("eval_file", "runs a program from a file"),
+    ("run_file", "runs a program from a file"),
     ("compile_file", "reads a program from a file"),
+    // Compiling a program is safe only while it stays compiling. This entry
+    // point resolves the program's `import` paths as it parses, so it reads a
+    // file for every module the author named.
+    (
+        "compile_into_self_contained",
+        "resolves an imported module, which reads a file",
+    ),
+    (
+        "FileModuleResolver",
+        "resolves an imported module by reading a file",
+    ),
 ];
 
 /// Every crate this library may link. Each one is a parser, an error type, or
@@ -296,7 +313,9 @@ assert!(files.contains(&ProjectFile {
     path: "questions/sample-question.yaml".to_owned(),
     contents: "question-body".to_owned(),
 }));
-let Ok(ast) = rhai::Engine::new().compile(source) else {
+use rhai::module_resolvers::DummyModuleResolver;
+engine.set_module_resolver(DummyModuleResolver::new());
+let Ok(ast) = parser().compile(source) else {
 "#;
 
 #[test]
@@ -346,6 +365,103 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
         .map(|refusal| refusal.spelling)
         .collect::<Vec<_>>();
     assert_eq!(refused, ["std::fs"], "the sweep read {wrapped:?} as clean");
+}
+
+/// `rhai::Engine::new()` installs a module resolver that reads files: with the
+/// default features this workspace pins, that is a `FileModuleResolver`, and it
+/// opens whatever path an `import` statement names. Nothing in this crate asks
+/// for a module today, but "nothing asks for it" is a fact about one call site
+/// rather than a property of the engine, and one call changed from `compile` to
+/// `compile_into_self_contained` would turn an editor into a file reader driven
+/// by an author's own text.
+///
+/// So the engine is built without that capability rather than merely never
+/// using it, and any engine this crate builds later has to disarm itself the
+/// same way.
+#[test]
+fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
+    let armed = rust_sources()
+        .into_iter()
+        .filter(|path| {
+            let text = fs::read_to_string(path).expect("crate sources are readable");
+            text.contains("Engine::new(") && !text.contains("set_module_resolver")
+        })
+        .map(|path| {
+            path.file_name()
+                .expect("named file")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        armed.is_empty(),
+        "these sources build a rhai engine and leave its file-reading module \
+         resolver in place: {armed:?}"
+    );
+}
+
+/// A directory of this test's own, under the system temporary directory.
+///
+/// Files on disk are what make "the file was not read" observable, and they
+/// have to be written from here: the crate under test is the one thing in this
+/// package that may not write them.
+fn scratch_directory(name: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!(
+        "registry-evidence-authoring-{}-{name}",
+        std::process::id()
+    ));
+    if directory.exists() {
+        fs::remove_dir_all(&directory).expect("a leftover scratch directory is removable");
+    }
+    fs::create_dir_all(&directory).expect("a writable temporary directory");
+    directory
+}
+
+/// An authored derivation may say `import`, and an editor runs these checks
+/// over whatever an author has typed, unsaved and unreviewed. Reading such a
+/// program must not read the files the program names.
+///
+/// The first half of this test shows the hazard is real rather than
+/// theoretical: an engine built the ordinary way decides what to return from
+/// what is on disk, and says so three different ways for a module that parses,
+/// one that does not, and one that is not there. The second half shows that
+/// this crate's verdict does not move when the disk does, which it could not
+/// claim if it had opened any of them.
+#[test]
+fn an_authored_import_does_not_read_the_file_it_names() {
+    let directory = scratch_directory("authored-import");
+    let parsable = directory.join("parsable");
+    fs::write(parsable.with_extension("rhai"), "let observed = 1;\n")
+        .expect("the scratch directory is writable");
+    let unparsable = directory.join("unparsable");
+    fs::write(unparsable.with_extension("rhai"), "!! not a program !!\n")
+        .expect("the scratch directory is writable");
+    let absent = directory.join("absent");
+
+    let program = |module: &PathBuf| {
+        format!(
+            "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+            module.display()
+        )
+    };
+    let engine = rhai::Engine::new();
+    let scope = rhai::Scope::new();
+    let resolved = |module| engine.compile_into_self_contained(&scope, program(module));
+    assert!(resolved(&parsable).is_ok());
+    assert!(resolved(&unparsable).is_err());
+    assert!(resolved(&absent).is_err());
+
+    for module in [&parsable, &unparsable, &absent] {
+        assert_eq!(
+            validate_authored_answer(&program(module)),
+            Vec::new(),
+            "reading a derivation that imports `{}` reported something, so \
+             something read the path",
+            module.display()
+        );
+    }
+
+    fs::remove_dir_all(&directory).expect("the scratch directory is removable");
 }
 
 #[test]
