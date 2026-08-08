@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{PrivateJwk, SigningAlgorithm};
+use registry_platform_crypto::PrivateJwk;
 use serde_json::{json, Map, Value};
 
 use crate::ON_BEHALF_OF_CLAIM;
@@ -106,14 +106,10 @@ pub fn sign_client_assertion(
         }
     }
 
-    let algorithm = match key
+    let algorithm = key
         .algorithm()
         .map_err(|error| AssertionError::Signing(error.to_string()))?
-    {
-        SigningAlgorithm::EdDsa => "EdDSA",
-        SigningAlgorithm::Es256 => "ES256",
-        SigningAlgorithm::Rs256 => "RS256",
-    };
+        .jwa_name();
     let header = json!({
         "alg": algorithm,
         "typ": "JWT",

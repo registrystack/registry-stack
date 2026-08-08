@@ -5,9 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{
-    canonicalize_json, parse_json_strict, verify, PublicJwk, SigningAlgorithm,
-};
+use registry_platform_crypto::{canonicalize_json, parse_json_strict, verify, PublicJwk};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
@@ -815,14 +813,10 @@ fn verify_transition_signatures(
 }
 
 fn signing_alg_label(jwk: &PublicJwk) -> Result<&'static str, ConfigBundleError> {
-    match jwk
+    Ok(jwk
         .algorithm()
         .map_err(|_| ConfigBundleError::InvalidTrustAnchor("enabled_signers[].jwk"))?
-    {
-        SigningAlgorithm::EdDsa => Ok("EdDSA"),
-        SigningAlgorithm::Es256 => Ok("ES256"),
-        SigningAlgorithm::Rs256 => Ok("RS256"),
-    }
+        .jwa_name())
 }
 
 fn verify_file_closure(

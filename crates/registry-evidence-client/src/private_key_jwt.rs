@@ -31,7 +31,7 @@ use std::{
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use registry_platform_crypto::{PrivateJwk, SigningAlgorithm};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::read_bounded;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::Deserialize;
@@ -323,12 +323,10 @@ impl PrivateKeyJwt {
         // algorithm would refuse keys a conforming authorization server accepts:
         // `token_endpoint_auth_signing_alg_values_supported` is the server's
         // choice to publish, not this client's to narrow. Parsing a `PrivateJwk`
-        // already refuses anything outside these three, so the last arm is a
-        // floor rather than a path a caller can reach.
+        // already refuses any algorithm the crypto crate does not support, so
+        // the error arm is a floor rather than a path a caller can reach.
         let algorithm = match config.client_key.algorithm() {
-            Ok(SigningAlgorithm::EdDsa) => "EdDSA",
-            Ok(SigningAlgorithm::Es256) => "ES256",
-            Ok(SigningAlgorithm::Rs256) => "RS256",
+            Ok(algorithm) => algorithm.jwa_name(),
             Err(_) => {
                 return Err(refuse(
                     "the client key must state a supported signing algorithm",

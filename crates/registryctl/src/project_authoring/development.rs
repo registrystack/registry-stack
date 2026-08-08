@@ -18,7 +18,7 @@ use registry_platform_config::{
     ConfigTrustAnchor, ConfigTrustAnchorSigner, ProductAcceptanceIdentityV1,
     ProductAcceptanceLaneV1, ProductAcceptanceProductV1, ProductTrustDomainV1,
 };
-use registry_platform_crypto::{sign as sign_payload, PrivateJwk, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{sign as sign_payload, PrivateJwk, PublicJwk};
 
 const DEV_AUDIT_PSEUDONYM_WRITE_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 
@@ -1212,12 +1212,7 @@ fn sign_development_lane(
             .context("failed to sign development config bundle")?;
         Ok(ConfigBundleSignature {
             kid: signer_kid.clone(),
-            alg: match algorithm {
-                SigningAlgorithm::EdDsa => "EdDSA",
-                SigningAlgorithm::Es256 => "ES256",
-                SigningAlgorithm::Rs256 => "RS256",
-            }
-            .to_string(),
+            alg: algorithm.jwa_name().to_string(),
             sig: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
         })
     })?;

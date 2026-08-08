@@ -109,7 +109,7 @@ impl SdJwtIssuer {
         }
 
         let header = json!({
-            "alg": signing_algorithm_jwa(self.signer.algorithm()),
+            "alg": self.signer.algorithm().jwa_name(),
             "typ": "dc+sd-jwt",
             "kid": self.signer.key_id(),
         });
@@ -126,7 +126,7 @@ impl SdJwtIssuer {
             return Err(SdJwtError::Signing(SigningError::MissingKeyId));
         }
         let header = json!({
-            "alg": signing_algorithm_jwa(self.signer.algorithm()),
+            "alg": self.signer.algorithm().jwa_name(),
             "typ": typ,
             "kid": self.signer.key_id(),
         });
@@ -415,14 +415,6 @@ fn map_signing_error(err: SigningError) -> SdJwtError {
         }
         SigningError::InvalidKey(err) => SdJwtError::InvalidKey(err),
         err => SdJwtError::Signing(err),
-    }
-}
-
-fn signing_algorithm_jwa(algorithm: SigningAlgorithm) -> &'static str {
-    match algorithm {
-        SigningAlgorithm::EdDsa => "EdDSA",
-        SigningAlgorithm::Es256 => "ES256",
-        SigningAlgorithm::Rs256 => "RS256",
     }
 }
 

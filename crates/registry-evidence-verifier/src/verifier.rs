@@ -1182,6 +1182,9 @@ mod tests {
     const KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
     const RETIRED_KEY_ID: &str = "xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M";
     const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    /// A P-384 key the crypto crate can sign with and the Evidence response
+    /// contract must still refuse.
+    const P384_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"mqEbC1fsX1XaMKD1_72-SyYZsDBSQycS8d0Oh6s7X9B2vmRS26yh8SKBBycRccTM","x":"SMwlaZvaVs0WiMZo4LXK3zrB14V8lRMIfqyPSSBIiyGEqMHQcBD2_jWMO4U3vnRI","y":"VOuWyPJGkfOjpQ71Ww3T63f1Hxoo1rxFeRdEduVXaYT-YtKL3s7lr6eVJdQnTh3s","alg":"ES384","kid":"dnpdD12NrqQSXYbHqJA2W5lOmmbqzugaQh5zCpEURa0"}"#;
     const RETIRED_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M"}"#;
 
     #[derive(Debug, Deserialize)]
@@ -2943,6 +2946,102 @@ mod tests {
             verify_sd_jwt_vc(&jws, &jwks, &policy),
             Err(VerificationError::MalformedJws)
         );
+    }
+
+    /// The shared crypto crate can sign with ES384 and RS384 so a deployment
+    /// can authenticate to a source that requires them. An Evidence response is
+    /// a different contract: it is ES256 only, on both wire formats, in the
+    /// header it states and in the key set a relying party pins.
+    #[tokio::test]
+    async fn an_evidence_response_is_refused_when_it_states_or_uses_es384_or_rs384() {
+        let wider = PrivateJwk::parse(P384_PRIVATE_JWK).expect("P-384 test key parses");
+        assert_eq!(
+            wider
+                .algorithm()
+                .expect("the P-384 key states its algorithm"),
+            SigningAlgorithm::Es384,
+            "the crypto crate must sign ES384 for this test to prove anything"
+        );
+
+        let evidence = fixture_evidence();
+        let (_, jwks, policy) = signed_fixture().await;
+
+        // Claiming a wider algorithm over a signature the trusted ES256 key
+        // really produced is refused before the key set is consulted.
+        for alg in ["ES384", "RS384"] {
+            let header = json!({
+                "alg": alg,
+                "kid": KEY_ID,
+                "typ": EVIDENCE_JWS_TYP,
+                "cty": EVIDENCE_JWS_CTY
+            });
+            let (serialized, _) = sign_with_protected_header(PRIVATE_JWK, header, &evidence).await;
+            assert_eq!(
+                verify_flattened_jws(&serialized, &jwks, &policy),
+                Err(VerificationError::ProtectedHeader),
+                "{alg}"
+            );
+        }
+
+        // A response genuinely signed with a P-384 key, published as its own
+        // trusted key. The fixture builder refuses to publish that key at all,
+        // so the key set is assembled by hand to reach the verifier itself.
+        let published = wider.public();
+        let wider_kid = published.jkt().expect("P-384 thumbprint computes");
+        assert!(
+            jwks_document(published.clone(), []).is_err(),
+            "publishing a non-ES256 Evidence key must stay impossible"
+        );
+        let wider_jwks = JwksDocument {
+            keys: vec![serde_json::to_value(&published).expect("P-384 public key serializes")],
+        };
+        for (alg, expected) in [
+            ("ES384", VerificationError::ProtectedHeader),
+            ("ES256", VerificationError::Key),
+        ] {
+            let header = json!({
+                "alg": alg,
+                "kid": wider_kid,
+                "typ": EVIDENCE_JWS_TYP,
+                "cty": EVIDENCE_JWS_CTY
+            });
+            let (serialized, _) =
+                sign_with_protected_header(P384_PRIVATE_JWK, header, &evidence).await;
+            assert_eq!(
+                verify_flattened_jws(&serialized, &wider_jwks, &policy),
+                Err(expected),
+                "{alg}"
+            );
+        }
+
+        // The issuing side refuses the same key, so no ES384 response is
+        // produced in the first place.
+        let provider: Arc<dyn SigningProvider> = Arc::new(
+            LocalJwkSigner::new(PrivateJwk::parse(P384_PRIVATE_JWK).expect("P-384 key parses"))
+                .expect("P-384 signer builds"),
+        );
+        assert!(EvidenceSigner::initialize(provider, &wider_kid)
+            .await
+            .is_err());
+
+        // The SD-JWT VC encoding of the same response holds the same line.
+        let (sd_jwt, sd_jwks, sd_policy) = issued_sd_jwt_vc().await;
+        let (jwt, disclosures) = split_sd_jwt(&sd_jwt);
+        for alg in ["ES384", "RS384"] {
+            let header = json!({"alg": alg, "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP});
+            let replacement =
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
+            let mutated = replace_segment(&jwt, 0, &replacement);
+            assert_eq!(
+                verify_sd_jwt_vc(
+                    join_sd_jwt(&mutated, &disclosures).as_bytes(),
+                    &sd_jwks,
+                    &sd_policy
+                ),
+                Err(VerificationError::ProtectedHeader),
+                "{alg}"
+            );
+        }
     }
 
     /// The discriminant is what a binding, a metric label, or a caller's own
