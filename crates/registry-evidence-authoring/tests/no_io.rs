@@ -163,11 +163,13 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
 /// each with what it actually names.
 ///
 /// The forbidden list is written short on purpose, so that a module is refused
-/// whatever is taken out of it. Three of those modules also hold a name that
-/// the compiler resolves or that never leaves the process, and each of them is
-/// ordinary in the crates next door. Naming the exceptions costs three lines
-/// and keeps the module entries; dropping the module entries to make room for
-/// them would cost `env::var` and `process::Command`, which is the wrong trade.
+/// whatever is taken out of it, and a type is refused whoever re-exports it.
+/// Written that short it also catches three names that reach nothing: two the
+/// compiler resolves without asking anyone, and one that belongs to `clap`
+/// rather than to `std::process`. All three are ordinary in the crates next
+/// door. Naming them costs three lines and keeps the short entries; widening
+/// the short entries to make room for them would cost `env::var` and
+/// `process::Command`, which is the wrong trade.
 ///
 /// An exception is a spelling, not a prefix: it is read as a whole segment on
 /// both sides, so a longer name that merely starts the same way stays refused.
@@ -202,7 +204,8 @@ fn inside_a_name(character: char) -> bool {
 /// `ProjectFile` type, so a plain substring search for `File::` refuses an
 /// ordinary `ProjectFile::` call, and a sweep that cries wolf gets widened
 /// until it means nothing. A spelling that already begins on a separator, such
-/// as `::net`, carries its own left boundary and is searched for as written.
+/// as `.exists()`, carries its own left boundary and is searched for as
+/// written.
 ///
 /// Only the left side is bounded. A forbidden spelling is written as the head
 /// of the path it forbids, so `std::fs` has to go on matching `std::fs::read`
