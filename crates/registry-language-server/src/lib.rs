@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Cross-file navigation for Registry Stack project YAML.
 
-mod index;
+mod refs;
+mod relay;
 mod server;
+mod yaml;
 
-pub use index::{ProjectIndex, RegistrySymbolKind};
+pub use refs::{ProjectIndex, RegistrySymbolKind};
 pub use server::Backend;
 
 /// Serve the Registry Stack language protocol over standard input and output.

@@ -24,9 +24,10 @@ use tower_lsp_server::{
     Client, LanguageServer,
 };
 
-use crate::index::{
-    document_diagnostic, is_project_document, is_safe_authored_file, is_valid_yaml,
-    load_project_documents, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex,
+use crate::{
+    refs::{document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex},
+    relay::{is_project_document, is_safe_authored_file, load_project_documents},
+    yaml::is_valid_yaml,
 };
 
 const SERVER_NAME: &str = "Registry Stack Language Server";
