@@ -18,7 +18,7 @@ use registry_evidence::auth::{AuthenticatedContext, AuthenticationClaimsConfig, 
 use registry_evidence::bundle::{Bundle, BundleError, DeploymentInputs};
 use registry_evidence::config::{AuthorityKind, SelectorInput};
 use registry_evidence::kernel::{
-    EvidenceConstruction, KernelOutcome, OfflineKernel, ValueProjection,
+    EvidenceConstruction, EvidenceScope, KernelOutcome, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
     Evidence, EvidenceRequest, FlattenedJws, RequestedSelector, RequestedSubject, SelectorValue,
@@ -166,7 +166,10 @@ impl PreparedService {
                 &derivation_selectors,
                 observed_at,
                 ValueProjection {
-                    audience: context.evidence_audience(),
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: context.evidence_audience(),
+                        request_nonce: &request.request_nonce,
+                    },
                     binding_key: BINDING_KEY,
                     binding_key_version: 1,
                 },
@@ -188,7 +191,9 @@ impl PreparedService {
                         BINDING_KEY,
                         1,
                         &self.bundle.config.service.trust_domain,
-                        context.evidence_audience(),
+                        registry_evidence::binding::SubjectBindingScope::Audience(
+                            context.evidence_audience(),
+                        ),
                         &request.purpose,
                     )
                     .expect("subject binding succeeds"),
@@ -203,9 +208,11 @@ impl PreparedService {
                 values,
                 EvidenceConstruction {
                     evidence_id: &evidence_id,
-                    request_nonce: &request.request_nonce,
                     purpose: &request.purpose,
-                    audience: context.evidence_audience(),
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: context.evidence_audience(),
+                        request_nonce: &request.request_nonce,
+                    },
                     issued_at,
                     observed_at,
                     subjects,
@@ -1187,7 +1194,7 @@ fn request(requirement: &str, subjects: Vec<RequestedSubject>) -> EvidenceReques
         requirement: requirement.to_owned(),
         purpose: PURPOSE.to_owned(),
         subjects,
-        holder_key: None,
+        holder_keys: Vec::new(),
     }
 }
 
@@ -1345,7 +1352,7 @@ fn audit_subjects(audit: &EvidenceAuditLog, resolved: &ResolvedAuthorization) ->
                         "subject-selector-bundle",
                         "selector-conformance",
                         &subject
-                            .audit_pseudonym_input(&resolved.audience, &resolved.purpose)
+                            .audit_pseudonym_input(&resolved.subject_scope, &resolved.purpose)
                             .expect("selector bundle canonicalizes"),
                     )
                     .expect("selector bundle pseudonymizes"),

@@ -1,0 +1,3 @@
+id: urn:example:fixture:codelist:registry-regions
+version: '1'
+codes: [RR-A, RR-B]

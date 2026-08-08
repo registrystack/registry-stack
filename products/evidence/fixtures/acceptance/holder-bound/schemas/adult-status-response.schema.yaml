@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [total]
+properties:
+  total: {type: integer, minimum: 0, maximum: 1000000}
+  date_of_birth: {type: string, format: date}

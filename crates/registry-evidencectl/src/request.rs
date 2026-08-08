@@ -460,6 +460,11 @@ fn evidence_request_spec(
         configuration_revision: procedure.configuration_revision,
         expected_assurance_profile: procedure.expected_assurance_profile,
         subjects,
+        // A local relying procedure is audience-scoped by construction: it is
+        // prepared ahead of any request, and a holder-bound binding derives
+        // from a per-request wallet key that does not exist at preparation
+        // time. Supplying none is the mode, not an omission.
+        holder_keys: Vec::new(),
         expected_outputs: procedure.expected_outputs,
         maximum_assertion_lifetime_seconds: procedure.maximum_assertion_lifetime_seconds,
         clock_skew_seconds: procedure.clock_skew_seconds,

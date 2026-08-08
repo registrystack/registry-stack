@@ -1,0 +1,215 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/holder-bound-verification-policy-v1.json
+title: Evidence relying-procedure holder-bound presentation verification policy Version 1
+type: object
+additionalProperties: false
+required:
+  - subjectBinding
+  - expectedAssuranceProfile
+  - issuedBy
+  - providedBy
+  - requirement
+  - evidenceType
+  - expectedIssuancePurpose
+  - configurationRevision
+  - expectedSubjects
+  - expectedOutputs
+  - maximumAssertionLifetimeSeconds
+  - revokedKeyIds
+  - keyBindingAudience
+  - keyBindingNonce
+  - maximumKeyBindingAgeSeconds
+properties:
+  subjectBinding:
+    const: holder-bound
+    description: >-
+      The binding mode this document governs. It is stated rather than
+      inferred, so a holder-bound presentation and an audience-scoped response
+      can never be verified under each other's expectations.
+  expectedAssuranceProfile: {enum: [local, production, evidence-grade]}
+  issuedBy: {type: string, format: uri, maxLength: 512}
+  providedBy: {type: string, format: uri, maxLength: 512}
+  requirement: {type: string, format: uri, maxLength: 512}
+  evidenceType: {type: string, format: uri, maxLength: 512}
+  expectedIssuancePurpose:
+    type: string
+    pattern: '^[a-z][a-z0-9._:-]{0,127}$'
+    description: >-
+      The purpose the credential was issued under, compared as signed issuance
+      provenance. It is named for what it is: a record of why the assertion was
+      produced, never a downstream use limit, licence, or authorization for
+      what the relying party may now do with it.
+  configurationRevision:
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+    description: >-
+      The requirement-scoped revision the relying party pinned, as the
+      requirement's own definition published it. A deployment's unrelated edits
+      do not change it.
+  expectedSubjects:
+    type: array
+    minItems: 1
+    maxItems: 8
+    uniqueItems: true
+    description: >-
+      Unordered set of unique role-bound opaque bindings, pinned from
+      independent trusted state and never recomputed. A holder-bound binding is
+      an HMAC under a deployment secret, so a relying party cannot derive it
+      from the holder key and this document carries no expectation that could
+      be mistaken for a derivation input. Subject order alone is never
+      semantic.
+    items: {$ref: '#/$defs/expected-subject'}
+  expectedOutputs:
+    type: array
+    minItems: 1
+    maxItems: 16
+    uniqueItems: true
+    description: >-
+      Expected concept identifiers, value forms, and cardinalities, one per
+      disclosed Supported Value. A holder-bound requirement cannot declare an
+      entity-reference value form, so an expectation naming one can never be
+      satisfied.
+    items: {$ref: '#/$defs/expected-output'}
+  maximumAssertionLifetimeSeconds:
+    type: integer
+    minimum: 1
+    maximum: 31536000
+    description: Longest acceptable validUntil minus issuedAt interval.
+  revokedKeyIds:
+    type: array
+    maxItems: 33
+    uniqueItems: true
+    items: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
+    description: Emergency denylist of Evidence service-key RFC 7638 thumbprints, checked before a pinned JWKS key is selected. An empty list is explicit. It denies service signing keys and never holder keys.
+  keyBindingAudience:
+    type: string
+    format: uri
+    maxLength: 512
+    description: >-
+      The audience the relying party itself put in the challenge it issued. It
+      is verifier-asserted rather than issuer-signed, so it proves who the
+      presenter addressed and never who the issuer intended.
+  keyBindingNonce:
+    type: string
+    pattern: '^[A-Za-z0-9_-]{43}$'
+    description: >-
+      The exact nonce from the challenge the relying party issued and retained.
+      Comparing it is not consuming it: the same presentation verifies again
+      under the same document, and retiring a nonce belongs to the relying
+      party's own challenge lifecycle.
+  maximumKeyBindingAgeSeconds:
+    type: integer
+    minimum: 1
+    maximum: 300
+    description: >-
+      Longest accepted interval between the key-binding JWT's iat and the
+      verification instant. It bounds how stale a proof of possession may be
+      and is not a replay window, because no state records that a proof was
+      already accepted.
+  clockSkewSeconds:
+    type: integer
+    minimum: 0
+    maximum: 300
+    default: 0
+    description: >-
+      The only tolerance in this document, applied to assertion validity and to
+      how far ahead of the verification instant a key-binding iat may sit.
+      Omitting it means zero tolerance. There is no second skew knob.
+  expectedHolderKeyThumbprint:
+    type: string
+    pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'
+    description: >-
+      Optional RFC 7638 thumbprint of a pre-established holder key. Supply it
+      only when the relying party already knows which holder it is talking to,
+      to authenticate that specific key. It is not needed to prove possession:
+      the key-binding JWT signature over cnf establishes that on its own, and
+      requiring this field would force every relying party into an out-of-band
+      holder registration it may not have.
+$defs:
+  expected-subject:
+    type: object
+    additionalProperties: false
+    required: [role, binding]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      binding: {type: string, pattern: '^urn:evidence:subject:v[1-9][0-9]*_[A-Za-z0-9_-]{43}$'}
+  expected-output:
+    type: object
+    additionalProperties: false
+    required: [concept, form]
+    properties:
+      concept: {type: string, format: uri, maxLength: 512}
+      form: {$ref: '#/$defs/expected-form'}
+  expected-form:
+    oneOf:
+      - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
+      - type: object
+        additionalProperties: false
+        required: [list]
+        properties:
+          list:
+            type: object
+            additionalProperties: false
+            required: [minimumItems, maximumItems]
+            properties:
+              minimumItems: {type: integer, minimum: 1, maximum: 64}
+              maximumItems: {type: integer, minimum: 1, maximum: 64}
+ownership:
+  document: relying party
+  producer: the relying procedure that issued the key-binding challenge and pinned the expected subject bindings from independent trusted state
+  consumer: offline re-verification by the `evidence verify-presentation` operator command
+command:
+  surface: evidence verify-presentation --sd-jwt-vc-presentation <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
+  sd-jwt-vc-presentation: one stored SD-JWT VC presentation file, in the issued compact serialization with the holder's key-binding JWT appended after the last tilde
+  format_selection: naming the input states its shape; a stored credential ending in a trailing tilde carries no key-binding JWT and is refused rather than verified without possession
+  key_binding_input: the key-binding JWT is part of the compact presentation, so there is no separate input file for it
+  policy_scope: this document governs holder-bound presentations only, and the Version 1 document governs audience-scoped signed JWS and SD-JWT VC responses; neither command accepts the other's document
+  jwks: the pinned trusted key set, which is the complete trust set for the run
+  policy: one document accepted by this schema
+  at: strict RFC 3339 at zero offset; system time when omitted
+  network: prohibited; no socket is opened, no metadata is resolved, and no key is fetched
+  input_bound: every input file is refused above 1 MiB before it is read
+  replay: verifying the same presentation twice succeeds twice; the command compares the expected nonce without consuming it and retains no state between runs
+output:
+  lines:
+    - 'verified-at: the chosen verification instant'
+    - 'authentic: yes or no, printed once verification ran'
+    - 'possession: what the run proved and what it did not, per possession_statement below, printed for an authentic presentation before its currency is known'
+    - 'currently-valid: yes or no, printed only for an authentic presentation'
+  inspection: on full success the verified Evidence JSON is also printed, for the operator who already holds the stored presentation
+  failure: only the closed class is reported, on standard error, with no field-level detail
+  classes: [malformed, protected-header, key, signature, payload, policy, time, disclosure, key-binding]
+  disclosure_class: reported only when the presented disclosures do not reconstruct the payload the issuer signature covers
+  key_binding_class: >-
+    Reported for every key-binding failure, including an absent key-binding
+    JWT, a signer other than the confirmation key, a rejected header member or
+    algorithm, a mismatched audience, nonce, or sd_hash, and an iat outside the
+    accepted window. A presentation whose issuer signature verifies and whose
+    key binding fails is rejected, never reported as an issuer-only success.
+  possession_statement: >-
+    Success proves the presenter held the confirmation key's private key when
+    the key-binding JWT was signed. It does not prove that the presentation is
+    fresh, single-use, or unreplayed.
+  exit_codes:
+    0: authentic, possession proven, and currently valid
+    3: authentic and possession proven, but not currently valid
+    1: every other outcome, including a policy mismatch, a key-binding failure, an unusable input document, and an unreadable file
+$comment: >-
+  Every expectation and revoked-key decision in this document must come from independent trusted state,
+  such as the challenge the relying party issued and retained and an accepted
+  original transaction. Copying values out of the presentation under
+  verification proves nothing, and a policy that omitted an expectation would
+  silently skip a comparison, so the document is closed and every field except
+  clockSkewSeconds and expectedHolderKeyThumbprint is required. The optional
+  holder key thumbprint authenticates a pre-established holder and is not what
+  proves possession; the key-binding signature over the credential's own
+  confirmation key is. A failed comparison reports one generic class and never
+  which comparison failed: the expected role-bound subject set, the expected
+  output contract, and every other policy expectation report the one policy
+  class, and the expected key-binding audience, nonce, and proof age report the
+  one key-binding class, so re-verification is never an oracle. Because key
+  binding is verified before any policy comparison runs, a failed possession
+  proof also never reveals whether the policy would have matched. Authenticity, proven possession,
+  and current usability are separate answers: a presentation may be
+  cryptographically authentic and possession-proven without being current
+  evidence.

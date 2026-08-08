@@ -10,6 +10,7 @@
 //! integration suite proves they agree with a real deployment.
 
 use registry_evidence_verifier::{
+    model::SubjectBindingMode,
     verifier::{
         ExpectedFormDocument, ExpectedListDocument, ExpectedListFormDocument,
         ExpectedOutputDocument, ExpectedScalarFormDocument,
@@ -60,6 +61,11 @@ pub struct EvidenceDefinition {
     /// not couple a relying procedure to the rest of the deployment.
     pub configuration_revision: String,
     pub kind: DefinitionKind,
+    /// What the subject bindings in this requirement's assertions are derived
+    /// under. Absent means audience-scoped, the mode every requirement already
+    /// had, so a document served before binding modes existed still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_binding_mode: Option<SubjectBindingMode>,
     pub evidence_type: String,
     pub purpose: String,
     pub reference_frameworks: Vec<String>,
@@ -390,6 +396,44 @@ mod tests {
             r#""assuranceProfile": "local", "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000","#,
         );
         assert!(serde_json::from_str::<EvidenceDefinitionsDocument>(&document_level).is_err());
+    }
+
+    #[test]
+    fn a_definition_without_the_binding_mode_key_deserializes_to_no_mode() {
+        // Absence means audience-scoped, and a definitions document served
+        // before binding modes existed carries no such key at all, so this
+        // must parse rather than fail.
+        let definition = &document().definitions[0];
+        assert_eq!(definition.subject_binding_mode, None);
+    }
+
+    #[test]
+    fn a_definition_with_the_holder_bound_key_deserializes_to_the_holder_bound_mode() {
+        let holder_bound = DOCUMENT.replace(
+            r#""kind": "criterion","#,
+            r#""kind": "criterion", "subjectBindingMode": "holder-bound","#,
+        );
+        assert_ne!(holder_bound, DOCUMENT, "the binding mode rewrite applies");
+        let document: EvidenceDefinitionsDocument =
+            serde_json::from_str(&holder_bound).expect("the holder-bound document parses");
+        assert_eq!(
+            document.definitions[0].subject_binding_mode,
+            Some(SubjectBindingMode::HolderBound)
+        );
+    }
+
+    #[test]
+    fn an_audience_scoped_definition_reserializes_without_the_binding_mode_key() {
+        // Absence is the audience-scoped mode, so re-emitting the key as an
+        // explicit null would publish a shape the definitions contract does not
+        // describe, and would hand a relying party a value to resolve where the
+        // deployment stated none.
+        let value =
+            serde_json::to_value(&document().definitions[0]).expect("the definition serializes");
+        assert!(!value
+            .as_object()
+            .expect("a definition serializes as an object")
+            .contains_key("subjectBindingMode"));
     }
 
     #[test]

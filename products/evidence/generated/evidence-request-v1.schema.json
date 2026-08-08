@@ -1,5 +1,5 @@
 {
-  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKey is meaningful only for the SD-JWT VC response format, where it is echoed into the cnf claim; it never reaches authorization, selectors, Rhai, source requests, or audit, and a key carrying any private member is rejected before credential acquisition or source access.",
+  "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKeys is meaningful only to the credential response formats, where each key is echoed into the cnf claim of the credential issued for it; a single-credential request is an array of one. The keys never reach Rhai, source requests, or audit, and a key carrying any private member, a repeated RFC 7638 thumbprint, or a batch above the deployment's declared ceiling is rejected before credential acquisition or source access. Under a holder-bound requirement each key's thumbprint additionally scopes the subject binding of that key's own credential.",
   "$defs": {
     "holder-key": {
       "additionalProperties": false,
@@ -108,8 +108,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "holderKey": {
-      "$ref": "#/$defs/holder-key"
+    "holderKeys": {
+      "items": {
+        "$ref": "#/$defs/holder-key"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
     },
     "purpose": {
       "pattern": "^[a-z][a-z0-9._:-]{0,127}$",

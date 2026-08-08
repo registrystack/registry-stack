@@ -34,6 +34,29 @@ SubjectRequestWithValues = TypedDict(
     },
 )
 ExpectedSubject = TypedDict("ExpectedSubject", {"role": str, "binding": str})
+
+# A holder public key a request may present. Public material only: there is no
+# member here for a private key half, and a key carrying one (`d`, or any other
+# private JWK member) is refused with that stated as the reason. `alg` and `kid`
+# may each be `None`, which the binding reads exactly as omitting them; that is
+# how the labelled shape below covers a key carrying only one of the two.
+HolderPublicKey = TypedDict(
+    "HolderPublicKey",
+    {"kty": Literal["EC"], "crv": Literal["P-256"], "x": str, "y": str},
+)
+HolderPublicKeyWithLabels = TypedDict(
+    "HolderPublicKeyWithLabels",
+    {
+        "kty": Literal["EC"],
+        "crv": Literal["P-256"],
+        "x": str,
+        "y": str,
+        "alg": Optional[Literal["ES256"]],
+        "kid": Optional[str],
+    },
+)
+HolderPublicKeys = Sequence[Union[HolderPublicKey, HolderPublicKeyWithLabels]]
+
 EvidenceRequestSpec = TypedDict(
     "EvidenceRequestSpec",
     {
@@ -47,6 +70,34 @@ EvidenceRequestSpec = TypedDict(
         "configuration_revision": str,
         "expected_assurance_profile": Any,
         "subjects": Sequence[Union[SubjectRequest, SubjectRequestWithValues]],
+        "expected_outputs": Sequence[Mapping[str, Any]],
+        "maximum_assertion_lifetime_seconds": int,
+        "clock_skew_seconds": int,
+        "subject_expectations": Union[
+            Literal["accept_first_use"], Sequence[ExpectedSubject]
+        ],
+    },
+)
+# The same specification, presenting holder public keys in the order the caller
+# wants them answered. Spelled as its own shape, the way `SubjectRequest` and
+# `SubjectRequestWithValues` are, because a `TypedDict` member is required and
+# presenting no key stays the request this binding has always sent. A request
+# presenting several keys can be answered with one credential per key, in that
+# same order; see `SdJwtVcBatchResponse`.
+EvidenceRequestSpecWithHolderKeys = TypedDict(
+    "EvidenceRequestSpecWithHolderKeys",
+    {
+        "response_format": EvidenceResponseFormat,
+        "requirement": str,
+        "purpose": str,
+        "audience": str,
+        "evidence_type": str,
+        "issued_by": str,
+        "provided_by": str,
+        "configuration_revision": str,
+        "expected_assurance_profile": Any,
+        "subjects": Sequence[Union[SubjectRequest, SubjectRequestWithValues]],
+        "holder_keys": HolderPublicKeys,
         "expected_outputs": Sequence[Mapping[str, Any]],
         "maximum_assertion_lifetime_seconds": int,
         "clock_skew_seconds": int,
@@ -150,6 +201,19 @@ class RawEvidenceResponse:
     body: bytes
     operation: Optional[str]
 
+class SdJwtVcBatchResponse:
+    """The issuance envelope answering one request that presented several
+    holder keys, read but not yet judged. `credentials[i]` answers the key the
+    request sent as `holder_keys[i]`, one credential per key, and there is no
+    partial envelope. Reading it judges nothing: each credential is verified
+    individually, exactly as a single credential is."""
+
+    credentials: Sequence[str]
+    count: int
+    @staticmethod
+    def parse(body: bytes) -> "SdJwtVcBatchResponse": ...
+    def credential_for_holder_key(self, index: int) -> Optional[str]: ...
+
 class VerifiedEvidence:
     """A response that satisfied every expectation."""
 
@@ -173,7 +237,10 @@ class EvidenceClient:
         max_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
     ) -> None: ...
-    def prepare(self, spec: EvidenceRequestSpec) -> PreparedEvidenceRequest: ...
+    def prepare(
+        self,
+        spec: Union[EvidenceRequestSpec, EvidenceRequestSpecWithHolderKeys],
+    ) -> PreparedEvidenceRequest: ...
     def discover(self) -> Any: ...
     def fetch_jwks(self) -> Any: ...
     def send(self, prepared: PreparedEvidenceRequest) -> RawEvidenceResponse: ...

@@ -66,14 +66,64 @@ impl HolderPublicKey {
     }
 }
 
+/// What the subject bindings in an assertion are derived under.
+///
+/// An audience-scoped assertion names the one relying party that may act on it.
+/// A holder-bound assertion names no relying party at all: its bindings are
+/// derived under the holder key, so possession of that key rather than an
+/// audience match is what a verifier checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubjectBindingMode {
+    AudienceScoped,
+    HolderBound,
+}
+
+/// An assertion whose declared binding mode does not agree with the members it
+/// carries. The two are correlated in code rather than in the payload schema,
+/// because a closed single-object contract cannot express the implication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SubjectBindingShapeError {
+    #[error("an audience-scoped assertion must carry an audience and a request nonce")]
+    AudienceScopedMembersMissing,
+    #[error("a holder-bound assertion must carry no audience and no request nonce")]
+    HolderBoundMembersPresent,
+}
+
+/// Refuse an assertion whose binding mode and members disagree.
+///
+/// Called at issuance and at every verification entry point, so neither side
+/// can accept an assertion that names a relying party it is not scoped to, nor
+/// one that silently drops the audience it was scoped to.
+pub fn validate_subject_binding_shape(evidence: &Evidence) -> Result<(), SubjectBindingShapeError> {
+    match evidence.subject_binding {
+        SubjectBindingMode::AudienceScoped => {
+            if evidence.audience.is_none() || evidence.request_nonce.is_none() {
+                return Err(SubjectBindingShapeError::AudienceScopedMembersMissing);
+            }
+        }
+        SubjectBindingMode::HolderBound => {
+            if evidence.audience.is_some() || evidence.request_nonce.is_some() {
+                return Err(SubjectBindingShapeError::HolderBoundMembersPresent);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Evidence {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
+    /// What the subject bindings below are derived under. Always present, so a
+    /// verifier never has to infer the mode from which members are absent.
+    pub subject_binding: SubjectBindingMode,
     /// Exact echo of the caller's request nonce for request-response
-    /// correlation. The runtime does not store it or reject reuse.
-    pub request_nonce: String,
+    /// correlation. The runtime does not store it or reject reuse. Absent from
+    /// a holder-bound assertion, which has no single request to correlate to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_nonce: Option<String>,
     pub id: String,
     #[serde(rename = "type")]
     pub evidence_type_name: EvidenceObjectType,
@@ -85,7 +135,10 @@ pub struct Evidence {
     pub observed_at: String,
     pub valid_until: String,
     pub purpose: String,
-    pub audience: String,
+    /// The one relying party an audience-scoped assertion is issued to. Absent
+    /// from a holder-bound assertion, which names no relying party.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
     pub configuration_revision: String,
     pub subjects: Vec<SubjectBinding>,
     pub supported_values: Vec<SupportedValue>,
@@ -324,7 +377,8 @@ mod tests {
         let evidence = Evidence {
             schema: "protected-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
-            request_nonce: "protected-request-nonce-canary".to_owned(),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some("protected-request-nonce-canary".to_owned()),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "protected-requirement-canary".to_owned(),
@@ -335,7 +389,7 @@ mod tests {
             observed_at: "2026-08-05T00:00:00Z".to_owned(),
             valid_until: "2026-08-06T00:00:00Z".to_owned(),
             purpose: "protected-purpose-canary".to_owned(),
-            audience: "protected-audience-canary".to_owned(),
+            audience: Some("protected-audience-canary".to_owned()),
             configuration_revision: "protected-revision-canary".to_owned(),
             subjects: vec![SubjectBinding {
                 role: "subject".to_owned(),
@@ -409,5 +463,105 @@ mod tests {
             assert!(diagnostic.contains("<redacted>"), "{diagnostic}");
             assert!(!diagnostic.contains("canary"), "{diagnostic}");
         }
+    }
+
+    fn shaped_evidence(mode: SubjectBindingMode) -> Evidence {
+        Evidence {
+            schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
+            assurance_profile: AssuranceProfile::Production,
+            subject_binding: mode,
+            request_nonce: None,
+            id: "urn:evidence:assertion:v1_2f0a".to_owned(),
+            evidence_type_name: EvidenceObjectType::Evidence,
+            supports_requirement: "urn:example:requirement".to_owned(),
+            is_conformant_to: "urn:example:evidence-type".to_owned(),
+            issued_by: "urn:example:issuer".to_owned(),
+            provided_by: "urn:example:provider".to_owned(),
+            issued_at: "2026-08-05T00:00:00Z".to_owned(),
+            observed_at: "2026-08-05T00:00:00Z".to_owned(),
+            valid_until: "2026-08-06T00:00:00Z".to_owned(),
+            purpose: "enrolment".to_owned(),
+            audience: None,
+            configuration_revision: "sha256:00".to_owned(),
+            subjects: vec![SubjectBinding {
+                role: "subject".to_owned(),
+                binding: "urn:evidence:subject:v1_aaaa".to_owned(),
+            }],
+            supported_values: vec![SupportedValue {
+                provides_value_for: "urn:example:concept".to_owned(),
+                value: PublicValue::Boolean(true),
+            }],
+        }
+    }
+
+    /// The payload contract is one closed object, so the correlation between
+    /// the declared mode and the members that mode implies is enforced here.
+    #[test]
+    fn the_declared_binding_mode_must_agree_with_the_members_carried() {
+        let mut audience_scoped = shaped_evidence(SubjectBindingMode::AudienceScoped);
+        assert_eq!(
+            validate_subject_binding_shape(&audience_scoped),
+            Err(SubjectBindingShapeError::AudienceScopedMembersMissing)
+        );
+        audience_scoped.audience = Some("https://relying.example/service".to_owned());
+        assert_eq!(
+            validate_subject_binding_shape(&audience_scoped),
+            Err(SubjectBindingShapeError::AudienceScopedMembersMissing)
+        );
+        audience_scoped.request_nonce = Some("A".repeat(43));
+        assert_eq!(validate_subject_binding_shape(&audience_scoped), Ok(()));
+
+        let mut missing_nonce = audience_scoped.clone();
+        missing_nonce.request_nonce = None;
+        assert_eq!(
+            validate_subject_binding_shape(&missing_nonce),
+            Err(SubjectBindingShapeError::AudienceScopedMembersMissing)
+        );
+
+        let holder_bound = shaped_evidence(SubjectBindingMode::HolderBound);
+        assert_eq!(validate_subject_binding_shape(&holder_bound), Ok(()));
+
+        let mut leftover_audience = holder_bound.clone();
+        leftover_audience.audience = Some("https://relying.example/service".to_owned());
+        assert_eq!(
+            validate_subject_binding_shape(&leftover_audience),
+            Err(SubjectBindingShapeError::HolderBoundMembersPresent)
+        );
+
+        let mut leftover_nonce = holder_bound.clone();
+        leftover_nonce.request_nonce = Some("A".repeat(43));
+        assert_eq!(
+            validate_subject_binding_shape(&leftover_nonce),
+            Err(SubjectBindingShapeError::HolderBoundMembersPresent)
+        );
+    }
+
+    /// The mode is a payload member with a stable wire spelling, so a verifier
+    /// never infers it from which members are absent.
+    #[test]
+    fn the_binding_mode_serializes_to_its_contract_spelling() {
+        assert_eq!(
+            serde_json::to_value(SubjectBindingMode::AudienceScoped).expect("serializes"),
+            Value::String("audience-scoped".to_owned())
+        );
+        assert_eq!(
+            serde_json::to_value(SubjectBindingMode::HolderBound).expect("serializes"),
+            Value::String("holder-bound".to_owned())
+        );
+    }
+
+    /// A holder-bound assertion names no relying party, so neither member may
+    /// survive serialization as an explicit null.
+    #[test]
+    fn a_holder_bound_payload_omits_the_audience_and_request_nonce() {
+        let rendered = serde_json::to_value(shaped_evidence(SubjectBindingMode::HolderBound))
+            .expect("serializes");
+        let object = rendered.as_object().expect("object");
+        assert!(!object.contains_key("audience"));
+        assert!(!object.contains_key("requestNonce"));
+        assert_eq!(
+            object.get("subjectBinding"),
+            Some(&Value::String("holder-bound".to_owned()))
+        );
     }
 }

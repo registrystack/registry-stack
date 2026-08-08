@@ -60,8 +60,8 @@ validation:
 canonical_encoding:
   format: deterministic length-prefixed UTF-8 binary
   sequence:
-    - version byte 0x01
-    - audience URI
+    - binding-mode version byte, 0x01 audience-scoped or 0x02 holder-bound
+    - audience URI, present only when audience-scoped and omitted entirely when holder-bound
     - purpose code
     - role id
     - selector profile id
@@ -73,9 +73,11 @@ canonical_encoding:
     integer: minimal signed decimal ASCII, no leading plus or leading zero except zero
     boolean: single byte 0x00 or 0x01
     controlled-code: exact validated UTF-8 codelist code
-  purpose: Input to audience-scoped subject binding and audit pseudonymization; never exposed or logged.
+  purpose: Input to audit pseudonymization; never exposed or logged. The audience is what keeps two relying parties distinct under audience-scoped derivation, the mode version byte alone is what stops the two modes colliding on one pseudonym, and the holder key thumbprint is never an input, so a holder-bound pseudonym is stable across issuances for one subject and cannot single out one holder.
 subject_binding_projection:
-  hmac_input: deterministic length-prefixed bytes over profile version, audience, purpose, role, selector profile, binding-key version, and complete canonical selector fields
+  hmac_input: deterministic length-prefixed bytes over the binding-mode domain constant, binding-key version, trust domain, scope component, purpose, role, selector profile, and complete canonical selector fields
+  scope_component: the audience URI under audience-scoped derivation and the holder key RFC 7638 thumbprint under holder-bound derivation; the thumbprint is the input rather than the key bytes, so serialization variance cannot fork a binding
+  mode_separation: the two modes use distinct domain constants, so the same trust domain, purpose, role, profile, and selector fields can never produce one binding under both modes
   key: subjectBinding.secretRef from the governed bundle
   output: 'urn:evidence:subject:v<key-version>_<base64url-no-pad HMAC-SHA256>'
   rule: Binding-key rotation changes the public binding version; a binding is never global or accepted as authority.

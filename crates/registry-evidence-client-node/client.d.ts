@@ -7,6 +7,25 @@ export * from './index'
 /** The signed response encoding closed before one request is sent. */
 export type EvidenceResponseFormat = 'signed-jws' | 'sd-jwt-vc'
 
+/**
+ * A holder public key a request may present, as a public JWK.
+ *
+ * Public material only. There is no member here for a private key half, and
+ * a key carrying one (`d`, or any other private JWK member) is refused with
+ * that stated as the reason: the private half stays with whoever holds it,
+ * and this package never asks for it, holds it, or sends it.
+ */
+export interface HolderPublicKey {
+  kty: 'EC'
+  crv: 'P-256'
+  /** The x coordinate, unpadded base64url. */
+  x: string
+  /** The y coordinate, unpadded base64url. */
+  y: string
+  alg?: 'ES256'
+  kid?: string
+}
+
 /** The request-spec input accepted by `EvidenceClient.prepare`. */
 export interface EvidenceRequestSpec {
   responseFormat: EvidenceResponseFormat
@@ -23,6 +42,15 @@ export interface EvidenceRequestSpec {
     selectorProfile: string
     selectorValues?: Readonly<Record<string, string | number | boolean>> | null
   }>
+  /**
+   * Holder public keys this request presents, in the order the caller wants
+   * them answered. Omit it (or pass an empty array) to present none, which is
+   * the request this package has always sent.
+   *
+   * A request presenting several keys can be answered with one credential per
+   * key, in that same order; see `SdJwtVcBatchResponse`.
+   */
+  holderKeys?: ReadonlyArray<HolderPublicKey>
   expectedOutputs: ReadonlyArray<Readonly<Record<string, unknown>>>
   maximumAssertionLifetimeSeconds: number
   clockSkewSeconds: number

@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use registry_evidence::bundle::{ArtifactFault, Bundle, DeploymentInputs, SourceExtract};
 use registry_evidence::config::{ArtifactPath, ConfigError, SchemaFault, SelectorInput};
 use registry_evidence::kernel::{
-    EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection,
+    EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
     LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue, SubjectBinding,
@@ -774,7 +774,10 @@ async fn execute_response(
                 derivation_selectors,
                 observed_at,
                 ValueProjection {
-                    audience: AUDIENCE,
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: AUDIENCE,
+                        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
                     binding_key: BINDING_KEY,
                     binding_key_version: 1,
                 },
@@ -800,7 +803,7 @@ async fn execute_response(
                             BINDING_KEY,
                             1,
                             &bundle.config.service.trust_domain,
-                            AUDIENCE,
+                            registry_evidence::binding::SubjectBindingScope::Audience(AUDIENCE),
                             &resolved.purpose,
                         )
                         .unwrap_or_else(|_| panic!("{label}: subject binding failed")),
@@ -813,9 +816,12 @@ async fn execute_response(
                     values,
                     EvidenceConstruction {
                         evidence_id: &evidence_id,
-                        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                         purpose: &resolved.purpose,
-                        audience: AUDIENCE,
+                        scope: EvidenceScope::AudienceScoped {
+                            audience: AUDIENCE,
+                            request_nonce:
+                                registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                        },
                         issued_at,
                         observed_at,
                         subjects,
@@ -1086,7 +1092,10 @@ fn execute_derivation_mutation(
             selectors,
             observed_at,
             ValueProjection {
-                audience: AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: BINDING_KEY,
                 binding_key_version: 1,
             },
@@ -1144,7 +1153,10 @@ fn execute_parameter_mutation(
         selectors,
         observed_at,
         ValueProjection {
-            audience: AUDIENCE,
+            scope: EvidenceScope::AudienceScoped {
+                audience: AUDIENCE,
+                request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+            },
             binding_key: BINDING_KEY,
             binding_key_version: 1,
         },

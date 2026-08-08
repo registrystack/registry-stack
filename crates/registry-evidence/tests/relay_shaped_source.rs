@@ -24,7 +24,9 @@ use base64::Engine as _;
 use chrono::Utc;
 use registry_evidence::bundle::Bundle;
 use registry_evidence::config::{PreparationChannelPolicy, PreparationLimits, SourceConfig};
-use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
+use registry_evidence::kernel::{
+    EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
+};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
 use registry_evidence::rhai_runtime::{
     RequestPartRequirement, RequestParts, RequestPartsBounds, RequestPartsLimits, RhaiRuntime,
@@ -438,7 +440,10 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             &facts,
             observed_at,
             ValueProjection {
-                audience: AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: BINDING_KEY,
                 binding_key_version: 1,
             },
@@ -459,9 +464,11 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             values,
             EvidenceConstruction {
                 evidence_id: "urn:ulid:01J4BRXQ0ZZZZZZZZZZZZZZZZZ",
-                request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                 purpose: "fixture-routing",
-                audience: AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 issued_at: observed_at,
                 observed_at,
                 subjects: vec![SubjectBinding {

@@ -203,7 +203,10 @@ fn expected_subjects(
                     binding_key,
                     binding_key_version,
                     trust_domain,
-                    audience,
+                    // The local relying procedure is audience-scoped only: a
+                    // holder-bound binding depends on a per-request wallet key
+                    // and is not computable at preparation time.
+                    crate::binding::SubjectBindingScope::Audience(audience),
                     purpose,
                 )
                 .map(|binding| ExpectedSubjectDocument {
@@ -273,7 +276,7 @@ mod tests {
             serde_json::from_value(input.clone()).expect("the closed draft parses");
         assert_eq!(parsed.response_format, LocalResponseFormat::SignedJws);
 
-        for member in ["requestNonce", "holderKey", "authorization"] {
+        for member in ["requestNonce", "holderKeys", "authorization"] {
             let mut changed = input.clone();
             changed[member] = json!("not-permitted");
             assert!(

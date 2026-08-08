@@ -10,12 +10,12 @@ use crate::{
     auth::AuthenticatedContext,
     binding::{
         subject_binding, BindingError, SelectorField as BindingField,
-        SelectorScalar as BindingScalar, SubjectBindingInput,
+        SelectorScalar as BindingScalar, SubjectBindingInput, SubjectBindingScope,
     },
     bundle::{Bundle, Codelist},
     config::{
         AuthorityKind, GrantedSubject, ResponseFormat, SelectorField as ConfiguredField,
-        SelectorProfile, ValueOrigin, MAX_SAFE_INTEGER,
+        SelectorProfile, SubjectBindingMode, ValueOrigin, MAX_SAFE_INTEGER,
     },
     model::{EvidenceRequest, RequestedSubject, SelectorValue},
 };
@@ -39,7 +39,7 @@ pub(crate) fn validate_subject_binding_key(
         key_version,
         SubjectBindingInput {
             trust_domain,
-            audience: "urn:registry-evidence:readiness",
+            scope: SubjectBindingScope::Audience("urn:registry-evidence:readiness"),
             purpose: "readiness",
             role: "readiness",
             profile: "readiness-v1",
@@ -178,7 +178,7 @@ impl ResolvedSubject {
         key: &[u8],
         key_version: u32,
         trust_domain: &str,
-        audience: &str,
+        scope: SubjectBindingScope<'_>,
         purpose: &str,
     ) -> Result<String, AuthorizationError> {
         let fields = self
@@ -194,7 +194,7 @@ impl ResolvedSubject {
             key_version,
             SubjectBindingInput {
                 trust_domain,
-                audience,
+                scope,
                 purpose,
                 role: &self.role,
                 profile: &self.selector_profile,
@@ -205,14 +205,30 @@ impl ResolvedSubject {
     }
 
     /// Canonical protected input for the one permitted per-subject audit pseudonym.
+    ///
+    /// The leading byte separates the two subject-binding modes, so an
+    /// audience-scoped and a holder-bound resolution over the same purpose,
+    /// role, profile, and selector fields can never derive the same pseudonym.
+    ///
+    /// An audience-scoped input binds the audience after that byte, which is
+    /// what keeps two relying parties asking about one subject apart. A
+    /// holder-bound input binds no scope component at all: the holder key
+    /// thumbprint stays out of audit entirely, so the pseudonym is stable
+    /// across issuances for one subject and carries nothing that could pick
+    /// one wallet key's activity out of the audit chain.
     pub fn audit_pseudonym_input(
         &self,
-        audience: &str,
+        scope: &ResolvedSubjectScope,
         purpose: &str,
     ) -> Result<Vec<u8>, AuthorizationError> {
         let mut output = Vec::new();
-        output.push(0x01);
-        push_component(&mut output, audience.as_bytes())?;
+        match scope {
+            ResolvedSubjectScope::Audience(audience) => {
+                output.push(0x01);
+                push_component(&mut output, audience.as_bytes())?;
+            }
+            ResolvedSubjectScope::HolderKeyThumbprint(_) => output.push(0x02),
+        }
         push_component(&mut output, purpose.as_bytes())?;
         push_component(&mut output, self.role.as_bytes())?;
         push_component(&mut output, self.selector_profile.as_bytes())?;
@@ -246,6 +262,63 @@ impl ResolvedSubject {
     }
 }
 
+/// The owned form of [`SubjectBindingScope`] carried on a resolved
+/// authorization. One enum rather than two optional members keeps a resolution
+/// that is holder-bound and audience-scoped at once unrepresentable.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ResolvedSubjectScope {
+    Audience(String),
+    HolderKeyThumbprint(String),
+}
+
+impl ResolvedSubjectScope {
+    /// The component this scope binds a subject binding under: the audience
+    /// when audience-scoped and the holder key thumbprint when holder-bound.
+    /// Audit pseudonymization binds it only in the audience-scoped mode.
+    pub fn component(&self) -> &str {
+        match self {
+            Self::Audience(audience) => audience,
+            Self::HolderKeyThumbprint(thumbprint) => thumbprint,
+        }
+    }
+
+    /// The relying party this resolution is scoped to, if any. A holder-bound
+    /// resolution has none, which is what removes the audience from its
+    /// assertion.
+    pub fn audience(&self) -> Option<&str> {
+        match self {
+            Self::Audience(audience) => Some(audience),
+            Self::HolderKeyThumbprint(_) => None,
+        }
+    }
+
+    pub fn as_binding_scope(&self) -> SubjectBindingScope<'_> {
+        match self {
+            Self::Audience(audience) => SubjectBindingScope::Audience(audience),
+            Self::HolderKeyThumbprint(thumbprint) => {
+                SubjectBindingScope::HolderKeyThumbprint(thumbprint)
+            }
+        }
+    }
+}
+
+/// A holder key thumbprint is a stable public name for one wallet key. It is
+/// never rendered in a diagnostic, so a captured log cannot link presentations.
+impl fmt::Debug for ResolvedSubjectScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Audience(audience) => formatter
+                .debug_tuple("Audience")
+                .field(&audience.as_str())
+                .finish(),
+            Self::HolderKeyThumbprint(_) => formatter
+                .debug_tuple("HolderKeyThumbprint")
+                .field(&"<redacted>")
+                .finish(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ResolvedAuthorization {
     pub authority_profile: String,
@@ -254,7 +327,7 @@ pub struct ResolvedAuthorization {
     pub grant_authority: Option<String>,
     pub requirement: String,
     pub purpose: String,
-    pub audience: String,
+    pub subject_scope: ResolvedSubjectScope,
     pub subjects: Vec<ResolvedSubject>,
 }
 
@@ -271,7 +344,7 @@ impl fmt::Debug for ResolvedAuthorization {
             )
             .field("requirement", &self.requirement)
             .field("purpose", &self.purpose)
-            .field("audience", &self.audience)
+            .field("subject_scope", &self.subject_scope)
             .field("subjects", &self.subjects)
             .finish()
     }
@@ -282,6 +355,7 @@ pub struct MatchedEntitlement {
     authority_profile: String,
     authority_kind: AuthorityKind,
     response_formats: Vec<ResponseFormat>,
+    subject_binding_modes: Vec<SubjectBindingMode>,
     subjects: Vec<GrantedSubject>,
 }
 
@@ -298,6 +372,17 @@ impl MatchedEntitlement {
     /// response format. Permissions are never unioned across grants.
     pub fn permits_response_format(&self, format: ResponseFormat) -> bool {
         self.response_formats.contains(&format)
+    }
+
+    /// Report whether this one complete matched grant permits the binding mode
+    /// the requirement is configured for. Permitting a serialization is not
+    /// permitting a binding mode, so this is a separate question from
+    /// [`Self::permits_response_format`] and both must answer yes.
+    pub fn permits_subject_binding(&self, mode: SubjectBindingMode) -> bool {
+        if self.subject_binding_modes.is_empty() {
+            return mode == SubjectBindingMode::AudienceScoped;
+        }
+        self.subject_binding_modes.contains(&mode)
     }
 
     pub(crate) fn subjects(&self) -> &[GrantedSubject] {
@@ -372,6 +457,7 @@ pub fn match_entitlement(
                 authority_profile: authority_profile.to_owned(),
                 authority_kind: authority.kind,
                 response_formats: grant.response_formats.clone(),
+                subject_binding_modes: grant.subject_binding_modes.clone(),
                 subjects: grant.subjects.clone(),
             });
         }
@@ -412,6 +498,8 @@ pub fn resolve_selectors(
         .subjects
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
+    let subject_scope =
+        resolve_subject_scope(requirement.subject_binding_mode(), request, context)?;
     Ok(ResolvedAuthorization {
         authority_profile: matched.authority_profile.clone(),
         authority_kind: matched.authority_kind,
@@ -423,9 +511,47 @@ pub fn resolve_selectors(
             .flatten(),
         requirement: request.requirement.clone(),
         purpose: request.purpose.clone(),
-        audience: context.evidence_audience().to_owned(),
+        subject_scope,
         subjects,
     })
+}
+
+/// Derive the one scope every subject binding of this resolution is computed
+/// under, from the requirement's configured binding mode.
+///
+/// An audience-scoped requirement binds the authenticated evidence audience, as
+/// it always has. A holder-bound requirement binds the thumbprint of the holder
+/// key the request presented, and never the audience: that substitution is what
+/// makes a holder-bound assertion presentable to a party the issuer never named.
+///
+/// A holder-bound requirement reaching here without a holder key is refused. The
+/// public request boundary answers a missing key earlier and more precisely;
+/// this is the fail-closed floor under offline callers, which cannot be reached
+/// through a served request.
+///
+/// A request presenting several keys resolves under the first of them. Every
+/// released credential carries the binding of its own key, derived per member
+/// at construction; this resolution names the one scope the audit material and
+/// the declared assertion scope are computed under.
+fn resolve_subject_scope(
+    mode: SubjectBindingMode,
+    request: &EvidenceRequest,
+    context: &AuthenticatedContext,
+) -> Result<ResolvedSubjectScope, AuthorizationError> {
+    match mode {
+        SubjectBindingMode::AudienceScoped => Ok(ResolvedSubjectScope::Audience(
+            context.evidence_audience().to_owned(),
+        )),
+        SubjectBindingMode::HolderBound => {
+            let key = request
+                .holder_keys
+                .first()
+                .ok_or(AuthorizationError::Binding)?;
+            let thumbprint = registry_evidence_verifier::sdjwt_vc::holder_thumbprint(key)
+                .map_err(|_| AuthorizationError::Binding)?;
+            Ok(ResolvedSubjectScope::HolderKeyThumbprint(thumbprint))
+        }
+    }
 }
 
 /// Confirm that selector values owned by the authenticated context or grant
@@ -594,12 +720,22 @@ pub fn resolve_offline_fixture_authorization(
     } else {
         fixture_subjects_from_selectors(bundle, requirement, purpose, common, case)?
     };
+    // A holder-bound requirement resolves its subject scope from a presented
+    // key, so offline evaluation presents the canonical offline stand-in. The
+    // mode is read from the bundle rather than from the fixture: what a
+    // requirement issues under is a deployment declaration, and a case that
+    // could ask for a scope of its own would be evaluating a bundle nobody
+    // deployed.
+    let holder_keys = match requirement.subject_binding_mode() {
+        SubjectBindingMode::AudienceScoped => Vec::new(),
+        SubjectBindingMode::HolderBound => vec![crate::model::offline_evaluation_holder_key()],
+    };
     let request = EvidenceRequest {
         request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE.to_owned(),
         requirement: requirement.id.clone(),
         purpose: purpose.to_owned(),
         subjects,
-        holder_key: None,
+        holder_keys,
     };
     let (authority_name, authority) = bundle
         .config
@@ -1058,6 +1194,8 @@ fn push_count(output: &mut Vec<u8>, count: usize) -> Result<(), AuthorizationErr
 mod tests {
     use super::*;
 
+    use crate::model::HolderPublicKey;
+
     #[test]
     fn resolved_selector_debug_never_exposes_values() {
         let subject = ResolvedSubject {
@@ -1086,12 +1224,153 @@ mod tests {
             }],
         };
         let first = subject
-            .audit_pseudonym_input("urn:audience:a", "purpose")
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::Audience("urn:audience:a".to_owned()),
+                "purpose",
+            )
             .expect("canonicalizes");
         let second = subject
-            .audit_pseudonym_input("urn:audience:b", "purpose")
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::Audience("urn:audience:b".to_owned()),
+                "purpose",
+            )
             .expect("canonicalizes");
         assert_ne!(first, second);
+
+        // The mode version byte alone separates the two modes, so a
+        // holder-bound input over the same purpose, role, profile, and fields
+        // never collides with an audience-scoped one.
+        let holder = subject
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::HolderKeyThumbprint("urn:audience:a".to_owned()),
+                "purpose",
+            )
+            .expect("canonicalizes");
+        assert_ne!(first, holder);
+    }
+
+    /// A holder-bound audit pseudonym names one subject under one purpose, and
+    /// nothing about the wallet that asked. Two holders of the same subject
+    /// material must therefore canonicalize identically, or the audit chain
+    /// would carry a per-wallet handle for that subject.
+    #[test]
+    fn a_holder_bound_audit_input_is_the_same_for_every_holder() {
+        let subject = audit_input_subject();
+        let first = subject
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::HolderKeyThumbprint(FIRST_THUMBPRINT.to_owned()),
+                "purpose",
+            )
+            .expect("canonicalizes");
+        let second = subject
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::HolderKeyThumbprint(SECOND_THUMBPRINT.to_owned()),
+                "purpose",
+            )
+            .expect("canonicalizes");
+        assert_eq!(first, second);
+    }
+
+    /// The order a batch presents its keys in is not a fact about the subject.
+    /// The resolution scope follows the first key, so an audit input that read
+    /// that scope's component would record a different pseudonym for the same
+    /// operation whenever a caller shuffled its keys.
+    #[test]
+    fn a_batch_audit_input_is_invariant_under_holder_key_order() {
+        let subject = audit_input_subject();
+        let context = AuthenticatedContext::test_context(
+            "principal",
+            Vec::new(),
+            "urn:example:relying-party",
+            None,
+            None,
+            Value::Null,
+        );
+        let presented = holder_key_request(vec![holder_key(0), holder_key(1)]);
+        let shuffled = holder_key_request(vec![holder_key(1), holder_key(0)]);
+
+        let first = resolve_subject_scope(SubjectBindingMode::HolderBound, &presented, &context)
+            .expect("resolves");
+        let second = resolve_subject_scope(SubjectBindingMode::HolderBound, &shuffled, &context)
+            .expect("resolves");
+        assert_ne!(
+            first.component(),
+            second.component(),
+            "the two orders resolve under different keys, which is what the audit input must ignore"
+        );
+
+        assert_eq!(
+            subject
+                .audit_pseudonym_input(&first, "purpose")
+                .expect("canonicalizes"),
+            subject
+                .audit_pseudonym_input(&second, "purpose")
+                .expect("canonicalizes")
+        );
+    }
+
+    /// Two 43-character unpadded base64url strings, the form RFC 7638 gives a
+    /// SHA-256 thumbprint.
+    const FIRST_THUMBPRINT: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const SECOND_THUMBPRINT: &str = "HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn";
+
+    /// Distinct P-256 public keys as `(x, y)` coordinate pairs. Each pair is a
+    /// real curve point, because a key the request boundary would refuse never
+    /// reaches scope resolution.
+    const HOLDER_COORDINATES: [(&str, &str); 2] = [
+        (
+            "rVMhRw_AQKeDul4F-iEv56CtlyJKrM6u5xi2bFAUq_4",
+            "5zdn5gQRuii0hVTzcJ4hWlURtMYeQk3OGREcRy9v1ps",
+        ),
+        (
+            "RGUpcejDhxZcjveUXQ_f5ROhMoVgUsZA8lAQgGj_p_c",
+            "qGIQUPRR3_DU1U4AtI9TTqsxy5sVZFYQe3S1whoMCVQ",
+        ),
+    ];
+
+    fn holder_key(index: usize) -> HolderPublicKey {
+        let (x, y) = HOLDER_COORDINATES[index];
+        HolderPublicKey {
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
+            x: x.to_owned(),
+            y: y.to_owned(),
+            alg: None,
+            kid: None,
+        }
+    }
+
+    fn holder_key_request(holder_keys: Vec<HolderPublicKey>) -> EvidenceRequest {
+        EvidenceRequest {
+            request_nonce: "A".repeat(43),
+            requirement: "urn:example:requirement:v1".to_owned(),
+            purpose: "purpose".to_owned(),
+            subjects: Vec::new(),
+            holder_keys,
+        }
+    }
+
+    fn audit_input_subject() -> ResolvedSubject {
+        ResolvedSubject {
+            role: "subject".to_owned(),
+            selector_profile: "opaque-v1".to_owned(),
+            value_origin: ValueOrigin::Request,
+            fields: vec![ResolvedSelectorField {
+                name: "field".to_owned(),
+                value: ResolvedSelectorValue::String("value".to_owned()),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_resolved_holder_scope_debug_never_exposes_the_thumbprint() {
+        let scope =
+            ResolvedSubjectScope::HolderKeyThumbprint("holder-thumbprint-canary".to_owned());
+        let debug = format!("{scope:?}");
+        assert!(!debug.contains("holder-thumbprint-canary"));
+        assert!(debug.contains("<redacted>"));
+        assert_eq!(scope.audience(), None);
+        assert_eq!(scope.component(), "holder-thumbprint-canary");
     }
 
     #[test]

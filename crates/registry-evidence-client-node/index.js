@@ -703,3 +703,4 @@ module.exports = nativeBinding
 module.exports.EvidenceClient = nativeBinding.EvidenceClient
 module.exports.PreparedEvidenceRequest = nativeBinding.PreparedEvidenceRequest
 module.exports.RawEvidenceResponse = nativeBinding.RawEvidenceResponse
+module.exports.SdJwtVcBatchResponse = nativeBinding.SdJwtVcBatchResponse

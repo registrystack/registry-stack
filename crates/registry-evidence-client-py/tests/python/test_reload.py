@@ -24,13 +24,14 @@ bootstrap.ensure_built()
 
 import registry_evidence_client as revc  # noqa: E402
 
-# The thirteen names `__init__.pyi` declares: the four plain classes, the
+# The fourteen names `__init__.pyi` declares: the five plain classes, the
 # base exception, and its eight subclasses. Kept in lockstep with
 # `test_drift.py`'s own `PLAIN_CLASS_NAMES` and `EXCEPTION_SUBCLASS_NAMES`.
 PUBLIC_SURFACE_NAMES = {
     "EvidenceClient",
     "PreparedEvidenceRequest",
     "RawEvidenceResponse",
+    "SdJwtVcBatchResponse",
     "VerifiedEvidence",
     "EvidenceClientError",
     "ConfigurationError",

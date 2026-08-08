@@ -457,3 +457,29 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it}
       - {file: crates/registry-evidence/tests/cli.rs, name: check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class}
       - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_gated_acquisition_kind_the_operator_enabled}
+  - id: acceptance-row-67
+    summary: The tracked holder-bound acceptance bundle declares every coequal definition under the holder-bound mode, each definition's matched grant carries the mode permission as well as the serialization permission, and the whole bundle satisfies the published bundle contract.
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: the_holder_bound_acceptance_bundle_declares_every_coequal_definition}
+      - {file: crates/registry-evidence/src/config.rs, name: bundle_contract_accepts_every_complete_version_one_bundle}
+  - id: acceptance-row-68
+    summary: Binding mode is the only variable between the holder-bound acceptance bundle and its audience-scoped twin; withdrawing the mode, the grant mode permission, the serialization set the mode forces, and the issuer origin SD-JWT VC forces lands back on the twin's typed configuration exactly.
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: the_holder_bound_acceptance_bundle_differs_from_its_twin_only_by_binding_mode}
+  - id: acceptance-row-69
+    summary: Every coequal definition in the tracked holder-bound bundle issues over the served path bound to the presented holder key, declaring the mode it was derived under, naming no relying party and echoing no request nonce, with every subject binding distinct and neither holder key material nor any released binding in the audit chain.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: every_coequal_definition_issues_under_the_holder_bound_mode}
+  - id: acceptance-row-70
+    summary: The tracked holder-bound bundle serves no serialization that cannot carry a holder key confirmation; every governed non-SD-JWT-VC format is refused on every one of its definitions with the single generic denial and reaches no source.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_holder_bound_acceptance_bundle_serves_no_unconfirmed_serialization}
+  - id: acceptance-row-71
+    summary: The tracked holder-bound bundle honours the batch ceiling it declares on every one of its definitions; a batch at the ceiling releases one independently bound credential per presented key from a single source acquisition, and a batch above it is refused before source access.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_holder_bound_acceptance_bundle_batches_every_definition_under_its_ceiling}
+  - id: acceptance-row-72
+    summary: Offline fixture evaluation decides every declared case of all four coequal definitions in the tracked holder-bound bundle, read-only and with no network, using a stand-in holder key the served request boundary would itself accept.
+    tests:
+      - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_holder_bound_acceptance_bundle}
+      - {file: crates/registry-evidence/src/model.rs, name: the_offline_stand_in_holder_key_is_a_key_the_request_boundary_would_accept}

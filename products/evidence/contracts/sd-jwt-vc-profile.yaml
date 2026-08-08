@@ -92,8 +92,13 @@ claims:
       source: the optional holderKey member of the request
       rule: >-
         Present only when the caller supplies a holder public key. Evidence
-        embeds it and never validates a presentation. Key-binding JWT
-        verification is the relying party's responsibility.
+        embeds the accepted key with its only permitted algorithm stated
+        explicitly, whether or not the request stated one, so the confirmed key
+        names the algorithm a key-binding JWT is verified under. The stated
+        algorithm is outside the RFC 7638 required members, so the holder
+        thumbprint and the subject binding derived from it are unchanged.
+        Evidence never validates a presentation. Key-binding JWT verification is
+        the relying party's responsibility.
       constraints:
         key_type: EC P-256 public JWK
         required_members: [kty, crv, x, y]

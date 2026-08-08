@@ -105,7 +105,7 @@ command:
   jws: one stored flattened JWS JSON response file
   sd-jwt-vc: one stored SD-JWT VC response file, in the issued compact serialization
   format_selection: exactly one stored response file is named, and naming it states its format; the command never infers a format from a file's contents, so a stored response is never re-verified under the other format's rules
-  policy_scope: one policy document governs both formats, because the same Evidence payload is verified whichever serialization carried it
+  policy_scope: this document governs the two audience-scoped formats, signed JWS and SD-JWT VC, because the same Evidence payload is verified whichever serialization carried it; a holder-bound presentation carries no audience or request nonce to compare and is governed by the holder-bound document instead, and neither command accepts the other's document
   jwks: the pinned trusted key set, which is the complete trust set for the run
   policy: one document accepted by this schema
   at: strict RFC 3339 at zero offset; system time when omitted
@@ -118,8 +118,9 @@ output:
     - 'currently-valid: yes or no, printed only for an authentic response'
   inspection: on full success the verified Evidence JSON is also printed, for the operator who already holds the stored response
   failure: only the closed class is reported, on standard error, with no field-level detail
-  classes: [malformed, protected-header, key, signature, payload, policy, time, disclosure]
+  classes: [malformed, protected-header, key, signature, payload, policy, time, disclosure, key-binding]
   disclosure_class: reported only for a stored SD-JWT VC whose disclosures do not reconstruct the payload the signature covers
+  key_binding_class: never reported by this command, which verifies audience-scoped responses and asks nothing about possession; it is listed here because the failure-class vocabulary is one closed list shared by both verification commands
   exit_codes:
     0: authentic and currently valid
     3: authentic but not currently valid

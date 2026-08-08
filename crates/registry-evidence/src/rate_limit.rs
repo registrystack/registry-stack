@@ -61,7 +61,21 @@ impl EvidenceRateLimiter {
     }
 
     pub async fn check_request(&self, principal_pseudonym: &str) -> Result<(), RateLimitError> {
+        self.check_request_cost(principal_pseudonym, 1).await
+    }
+
+    /// Charge one request more than a single token.
+    ///
+    /// A batch release issues one credential per presented holder key, so it
+    /// costs the deployment what that many single-credential requests cost. A
+    /// cost of zero would make a request free, so it is charged as one.
+    pub async fn check_request_cost(
+        &self,
+        principal_pseudonym: &str,
+        cost: u32,
+    ) -> Result<(), RateLimitError> {
         validate_pseudonym_key(principal_pseudonym)?;
+        let cost = f64::from(cost.max(1));
         let now = Instant::now();
         let mut buckets = self.requests.lock().await;
         prune_buckets(&mut buckets, now);
@@ -79,10 +93,10 @@ impl EvidenceRateLimiter {
         let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
         bucket.updated_at = now;
-        if bucket.tokens < 1.0 {
+        if bucket.tokens < cost {
             return Err(RateLimitError::RequestExceeded);
         }
-        bucket.tokens -= 1.0;
+        bucket.tokens -= cost;
         Ok(())
     }
 

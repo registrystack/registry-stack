@@ -48,12 +48,29 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Time allowed for connection setup, including TLS negotiation.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
 
+/// Whether this relying party verifies the responses it receives.
+///
+/// The stance is decided at construction and never changes, because it decides
+/// which client type the configuration can build: only a `Pinned` configuration
+/// reaches [`crate::EvidenceClient`], and only that client can verify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerificationStance {
+    /// The relying party pinned a key set and verifies every response.
+    Pinned,
+    /// The relying party does not verify, and states so. Reserved for a client
+    /// that only requests holder-bound credentials and hands them to a wallet,
+    /// where verification happens later, at presentation, against a key-binding
+    /// JWT that does not exist yet at issuance.
+    Declined,
+}
+
 /// Everything the client needs, decided before the first request.
 pub struct EvidenceClientConfig {
     pub(crate) base_url: Url,
     pub(crate) token_provider: Arc<dyn TokenProvider>,
     pub(crate) trusted_jwks: JwksDocument,
     pub(crate) revoked_key_ids: Vec<String>,
+    verification: VerificationStance,
     pub(crate) request_timeout: Duration,
     pub(crate) connect_timeout: Duration,
     pub(crate) user_agent: Option<String>,
@@ -81,6 +98,39 @@ impl EvidenceClientConfig {
             token_provider,
             trusted_jwks,
             revoked_key_ids,
+            verification: VerificationStance::Pinned,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            user_agent: None,
+            trusted_root_certificates: None,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
+        }
+    }
+
+    /// Configure a relying party that does not verify what it receives.
+    ///
+    /// This states a real position rather than relaxing a check. A credential
+    /// delivery front end that requests holder-bound credentials and passes
+    /// them to a wallet never verifies: verification of a holder-bound
+    /// credential happens at presentation, against a key-binding JWT the holder
+    /// has not created at issuance time. Such a client has nothing to do with a
+    /// pinned key set, and requiring one would make it carry a file whose only
+    /// function is satisfying a constructor.
+    ///
+    /// A configuration built this way carries no key set and can only build a
+    /// [`crate::NonVerifyingEvidenceClient`], which has no verification method
+    /// to call. [`crate::EvidenceClient::new`] refuses it, so the audience-scoped
+    /// path is unaffected: it still requires a pinned key set, and still
+    /// verifies.
+    #[must_use]
+    pub fn without_verification(base_url: Url, token_provider: Arc<dyn TokenProvider>) -> Self {
+        Self {
+            base_url,
+            token_provider,
+            trusted_jwks: JwksDocument { keys: Vec::new() },
+            revoked_key_ids: Vec::new(),
+            verification: VerificationStance::Declined,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
@@ -138,10 +188,21 @@ impl EvidenceClientConfig {
         &self.base_url
     }
 
-    /// The pinned key set every verification uses.
+    /// The pinned key set every verification uses. Empty when this relying
+    /// party [declined to verify](Self::without_verification).
     #[must_use]
     pub fn trusted_jwks(&self) -> &JwksDocument {
         &self.trusted_jwks
+    }
+
+    /// Whether this relying party verifies the responses it receives.
+    ///
+    /// False only for a configuration built by
+    /// [`without_verification`](Self::without_verification), which cannot build
+    /// a client that has a verification method.
+    #[must_use]
+    pub fn verifies(&self) -> bool {
+        self.verification == VerificationStance::Pinned
     }
 
     /// Emergency service-key denylist applied before the pinned key set.
@@ -199,15 +260,30 @@ impl EvidenceClientConfig {
         // could never verify anything looks to an adopter like a deployment
         // fault. The rule is the verifier's own, asked once at the point the
         // decision was made instead of restated here where it could drift.
-        if trusted_keys_are_usable(&self.trusted_jwks).is_err() {
-            return Err(EvidenceClientError::configuration(
-                "the pinned key set must be one the verifier can use",
-            ));
-        }
-        if revoked_key_ids_are_usable(&self.revoked_key_ids).is_err() {
-            return Err(EvidenceClientError::configuration(
-                "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound",
-            ));
+        match self.verification {
+            VerificationStance::Pinned => {
+                if trusted_keys_are_usable(&self.trusted_jwks).is_err() {
+                    return Err(EvidenceClientError::configuration(
+                        "the pinned key set must be one the verifier can use",
+                    ));
+                }
+                if revoked_key_ids_are_usable(&self.revoked_key_ids).is_err() {
+                    return Err(EvidenceClientError::configuration(
+                        "the revoked key identifiers must be unique RFC 7638 thumbprints within the verifier bound",
+                    ));
+                }
+            }
+            // A declined stance is only reachable through
+            // `without_verification`, which sets both to empty and offers no
+            // way to fill them. Checking anyway keeps the emptiness a stated
+            // property rather than a fact about one constructor.
+            VerificationStance::Declined => {
+                if !self.trusted_jwks.keys.is_empty() || !self.revoked_key_ids.is_empty() {
+                    return Err(EvidenceClientError::configuration(
+                        "a client that declined to verify must carry no key material",
+                    ));
+                }
+            }
         }
         if self.max_response_bytes == 0 || self.max_metadata_bytes == 0 {
             return Err(EvidenceClientError::configuration(
@@ -231,6 +307,7 @@ impl fmt::Debug for EvidenceClientConfig {
         formatter
             .debug_struct("EvidenceClientConfig")
             .field("base_url", &base_url_without_userinfo(&self.base_url))
+            .field("verifies", &self.verifies())
             .field("request_timeout", &self.request_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("user_agent", &self.user_agent)
@@ -499,6 +576,90 @@ mod tests {
         assert!(
             rendered.contains("https://evidence.example.org/"),
             "{rendered}"
+        );
+    }
+
+    fn non_verifying_config(base_url: &str) -> EvidenceClientConfig {
+        EvidenceClientConfig::without_verification(
+            Url::parse(base_url).expect("the test URL parses"),
+            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+        )
+    }
+
+    /// The declined stance is the whole difference: an empty key set is
+    /// accepted here and refused for a client that verifies, so neither
+    /// constructor can be mistaken for the other.
+    #[test]
+    fn declining_verification_accepts_no_key_set_and_pinning_still_requires_one() {
+        let declined = non_verifying_config("https://evidence.example.org");
+        assert!(!declined.verifies());
+        assert!(declined.trusted_jwks().keys.is_empty());
+        assert!(declined.revoked_key_ids().is_empty());
+        declined.validate().expect("a declined stance is accepted");
+
+        let mut pinned = config("https://evidence.example.org");
+        assert!(pinned.verifies());
+        pinned.trusted_jwks = JwksDocument { keys: Vec::new() };
+        let failure = pinned
+            .validate()
+            .expect_err("a client that verifies needs keys");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "the pinned key set must be one the verifier can use"
+                }
+            ),
+            "{failure:?}"
+        );
+    }
+
+    /// Declining verification relaxes only the key set. Every other rule a
+    /// configuration carries still decides, so this is not a way around the
+    /// checks that protect the credential.
+    #[test]
+    fn declining_verification_relaxes_nothing_but_the_key_set() {
+        let failure = non_verifying_config("http://evidence.example.org")
+            .validate()
+            .expect_err("the transport still decides");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "the base URL must use HTTPS, or HTTP with a loopback host"
+                }
+            ),
+            "{failure:?}"
+        );
+
+        let failure = non_verifying_config("https://evidence.example.org")
+            .with_request_timeout(Duration::ZERO)
+            .validate()
+            .expect_err("the timeouts still decide");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "the timeouts must be greater than zero"
+                }
+            ),
+            "{failure:?}"
+        );
+    }
+
+    /// The stance is written down where an operator reads it, so a client that
+    /// does not verify says so in its own diagnostics rather than looking like
+    /// one that does.
+    #[test]
+    fn debug_output_states_the_verification_stance() {
+        assert!(
+            format!("{:?}", config("https://evidence.example.org")).contains("verifies: true"),
+            "a pinned configuration states that it verifies"
+        );
+        assert!(
+            format!("{:?}", non_verifying_config("https://evidence.example.org"))
+                .contains("verifies: false"),
+            "a declined configuration states that it does not"
         );
     }
 }

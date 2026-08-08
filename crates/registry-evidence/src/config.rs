@@ -371,9 +371,16 @@ pub struct EvidenceConfig {
     /// `configurationRevision` digests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acquisition_capabilities: Vec<String>,
+    /// Ceiling on how many assertions one holder-bound release may carry.
+    /// Omission means one, so a bundle written before batch release cannot
+    /// serve a batch, and the key is omitted when absent because the projected
+    /// configuration is what a requirement's `configurationRevision` digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_bound_batch_max_size: Option<u16>,
     pub requirements: Vec<RequirementConfig>,
 }
 
+pub use registry_evidence_verifier::model::SubjectBindingMode;
 /// The declared assurance boundary travels with every response, so the
 /// portable `registry-evidence-verifier` crate owns it and configuration serves
 /// it at the runtime's own path.
@@ -381,7 +388,61 @@ pub use registry_evidence_verifier::AssuranceProfile;
 
 pub type SourceSelectorSet = Vec<(String, String)>;
 
+/// The ceiling one holder-bound release may carry when the bundle declares no
+/// other, which is one assertion. Silence enables nothing.
+const DEFAULT_HOLDER_BOUND_BATCH_SIZE: u16 = 1;
+
+/// The compile-time ceiling on a declared holder-bound batch size. It bounds
+/// the released set an audit record has to name, so the two limits move
+/// together.
+pub const MAXIMUM_HOLDER_BOUND_BATCH_SIZE: u16 = 16;
+
+/// The serializations a holder-bound assertion may take.
+///
+/// A holder-bound assertion names no relying party, so it can only travel in a
+/// serialization that carries the holder key confirmation the verifier checks
+/// possession against. The signed flattened JWS and unsigned JSON forms carry
+/// no such confirmation, so neither may transport one.
+const HOLDER_BOUND_RESPONSE_FORMATS: [ResponseFormat; 2] =
+    [ResponseFormat::SdJwtVc, ResponseFormat::SdJwtVcBatch];
+
+/// The serializations an audience-scoped assertion may take.
+///
+/// The three formats an audience-scoped requirement served before batch
+/// issuance existed, and no more. The batch container carries exactly one
+/// member per presented holder key, and an audience-scoped assertion binds the
+/// authenticated audience rather than a key, so there is nothing for its
+/// members to differ by.
+const AUDIENCE_SCOPED_RESPONSE_FORMATS: [ResponseFormat; 3] = [
+    ResponseFormat::SignedJws,
+    ResponseFormat::UnsignedJson,
+    ResponseFormat::SdJwtVc,
+];
+
+/// Report whether a binding mode allows one response format at all.
+///
+/// This is the third term of the effective format set, alongside the bundle
+/// half and the one matched grant's half. It restricts a single requirement,
+/// never a bundle or a grant, so a deployment that serves one holder-bound
+/// requirement keeps serving every other requirement over the formats it
+/// already served.
+pub fn subject_binding_permits_response_format(
+    mode: SubjectBindingMode,
+    format: ResponseFormat,
+) -> bool {
+    match mode {
+        SubjectBindingMode::AudienceScoped => AUDIENCE_SCOPED_RESPONSE_FORMATS.contains(&format),
+        SubjectBindingMode::HolderBound => HOLDER_BOUND_RESPONSE_FORMATS.contains(&format),
+    }
+}
+
 impl EvidenceConfig {
+    /// The declared holder-bound batch ceiling, or one when none is declared.
+    pub fn holder_bound_batch_ceiling(&self) -> u16 {
+        self.holder_bound_batch_max_size
+            .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
+    }
+
     pub fn requirement_acquisition_posture(
         &self,
         requirement_id: &str,
@@ -425,8 +486,14 @@ impl EvidenceConfig {
         self.rate_limits.validate()?;
         self.signing.validate()?;
         validate_response_formats(&self.response_formats, "bundle response formats")?;
+        // Both SD-JWT VC serializations name their issuer by origin, the batch
+        // container as much as the singular form it batches, so either one
+        // enabled outside the local assurance profile forces the origin.
         if self.assurance_profile != AssuranceProfile::Local
-            && self.response_formats.contains(&ResponseFormat::SdJwtVc)
+            && self
+                .response_formats
+                .iter()
+                .any(|format| HOLDER_BOUND_RESPONSE_FORMATS.contains(format))
         {
             validate_https_origin(&self.service.provider_id)?;
         }
@@ -493,7 +560,75 @@ impl EvidenceConfig {
         }
 
         self.validate_acquisition_capabilities()?;
+        self.validate_holder_bound_requirements()?;
         self.validate_cross_references()
+    }
+
+    /// Refuse a holder-bound requirement no request could ever reach, and one
+    /// whose disclosure would defeat the mode.
+    ///
+    /// Both refusals happen while the bundle is loading, before the listener
+    /// binds, so a deployment either serves every holder-bound requirement it
+    /// declares or does not start. Each cause names the rule and no configured
+    /// value.
+    fn validate_holder_bound_requirements(&self) -> Result<(), ConfigError> {
+        if self
+            .holder_bound_batch_max_size
+            .is_some_and(|size| size == 0 || size > MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
+        {
+            return invalid("holder-bound batch size is outside the permitted range");
+        }
+        for requirement in &self.requirements {
+            if requirement.subject_binding_mode() != SubjectBindingMode::HolderBound {
+                continue;
+            }
+            // An entity reference is a pointer only the one relying party it was
+            // scoped to can resolve. A holder-bound assertion has no such party,
+            // so a value form that emits one cannot be disclosed under this mode.
+            if requirement.concepts.iter().any(|concept| {
+                matches!(
+                    concept.form,
+                    ConceptForm::AudienceScopedEntityReference | ConceptForm::EntityReferenceList
+                )
+            }) {
+                return invalid(
+                    "holder-bound requirement must not disclose an entity-reference value form",
+                );
+            }
+            let bundle_permits = self.response_formats.iter().any(|format| {
+                subject_binding_permits_response_format(SubjectBindingMode::HolderBound, *format)
+            });
+            if !bundle_permits {
+                return invalid(
+                    "holder-bound requirement needs a bundle response format its mode permits",
+                );
+            }
+            // Both permission halves, on the one grant that would have to carry
+            // the request. Permissions are never unioned across grants, so a
+            // grant permitting the mode and another permitting the format leave
+            // the requirement unreachable.
+            let reachable = self
+                .authority_profiles
+                .iter()
+                .flat_map(|(_, authority)| &authority.grants)
+                .filter(|grant| grant.requirement == requirement.id)
+                .any(|grant| {
+                    grant.permits_subject_binding(SubjectBindingMode::HolderBound)
+                        && grant.response_formats.iter().any(|format| {
+                            self.response_formats.contains(format)
+                                && subject_binding_permits_response_format(
+                                    SubjectBindingMode::HolderBound,
+                                    *format,
+                                )
+                        })
+                });
+            if !reachable {
+                return invalid(
+                    "holder-bound requirement needs one grant permitting the mode and a permitted response format",
+                );
+            }
+        }
+        Ok(())
     }
 
     /// A bundle serves the fetch-set acquisition only where it declared it, so
@@ -2914,6 +3049,14 @@ pub struct AuthorityGrant {
     /// grants.
     #[serde(default = "default_response_formats")]
     pub response_formats: Vec<ResponseFormat>,
+    /// Closed subject-binding modes this complete grant permits. Omission and
+    /// an explicit empty list both mean audience-scoped alone, so a grant that
+    /// was widened to permit a serialization does not thereby gain the right to
+    /// issue under another binding mode. The two permissions are separate on
+    /// purpose: one names how a response is serialized, the other names what
+    /// the subject bindings inside it are derived under.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subject_binding_modes: Vec<SubjectBindingMode>,
     pub subjects: Vec<GrantedSubject>,
 }
 
@@ -2922,7 +3065,35 @@ impl AuthorityGrant {
         validate_uri(&self.requirement)?;
         validate_purpose(&self.purpose)?;
         validate_response_formats(&self.response_formats, "authority grant response formats")?;
+        validate_subject_binding_modes(&self.subject_binding_modes)?;
         validate_len(self.subjects.len(), 1, 8, "authority grant subjects")
+    }
+
+    /// Report whether this one complete matched grant permits the binding mode.
+    /// Permissions are never unioned across grants.
+    pub fn permits_subject_binding(&self, mode: SubjectBindingMode) -> bool {
+        if self.subject_binding_modes.is_empty() {
+            return mode == SubjectBindingMode::AudienceScoped;
+        }
+        self.subject_binding_modes.contains(&mode)
+    }
+}
+
+fn validate_subject_binding_modes(modes: &[SubjectBindingMode]) -> Result<(), ConfigError> {
+    validate_len(modes.len(), 0, 2, "authority grant subject binding modes")?;
+    let mut seen = BTreeSet::new();
+    for mode in modes {
+        if !seen.insert(subject_binding_mode_discriminant(*mode)) {
+            return invalid("authority grant subject binding modes must be unique");
+        }
+    }
+    Ok(())
+}
+
+fn subject_binding_mode_discriminant(mode: SubjectBindingMode) -> u8 {
+    match mode {
+        SubjectBindingMode::AudienceScoped => 0,
+        SubjectBindingMode::HolderBound => 1,
     }
 }
 
@@ -2934,6 +3105,9 @@ pub enum ResponseFormat {
     UnsignedJson,
     /// Audience-scoped SD-JWT VC serialization of the same assertion.
     SdJwtVc,
+    /// Holder-bound issuance container carrying one SD-JWT VC serialization per
+    /// presented holder key.
+    SdJwtVcBatch,
 }
 
 fn default_response_formats() -> Vec<ResponseFormat> {
@@ -2944,7 +3118,7 @@ fn validate_response_formats(
     formats: &[ResponseFormat],
     description: &'static str,
 ) -> Result<(), ConfigError> {
-    validate_len(formats.len(), 1, 3, description)?;
+    validate_len(formats.len(), 1, 4, description)?;
     let mut seen = BTreeSet::new();
     for format in formats {
         if !seen.insert(format_discriminant(*format)) {
@@ -2962,6 +3136,7 @@ fn format_discriminant(format: ResponseFormat) -> u8 {
         ResponseFormat::SignedJws => 0,
         ResponseFormat::UnsignedJson => 1,
         ResponseFormat::SdJwtVc => 2,
+        ResponseFormat::SdJwtVcBatch => 3,
     }
 }
 
@@ -3340,6 +3515,13 @@ impl StageInputs {
 pub struct RequirementConfig {
     pub id: String,
     pub kind: RequirementKind,
+    /// What the subject bindings in this requirement's assertions are derived
+    /// under. Omission means audience-scoped, and the key is omitted when
+    /// absent, so every requirement written before binding modes existed keeps
+    /// exactly the projected configuration, and therefore exactly the
+    /// `configurationRevision`, it already had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_binding: Option<SubjectBindingMode>,
     pub acquisition: AcquisitionConfig,
     pub purposes: Vec<String>,
     pub subject_roles: Vec<SubjectRole>,
@@ -3359,6 +3541,13 @@ pub struct RequirementConfig {
 impl RequirementConfig {
     pub fn initial_source(&self) -> &str {
         self.acquisition.initial_source()
+    }
+
+    /// The binding mode this requirement issues under. An undeclared mode is
+    /// audience-scoped, which is what every requirement already did.
+    pub fn subject_binding_mode(&self) -> SubjectBindingMode {
+        self.subject_binding
+            .unwrap_or(SubjectBindingMode::AudienceScoped)
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -5935,6 +6124,7 @@ mod tests {
         for yaml in [
             include_bytes!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml").as_slice(),
+            include_bytes!("../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/professional-licence/evidence.yaml").as_slice(),
             include_bytes!("../../../products/evidence/fixtures/acceptance/residence-region/evidence.yaml").as_slice(),
@@ -7770,6 +7960,525 @@ outboundTls:
             serde_json::to_value(&declared).expect("the configuration projects")
                 ["acquisitionCapabilities"],
             serde_json::json!(["search-then-fetch-set"])
+        );
+    }
+
+    /// One acceptance bundle rewritten so a single requirement issues under the
+    /// holder-bound mode, with both permission halves present: the bundle and
+    /// the one matched grant permit the serialization that mode allows, and the
+    /// grant names the mode itself.
+    fn holder_bound_bundle() -> String {
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let mut bundle = yaml.to_owned();
+        for (name, from, to) in [
+            (
+                // Outside the local profile the SD-JWT VC issuer is an origin.
+                "provider origin",
+                "  providerId: urn:example:fixture:provider:evidence\n",
+                "  providerId: https://provider.invalid\n",
+            ),
+            (
+                "bundle formats",
+                "\nresponseFormats: [signed-jws, unsigned-json]\n",
+                "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n",
+            ),
+            (
+                "grant permission",
+                "      - requirement: urn:example:fixture:requirement:adult-status:v1\n        purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]\n",
+                "      - requirement: urn:example:fixture:requirement:adult-status:v1\n        purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n        subjectBindingModes: [holder-bound]\n",
+            ),
+            (
+                "requirement mode",
+                "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
+                "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
+            ),
+        ] {
+            let rewritten = bundle.replace(from, to);
+            assert_ne!(rewritten, bundle, "the {name} rewrite applies");
+            bundle = rewritten;
+        }
+        bundle
+    }
+
+    #[test]
+    fn an_undeclared_subject_binding_mode_stays_out_of_the_projected_configuration() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("the acceptance bundle validates");
+        assert!(config.holder_bound_batch_max_size.is_none());
+        assert!(config
+            .requirements
+            .iter()
+            .all(|requirement| requirement.subject_binding.is_none()));
+        assert!(config.authority_profiles.iter().all(|(_, profile)| profile
+            .grants
+            .iter()
+            .all(|grant| grant.subject_binding_modes.is_empty())));
+
+        let projected = serde_json::to_value(&config).expect("the configuration projects");
+        assert!(
+            projected.get("holderBoundBatchMaxSize").is_none(),
+            "an undeclared batch ceiling moves every existing configuration revision"
+        );
+        for requirement in projected["requirements"]
+            .as_array()
+            .expect("the requirements project")
+        {
+            assert!(
+                requirement.get("subjectBinding").is_none(),
+                "an undeclared binding mode moves every existing configuration revision"
+            );
+        }
+        for profile in projected["authorityProfiles"]
+            .as_object()
+            .expect("the authority profiles project")
+            .values()
+        {
+            for grant in profile["grants"].as_array().expect("the grants project") {
+                assert!(
+                    grant.get("subjectBindingModes").is_none(),
+                    "an undeclared grant mode list moves every existing configuration revision"
+                );
+            }
+        }
+
+        // Absence is a decided default, not an unresolved omission.
+        assert!(config
+            .requirements
+            .iter()
+            .all(|requirement| requirement.subject_binding_mode()
+                == SubjectBindingMode::AudienceScoped));
+        assert_eq!(config.holder_bound_batch_ceiling(), 1);
+        assert!(config
+            .authority_profiles
+            .iter()
+            .all(|(_, profile)| profile.grants.iter().all(|grant| grant
+                .permits_subject_binding(SubjectBindingMode::AudienceScoped)
+                && !grant.permits_subject_binding(SubjectBindingMode::HolderBound))));
+
+        let declared = EvidenceConfig::parse_yaml(holder_bound_bundle().as_bytes())
+            .expect("the bundle validates");
+        let projected = serde_json::to_value(&declared).expect("the configuration projects");
+        assert_eq!(
+            projected["requirements"][0]["subjectBinding"],
+            serde_json::json!("holder-bound")
+        );
+        assert_eq!(
+            projected["authorityProfiles"]["statutory-caseworker-v1"]["grants"][0]
+                ["subjectBindingModes"],
+            serde_json::json!(["holder-bound"])
+        );
+    }
+
+    #[test]
+    fn permission_to_serialize_sd_jwt_vc_is_not_permission_to_issue_holder_bound() {
+        let bundle = holder_bound_bundle();
+        EvidenceConfig::parse_yaml(bundle.as_bytes()).expect("both permission halves validate");
+
+        // The grant keeps the serialization it needs and loses only the mode.
+        // Nothing else about it changes, so a bundle that still loads would say
+        // format permission had silently carried mode permission with it.
+        let format_only = bundle.replace("\n        subjectBindingModes: [holder-bound]", "");
+        assert_ne!(format_only, bundle, "the mode withdrawal applies");
+        assert!(
+            EvidenceConfig::parse_yaml(format_only.as_bytes()).is_err(),
+            "a grant permitting the SD-JWT VC serialization silently gained holder-bound issuance"
+        );
+
+        // The same grant read directly: it may serialize, and it may not issue.
+        let audience_scoped = format_only.replace("\n    subjectBinding: holder-bound", "");
+        assert_ne!(audience_scoped, format_only, "the mode removal applies");
+        let config = EvidenceConfig::parse_yaml(audience_scoped.as_bytes())
+            .expect("a grant may serialize SD-JWT VC with no binding-mode permission at all");
+        let grant = &config
+            .authority_profiles
+            .get("statutory-caseworker-v1")
+            .expect("the acceptance profile is configured")
+            .grants[0];
+        assert!(grant.response_formats.contains(&ResponseFormat::SdJwtVc));
+        assert!(grant.permits_subject_binding(SubjectBindingMode::AudienceScoped));
+        assert!(!grant.permits_subject_binding(SubjectBindingMode::HolderBound));
+    }
+
+    #[test]
+    fn a_holder_bound_requirement_no_request_could_reach_is_refused_at_bundle_load() {
+        let bundle = holder_bound_bundle();
+        EvidenceConfig::parse_yaml(bundle.as_bytes()).expect("the reachable bundle validates");
+
+        for (name, mutated) in [
+            (
+                // The bundle half withdraws the one serialization the mode permits.
+                "bundle format",
+                bundle.replace(
+                    "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n",
+                    "\nresponseFormats: [signed-jws, unsigned-json]\n",
+                ),
+            ),
+            (
+                // The grant half withdraws it while still naming the mode.
+                "grant format",
+                bundle.replace(
+                    "        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n        subjectBindingModes: [holder-bound]\n",
+                    "        responseFormats: [signed-jws, unsigned-json]\n        subjectBindingModes: [holder-bound]\n",
+                ),
+            ),
+            (
+                // The grant half withdraws the mode while still permitting the format.
+                "grant mode",
+                bundle.replace("\n        subjectBindingModes: [holder-bound]", ""),
+            ),
+            (
+                // No grant covers the requirement under the mode at all.
+                "grant audience-scoped only",
+                bundle.replace(
+                    "\n        subjectBindingModes: [holder-bound]",
+                    "\n        subjectBindingModes: [audience-scoped]",
+                ),
+            ),
+        ] {
+            assert_ne!(mutated, bundle, "the {name} mutation applies");
+            let error = EvidenceConfig::parse_yaml(mutated.as_bytes()).expect_err(
+                "an unreachable holder-bound requirement was accepted at bundle load",
+            );
+            assert!(
+                !format!("{error}").contains("urn:example:fixture"),
+                "the {name} refusal names a configured value"
+            );
+        }
+    }
+
+    #[test]
+    fn a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form() {
+        let bundle = holder_bound_bundle();
+        let anchor = "      - {id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}\n";
+        for form in [
+            "      - {id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
+            "      - {id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
+        ] {
+            let mutated = bundle.replace(anchor, &format!("{anchor}{form}"));
+            assert_ne!(mutated, bundle, "the {form} mutation applies");
+            let refusal = EvidenceConfig::parse_yaml(mutated.as_bytes()).expect_err(
+                "a holder-bound requirement disclosed an entity-reference value form",
+            );
+
+            // The refusal happens here, in parsing, which the server does
+            // before it binds a listener, so no request can reach a deployment
+            // configured this way. Its cause is a fixed sentence: it names the
+            // rule that was broken and interpolates nothing from the rejected
+            // bundle, so an operator reading a startup log learns no configured
+            // identifier, endpoint, or constraint from it.
+            let cause = refusal.to_string();
+            assert!(
+                cause.contains("must not disclose an entity-reference value form"),
+                "the refusal does not name the rule that was broken: {cause}"
+            );
+            for interpolated in ["urn:example:", "maximumBytes", "minimumItems", "160"] {
+                assert!(
+                    !cause.contains(interpolated),
+                    "the refusal echoes rejected bundle content: {cause}"
+                );
+            }
+
+            // The refusal is about the mode, not about the value form: the same
+            // concept on an audience-scoped requirement stays configurable.
+            let audience_scoped = mutated
+                .replace("\n    subjectBinding: holder-bound", "")
+                .replace("\n        subjectBindingModes: [holder-bound]", "");
+            EvidenceConfig::parse_yaml(audience_scoped.as_bytes())
+                .expect("an audience-scoped requirement may disclose an entity reference");
+        }
+    }
+
+    #[test]
+    fn a_holder_bound_batch_ceiling_outside_the_permitted_range_is_refused() {
+        let bundle = holder_bound_bundle();
+        let validator = bundle_contract_validator();
+        for (ceiling, accepted) in [("1", true), ("16", true), ("0", false), ("17", false)] {
+            let mutated = bundle.replace(
+                "\nrequirements:\n",
+                &format!("\nholderBoundBatchMaxSize: {ceiling}\n\nrequirements:\n"),
+            );
+            assert_ne!(mutated, bundle, "the ceiling {ceiling} mutation applies");
+            let config = EvidenceConfig::parse_yaml(mutated.as_bytes());
+            assert_eq!(
+                config.is_ok(),
+                accepted,
+                "startup validation disagrees on batch ceiling {ceiling}"
+            );
+            assert_eq!(
+                validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                accepted,
+                "the published contract disagrees on batch ceiling {ceiling}"
+            );
+            if let Ok(config) = config {
+                assert_eq!(
+                    config.holder_bound_batch_ceiling(),
+                    ceiling.parse::<u16>().expect("the ceiling is an integer")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_sd_jwt_vc_serialization_may_carry_a_holder_bound_assertion() {
+        for format in [
+            ResponseFormat::SignedJws,
+            ResponseFormat::UnsignedJson,
+            ResponseFormat::SdJwtVc,
+        ] {
+            assert!(subject_binding_permits_response_format(
+                SubjectBindingMode::AudienceScoped,
+                format
+            ));
+        }
+        assert!(subject_binding_permits_response_format(
+            SubjectBindingMode::HolderBound,
+            ResponseFormat::SdJwtVc
+        ));
+        assert!(!subject_binding_permits_response_format(
+            SubjectBindingMode::HolderBound,
+            ResponseFormat::SignedJws
+        ));
+        assert!(!subject_binding_permits_response_format(
+            SubjectBindingMode::HolderBound,
+            ResponseFormat::UnsignedJson
+        ));
+
+        // The batch envelope belongs to this mode alone, in both directions.
+        // It carries one confirmation per member, so an audience-scoped
+        // requirement has nothing to put in one, and there is no batch form of
+        // an audience-scoped assertion for a caller to select.
+        assert!(subject_binding_permits_response_format(
+            SubjectBindingMode::HolderBound,
+            ResponseFormat::SdJwtVcBatch
+        ));
+        assert!(!subject_binding_permits_response_format(
+            SubjectBindingMode::AudienceScoped,
+            ResponseFormat::SdJwtVcBatch
+        ));
+
+        // The restriction is per requirement. Signed JWS stays mandatory at
+        // bundle and grant scope in a deployment that serves a holder-bound
+        // requirement, so the mode never narrows the rest of the deployment.
+        let config = EvidenceConfig::parse_yaml(holder_bound_bundle().as_bytes())
+            .expect("the bundle validates");
+        assert!(config.response_formats.contains(&ResponseFormat::SignedJws));
+        assert!(config.authority_profiles.iter().all(|(_, profile)| profile
+            .grants
+            .iter()
+            .all(|grant| grant.response_formats.contains(&ResponseFormat::SignedJws))));
+        assert!(
+            validate_response_formats(&[ResponseFormat::SdJwtVc], "bundle response formats")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_bundle_contract_closes_the_binding_mode_vocabulary() {
+        let bundle = holder_bound_bundle();
+        let validator = bundle_contract_validator();
+        assert!(
+            validator.is_valid(&bundle_contract_instance(bundle.as_bytes())),
+            "the contract rejects a declared holder-bound requirement"
+        );
+
+        for (name, mutated) in [
+            (
+                "unknown requirement mode",
+                bundle.replace(
+                    "\n    subjectBinding: holder-bound",
+                    "\n    subjectBinding: bearer-bound",
+                ),
+            ),
+            (
+                "unknown grant mode",
+                bundle.replace(
+                    "\n        subjectBindingModes: [holder-bound]",
+                    "\n        subjectBindingModes: [bearer-bound]",
+                ),
+            ),
+            (
+                "repeated grant mode",
+                bundle.replace(
+                    "\n        subjectBindingModes: [holder-bound]",
+                    "\n        subjectBindingModes: [holder-bound, holder-bound]",
+                ),
+            ),
+            (
+                "overlong grant mode list",
+                bundle.replace(
+                    "\n        subjectBindingModes: [holder-bound]",
+                    "\n        subjectBindingModes: [holder-bound, audience-scoped, holder-bound]",
+                ),
+            ),
+        ] {
+            assert_ne!(mutated, bundle, "the {name} mutation applies");
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                "the contract accepts {name}"
+            );
+            assert!(
+                EvidenceConfig::parse_yaml(mutated.as_bytes()).is_err(),
+                "startup validation accepts {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_holder_bound_acceptance_bundle_declares_every_coequal_definition() {
+        // The mode is not a property of one definition. A committed bundle that
+        // declared it for a single requirement would make the other three a
+        // later phase, which the coequality rule forbids, so the check is on
+        // the committed fixture rather than on a rewrite of it.
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
+        ))
+        .expect("the holder-bound acceptance bundle validates");
+        let declared: Vec<&str> = config
+            .requirements
+            .iter()
+            .map(|requirement| requirement.id.as_str())
+            .collect();
+        assert_eq!(
+            declared,
+            [
+                "urn:example:fixture:requirement:adult-status:v1",
+                "urn:example:fixture:requirement:residence-region:v1",
+                "urn:example:fixture:requirement:professional-licence-status:v1",
+                "urn:example:fixture:requirement:legal-parent-relationship:v1",
+            ]
+        );
+        for requirement in &config.requirements {
+            assert_eq!(
+                requirement.subject_binding_mode(),
+                SubjectBindingMode::HolderBound,
+                "{} does not issue under the holder-bound mode",
+                requirement.id
+            );
+        }
+
+        // Every definition is reachable: each requirement's matched grant
+        // carries the mode permission as well as the serialization permission.
+        for (_, profile) in config.authority_profiles.iter() {
+            for grant in &profile.grants {
+                assert!(
+                    grant.permits_subject_binding(SubjectBindingMode::HolderBound),
+                    "{} cannot be acquired under the mode it declares",
+                    grant.requirement
+                );
+            }
+        }
+        assert_eq!(config.holder_bound_batch_ceiling(), 4);
+        assert!(config.response_formats.contains(&ResponseFormat::SdJwtVc));
+        assert!(config
+            .response_formats
+            .contains(&ResponseFormat::SdJwtVcBatch));
+        assert!(!config
+            .response_formats
+            .contains(&ResponseFormat::UnsignedJson));
+    }
+
+    #[test]
+    fn the_holder_bound_acceptance_bundle_differs_from_its_twin_only_by_binding_mode() {
+        // Two acceptance bundles serve the same four definitions, and the
+        // holder-bound one is the audience-scoped one plus the mode and the
+        // consequences the mode forces. Withdrawing exactly those declarations
+        // must land back on the twin's typed configuration: anything else in
+        // the fixture would be a second variable, and a behavioural difference
+        // between the two bundles could then be attributed to it instead of to
+        // the mode.
+        let holder_bound = include_str!(
+            "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
+        );
+        let mut normalized = holder_bound.to_owned();
+        for (name, from, to) in [
+            (
+                "grant permission",
+                "        responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\n        subjectBindingModes: [holder-bound]\n",
+                "        responseFormats: [signed-jws, unsigned-json]\n",
+            ),
+            (
+                "bundle permission and batch ceiling",
+                "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
+                "\nresponseFormats: [signed-jws, unsigned-json]\n",
+            ),
+            (
+                "requirement mode",
+                "\n    subjectBinding: holder-bound",
+                "",
+            ),
+            (
+                // Forced by the serialization the mode permits, not chosen:
+                // SD-JWT VC names its issuer by origin outside the local
+                // assurance profile.
+                "provider identifier",
+                "  providerId: https://provider.invalid\n",
+                "  providerId: urn:example:fixture:provider:evidence\n",
+            ),
+        ] {
+            let rewritten = normalized.replace(from, to);
+            assert_ne!(rewritten, normalized, "the {name} withdrawal applies");
+            normalized = rewritten;
+        }
+
+        let withdrawn = EvidenceConfig::parse_yaml(normalized.as_bytes())
+            .expect("the withdrawn bundle validates");
+        let twin = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("the audience-scoped acceptance bundle validates");
+        assert_eq!(
+            withdrawn, twin,
+            "the holder-bound acceptance bundle carries a difference beyond its binding mode"
+        );
+    }
+
+    #[test]
+    fn a_batch_only_bundle_still_forces_the_https_origin_the_singular_form_forces() {
+        // The batch container is a second SD-JWT VC serialization, not a
+        // different one, so a bundle that drops the singular form and keeps
+        // only the batch form must keep the same HTTPS-origin requirement on
+        // service.providerId outside the local assurance profile.
+        let holder_bound = include_str!(
+            "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
+        );
+        let batch_only = holder_bound.replace(
+            "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
+            "\nresponseFormats: [signed-jws, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
+        );
+        assert_ne!(
+            batch_only, holder_bound,
+            "the bundle format withdrawal applies"
+        );
+
+        let validator = bundle_contract_validator();
+        assert!(
+            EvidenceConfig::parse_yaml(batch_only.as_bytes()).is_ok(),
+            "a batch-only bundle with an HTTPS provider identifier failed to validate"
+        );
+        assert!(
+            validator.is_valid(&bundle_contract_instance(batch_only.as_bytes())),
+            "the published contract rejects a batch-only bundle with an HTTPS provider identifier"
+        );
+
+        let urn_provider = batch_only.replace(
+            "  providerId: https://provider.invalid\n",
+            "  providerId: urn:example:fixture:provider:evidence\n",
+        );
+        assert_ne!(
+            urn_provider, batch_only,
+            "the provider identifier rewrite applies"
+        );
+        assert!(
+            EvidenceConfig::parse_yaml(urn_provider.as_bytes()).is_err(),
+            "a batch-only bundle accepted a URN provider identifier outside the local profile"
+        );
+        assert!(
+            !validator.is_valid(&bundle_contract_instance(urn_provider.as_bytes())),
+            "the published contract accepts a batch-only bundle with a URN provider identifier"
         );
     }
 }

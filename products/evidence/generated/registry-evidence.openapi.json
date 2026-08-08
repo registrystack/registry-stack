@@ -50,6 +50,14 @@
       },
       "Evidence": {
         "additionalProperties": false,
+        "dependentRequired": {
+          "audience": [
+            "requestNonce"
+          ],
+          "requestNonce": [
+            "audience"
+          ]
+        },
         "properties": {
           "assuranceProfile": {
             "enum": [
@@ -110,6 +118,13 @@
             ],
             "type": "string"
           },
+          "subjectBinding": {
+            "enum": [
+              "audience-scoped",
+              "holder-bound"
+            ],
+            "type": "string"
+          },
           "subjects": {
             "items": {
               "$ref": "#/components/schemas/SubjectBinding"
@@ -145,7 +160,7 @@
         "required": [
           "schema",
           "assuranceProfile",
-          "requestNonce",
+          "subjectBinding",
           "id",
           "type",
           "supportsRequirement",
@@ -156,7 +171,6 @@
           "observedAt",
           "validUntil",
           "purpose",
-          "audience",
           "configurationRevision",
           "subjects",
           "supportedValues"
@@ -211,6 +225,14 @@
           "requirement": {
             "format": "uri",
             "maxLength": 512,
+            "type": "string"
+          },
+          "subjectBindingMode": {
+            "description": "What the subject bindings in this requirement's assertions are derived under. The vocabulary is closed and carries no default: absence means audience-scoped, stated here so a relying party reading a definition without the key knows the requirement issues audience-scoped assertions and is not reading an omission it has to resolve elsewhere. A definition that does carry the key states the mode explicitly.",
+            "enum": [
+              "audience-scoped",
+              "holder-bound"
+            ],
             "type": "string"
           },
           "subjects": {
@@ -405,8 +427,13 @@
       "EvidenceRequest": {
         "additionalProperties": false,
         "properties": {
-          "holderKey": {
-            "$ref": "#/components/schemas/HolderPublicKey"
+          "holderKeys": {
+            "items": {
+              "$ref": "#/components/schemas/HolderPublicKey"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
           },
           "purpose": {
             "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
@@ -1182,6 +1209,39 @@
         ],
         "type": "object"
       },
+      "SdJwtVcBatchEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "credentials": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "schema": {
+            "enum": [
+              "registry.sd-jwt-vc-batch-envelope/v1"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "SdJwtVcBatchEnvelope"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "type",
+          "credentials"
+        ],
+        "title": "Evidence SD-JWT VC batch issuance envelope Version 1",
+        "type": "object"
+      },
       "SdJwtVcCredential": {
         "description": "Compact SD-JWT VC: the issuer-signed JWT, then the root-value and configured structured-field disclosures, then a trailing tilde marking an absent key-binding JWT. The issuer never appends a key-binding JWT.",
         "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(~[A-Za-z0-9_-]+)*~$",
@@ -1632,7 +1692,7 @@
     },
     "/v1/evidence": {
       "post": {
-        "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only the exact application/dc+sd-jwt media type selects the SD-JWT VC serialization of the same assertion; each is released only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
+        "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, only the exact application/dc+sd-jwt media type selects the SD-JWT VC serialization of the same assertion, and only the exact application/vnd.registrystack.evidence.batch+json media type selects the holder-bound batch issuance envelope carrying one credential per presented holder key; each is released only when the immutable bundle, the complete matched authority grant, and the requirement's subject binding mode all permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
         "operationId": "createEvidence",
         "requestBody": {
           "content": {
@@ -1661,9 +1721,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/UnsignedEvidenceEnvelope"
                 }
+              },
+              "application/vnd.registrystack.evidence.batch+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SdJwtVcBatchEnvelope"
+                }
               }
             },
-            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized SD-JWT VC serialization or self-identifying unsigned envelope",
+            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized SD-JWT VC serialization, holder-bound batch issuance envelope, or self-identifying unsigned envelope",
             "headers": {
               "Cache-Control": {
                 "description": "Evidence responses are never cacheable.",

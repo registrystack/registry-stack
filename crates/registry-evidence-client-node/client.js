@@ -122,18 +122,22 @@ wrapGetter(native.PreparedEvidenceRequest.prototype, 'subjectExpectations');
 wrapGetter(native.RawEvidenceResponse.prototype, 'body');
 wrapGetter(native.RawEvidenceResponse.prototype, 'operation');
 
+wrapSync(native.SdJwtVcBatchResponse.prototype, 'credentialForHolderKey');
+wrapGetter(native.SdJwtVcBatchResponse.prototype, 'credentials');
+wrapGetter(native.SdJwtVcBatchResponse.prototype, 'count');
+
 /**
- * The one class this module wraps rather than patches in place: a
+ * The two classes this module wraps rather than patches in place: a
  * constructor's own throw happens before any instance exists, so there is no
  * prototype method to patch ahead of time the way there is for every other
  * method above.
  *
  * Subclassing is safe here in a way it would not be for
- * `PreparedEvidenceRequest`: nothing hands an `EvidenceClient` back into a
- * later native call for an identity check to depend on, and every prototype
- * method above is already patched on `native.EvidenceClient.prototype`, which
- * this subclass inherits unchanged, so `instanceof native.EvidenceClient`
- * still holds for its instances.
+ * `PreparedEvidenceRequest`: nothing hands an `EvidenceClient` or an
+ * `SdJwtVcBatchResponse` back into a later native call for an identity check
+ * to depend on, and every prototype member above is already patched on the
+ * native prototype, which these subclasses inherit unchanged, so
+ * `instanceof native.EvidenceClient` still holds for their instances.
  */
 class EvidenceClient extends native.EvidenceClient {
   constructor(config) {
@@ -145,9 +149,20 @@ class EvidenceClient extends native.EvidenceClient {
   }
 }
 
+class SdJwtVcBatchResponse extends native.SdJwtVcBatchResponse {
+  constructor(body) {
+    try {
+      super(body);
+    } catch (error) {
+      throw normalize(error);
+    }
+  }
+}
+
 module.exports = {
   EvidenceClient,
   EvidenceClientError,
   PreparedEvidenceRequest: native.PreparedEvidenceRequest,
   RawEvidenceResponse: native.RawEvidenceResponse,
+  SdJwtVcBatchResponse,
 };

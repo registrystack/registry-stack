@@ -56,6 +56,20 @@ test('every native PreparedEvidenceRequest and RawEvidenceResponse getter is wra
   assert.deepEqual(ownGetterNames(native.RawEvidenceResponse.prototype).sort(), ['body', 'operation']);
 });
 
+test('every native SdJwtVcBatchResponse member is wrapped', () => {
+  // Reading an envelope is the native constructor, so `client.js` subclasses
+  // this one rather than patching it, the way it does for `EvidenceClient`.
+  assert.notEqual(wrapper.SdJwtVcBatchResponse, native.SdJwtVcBatchResponse);
+  assert.ok(wrapper.SdJwtVcBatchResponse.prototype instanceof native.SdJwtVcBatchResponse);
+  assert.deepEqual(ownMethodNames(native.SdJwtVcBatchResponse.prototype).sort(), [
+    'credentialForHolderKey',
+  ]);
+  assert.deepEqual(ownGetterNames(native.SdJwtVcBatchResponse.prototype).sort(), [
+    'count',
+    'credentials',
+  ]);
+});
+
 test('every class client.js exports is declared in client.d.ts or the index.d.ts it re-exports', () => {
   // `client.d.ts` re-exports `index.d.ts` wholesale (`export * from './index'`)
   // rather than repeating each declaration, so a name may legitimately live

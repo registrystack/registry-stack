@@ -15,9 +15,9 @@ use crate::config::AssuranceProfile;
 pub use registry_evidence_verifier::model::{
     BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
     EvidenceObjectType, FlattenedJws, HolderPublicKey, JwksDocument, PublicValue,
-    ScalarOrEntityReference, StructuredValue, StructuredValueForm, SubjectBinding, SupportedValue,
-    UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
-    UnsignedIntegrityProtection,
+    ScalarOrEntityReference, StructuredValue, StructuredValueForm, SubjectBinding,
+    SubjectBindingMode, SupportedValue, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
+    UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
 };
 
 /// Exact encoded length of the required caller-generated request nonce: the
@@ -29,6 +29,32 @@ const REQUEST_NONCE_DECODED_LENGTH: usize = 32;
 /// non-released request shapes. Real callers generate a fresh random value
 /// for every request.
 pub const OFFLINE_EVALUATION_REQUEST_NONCE: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+/// Deterministic stand-in holder key for offline fixture evaluation, the
+/// counterpart of the canonical offline nonce above.
+///
+/// A holder-bound requirement resolves its subject scope from a presented
+/// holder key, so an offline caller that presented none could not evaluate such
+/// a requirement's cases at all. This supplies one, and only there: nothing
+/// reads it on a served request path, where the key always comes from the
+/// caller.
+///
+/// The coordinates are the P-256 generator point. That is a deliberate choice
+/// over a freshly generated key: the generator is a published constant that
+/// belongs to nobody, so this cannot be mistaken for key material anyone holds,
+/// exactly as the all-zero nonce above cannot be mistaken for a real nonce. It
+/// is still a well-formed public point, so binding derivation, thumbprinting,
+/// and confirmation all behave as they do for a caller-supplied key.
+pub fn offline_evaluation_holder_key() -> HolderPublicKey {
+    HolderPublicKey {
+        kty: "EC".to_owned(),
+        crv: "P-256".to_owned(),
+        x: "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY".to_owned(),
+        y: "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU".to_owned(),
+        alg: Some("ES256".to_owned()),
+        kid: None,
+    }
+}
 
 /// Accept only the canonical 43-character unpadded base64url encoding of
 /// exactly 32 bytes. Padding, wrong length, non-alphabet bytes, and a
@@ -59,12 +85,39 @@ pub struct EvidenceRequest {
     /// Unordered role set encoded as an array. Roles are resolved by name and
     /// canonicalized to requirement declaration order.
     pub subjects: Vec<RequestedSubject>,
-    /// Optional holder public key echoed into the SD-JWT VC `cnf` claim. It is
-    /// meaningful only for the SD-JWT VC response format, never reaches
-    /// authorization, selectors, Rhai, source requests, or audit, and never
-    /// appears in the signed-JWS payload.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub holder_key: Option<HolderPublicKey>,
+    /// Holder public keys, each echoed into the `cnf` claim of the credential
+    /// issued for it. A single-credential request is an array of one, and an
+    /// empty array is the same as none at all.
+    ///
+    /// The keys are meaningful only to the credential response formats and
+    /// never appear in the signed-JWS payload. They never reach Rhai, source
+    /// requests, or audit. Under a holder-bound requirement each key's RFC 7638
+    /// thumbprint scopes the subject binding of that key's own credential, so a
+    /// thumbprint reaches subject scope resolution and nothing downstream of
+    /// it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holder_keys: Vec<HolderPublicKey>,
+}
+
+/// Issuance container for a holder-bound release carrying one SD-JWT VC
+/// serialization per presented holder key.
+///
+/// It is issuance-only. Nothing consumes it at verification: a relying party
+/// receives one member and verifies it as an ordinary holder-bound credential.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SdJwtVcBatchEnvelope {
+    pub schema: String,
+    #[serde(rename = "type")]
+    pub envelope_type: SdJwtVcBatchEnvelopeType,
+    /// One combined SD-JWT VC issuance serialization per presented holder key,
+    /// in the order the keys were presented.
+    pub credentials: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+pub enum SdJwtVcBatchEnvelopeType {
+    SdJwtVcBatchEnvelope,
 }
 
 /// Requester-scoped descriptions of the exact Evidence request shapes that
@@ -88,6 +141,12 @@ pub struct EvidenceDefinition {
     /// pins one requirement without depending on the rest of the deployment.
     pub configuration_revision: String,
     pub kind: String,
+    /// What the subject bindings in this requirement's assertions are derived
+    /// under. Omitted for audience-scoped, the mode every requirement already
+    /// had, so a definition written before binding modes existed keeps
+    /// exactly the response it already served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_binding_mode: Option<SubjectBindingMode>,
     pub evidence_type: String,
     pub purpose: String,
     pub reference_frameworks: Vec<String>,
@@ -220,11 +279,25 @@ redacted_debug!(
     RequestedSelector,
     SelectorValue,
     LookupResult,
+    SdJwtVcBatchEnvelope,
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_offline_stand_in_holder_key_is_a_key_the_request_boundary_would_accept() {
+        // Offline evaluation resolves a holder-bound subject scope from this
+        // key, so a key the served boundary would reject would make offline
+        // evaluation exercise a shape no request could ever present.
+        let key = offline_evaluation_holder_key();
+        assert!(key.is_acceptable());
+        assert!(
+            registry_evidence_verifier::sdjwt_vc::holder_thumbprint(&key).is_ok(),
+            "the offline stand-in key has no RFC 7638 thumbprint to bind under"
+        );
+    }
 
     #[test]
     fn holder_public_key_rejects_coordinates_that_are_not_on_p256() {
@@ -327,7 +400,8 @@ mod tests {
         let serialized = serde_json::to_value(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
-            request_nonce: "A".repeat(43),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some("A".repeat(43)),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:requirement:v1".to_string(),
@@ -338,7 +412,7 @@ mod tests {
             observed_at: "2026-08-02T00:00:00Z".to_string(),
             valid_until: "2026-08-03T00:00:00Z".to_string(),
             purpose: "casework".to_string(),
-            audience: "urn:example:audience".to_string(),
+            audience: Some("urn:example:audience".to_string()),
             configuration_revision: format!("sha256:{}", "0".repeat(64)),
             subjects: vec![SubjectBinding {
                 role: "subject".to_string(),
@@ -371,12 +445,13 @@ mod tests {
                     )])),
                 },
             }],
-            holder_key: None,
+            holder_keys: Vec::new(),
         };
         let evidence = Evidence {
             schema: "protected-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
-            request_nonce: "protected-request-nonce-canary".to_owned(),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some("protected-request-nonce-canary".to_owned()),
             id: "protected-evidence-id-canary".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "protected-requirement-canary".to_owned(),
@@ -387,7 +462,7 @@ mod tests {
             observed_at: "2026-08-02T00:00:00Z".to_owned(),
             valid_until: "2026-08-03T00:00:00Z".to_owned(),
             purpose: "protected-purpose-canary".to_owned(),
-            audience: "protected-audience-canary".to_owned(),
+            audience: Some("protected-audience-canary".to_owned()),
             configuration_revision: "protected-revision-canary".to_owned(),
             subjects: vec![SubjectBinding {
                 role: "subject".to_owned(),
@@ -416,6 +491,7 @@ mod tests {
                 requirement: "protected-discovery-requirement-canary".to_owned(),
                 configuration_revision: "protected-discovery-revision-canary".to_owned(),
                 kind: "protected-discovery-kind-canary".to_owned(),
+                subject_binding_mode: None,
                 evidence_type: "protected-discovery-type-canary".to_owned(),
                 purpose: "protected-discovery-purpose-canary".to_owned(),
                 reference_frameworks: vec!["protected-discovery-framework-canary".to_owned()],

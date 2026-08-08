@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence_verifier::{
-    model::{Evidence, JwksDocument},
+    model::{Evidence, HolderPublicKey, JwksDocument},
     sdjwt_vc::issuance_input,
     EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
 };
@@ -55,6 +55,25 @@ pub(crate) struct SignedEvidenceFixture {
     pub(crate) trusted_jwks: JwksDocument,
     pub(crate) subject_binding: String,
     pub(crate) now: DateTime<Utc>,
+}
+
+/// A holder public key a caller could plausibly present.
+///
+/// The private half is generated here and dropped immediately: only the public
+/// coordinates are returned, because that is all a request ever carries and all
+/// this crate is ever given. Each call returns a distinct key.
+pub(crate) fn holder_key() -> HolderPublicKey {
+    let point = SigningKey::random(&mut OsRng)
+        .verifying_key()
+        .to_encoded_point(false);
+    HolderPublicKey {
+        kty: "EC".to_owned(),
+        crv: "P-256".to_owned(),
+        x: URL_SAFE_NO_PAD.encode(point.x().expect("an uncompressed point states x")),
+        y: URL_SAFE_NO_PAD.encode(point.y().expect("an uncompressed point states y")),
+        alg: Some("ES256".to_owned()),
+        kid: None,
+    }
 }
 
 /// A fresh issuer. Two fixtures never share a key or a key identifier, so a
@@ -150,6 +169,7 @@ impl SignedEvidenceFixture {
         json!({
             "schema": EVIDENCE_SCHEMA_V1,
             "assuranceProfile": "local",
+            "subjectBinding": "audience-scoped",
             "requestNonce": request_nonce,
             "id": "urn:example:client:evidence:00000000-0000-4000-8000-000000000001",
             "type": "Evidence",

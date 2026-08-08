@@ -1,0 +1,3 @@
+id: urn:example:fixture:scheme:licence-expiry
+version: '1'
+codes: [expired, within-30-days, within-90-days, later]

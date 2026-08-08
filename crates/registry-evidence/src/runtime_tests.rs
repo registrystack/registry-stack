@@ -42,7 +42,7 @@ use crate::{
     },
     auth::{AuthenticationClaimsConfig, Authenticator},
     bundle::DeploymentInputs,
-    config::{AssuranceProfile, ResponseFormat},
+    config::{AssuranceProfile, ResponseFormat, MAXIMUM_HOLDER_BOUND_BATCH_SIZE},
     contracts::evidence_contract_accepts,
     local_verification::{
         prepare_local_relying_procedure, LocalRelyingProcedure, LocalRelyingProcedureInput,
@@ -50,7 +50,8 @@ use crate::{
     },
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
-        PublicValue, RequestedSelector, RequestedSubject, SelectorValue, UnsignedEvidenceEnvelope,
+        PublicValue, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope, SelectorValue,
+        UnsignedEvidenceEnvelope,
     },
     observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
@@ -61,7 +62,8 @@ use crate::{
         verify_flattened_jws, verify_sd_jwt_vc, EvidenceVerificationPolicy,
         EvidenceVerificationPolicyDocument, ExpectedValueForm,
     },
-    EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+    EVIDENCE_UNSIGNED_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"acceptance-auth-key"}"#;
@@ -292,7 +294,10 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         Ok(bytes) => {
             let envelope: UnsignedEvidenceEnvelope = serde_json::from_slice(&bytes)
                 .expect("unsigned first-curl output parses as the closed envelope");
-            assert_eq!(envelope.evidence.request_nonce, request.request_nonce);
+            assert_eq!(
+                envelope.evidence.request_nonce.as_deref(),
+                Some(request.request_nonce.as_str())
+            );
             assert!(
                 verify_flattened_jws(
                     &bytes,
@@ -373,6 +378,41 @@ impl SigningProvider for FailOnceAfterSelfTestSigner {
             1 => Err(SigningError::external("synthetic unavailable signer")),
             _ => self.delegate.sign(payload).await,
         }
+    }
+}
+
+/// A signer that refuses one nominated signature and serves every other, so a
+/// test can fail a batch on a member the loop reached only after signing an
+/// earlier one. Call index zero is the startup self-test.
+struct FailOnNthSignatureSigner {
+    delegate: LocalJwkSigner,
+    calls: AtomicUsize,
+    fail_at: usize,
+}
+
+#[async_trait]
+impl SigningProvider for FailOnNthSignatureSigner {
+    fn algorithm(&self) -> SigningAlgorithm {
+        self.delegate.algorithm()
+    }
+
+    fn key_id(&self) -> &str {
+        self.delegate.key_id()
+    }
+
+    fn public_jwk(&self) -> PublicJwk {
+        self.delegate.public_jwk()
+    }
+
+    fn readiness(&self) -> KeyReadiness {
+        KeyReadiness::Ready
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+        if self.calls.fetch_add(1, Ordering::AcqRel) == self.fail_at {
+            return Err(SigningError::external("synthetic member signing failure"));
+        }
+        self.delegate.sign(payload).await
     }
 }
 
@@ -1238,6 +1278,64 @@ async fn discovery_uses_the_bounded_per_principal_request_budget() {
         .is_empty());
 }
 
+/// The vocabulary carries no default: absence means audience-scoped. A
+/// definition for an audience-scoped requirement must omit the key entirely
+/// rather than serialize an explicit `audience-scoped` value, so a definition
+/// written before binding modes existed keeps exactly the response it already
+/// served.
+#[tokio::test]
+async fn discovery_omits_the_subject_binding_mode_for_an_audience_scoped_requirement() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+
+    let response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .await;
+    response.assert_status_ok();
+    let definitions = response.json::<Value>()["definitions"]
+        .as_array()
+        .expect("the definitions project")
+        .clone();
+    assert!(!definitions.is_empty());
+    for definition in &definitions {
+        assert!(
+            definition.get("subjectBindingMode").is_none(),
+            "an audience-scoped definition must not carry the key at all"
+        );
+    }
+}
+
+/// A relying party reading a definition for a holder-bound requirement must
+/// see the mode stated explicitly, so it knows the assertions this
+/// requirement issues bind to a presented holder key rather than an audience.
+#[tokio::test]
+async fn discovery_declares_the_holder_bound_mode_for_a_holder_bound_requirement() {
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+
+    let response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .await;
+    response.assert_status_ok();
+    let definitions = response.json::<Value>()["definitions"]
+        .as_array()
+        .expect("the definitions project")
+        .clone();
+    let adult_status = definitions
+        .iter()
+        .find(|definition| {
+            definition["requirement"]
+                .as_str()
+                .expect("the requirement projects")
+                .ends_with(":adult-status:v1")
+        })
+        .expect("the holder-bound requirement is discoverable");
+    assert_eq!(adult_status["subjectBindingMode"], json!("holder-bound"));
+}
+
 #[tokio::test]
 async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture() {
     let fixture = acceptance_runtime().await;
@@ -1462,7 +1560,10 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
     let policy = local_procedure_policy(&procedure, &request.request_nonce, Utc::now());
     let verified = verify_flattened_jws(&serialized, &procedure.trusted_jwks, &policy)
         .expect("the response strictly verifies against the prepared procedure");
-    assert_eq!(verified.request_nonce, request.request_nonce);
+    assert_eq!(
+        verified.request_nonce.as_deref(),
+        Some(request.request_nonce.as_str())
+    );
     assert_eq!(
         verified.supported_values[0].value,
         PublicValue::Boolean(true)
@@ -2359,7 +2460,11 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
         .decode(&jws.payload)
         .expect("payload decodes");
     let evidence: Evidence = serde_json::from_slice(&payload).expect("payload parses");
-    assert_eq!(evidence.request_nonce, nonce, "exact nonce echo");
+    assert_eq!(
+        evidence.request_nonce.as_deref(),
+        Some(nonce.as_str()),
+        "exact nonce echo"
+    );
 
     let audit = wait_for_audit_counts(&fixture.audit_path, 1, 1).await;
     assert!(
@@ -2609,7 +2714,10 @@ async fn unsigned_envelope_is_exact_audited_and_never_a_signing_fallback() {
     assert_eq!(value["warning"], json!("not-cryptographically-verifiable"));
     let envelope: UnsignedEvidenceEnvelope =
         serde_json::from_str(&body).expect("envelope parses strictly");
-    assert_eq!(envelope.evidence.request_nonce, nonce);
+    assert_eq!(
+        envelope.evidence.request_nonce.as_deref(),
+        Some(nonce.as_str())
+    );
     assert!(
         evidence_contract_accepts(&value["evidence"]).expect("evidence contract is available"),
         "the nested evidence is the same closed core object"
@@ -2640,7 +2748,13 @@ async fn unsigned_envelope_is_exact_audited_and_never_a_signing_fallback() {
     assert!(release["record"]["signingKeyId"].is_null());
     assert!(release["record"]["evidenceId"].is_string());
     assert!(release["record"]["disclosedConcepts"].is_array());
-    assert!(!audit.contains(&envelope.evidence.request_nonce));
+    assert!(!audit.contains(
+        envelope
+            .evidence
+            .request_nonce
+            .as_deref()
+            .expect("audience-scoped")
+    ));
 
     // An unready ordinary signing dependency also denies unsigned output.
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
@@ -2766,7 +2880,10 @@ async fn all_four_definitions_pass_the_explicitly_authorized_unsigned_path() {
         );
         let envelope: UnsignedEvidenceEnvelope =
             serde_json::from_str(&response.text()).expect("envelope parses strictly");
-        assert_eq!(envelope.evidence.request_nonce, request.request_nonce);
+        assert_eq!(
+            envelope.evidence.request_nonce.as_deref(),
+            Some(request.request_nonce.as_str())
+        );
         assert!(!envelope.evidence.supported_values.is_empty());
         assert_eq!(
             envelope.evidence.subjects.len(),
@@ -2810,6 +2927,1249 @@ async fn sd_jwt_vc_acceptance(grant_permits: bool) -> PreparedAcceptance {
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
     make_read_only(&prepared.bundle_root);
     prepared
+}
+
+/// Rewrite the acceptance bundle so one requirement issues under the
+/// holder-bound mode, with both permission halves present: the bundle and the
+/// one matched grant permit the serialization the mode allows, and the grant
+/// names the mode itself.
+async fn holder_bound_acceptance() -> PreparedAcceptance {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nresponseFormats: [signed-jws, unsigned-json]",
+        "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]",
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc]\n        subjectBindingModes: [holder-bound]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        1,
+    );
+    fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    prepared
+}
+
+#[tokio::test]
+async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    // No source is mounted: nothing here may reach acquisition.
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let body = serde_json::to_value(adult_request()).expect("request serializes");
+
+    // A requester no grant covers must not learn that this requirement is
+    // holder-bound. Answering the missing holder key here would turn the
+    // endpoint into an unauthenticated requirement-existence oracle.
+    let unmatched = http
+        .post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!(
+                "Bearer {}",
+                access_token(Some(json!({"evidence_tags": ["unmatched-agency"]})))
+            ),
+        )
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    assert_eq!(unmatched.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(unmatched.json::<Value>()["code"], json!("not_authorized"));
+
+    // An authorized requester asking for a serialization the mode does not
+    // permit gets the same single denial. It never says which of the bundle
+    // permission, the grant permission, or the mode allowlist withheld it.
+    let wrong_format = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&body)
+        .await;
+    assert_eq!(
+        wrong_format.status_code(),
+        axum::http::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        wrong_format.json::<Value>()["code"],
+        json!("not_authorized")
+    );
+
+    // The two denials came from different layers, and the caller cannot tell
+    // them apart. The bodies are compared whole, not just the code, because a
+    // title or a type that differed by layer would be the same oracle. The
+    // per-request operation is the one member expected to vary, so it is
+    // removed rather than assumed equal.
+    let mut authorization_denial = unmatched.json::<Value>();
+    let mut format_denial = wrong_format.json::<Value>();
+    for denial in [&mut authorization_denial, &mut format_denial] {
+        denial
+            .as_object_mut()
+            .expect("a problem body is an object")
+            .remove("operation");
+    }
+    assert_eq!(
+        authorization_denial, format_denial,
+        "the denial says which layer withheld the response"
+    );
+    let rendered = serde_json::to_string(&format_denial).expect("the denial serializes");
+    for layer in ["holder", "binding", "format", "grant", "serialization"] {
+        assert!(
+            !rendered.contains(layer),
+            "the denial names the layer that withheld the response"
+        );
+    }
+
+    // Only past both gates does the missing holder key become the answer.
+    let malformed = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    assert_eq!(malformed.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        malformed.json::<Value>()["code"],
+        json!("malformed_request")
+    );
+
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "a holder-bound request without a holder key reached acquisition"
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(
+        !audit.contains("holder-key"),
+        "the audit chain names the withheld request member"
+    );
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+#[tokio::test]
+async fn a_holder_bound_requirement_binds_its_subjects_under_the_presented_key() {
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let request = adult_request();
+    let mut body = serde_json::to_value(&request).expect("request serializes");
+
+    // Two holders ask for the same assertion about the same subject. If the
+    // deployment still derived every binding under the authenticated audience,
+    // the two bindings would be equal and one relying party could correlate
+    // the two holders' credentials.
+    let mut bindings = Vec::new();
+    for holder_key in [
+        json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+            "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+        }),
+        json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+            "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }),
+    ] {
+        body["holderKeys"] = json!([holder_key]);
+        body["requestNonce"] = json!(fresh_request_nonce());
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        released.assert_status_ok();
+
+        // The issued credential is the SD-JWT VC serialization, whose issuer
+        // signed payload carries the subject bindings this mode derived.
+        let credential = released.text();
+        let payload = credential
+            .split('.')
+            .nth(1)
+            .expect("the credential has a payload segment");
+        let payload = URL_SAFE_NO_PAD
+            .decode(payload.split('~').next().expect("the payload ends the JWS"))
+            .expect("payload decodes");
+        let payload: Value = serde_json::from_slice(&payload).expect("payload parses");
+        let binding = payload["subjects"][0]["binding"]
+            .as_str()
+            .expect("the assertion binds its subject")
+            .to_owned();
+        bindings.push(binding);
+    }
+
+    assert_eq!(bindings.len(), 2);
+    assert_ne!(
+        bindings[0], bindings[1],
+        "two holders received the same subject binding for one subject"
+    );
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(
+        !audit.contains("3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4"),
+        "the audit chain records holder key material"
+    );
+    for binding in &bindings {
+        assert!(
+            !audit.contains(binding.as_str()),
+            "the audit chain records a released subject binding"
+        );
+    }
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+/// A released assertion must declare the mode it was actually derived under.
+///
+/// The bindings and the declared mode come from two different places in
+/// issuance, so they can disagree: a deployment can derive every binding under
+/// the presented holder key and still stamp the payload `audience-scoped`,
+/// leaving a relying party comparing a pinned holder-bound binding against an
+/// assertion that claims to be scoped to it. That contradiction is invisible
+/// to a test that only inspects the bindings, so this asserts the payload's
+/// own account of itself.
+#[tokio::test]
+async fn a_holder_bound_release_declares_the_mode_it_was_derived_under() {
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 1).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    }]);
+
+    let released = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    released.assert_status_ok();
+
+    let credential = released.text();
+    let payload = credential
+        .split('.')
+        .nth(1)
+        .expect("the credential has a payload segment");
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload.split('~').next().expect("the payload ends the JWS"))
+        .expect("payload decodes");
+    let payload: Value = serde_json::from_slice(&payload).expect("payload parses");
+
+    assert_eq!(
+        payload["subjectBinding"], "holder-bound",
+        "the released assertion declares a mode its bindings do not match"
+    );
+    assert!(
+        payload.get("audience").is_none(),
+        "a holder-bound assertion named a relying party"
+    );
+    assert!(
+        payload.get("requestNonce").is_none(),
+        "a holder-bound assertion echoed a request nonce it has no verifier to echo to"
+    );
+    assert!(
+        payload["subjects"][0]["binding"]
+            .as_str()
+            .expect("the assertion binds its subject")
+            .starts_with("urn:evidence:subject:"),
+        "the assertion carries no subject binding"
+    );
+}
+
+/// Under this mode the binding is derived from the presented key, so it must
+/// not move with whoever asked for it.
+///
+/// The sibling test above proves two holders get different bindings. That is
+/// still satisfied by a deployment that mixed the requester into the
+/// derivation, and such a deployment would be badly broken: the same holder
+/// collecting the same assertion through two relying parties would hold two
+/// unequal bindings, and a relying party could poison a holder's binding
+/// simply by asking under its own identity. This asks twice under one key and
+/// two different authenticated requesters.
+#[tokio::test]
+async fn a_holder_bound_binding_does_not_move_with_the_requesting_relying_party() {
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    }]);
+
+    let mut bindings = Vec::new();
+    for audience in [
+        EVIDENCE_AUDIENCE,
+        "https://second-relying.invalid/procedure",
+    ] {
+        body["requestNonce"] = json!(fresh_request_nonce());
+        let token = access_token(Some(json!({"evidence_audience": audience})));
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        released.assert_status_ok();
+        let payload = released_credential_payload(&released.text());
+        assert!(
+            payload.get("audience").is_none(),
+            "a holder-bound assertion named the requester"
+        );
+        bindings.push(
+            payload["subjects"][0]["binding"]
+                .as_str()
+                .expect("the assertion binds its subject")
+                .to_owned(),
+        );
+    }
+
+    assert_eq!(
+        bindings[0], bindings[1],
+        "one holder received two bindings because the requester entered the derivation"
+    );
+
+    // Control. The equality above is only evidence of anything if the two
+    // requesters were genuinely different to this deployment, so the same two
+    // tokens are put through the audience-scoped path, where the requester is
+    // what the binding is derived from. Those bindings must differ.
+    let audience_scoped = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&audience_scoped).await;
+    mount_adult_source_expecting(&audience_scoped.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut scoped_bindings = Vec::new();
+    for audience in [
+        EVIDENCE_AUDIENCE,
+        "https://second-relying.invalid/procedure",
+    ] {
+        let body = serde_json::to_value(adult_request()).expect("request serializes");
+        let token = access_token(Some(json!({"evidence_audience": audience})));
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        released.assert_status_ok();
+        let payload = released_credential_payload(&released.text());
+        assert_eq!(
+            payload["audience"],
+            json!(audience),
+            "the deployment did not read the requester from the presented token"
+        );
+        scoped_bindings.push(
+            payload["subjects"][0]["binding"]
+                .as_str()
+                .expect("the assertion binds its subject")
+                .to_owned(),
+        );
+    }
+    assert_ne!(
+        scoped_bindings[0], scoped_bindings[1],
+        "the two requesters were indistinguishable, so the equality above proves nothing"
+    );
+}
+
+/// A requirement that does not declare the mode serves the audience-scoped
+/// path whatever the caller supplies.
+///
+/// The optional holder key is confirmed into an audience-scoped credential so
+/// a wallet can still prove possession, and that confirmation must not be
+/// mistaken for a request for the mode. If it were, a caller could reach
+/// holder-bound issuance on a requirement no operator declared for it, simply
+/// by attaching a key.
+#[tokio::test]
+async fn an_undeclared_requirement_serves_audience_scoped_whatever_the_caller_supplies() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let holder_key = json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    });
+
+    let mut with_key = serde_json::to_value(adult_request()).expect("request serializes");
+    with_key["holderKeys"] = json!([holder_key.clone()]);
+    let mut bindings = Vec::new();
+    for body in [
+        &with_key,
+        &serde_json::to_value(adult_request()).expect("request serializes"),
+    ] {
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(body)
+            .await;
+        released.assert_status_ok();
+        let payload = released_credential_payload(&released.text());
+        assert_eq!(
+            payload["subjectBinding"], "audience-scoped",
+            "an undeclared requirement issued under the mode because a key was attached"
+        );
+        assert_eq!(
+            payload["audience"],
+            json!(EVIDENCE_AUDIENCE),
+            "an audience-scoped assertion did not name the party it is scoped to"
+        );
+        bindings.push(
+            payload["subjects"][0]["binding"]
+                .as_str()
+                .expect("the assertion binds its subject")
+                .to_owned(),
+        );
+    }
+
+    assert_eq!(
+        bindings[0], bindings[1],
+        "attaching a key changed which scope the binding was derived under"
+    );
+}
+
+/// Key material reaches exactly one place: the confirmation the issuer signs.
+///
+/// The public confirmation is the point of the mode and is disclosed on
+/// purpose, so the property is confinement, not absence. Everything the
+/// deployment emits outward or records durably must be free of it, including
+/// the requests the configured scripts prepare: those scripts run between the
+/// request and the source, so a script that could read the presented key would
+/// have to place it in an outbound request to use it.
+#[tokio::test]
+async fn holder_key_material_reaches_only_the_signed_confirmation() {
+    const HOLDER_X: &str = "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4";
+    const HOLDER_Y: &str = "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU";
+    const HOLDER_KID: &str = "holder-owned-key-name-canary";
+
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 1).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": HOLDER_X,
+        "y": HOLDER_Y,
+        "kid": HOLDER_KID
+    }]);
+
+    let released = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    released.assert_status_ok();
+    let payload = released_credential_payload(&released.text());
+    assert_eq!(
+        payload["cnf"]["jwk"]["x"],
+        json!(HOLDER_X),
+        "the confirmation does not carry the presented public key"
+    );
+    assert_eq!(payload["cnf"]["jwk"]["y"], json!(HOLDER_Y));
+    assert!(
+        payload["cnf"]["jwk"].get("d").is_none(),
+        "the confirmation carries a private member"
+    );
+
+    let material = [HOLDER_X, HOLDER_Y, HOLDER_KID];
+    for request in prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+    {
+        let sent = String::from_utf8_lossy(&request.body).into_owned();
+        let headers = format!("{:?}", request.headers);
+        let url = request.url.to_string();
+        for value in material {
+            assert!(
+                !sent.contains(value),
+                "an outbound request body carried key material"
+            );
+            assert!(
+                !headers.contains(value),
+                "an outbound header carried key material"
+            );
+            assert!(
+                !url.contains(value),
+                "an outbound target carried key material"
+            );
+        }
+    }
+
+    let audit = wait_for_audit_counts(&prepared.audit_path, 1, 1).await;
+    for value in material {
+        assert!(
+            !audit.contains(value),
+            "the audit chain records presented key material"
+        );
+    }
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+/// The committed holder-bound acceptance bundle, served as it is committed.
+///
+/// The tests above rewrite the audience-scoped bundle in memory to reach the
+/// mode, which proves the runtime but says nothing about whether a bundle an
+/// adopter could copy declares it correctly. This serves the tracked fixture
+/// unchanged apart from the deployment-only rewrites every fixture takes.
+async fn holder_bound_acceptance_bundle(ceilings: &FixtureCeilings) -> PreparedAcceptance {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_root_with_mutation(
+        &holder_bound_fixture_root(),
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        ceilings,
+        |_| {},
+    );
+    PreparedAcceptance {
+        temporary: prepared.temporary,
+        bundle_root: prepared.bundle_root,
+        runtime_path: prepared.runtime_path,
+        server,
+        audit_path: prepared.audit_path,
+    }
+}
+
+/// Decode the issuer-signed payload of a released SD-JWT VC.
+fn released_credential_payload(credential: &str) -> Value {
+    let payload = credential
+        .split('.')
+        .nth(1)
+        .expect("the credential has a payload segment");
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload.split('~').next().expect("the payload ends the JWS"))
+        .expect("payload decodes");
+    serde_json::from_slice(&payload).expect("payload parses")
+}
+
+/// Adult status, residence region, professional licence status, and the
+/// legal-parent relationship are coequal, so the holder-bound mode is not one
+/// definition's feature. Each of the four is asked for from the committed
+/// holder-bound bundle over the full served path, and each must come back
+/// bound to the presented key rather than to the requester.
+#[tokio::test]
+async fn every_coequal_definition_issues_under_the_holder_bound_mode() {
+    let prepared = holder_bound_acceptance_bundle(&FixtureCeilings::deployment_defaults()).await;
+    let runtime = runtime_for(&prepared).await;
+    mount_success_sources(&prepared.server, true).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let holder_key = json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    });
+
+    let mut bindings = Vec::new();
+    for (token, request) in [
+        (access_token(None), adult_request()),
+        (access_token(None), residence_request()),
+        (access_token(None), licence_request()),
+        (access_token(Some(parent_grant_claims())), parent_request()),
+    ] {
+        let requirement = request.requirement.clone();
+        let mut body = serde_json::to_value(&request).expect("request serializes");
+        body["holderKeys"] = json!([holder_key]);
+
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(
+            released.status_code(),
+            axum::http::StatusCode::OK,
+            "{requirement}"
+        );
+
+        let payload = released_credential_payload(&released.text());
+        assert_eq!(
+            payload["subjectBinding"], "holder-bound",
+            "{requirement} declares a mode it was not derived under"
+        );
+        assert!(
+            payload.get("audience").is_none(),
+            "{requirement} named a relying party"
+        );
+        assert!(
+            payload.get("requestNonce").is_none(),
+            "{requirement} echoed a request nonce it has no verifier to echo to"
+        );
+        for subject in payload["subjects"]
+            .as_array()
+            .expect("the assertion binds its subjects")
+        {
+            let binding = subject["binding"]
+                .as_str()
+                .expect("the subject carries a binding")
+                .to_owned();
+            assert!(
+                binding.starts_with("urn:evidence:subject:"),
+                "{requirement}"
+            );
+            bindings.push(binding);
+        }
+    }
+
+    // One holder, four definitions, five subject roles in total. Every binding
+    // is distinct: the holder key scopes the derivation, it does not collapse
+    // subjects or definitions onto one identifier a relying party could join on.
+    assert_eq!(bindings.len(), 5);
+    let distinct: std::collections::BTreeSet<&String> = bindings.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        bindings.len(),
+        "two holder-bound subjects share a binding"
+    );
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(
+        !audit.contains("3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4"),
+        "the audit chain records holder key material"
+    );
+    for binding in &bindings {
+        assert!(
+            !audit.contains(binding.as_str()),
+            "the audit chain records a released subject binding"
+        );
+    }
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+/// The committed holder-bound bundle must refuse every serialization that
+/// cannot carry a holder key confirmation, for every one of its definitions.
+///
+/// The mode allowlist and the bundle's own format list are two separate gates,
+/// and a bundle could satisfy one while leaving the other open. Asking for each
+/// governed non-SD-JWT-VC serialization, on each definition, is what shows the
+/// tracked fixture closes both.
+#[tokio::test]
+async fn the_holder_bound_acceptance_bundle_serves_no_unconfirmed_serialization() {
+    let prepared = holder_bound_acceptance_bundle(&FixtureCeilings::deployment_defaults()).await;
+    let runtime = runtime_for(&prepared).await;
+    // No source is mounted: nothing here may reach acquisition.
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let holder_key = json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    });
+
+    for (token, request) in [
+        (access_token(None), adult_request()),
+        (access_token(None), residence_request()),
+        (access_token(None), licence_request()),
+        (access_token(Some(parent_grant_claims())), parent_request()),
+    ] {
+        let requirement = request.requirement.clone();
+        let mut body = serde_json::to_value(&request).expect("request serializes");
+        body["holderKeys"] = json!([holder_key]);
+        for accept in ["application/jose+json", EVIDENCE_UNSIGNED_MEDIA_TYPE] {
+            let refused = http
+                .post("/v1/evidence")
+                .add_header("authorization", format!("Bearer {token}"))
+                .add_header("accept", accept)
+                .json(&body)
+                .await;
+            assert_eq!(
+                refused.status_code(),
+                axum::http::StatusCode::FORBIDDEN,
+                "{requirement} served {accept}"
+            );
+            assert_eq!(
+                refused.json::<Value>()["code"],
+                json!("not_authorized"),
+                "{requirement} explained which gate withheld {accept}"
+            );
+        }
+    }
+
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "a refused serialization reached acquisition"
+    );
+}
+
+/// The committed bundle enables the batch container and declares its own
+/// ceiling, so both halves of that declaration are exercised on every one of
+/// its definitions: a batch at the ceiling releases one independently bound
+/// credential per key from one acquisition, and a batch above it is refused
+/// before any source is reached.
+#[tokio::test]
+async fn the_holder_bound_acceptance_bundle_batches_every_definition_under_its_ceiling() {
+    const DECLARED_CEILING: usize = 4;
+    // A batch request costs one unit per presented key, and this walks four
+    // definitions twice, so the tracked per-principal ceiling would answer 429
+    // before the last definition was reached. Lifting the rate ceiling alone
+    // keeps every other ceiling, the batch ceiling included, exactly as the
+    // bundle declares it.
+    let prepared = holder_bound_acceptance_bundle(&FixtureCeilings {
+        requests_per_principal_per_minute: 1_000,
+        burst_per_principal: 1_000,
+        ..FixtureCeilings::deployment_defaults()
+    })
+    .await;
+    let runtime = runtime_for(&prepared).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let cases = || {
+        [
+            (access_token(None), adult_request()),
+            (access_token(None), residence_request()),
+            (access_token(None), licence_request()),
+            (access_token(Some(parent_grant_claims())), parent_request()),
+        ]
+    };
+
+    // Above the ceiling first, while no source is mounted at all: a refusal
+    // that reached acquisition would be caught by the mock expectations below.
+    for (token, request) in cases() {
+        let requirement = request.requirement.clone();
+        let mut body = serde_json::to_value(&request).expect("request serializes");
+        body["holderKeys"] = batch_holder_keys(DECLARED_CEILING + 1);
+        let refused = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(
+            refused.status_code(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "{requirement} released a batch above the declared ceiling"
+        );
+        assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    }
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "a batch above the ceiling reached acquisition"
+    );
+
+    // Each source expects exactly one call, so a batch that re-read its source
+    // once per member would fail here rather than merely be slow.
+    mount_success_sources(&prepared.server, true).await;
+    let mut bindings = BTreeSet::new();
+    for (token, request) in cases() {
+        let requirement = request.requirement.clone();
+        let mut body = serde_json::to_value(&request).expect("request serializes");
+        body["holderKeys"] = batch_holder_keys(DECLARED_CEILING);
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(
+            released.status_code(),
+            axum::http::StatusCode::OK,
+            "{requirement}"
+        );
+        let envelope: SdJwtVcBatchEnvelope =
+            serde_json::from_str(&released.text()).expect("the batch envelope parses strictly");
+        assert_eq!(
+            envelope.credentials.len(),
+            DECLARED_CEILING,
+            "{requirement}"
+        );
+        for credential in &envelope.credentials {
+            let payload = released_credential_payload(credential);
+            assert_eq!(payload["subjectBinding"], "holder-bound", "{requirement}");
+            for subject in payload["subjects"]
+                .as_array()
+                .expect("the member binds its subjects")
+            {
+                assert!(
+                    bindings.insert(
+                        subject["binding"]
+                            .as_str()
+                            .expect("the subject carries a binding")
+                            .to_owned()
+                    ),
+                    "{requirement} reused a subject binding across members"
+                );
+            }
+        }
+    }
+    // Five subject roles across the four definitions, each bound once per key.
+    assert_eq!(bindings.len(), 5 * DECLARED_CEILING);
+}
+
+/// Distinct P-256 public keys for batch tests, as `(x, y)` coordinate pairs.
+///
+/// Each pair is a real curve point, because an unacceptable key is refused at
+/// the request boundary and would never reach the release path under test.
+const BATCH_HOLDER_COORDINATES: [(&str, &str); 5] = [
+    (
+        "rVMhRw_AQKeDul4F-iEv56CtlyJKrM6u5xi2bFAUq_4",
+        "5zdn5gQRuii0hVTzcJ4hWlURtMYeQk3OGREcRy9v1ps",
+    ),
+    (
+        "RGUpcejDhxZcjveUXQ_f5ROhMoVgUsZA8lAQgGj_p_c",
+        "qGIQUPRR3_DU1U4AtI9TTqsxy5sVZFYQe3S1whoMCVQ",
+    ),
+    (
+        "Kh89S0sAKyna9LcIUwqbidX9F2fYAfEHo9yVnjnxz_8",
+        "g_V0Cd3L9dBM6mV3A2opGUcpiLsUlZEYgGMlvy-BLlE",
+    ),
+    (
+        "uqIQI6Dojkugmah66LioTMR7_sk3aXzk0KtJMnz1PVU",
+        "HW2NBVGRGvpxY0FUpGZ_h8_XU3V9bw7jX9dHej5iZSI",
+    ),
+    (
+        "xEbuhghflHAoU0cPEgzL4ShMhbE4u375LGbQwHPqJn0",
+        "vnEhUQHqVftrRfQ1Ro76ShfRsmXNAG3xJf_-_jmflzs",
+    ),
+];
+
+fn batch_holder_keys(count: usize) -> Value {
+    Value::Array(
+        BATCH_HOLDER_COORDINATES
+            .iter()
+            .take(count)
+            .map(|(x, y)| json!({"kty": "EC", "crv": "P-256", "x": x, "y": y}))
+            .collect(),
+    )
+}
+
+/// Rewrite the acceptance bundle so the holder-bound requirement may also be
+/// released as a batch, under the declared ceiling.
+async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nresponseFormats: [signed-jws, unsigned-json]",
+        &format!(
+            "\nresponseFormats: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: {ceiling}"
+        ),
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json]",
+        "purpose: fixture-eligibility\n        audienceFrom: authenticated-requester\n        responseFormats: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]\n        subjectBindingModes: [holder-bound]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        1,
+    );
+    fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    prepared
+}
+
+/// One batch release carries exactly one independent credential per presented
+/// key, over exactly one source acquisition and one terminal release record.
+#[tokio::test]
+async fn a_batch_release_issues_one_independent_credential_for_each_presented_key() {
+    let prepared = holder_bound_batch_acceptance(4).await;
+    let runtime = runtime_for(&prepared).await;
+    // The whole point of evaluating once: three credentials, one source read.
+    mount_adult_source_expecting(&prepared.server, None, 1).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = batch_holder_keys(3);
+
+    let released = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    released.assert_status_ok();
+    assert_eq!(
+        released.header("content-type"),
+        EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE
+    );
+
+    let envelope: SdJwtVcBatchEnvelope =
+        serde_json::from_str(&released.text()).expect("the batch envelope parses strictly");
+    assert_eq!(envelope.schema, SD_JWT_VC_BATCH_SCHEMA_V1);
+    assert_eq!(envelope.credentials.len(), 3);
+
+    let mut bindings = BTreeSet::new();
+    let mut identifiers = BTreeSet::new();
+    let mut confirmations = BTreeSet::new();
+    let mut disclosures = BTreeSet::new();
+    for credential in &envelope.credentials {
+        let mut segments = credential.split('~');
+        let issued = segments.next().expect("a credential carries its JWS");
+        for disclosure in segments.filter(|segment| !segment.is_empty()) {
+            assert!(
+                disclosures.insert(disclosure.to_owned()),
+                "two members reused one disclosure salt"
+            );
+        }
+        let payload = URL_SAFE_NO_PAD
+            .decode(issued.split('.').nth(1).expect("the JWS has a payload"))
+            .expect("payload decodes");
+        let payload: Value = serde_json::from_slice(&payload).expect("payload parses");
+        assert_eq!(payload["subjectBinding"], "holder-bound");
+        assert!(
+            bindings.insert(
+                payload["subjects"][0]["binding"]
+                    .as_str()
+                    .expect("the member binds its subject")
+                    .to_owned()
+            ),
+            "two members carry one subject binding"
+        );
+        assert!(
+            identifiers.insert(
+                payload["jti"]
+                    .as_str()
+                    .expect("the member carries its own identifier")
+                    .to_owned()
+            ),
+            "two members carry one identifier"
+        );
+        assert!(
+            confirmations.insert(payload["cnf"]["jwk"]["x"].to_string()),
+            "two members confirm one holder key"
+        );
+    }
+    assert_eq!(bindings.len(), 3);
+    assert_eq!(identifiers.len(), 3);
+    assert_eq!(confirmations.len(), 3);
+
+    // Exactly one terminal release event, naming the complete released set.
+    let audit = wait_for_audit_counts(&prepared.audit_path, 1, 1).await;
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
+    assert_eq!(audit.matches("\"evidenceIds\"").count(), 1);
+    // A released set names itself once. The singular member and the plural one
+    // are mutually exclusive, so a reader never counts one release twice.
+    assert_eq!(audit.matches("\"evidenceId\":").count(), 0);
+    for identifier in &identifiers {
+        assert!(
+            audit.contains(identifier.as_str()),
+            "the release event omits a released member"
+        );
+    }
+    for (x, _) in BATCH_HOLDER_COORDINATES {
+        assert!(
+            !audit.contains(x),
+            "the audit chain records holder material"
+        );
+    }
+    for canary in privacy_canaries() {
+        assert!(!audit.contains(canary));
+    }
+}
+
+/// A batch above the deployment's declared ceiling reaches no source.
+#[tokio::test]
+async fn a_batch_above_the_declared_ceiling_is_refused_before_source_access() {
+    let prepared = holder_bound_batch_acceptance(2).await;
+    let runtime = runtime_for(&prepared).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = batch_holder_keys(3);
+
+    let refused = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "a batch above the ceiling reached acquisition"
+    );
+
+    // The compile-time maximum bounds the request before the deployment's own
+    // ceiling can be read at all.
+    let mut oversized = serde_json::to_value(adult_request()).expect("request serializes");
+    oversized["holderKeys"] = Value::Array(
+        std::iter::repeat_n(
+            json!({"kty": "EC", "crv": "P-256", "x": BATCH_HOLDER_COORDINATES[0].0, "y": BATCH_HOLDER_COORDINATES[0].1}),
+            usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE) + 1,
+        )
+        .collect(),
+    );
+    let refused = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&oversized)
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+}
+
+/// Two keys that are distinct JSON but one key by RFC 7638 thumbprint would
+/// silently collapse a batch to one holder, so they are refused outright.
+#[tokio::test]
+async fn a_repeated_holder_key_thumbprint_is_refused_before_source_access() {
+    let prepared = holder_bound_batch_acceptance(4).await;
+    let runtime = runtime_for(&prepared).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let (x, y) = BATCH_HOLDER_COORDINATES[0];
+
+    for keys in [
+        // Byte-identical members.
+        json!([
+            {"kty": "EC", "crv": "P-256", "x": x, "y": y},
+            {"kty": "EC", "crv": "P-256", "x": x, "y": y},
+        ]),
+        // The same curve point under a wallet-chosen key identifier and a
+        // declared algorithm. RFC 7638 excludes both members, so this is one
+        // key wearing two names.
+        json!([
+            {"kty": "EC", "crv": "P-256", "x": x, "y": y, "kid": "wallet-a"},
+            {"kty": "EC", "crv": "P-256", "x": x, "y": y, "kid": "wallet-b", "alg": "ES256"},
+        ]),
+    ] {
+        let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+        body["holderKeys"] = keys;
+        let refused = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {}", access_token(None)))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    }
+
+    assert!(
+        prepared
+            .server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .is_empty(),
+        "a repeated holder key reached acquisition"
+    );
+}
+
+/// The singular credential media type carries exactly one holder key, and the
+/// batch media type carries exactly one member per key.
+#[tokio::test]
+async fn the_singular_media_type_requires_exactly_one_holder_key() {
+    let prepared = holder_bound_batch_acceptance(4).await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 1).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = batch_holder_keys(2);
+    let refused = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+
+    // One key is a batch of one, so the batch media type still serves it.
+    let mut single = serde_json::to_value(adult_request()).expect("request serializes");
+    single["holderKeys"] = batch_holder_keys(1);
+    let released = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&single)
+        .await;
+    released.assert_status_ok();
+    let envelope: SdJwtVcBatchEnvelope =
+        serde_json::from_str(&released.text()).expect("the batch envelope parses strictly");
+    assert_eq!(envelope.credentials.len(), 1);
+
+    // A release of one assertion names it in the singular audit member, so a
+    // reader can never count one release twice.
+    let audit = wait_for_audit_counts(&prepared.audit_path, 1, 1).await;
+    assert_eq!(audit.matches("\"evidenceIds\"").count(), 0);
+    assert_eq!(audit.matches("\"evidenceId\":").count(), 1);
+}
+
+/// Keyless audience-scoped SD-JWT VC issuance predates the holder key and is
+/// unchanged by it, and one key is still only echoed into the confirmation
+/// claim. The singular serialization answers at most one key in either binding
+/// mode, so a request naming several is refused rather than answered in part.
+#[tokio::test]
+async fn audience_scoped_credential_issuance_answers_at_most_one_holder_key() {
+    let prepared = sd_jwt_vc_acceptance(true).await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+
+    // No holder key at all: the historic keyless path.
+    let keyless = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&serde_json::to_value(adult_request()).expect("request serializes"))
+        .await;
+    keyless.assert_status_ok();
+    assert!(!keyless.text().contains("cnf"));
+
+    // One key, echoed into the confirmation without changing the binding mode.
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = batch_holder_keys(1);
+    let confirmed = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    confirmed.assert_status_ok();
+    let credential = confirmed.text();
+    let payload = URL_SAFE_NO_PAD
+        .decode(
+            credential
+                .split('~')
+                .next()
+                .expect("the credential carries its JWS")
+                .split('.')
+                .nth(1)
+                .expect("the JWS has a payload"),
+        )
+        .expect("payload decodes");
+    let payload: Value = serde_json::from_slice(&payload).expect("payload parses");
+    assert_eq!(payload["subjectBinding"], "audience-scoped");
+    assert_eq!(
+        payload["cnf"]["jwk"]["x"],
+        json!(BATCH_HOLDER_COORDINATES[0].0)
+    );
+
+    // An audience-scoped requirement may not take the batch serialization at
+    // all: the envelope exists to carry one member per holder key.
+    let batch = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&body)
+        .await;
+    assert_eq!(batch.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(batch.json::<Value>()["code"], json!("not_authorized"));
+
+    // Two keys under a singular media type asks for two credentials over a
+    // serialization that carries one. It is refused rather than answered for
+    // the first key alone, and refused before the source is reached: the mock
+    // is mounted for exactly the two acquisitions the requests above make.
+    let mut crowded = serde_json::to_value(adult_request()).expect("request serializes");
+    crowded["holderKeys"] = batch_holder_keys(2);
+    let crowded = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+        .json(&crowded)
+        .await;
+    assert_eq!(crowded.status_code(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(crowded.json::<Value>()["code"], json!("malformed_request"));
+}
+
+/// There is no partial batch. A failure on any member releases nothing, and
+/// the durable chain carries no terminal release record for the operation.
+#[tokio::test]
+async fn a_failure_on_a_later_batch_member_releases_nothing() {
+    let prepared = holder_bound_batch_acceptance(4).await;
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    // Call zero is the startup self-test and call one is the first member, so
+    // the refusal lands on a member the loop reached only after signing an
+    // earlier one.
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailOnNthSignatureSigner {
+        delegate,
+        calls: AtomicUsize::new(0),
+        fail_at: 2,
+    });
+    let failing_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(failing_signer);
+    mount_adult_source_expecting(&prepared.server, None, 1).await;
+
+    let http = TestServer::new(build_app(Arc::new(runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = batch_holder_keys(3);
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)
+        .json(&body)
+        .await;
+
+    assert_eq!(
+        response.status_code(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(response.header("content-type"), "application/problem+json");
+    let text = response.text();
+    assert!(
+        !text.contains('~') && !text.contains("credentials"),
+        "a failed member leaked an earlier member's credential"
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"decision\":\"signing-failure\"").count(), 1);
 }
 
 async fn runtime_for(prepared: &PreparedAcceptance) -> Arc<EvidenceRuntime> {
@@ -2934,7 +4294,10 @@ async fn sd_jwt_format_not_permitted_by_grant() {
         .expect("the credential verifies against the signed transaction's expectations");
     assert_eq!(verified.supported_values, expected.supported_values);
     assert_eq!(verified.subjects, expected.subjects);
-    assert_eq!(verified.request_nonce, request.request_nonce);
+    assert_eq!(
+        verified.request_nonce.as_deref(),
+        Some(request.request_nonce.as_str())
+    );
 
     // Audit records the closed protection mode and the signing key identity.
     let audit = wait_for_audit_counts(&prepared.audit_path, 2, 2).await;
@@ -2983,7 +4346,7 @@ async fn sd_jwt_holder_key_with_private_member_rejected() {
             "k": "c2VjcmV0LWtleS1jYW5hcnk"
         }),
     ] {
-        body["holderKey"] = holder_key;
+        body["holderKeys"] = json!([holder_key]);
         let response = http
             .post("/v1/evidence")
             .add_header("authorization", format!("Bearer {}", access_token(None)))
@@ -3033,7 +4396,7 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
         json!({"kty": "EC", "crv": "P-256", "x": "11qYAYKxCrfVS_7TyWQHOg", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
         json!({"kty": "EC", "crv": "P-256", "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4=", "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}),
     ] {
-        body["holderKey"] = holder_key.clone();
+        body["holderKeys"] = json!([holder_key.clone()]);
         let response = http
             .post("/v1/evidence")
             .add_header("authorization", format!("Bearer {}", access_token(None)))
@@ -3052,7 +4415,7 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
     // is the key's and not the format's.
     body.as_object_mut()
         .expect("request is an object")
-        .remove("holderKey");
+        .remove("holderKeys");
     let accepted = http
         .post("/v1/evidence")
         .add_header("authorization", format!("Bearer {}", access_token(None)))
@@ -3256,7 +4619,10 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
     );
     assert_eq!(verified.supported_values, accepted.supported_values);
     assert_eq!(verified.subjects, accepted.subjects);
-    assert_eq!(verified.request_nonce, request.request_nonce);
+    assert_eq!(
+        verified.request_nonce.as_deref(),
+        Some(request.request_nonce.as_str())
+    );
 
     shutdown_tx.send(()).expect("demo server is still running");
     server
@@ -4528,7 +5894,10 @@ async fn search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handof
             &facts,
             Utc::now(),
             crate::kernel::ValueProjection {
-                audience: EVIDENCE_AUDIENCE,
+                scope: crate::kernel::EvidenceScope::AudienceScoped {
+                    audience: EVIDENCE_AUDIENCE,
+                    request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: b"subject-binding-secret-canary-32-bytes-minimum",
                 binding_key_version: 1,
             },
@@ -5487,6 +6856,24 @@ fn prepare_fixture_with_mutation(
     ceilings: &FixtureCeilings,
     mutate_bundle: impl FnOnce(&Path),
 ) -> PreparedFixture {
+    prepare_fixture_root_with_mutation(
+        &fixture_root(),
+        binding_secret,
+        source_origin,
+        ceilings,
+        mutate_bundle,
+    )
+}
+
+/// The same preparation, from a named acceptance bundle rather than the
+/// audience-scoped one. The holder-bound twin is prepared through here.
+fn prepare_fixture_root_with_mutation(
+    fixture_root: &Path,
+    binding_secret: &str,
+    source_origin: &str,
+    ceilings: &FixtureCeilings,
+    mutate_bundle: impl FnOnce(&Path),
+) -> PreparedFixture {
     let temporary = tempfile::tempdir().expect("temporary acceptance root");
     let bundle_root = temporary.path().join("bundle");
     let runtime_path = temporary.path().join("runtime.yaml");
@@ -5500,7 +6887,7 @@ fn prepare_fixture_with_mutation(
         fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
             .expect("secret root is owner-only");
     }
-    copy_tree(&fixture_root(), &bundle_root);
+    copy_tree(fixture_root, &bundle_root);
 
     rewrite_deployment_values(&bundle_root, source_origin);
     apply_fixture_ceilings(&bundle_root, ceilings);
@@ -5918,7 +7305,7 @@ fn request(requirement: &str, purpose: &str, subjects: Vec<RequestedSubject>) ->
         requirement: requirement.to_owned(),
         purpose: purpose.to_owned(),
         subjects,
-        holder_key: None,
+        holder_keys: Vec::new(),
     }
 }
 
@@ -6064,6 +7451,13 @@ fn privacy_canaries() -> &'static [&'static str] {
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/evidence/fixtures/acceptance/all-definitions")
+}
+
+/// The committed holder-bound twin of the bundle above: the same four coequal
+/// definitions, declared under the holder-bound mode.
+fn holder_bound_fixture_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/fixtures/acceptance/holder-bound")
 }
 
 fn rewrite_deployment_values(bundle_root: &Path, source_origin: &str) {
