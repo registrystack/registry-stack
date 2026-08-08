@@ -21,7 +21,15 @@ use crate::{
 /// adding roots here instead of holding an unbounded part of the filesystem open.
 pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
 
-const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
+/// How many resolved paths one session remembers.
+///
+/// The map spares a filesystem call for every document a session works with, which stays a small
+/// set even in a large project. It is a cache and not a record, so it stops growing here: a client
+/// that delivers a whole branch of changed files at once must not be able to make the server hold
+/// that branch's path set for the rest of the session.
+const MAX_INTERNED_PATHS: usize = 4096;
+
+const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
 /// What one family's loader found under a root: the documents it read, and the reasons it could
 /// not read the rest.
@@ -29,6 +37,38 @@ const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub(crate) struct LoadedProjectDocuments {
     pub(crate) documents: BTreeMap<PathBuf, String>,
     pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+}
+
+/// How large a document may be for the family that owns it to index it, and the sentence an author
+/// reads when it is larger.
+///
+/// The two travel together because they are answered together on every path that admits a
+/// document: the first scan of a root, a buffer the client opened, and a change that arrived from
+/// disk. A ceiling only the first scan applies is a ceiling the editor does not have, and a
+/// ceiling applied without its sentence takes a file out of the index with nothing on screen to
+/// say so.
+#[derive(Debug)]
+pub(crate) struct DocumentCeiling {
+    pub(crate) max_bytes: u64,
+    pub(crate) message: String,
+}
+
+impl DocumentCeiling {
+    /// The one ceiling a family applies to every document it holds, whatever part that document
+    /// plays in the project.
+    pub(crate) fn project_document() -> Self {
+        Self {
+            max_bytes: MAX_DOCUMENT_BYTES,
+            message: "Project document exceeds the 1 MiB indexing limit".to_owned(),
+        }
+    }
+
+    /// Whether a document of this many bytes in hand is one the editor reads. A caller holding a
+    /// file's metadata rather than its bytes weighs it against [`Self::max_bytes`] directly, which
+    /// is how the first scan of a root refuses a file without reading it.
+    pub(crate) fn admits(&self, bytes: usize) -> bool {
+        u64::try_from(bytes).is_ok_and(|bytes| bytes <= self.max_bytes)
+    }
 }
 
 /// A family of project documents. Each one answers for its own roots, its own documents, and its
@@ -71,6 +111,31 @@ impl ProjectFamily {
         match self {
             Self::Relay => relay::is_safe_authored_file(root, path),
             Self::Evidence => evidence::is_safe_authored_file(root, path),
+        }
+    }
+
+    /// How large a document at this path may be for this family to index it.
+    ///
+    /// Relay holds every project document to one limit. Evidence holds each document to the
+    /// ceiling the authoring form gives the part it plays, so a document an author's compiler
+    /// refuses for its size is a document the editor refuses for the same size.
+    fn document_ceiling(self, root: &Path, path: &Path) -> DocumentCeiling {
+        match self {
+            Self::Relay => DocumentCeiling::project_document(),
+            Self::Evidence => evidence::document_ceiling(root, path),
+        }
+    }
+
+    /// The most documents this family indexes from the directory that holds this path, when it
+    /// bounds that directory at all.
+    ///
+    /// Relay bounds none of its directories. Evidence bounds the two the authoring form bounds and
+    /// no others, so a definition the compiler resolves cannot become an unresolved reference on
+    /// screen.
+    fn max_documents_per_directory(self, root: &Path, path: &Path) -> Option<usize> {
+        match self {
+            Self::Relay => None,
+            Self::Evidence => evidence::max_documents_per_directory(root, path),
         }
     }
 
@@ -163,17 +228,30 @@ impl RootState {
         &self.open_versions
     }
 
+    /// Takes the text of a buffer the client has open.
+    ///
+    /// The directory ceiling is deliberately not applied here. It bounds what the editor reads from
+    /// a project on its own; a document the client is holding open is one the author is looking at,
+    /// and leaving it out would give them a file on screen with no symbols and no reason for it.
     fn update(&mut self, path: PathBuf, text: String, version: i32) {
         if !self.family.owns_document(&self.root, &path) {
             return;
         }
         self.open_versions.insert(path.clone(), version);
-        if text.len() <= MAX_DOCUMENT_BYTES {
-            self.disk_diagnostics
-                .retain(|diagnostic| diagnostic.path != path);
+        self.disk_diagnostics
+            .retain(|diagnostic| diagnostic.path != path);
+        let ceiling = self.family.document_ceiling(&self.root, &path);
+        if ceiling.admits(text.len()) {
             self.documents.insert(path, text);
-            self.rebuild();
+        } else {
+            // A buffer that has grown past the ceiling stops being indexed and says so. Leaving the
+            // last text that fitted would answer every later request from a revision the author can
+            // no longer see, and silently: nothing else in the session would report the change.
+            self.documents.remove(&path);
+            self.disk_diagnostics
+                .push(document_diagnostic(&path, &ceiling.message));
         }
+        self.rebuild();
     }
 
     fn close(&mut self, path: &Path) {
@@ -195,13 +273,18 @@ impl RootState {
             self.rebuild();
             return;
         }
+        if let Some(refusal) = self.refuse_for_a_full_directory(path) {
+            self.documents.remove(path);
+            self.disk_diagnostics.push(refusal);
+            self.rebuild();
+            return;
+        }
+        let ceiling = self.family.document_ceiling(&self.root, path);
         match fs::read(path) {
-            Ok(bytes) if bytes.len() > MAX_DOCUMENT_BYTES => {
+            Ok(bytes) if !ceiling.admits(bytes.len()) => {
                 self.documents.remove(path);
-                self.disk_diagnostics.push(document_diagnostic(
-                    path,
-                    "Project document exceeds the 1 MiB indexing limit",
-                ));
+                self.disk_diagnostics
+                    .push(document_diagnostic(path, &ceiling.message));
             }
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => {
@@ -224,6 +307,34 @@ impl RootState {
             }
         }
         self.rebuild();
+    }
+
+    /// The refusal a document this root has no room for carries, or `None` when there is room.
+    ///
+    /// A directory a family bounds is bounded on every path that adds to it, not only on the first
+    /// scan. A client that watches the project delivers a whole branch switch here, one path at a
+    /// time, and a ceiling the scan applied and the watcher did not is a ceiling the editor does
+    /// not have. A document the root already holds is a refresh rather than an addition, so it is
+    /// always let through.
+    fn refuse_for_a_full_directory(&self, path: &Path) -> Option<IndexedDiagnostic> {
+        if self.documents.contains_key(path) {
+            return None;
+        }
+        let ceiling = self.family.max_documents_per_directory(&self.root, path)?;
+        let directory = path.parent()?;
+        let held = self
+            .documents
+            .keys()
+            .filter(|held| held.parent() == Some(directory))
+            .count();
+        (held >= ceiling).then(|| {
+            document_diagnostic(
+                path,
+                &format!(
+                    "This project directory already holds the {ceiling} documents the editor indexes; this file is not indexed"
+                ),
+            )
+        })
     }
 
     fn rebuild(&mut self) {
@@ -297,13 +408,19 @@ impl Workspace {
 
     /// The canonical form of a path the server is about to store, remembered so later requests for
     /// the same document resolve by lookup instead of by another filesystem call.
+    ///
+    /// Past [`MAX_INTERNED_PATHS`] the answer is still correct and only costs what it costs: a path
+    /// the map does not hold is resolved from the filesystem, which is what [`Self::resolve`] does
+    /// for every path a session has never stored.
     pub(crate) fn intern(&mut self, path: &Path) -> PathBuf {
         if let Some(canonical) = self.canonical_paths.get(path) {
             return canonical.clone();
         }
         let canonical = canonical_path(path);
-        self.canonical_paths
-            .insert(path.to_path_buf(), canonical.clone());
+        if self.canonical_paths.len() < MAX_INTERNED_PATHS {
+            self.canonical_paths
+                .insert(path.to_path_buf(), canonical.clone());
+        }
         canonical
     }
 
@@ -409,7 +526,7 @@ mod tests {
     use std::fs;
 
     use registry_evidence_authoring::{
-        layout::{OPENAPI_FILE, QUESTIONS_DIRECTORY},
+        layout::{MAX_QUESTIONS, MAX_QUESTION_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY},
         marker::{default_project_marker_document, PROJECT_MARKER_FILE},
     };
     use tempfile::TempDir;
@@ -929,6 +1046,162 @@ mod tests {
         fs::remove_file(&entity).unwrap();
         state.reload_from_disk(&entity);
         assert!(state.index.workspace_symbols("person").is_empty());
+    }
+
+    /// The role ceilings are the authoring form's, so the fixtures below build a question past
+    /// `MAX_QUESTION_BYTES` rather than past the workspace-wide limit: a document under 1 MiB and
+    /// over 64 KiB is exactly the document the two limits disagree about.
+    fn oversized_question() -> String {
+        let mut text = String::from("version: 1\nid: adult-status\n#");
+        text.push_str(&" ".repeat(MAX_QUESTION_BYTES as usize));
+        text
+    }
+
+    fn evidence_root_with_a_question(directory: &Path) -> (RootState, PathBuf) {
+        evidence_project_in(directory);
+        let state = RootState::load(directory, ProjectFamily::Evidence).unwrap();
+        let question = directory
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml")
+            .canonicalize()
+            .unwrap();
+        (state, question)
+    }
+
+    fn ceiling_messages(state: &RootState) -> Vec<&str> {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("limit the editor indexes"))
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn an_open_buffer_past_its_role_s_ceiling_is_dropped_and_reported() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, question) = evidence_root_with_a_question(temp.path());
+        assert!(state
+            .index
+            .workspace_symbols("adult-status")
+            .iter()
+            .any(|symbol| symbol.name == "adult-status"));
+
+        state.update(question.clone(), oversized_question(), 2);
+
+        assert!(!state.documents.contains_key(&question));
+        assert!(
+            state.index.workspace_symbols("adult-status").is_empty(),
+            "the index must not answer from text the buffer no longer holds"
+        );
+        assert_eq!(
+            ceiling_messages(&state),
+            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+        );
+    }
+
+    #[test]
+    fn a_change_on_disk_past_its_role_s_ceiling_is_refused_and_reported() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, question) = evidence_root_with_a_question(temp.path());
+
+        fs::write(&question, oversized_question()).unwrap();
+        state.reload_from_disk(&question);
+
+        assert!(!state.documents.contains_key(&question));
+        assert_eq!(
+            ceiling_messages(&state),
+            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+        );
+    }
+
+    #[test]
+    fn the_ceiling_the_first_scan_reported_survives_opening_and_closing_the_file() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+        let question = temp.path().join(QUESTIONS_DIRECTORY).join("large.yaml");
+        fs::write(&question, oversized_question()).unwrap();
+        let question = question.canonicalize().unwrap();
+        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
+        assert_eq!(ceiling_messages(&state).len(), 1);
+
+        state.update(question.clone(), oversized_question(), 1);
+        assert_eq!(ceiling_messages(&state).len(), 1, "opening it keeps it");
+
+        state.close(&question);
+        assert_eq!(ceiling_messages(&state).len(), 1, "closing it keeps it");
+    }
+
+    #[test]
+    fn a_document_a_bounded_directory_has_no_room_for_is_refused_from_disk() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+        let questions = temp.path().join(QUESTIONS_DIRECTORY);
+        for index in 0..MAX_QUESTIONS {
+            fs::write(
+                questions.join(format!("question-{index:03}.yaml")),
+                QUESTION,
+            )
+            .unwrap();
+        }
+        fs::remove_file(questions.join("adult-status.yaml")).unwrap();
+        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
+        assert_eq!(
+            state.documents.len(),
+            MAX_QUESTIONS + 1,
+            "the marker and the questions"
+        );
+
+        let extra = questions.join("question-999.yaml");
+        fs::write(&extra, QUESTION).unwrap();
+        let extra = extra.canonicalize().unwrap();
+        state.reload_from_disk(&extra);
+
+        assert!(!state.documents.contains_key(&extra));
+        assert!(
+            state
+                .index
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.path == extra
+                    && diagnostic
+                        .message
+                        .contains("already holds the 128 documents")),
+            "{:?}",
+            state.index.diagnostics()
+        );
+    }
+
+    #[test]
+    fn a_directory_the_authoring_form_does_not_bound_keeps_taking_documents_from_disk() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+        let selectors = temp.path().join("selectors");
+        fs::create_dir_all(&selectors).unwrap();
+        for index in 0..MAX_QUESTIONS {
+            fs::write(
+                selectors.join(format!("profile-{index:03}.yaml")),
+                "kind: exact\n",
+            )
+            .unwrap();
+        }
+        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
+
+        let extra = selectors.join("profile-999.yaml");
+        fs::write(&extra, "kind: exact\n").unwrap();
+        let extra = extra.canonicalize().unwrap();
+        state.reload_from_disk(&extra);
+
+        assert!(
+            state.documents.contains_key(&extra),
+            "the compiler reads every selector, so the editor does too"
+        );
+        assert!(state
+            .index
+            .workspace_symbols("profile-999")
+            .iter()
+            .any(|symbol| symbol.name == "profile-999"));
     }
 
     #[test]

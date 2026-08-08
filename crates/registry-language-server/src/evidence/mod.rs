@@ -11,21 +11,21 @@ pub(crate) mod index;
 pub(crate) mod layout;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 use registry_evidence_authoring::{
-    layout::{MAX_QUESTIONS, OPENAPI_FILE, QUESTIONS_DIRECTORY},
+    layout::{OPENAPI_FILE, QUESTIONS_DIRECTORY},
     marker::PROJECT_MARKER_FILE,
 };
 
 use crate::{
     refs::document_diagnostic,
     safety::{plain_directory, plain_file, secure_directory, secure_regular_file},
-    workspace::LoadedProjectDocuments,
+    workspace::{DocumentCeiling, LoadedProjectDocuments},
 };
 
 pub(crate) use index::build_index;
@@ -33,14 +33,6 @@ use layout::DocumentRole;
 
 /// The file that marks a directory as an Evidence authoring project.
 pub(crate) const PROJECT_FILE: &str = PROJECT_MARKER_FILE;
-
-/// The most documents the server indexes from one project directory.
-///
-/// A project directory is an author's working area rather than an archive, and the authoring form
-/// already holds one project to [`MAX_QUESTIONS`] questions. Past the ceiling the editor stops
-/// reading instead of holding an unbounded part of the filesystem open, and names the first file
-/// it did not read so that the silence is visible where the author is working.
-const MAX_DOCUMENTS_PER_DIRECTORY: usize = MAX_QUESTIONS;
 
 /// Whether a directory is an Evidence authoring project root.
 ///
@@ -72,6 +64,34 @@ pub(crate) fn is_safe_authored_file(root: &Path, path: &Path) -> bool {
     is_project_document(root, path) && crate::safety::is_safe_authored_file(root, path)
 }
 
+/// How large a document at this path may be for the editor to read it, and the sentence an author
+/// reads when it is larger.
+///
+/// A path the authoring form does not name is not a document this root indexes, so the loader never
+/// asks about one. A caller that asks anyway is answered with a bound rather than with none.
+pub(crate) fn document_ceiling(root: &Path, path: &Path) -> DocumentCeiling {
+    document_role(root, path).map_or_else(DocumentCeiling::project_document, role_ceiling)
+}
+
+/// The most documents the editor reads from the directory that holds this path, for the directories
+/// the authoring form bounds.
+pub(crate) fn max_documents_per_directory(root: &Path, path: &Path) -> Option<usize> {
+    document_role(root, path).and_then(DocumentRole::max_documents)
+}
+
+/// The ceiling one role carries, written once so that the first scan of a project, a buffer the
+/// client has open, and a change that arrived from disk all answer a document's size the same way.
+fn role_ceiling(role: DocumentRole) -> DocumentCeiling {
+    DocumentCeiling {
+        max_bytes: role.max_bytes(),
+        message: format!(
+            "This {} exceeds the {}-byte limit the editor indexes",
+            role.label(),
+            role.max_bytes()
+        ),
+    }
+}
+
 /// Reads the documents of one Evidence authoring project.
 ///
 /// A missing marker is not a failure, unlike Relay's missing manifest. A project that predates the
@@ -82,6 +102,9 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
     let mut diagnostics = Vec::new();
     let mut candidates = vec![(root.join(PROJECT_FILE), DocumentRole::Marker)];
     for (directory, role) in layout::YAML_DIRECTORIES {
+        if !role.is_indexed() {
+            continue;
+        }
         add_documents(
             root,
             &root.join(directory),
@@ -105,15 +128,9 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
         let Some(metadata) = secure_regular_file(root, &path)? else {
             continue;
         };
-        if metadata.len() > role.max_bytes() {
-            diagnostics.push(document_diagnostic(
-                &path,
-                &format!(
-                    "This {} exceeds the {}-byte limit the editor indexes",
-                    role.label(),
-                    role.max_bytes()
-                ),
-            ));
+        let ceiling = role_ceiling(role);
+        if metadata.len() > ceiling.max_bytes {
+            diagnostics.push(document_diagnostic(&path, &ceiling.message));
             continue;
         }
         match fs::read(&path) {
@@ -142,6 +159,17 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
 /// Adds the documents one project directory holds in `role`. The directory is read once and never
 /// descended into: a project's parts are all one directory deep, so a subdirectory holds something
 /// the authoring form did not put there.
+///
+/// Only the roles the authoring form bounds are truncated here, and a directory it does not bound
+/// is read whole: a ceiling the editor applies where the compiler applies none turns a definition
+/// the build resolves into an unresolved reference on screen.
+///
+/// The names of a bounded directory are collected into a set that never holds more than one name
+/// past its ceiling, because a ceiling on what is read is not a ceiling on what is enumerated. A
+/// directory holding a million entries would otherwise be gathered whole and thrown away, and the
+/// one name past the ceiling is kept so the first unread file can be named. Whether an entry is a
+/// file the server may open is settled once, by the reader, rather than by a second secure walk of
+/// every path here.
 fn add_documents(
     root: &Path,
     directory: &Path,
@@ -158,7 +186,8 @@ fn add_documents(
             root.display()
         )
     })?;
-    let mut paths = Vec::new();
+    let ceiling = role.max_documents();
+    let mut named = BTreeSet::new();
     for entry in entries {
         let entry = entry.with_context(|| {
             format!(
@@ -167,20 +196,28 @@ fn add_documents(
             )
         })?;
         let path = entry.path();
-        if document_role(root, &path) == Some(role) && secure_regular_file(root, &path)?.is_some() {
-            paths.push(path);
+        if document_role(root, &path) != Some(role) {
+            continue;
+        }
+        named.insert(path);
+        if let Some(ceiling) = ceiling {
+            if named.len() > ceiling + 1 {
+                named.pop_last();
+            }
         }
     }
 
-    paths.sort();
-    if let Some(first_unread) = paths.get(MAX_DOCUMENTS_PER_DIRECTORY) {
-        diagnostics.push(document_diagnostic(
-            first_unread,
-            &format!(
-                "This project directory holds more than the {MAX_DOCUMENTS_PER_DIRECTORY} documents the editor indexes; this file and the ones after it are not indexed"
-            ),
-        ));
-        paths.truncate(MAX_DOCUMENTS_PER_DIRECTORY);
+    let mut paths = named.into_iter().collect::<Vec<_>>();
+    if let Some(ceiling) = ceiling {
+        if let Some(first_unread) = paths.get(ceiling) {
+            diagnostics.push(document_diagnostic(
+                first_unread,
+                &format!(
+                    "This project directory holds more than the {ceiling} documents the editor indexes; this file and the ones after it are not indexed"
+                ),
+            ));
+            paths.truncate(ceiling);
+        }
     }
     candidates.extend(paths.into_iter().map(|path| (path, role)));
     Ok(())
@@ -259,9 +296,7 @@ mod tests {
             vec![
                 "access/policies/adult-status.yaml",
                 "evidence-project.yaml",
-                "fixtures/adult.yaml",
                 "questions/adult-status.yaml",
-                "schemas/person.schema.yaml",
                 "selectors/person.yaml",
                 "sources/people.yaml",
             ]
@@ -363,10 +398,13 @@ mod tests {
     }
 
     #[test]
-    fn stops_reading_a_directory_at_the_document_ceiling() {
+    fn stops_reading_a_directory_at_the_ceiling_the_authoring_form_sets() {
+        let ceiling = DocumentRole::Question
+            .max_documents()
+            .expect("the authoring form bounds a project's questions");
         let temp = TempDir::new().unwrap();
         write(temp.path(), PROJECT_FILE, default_project_marker_document());
-        for index in 0..MAX_DOCUMENTS_PER_DIRECTORY + 1 {
+        for index in 0..ceiling + 1 {
             write(
                 temp.path(),
                 &format!("questions/question-{index:03}.yaml"),
@@ -377,17 +415,69 @@ mod tests {
 
         let loaded = load_project_documents(&root).unwrap();
 
-        assert_eq!(loaded.documents.len(), MAX_DOCUMENTS_PER_DIRECTORY + 1);
+        assert_eq!(loaded.documents.len(), ceiling + 1);
         assert_eq!(loaded.diagnostics.len(), 1, "{:?}", loaded.diagnostics);
         assert_eq!(
             loaded.diagnostics[0].path,
-            root.join(format!(
-                "questions/question-{MAX_DOCUMENTS_PER_DIRECTORY:03}.yaml"
-            ))
+            root.join(format!("questions/question-{ceiling:03}.yaml"))
         );
         assert!(loaded.diagnostics[0]
             .message
             .contains("more than the 128 documents"));
+    }
+
+    /// `evidencectl` reads every selector and source a project holds, so the editor does too. A
+    /// ceiling only the editor has would leave every question naming the file past it reporting an
+    /// unknown selector profile against a project the compiler builds.
+    #[test]
+    fn reads_every_document_of_a_directory_the_authoring_form_does_not_bound() {
+        let beyond_a_bounded_directory = DocumentRole::Question
+            .max_documents()
+            .expect("the authoring form bounds a project's questions")
+            + 1;
+        let temp = TempDir::new().unwrap();
+        write(temp.path(), PROJECT_FILE, default_project_marker_document());
+        for index in 0..beyond_a_bounded_directory {
+            write(
+                temp.path(),
+                &format!("selectors/profile-{index:03}.yaml"),
+                "kind: exact\n",
+            );
+        }
+        let root = temp.path().canonicalize().unwrap();
+
+        let loaded = load_project_documents(&root).unwrap();
+
+        assert_eq!(loaded.documents.len(), beyond_a_bounded_directory + 1);
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    }
+
+    /// A schema and a fixture are defined by the document that points at one, from the path it
+    /// wrote, so nothing in the index comes from their own content and the loader leaves them where
+    /// they are.
+    #[test]
+    fn leaves_the_roles_no_walker_reads_on_disk() {
+        let temp = fixture_project();
+        let root = temp.path().canonicalize().unwrap();
+
+        let loaded = load_project_documents(&root).unwrap();
+
+        assert!(
+            root.join("schemas/person.schema.yaml").is_file()
+                && root.join("fixtures/adult.yaml").is_file(),
+            "the fixture must place a real schema and a real fixture"
+        );
+        assert!(!relative_documents(&root, &loaded)
+            .iter()
+            .any(|path| path.starts_with("schemas/") || path.starts_with("fixtures/")));
+        assert!(!is_project_document(
+            &root,
+            &root.join("schemas/person.schema.yaml")
+        ));
+        assert!(!is_project_document(
+            &root,
+            &root.join("fixtures/adult.yaml")
+        ));
     }
 
     #[cfg(unix)]
@@ -403,7 +493,18 @@ mod tests {
             temp.path().join("questions/linked.yaml"),
         )
         .unwrap();
-        symlink(outside.path(), temp.path().join("selectors")).ok();
+        // A whole directory replaced by a link, which is the other half of the same hazard. The
+        // fixture writes a real selectors/ directory, so it has to go before the link can take its
+        // name, and the link is unwrapped: a test that cannot build the dangerous artifact proves
+        // nothing about refusing it.
+        let linked_directory = temp.path().join("selectors");
+        fs::remove_dir_all(&linked_directory).unwrap();
+        symlink(outside.path(), &linked_directory).unwrap();
+        assert!(
+            fs::symlink_metadata(&linked_directory)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink()),
+            "the fixture must replace the directory with a link"
+        );
         let root = temp.path().canonicalize().unwrap();
 
         let loaded = load_project_documents(&root).unwrap();
@@ -414,6 +515,16 @@ mod tests {
         assert!(!is_safe_authored_file(
             &root,
             &root.join("questions/linked.yaml")
+        ));
+        assert!(
+            !relative_documents(&root, &loaded)
+                .iter()
+                .any(|path| path.starts_with("selectors")),
+            "nothing behind a linked directory is read"
+        );
+        assert!(!is_safe_authored_file(
+            &root,
+            &root.join("selectors/question.yaml")
         ));
     }
 }

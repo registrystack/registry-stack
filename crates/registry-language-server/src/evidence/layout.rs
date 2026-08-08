@@ -8,8 +8,9 @@ use registry_evidence_authoring::{
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
         MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_PROJECT_MARKER_BYTES,
-        MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY,
-        SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
+        MAX_QUESTIONS, MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
+        QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY,
+        SOURCES_DIRECTORY,
     },
     marker::PROJECT_MARKER_FILE,
 };
@@ -45,6 +46,27 @@ impl DocumentRole {
         }
     }
 
+    /// The most documents of this role one project directory holds, for the roles the authoring
+    /// form bounds.
+    ///
+    /// The bound is the compiler's own. `evidencectl` refuses a project that holds more than
+    /// [`MAX_QUESTIONS`] questions or more than that many access policies, and reads every
+    /// selector, source, schema, and fixture a project holds. The editor stops where the compiler
+    /// stops and nowhere else: a ceiling only the editor has turns a name the build resolves into
+    /// an unresolved reference on screen, which is a diagnostic the author cannot act on.
+    pub(crate) fn max_documents(self) -> Option<usize> {
+        match self {
+            Self::Question | Self::AccessPolicy => Some(MAX_QUESTIONS),
+            Self::Marker
+            | Self::OpenApi
+            | Self::Source
+            | Self::Selector
+            | Self::Schema
+            | Self::Fixture
+            | Self::Derivation => None,
+        }
+    }
+
     /// The name this role goes by in a message an author reads.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -68,16 +90,19 @@ impl DocumentRole {
     /// the leaves a question may select belongs to the OpenAPI phase. Reading the description
     /// before then would also put a document allowed to reach 16 MiB through the YAML tree on
     /// every keystroke, for symbols no walker asks for yet.
+    ///
+    /// A schema and a fixture are classified for the same reason and read for none. Neither is
+    /// named by anything written inside it: the document that points at one defines it, from the
+    /// path it wrote and the file that sits at that path, so no symbol, reference, or diagnostic in
+    /// the index comes from a schema's or a fixture's own content. Reading them would put a
+    /// recorded response, which the form allows to reach 1 MiB, through the YAML tree on every
+    /// keystroke in an unrelated question.
     pub(crate) fn is_indexed(self) -> bool {
         match self {
-            Self::Marker
-            | Self::Question
-            | Self::Source
-            | Self::Selector
-            | Self::Schema
-            | Self::Fixture
-            | Self::AccessPolicy => true,
-            Self::OpenApi | Self::Derivation => false,
+            Self::Marker | Self::Question | Self::Source | Self::Selector | Self::AccessPolicy => {
+                true
+            }
+            Self::OpenApi | Self::Schema | Self::Fixture | Self::Derivation => false,
         }
     }
 }
@@ -243,6 +268,43 @@ mod tests {
             (DocumentRole::Derivation, MAX_DERIVATION_BYTES),
         ] {
             assert_eq!(role.max_bytes(), ceiling, "{role:?}");
+        }
+    }
+
+    /// The compiler bounds a project's questions and its access policies and reads every selector,
+    /// source, schema, and fixture there is. The editor stops where the compiler stops and nowhere
+    /// else, so this table is the compiler's.
+    #[test]
+    fn only_the_directories_the_authoring_form_bounds_are_bounded() {
+        for (role, ceiling) in [
+            (DocumentRole::Marker, None),
+            (DocumentRole::OpenApi, None),
+            (DocumentRole::Question, Some(MAX_QUESTIONS)),
+            (DocumentRole::Source, None),
+            (DocumentRole::Selector, None),
+            (DocumentRole::Schema, None),
+            (DocumentRole::Fixture, None),
+            (DocumentRole::AccessPolicy, Some(MAX_QUESTIONS)),
+            (DocumentRole::Derivation, None),
+        ] {
+            assert_eq!(role.max_documents(), ceiling, "{role:?}");
+        }
+    }
+
+    #[test]
+    fn every_role_says_whether_the_server_reads_it() {
+        for (role, indexed) in [
+            (DocumentRole::Marker, true),
+            (DocumentRole::OpenApi, false),
+            (DocumentRole::Question, true),
+            (DocumentRole::Source, true),
+            (DocumentRole::Selector, true),
+            (DocumentRole::Schema, false),
+            (DocumentRole::Fixture, false),
+            (DocumentRole::AccessPolicy, true),
+            (DocumentRole::Derivation, false),
+        ] {
+            assert_eq!(role.is_indexed(), indexed, "{role:?}");
         }
     }
 }
