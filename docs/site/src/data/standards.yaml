@@ -293,8 +293,10 @@
     `application/dc+sd-jwt` credentials, issuer signing with EdDSA over Ed25519
     or ES256 over P-256, and EdDSA `did:jwk` holder binding. The retired product
     also rejected pre-rename format aliases such as `application/vc+sd-jwt` in
-    operator configuration. Full SD-JWT VC conformance is not claimed, and
-    OID4VCI is implemented in no part.
+    operator configuration. Full SD-JWT VC conformance is not claimed, and the
+    Evidence Gateway runtime implements OID4VCI in no part; wallet-facing
+    OID4VCI delivery of an Evidence credential belongs to the separate
+    `registry-evidence-oid4vci` front end, which this record does not cover.
 - id: verifiable-credentials
   name: Verifiable Credentials Data Model
   standards_body: W3C
