@@ -549,12 +549,15 @@ event.
 Operational logs contain route templates, operation identifiers, duration,
 status category, the public problem code, and safe internal error categories
 only. The internal category is narrower than the public problem code but is
-drawn from the same kind of fixed, closed set of service-chosen strings, and it
-collapses every unresolved outcome onto the one category the public contract
-also collapses them onto, so it is never a way to tell a record that was not
-found from one that matched more than once. A request that raises no failure
-logs a fixed placeholder in its place. Request bodies,
-selector profile identifiers and values, source requests and responses,
+drawn from the same kind of fixed, closed set of service-chosen strings. It
+names the internal step that failed, never what that step saw, and it carries
+no counts. A record that was not found and a record that matched more than once
+share one category, so the category is never a way to tell them apart. A
+missing required fact and an inconsistent derivation input do keep separate
+categories: separating those two is what lets an operator repair a deployment,
+and the public problem code reports both as the same shape regardless. A
+request that raises no failure logs a fixed placeholder in its place. Request
+bodies, selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
 excluded from logs, metrics, traces, snapshots, panics, and errors.
 

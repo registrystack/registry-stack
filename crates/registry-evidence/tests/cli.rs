@@ -17,67 +17,98 @@ use serde_json::{json, Value};
 /// document value fails loudly instead of quietly.
 const CANARY: &str = "s3cr3t-canary-value";
 
+/// One shipped reference deployment project, staged for the real binary.
+///
+/// Its fixtures take the reference evaluation path rather than the acceptance
+/// path, and they are the fixtures an adopter's own project resembles, so
+/// behavior that differs between the two paths is proven on both.
+struct ReferenceProject {
+    root: tempfile::TempDir,
+}
+
+impl ReferenceProject {
+    fn stage() -> Self {
+        let root = tempfile::tempdir().expect("temporary deployment");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
+        );
+        copy_tree(&project.join("bundle"), &root.path().join("bundle"));
+        let bundle_configuration = root.path().join("bundle/evidence.yaml");
+        let bundle_document =
+            fs::read_to_string(&bundle_configuration).expect("read bundle document");
+        fs::write(
+            &bundle_configuration,
+            bundle_document.replacen(
+                "assuranceProfile: evidence-grade",
+                "assuranceProfile: local",
+                1,
+            ),
+        )
+        .expect("select local assurance for the isolated CLI test");
+        let secret_root = root.path().join("secrets");
+        fs::create_dir(&secret_root).expect("create private secret root");
+        fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+            .expect("set private secret-root mode");
+
+        stage_reference_secrets(&secret_root);
+
+        let runtime =
+            fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+        let bundle_path = root.path().join("bundle");
+        let bundle_directory = bundle_path.to_str().expect("temporary path is UTF-8");
+        let audit_path = root.path().join("audit.jsonl");
+        let runtime = runtime
+            .replacen("/etc/registry-evidence/bundle", bundle_directory, 1)
+            .replacen(
+                "/run/secrets/registry-evidence",
+                secret_root.to_str().expect("temporary path is UTF-8"),
+                1,
+            )
+            .replacen(
+                "/var/lib/registry-evidence/audit/evidence.jsonl",
+                audit_path.to_str().expect("temporary path is UTF-8"),
+                1,
+            )
+            .replacen(
+                "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+                "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+                1,
+            );
+        fs::write(root.path().join("runtime.yaml"), runtime).expect("stage runtime");
+        Self { root }
+    }
+
+    /// Run against the project with the immutable modes the runtime demands.
+    ///
+    /// The modes are restored before the caller asserts anything, so a failed
+    /// assertion still leaves a tree the temporary directory can remove.
+    fn sealed<T>(&self, run: impl FnOnce(&Path) -> T) -> T {
+        let bundle = self.root.path().join("bundle");
+        let runtime = self.root.path().join("runtime.yaml");
+        set_tree_mode(&bundle, 0o555, 0o444);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o444))
+            .expect("set immutable runtime mode");
+        let outcome = run(&runtime);
+        set_tree_mode(&bundle, 0o755, 0o644);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644))
+            .expect("restore runtime mode");
+        outcome
+    }
+}
+
 #[test]
 fn actual_binary_checks_and_evaluates_an_immutable_project() {
-    let staged = tempfile::tempdir().expect("temporary deployment");
-    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
-    );
-    copy_tree(&project.join("bundle"), &staged.path().join("bundle"));
-    let bundle_configuration = staged.path().join("bundle/evidence.yaml");
-    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
-    fs::write(
-        &bundle_configuration,
-        bundle_document.replacen(
-            "assuranceProfile: evidence-grade",
-            "assuranceProfile: local",
-            1,
-        ),
-    )
-    .expect("select local assurance for the isolated CLI test");
-    let secret_root = staged.path().join("secrets");
-    fs::create_dir(&secret_root).expect("create private secret root");
-    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
-        .expect("set private secret-root mode");
-
-    stage_reference_secrets(&secret_root);
-
-    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
-    let bundle_path = staged.path().join("bundle");
-    let bundle_directory = bundle_path.to_str().expect("temporary path is UTF-8");
-    let audit_path = staged.path().join("audit.jsonl");
-    let runtime = runtime
-        .replacen("/etc/registry-evidence/bundle", bundle_directory, 1)
-        .replacen(
-            "/run/secrets/registry-evidence",
-            secret_root.to_str().expect("temporary path is UTF-8"),
-            1,
+    let project = ReferenceProject::stage();
+    let (check, evaluate) = project.sealed(|runtime| {
+        (
+            invoke(runtime, &["check"]),
+            invoke(
+                runtime,
+                &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
+            ),
         )
-        .replacen(
-            "/var/lib/registry-evidence/audit/evidence.jsonl",
-            audit_path.to_str().expect("temporary path is UTF-8"),
-            1,
-        )
-        .replacen(
-            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
-            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
-            1,
-        );
-    let runtime_path = staged.path().join("runtime.yaml");
-    fs::write(&runtime_path, runtime).expect("stage runtime");
-    set_tree_mode(&bundle_path, 0o555, 0o444);
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
-        .expect("set immutable runtime mode");
+    });
 
-    let check = invoke(&runtime_path, &["check"]);
-    let evaluate = invoke(
-        &runtime_path,
-        &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
-    );
-
-    set_tree_mode(&bundle_path, 0o755, 0o644);
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644))
-        .expect("restore runtime mode");
     assert_success(
         &check,
         "Evidence deployment ",
@@ -88,6 +119,88 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "Evidence fixture passed (",
         " evaluated cases)\n",
     );
+}
+
+/// The reference path has to explain itself as well as the acceptance path does.
+///
+/// A reference case that records only the form it was written in says a case
+/// was read, never how far it got, which is the whole of what the trace is for.
+#[test]
+fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
+    let project = ReferenceProject::stage();
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    assert!(
+        output.status.success(),
+        "explained evaluation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(true));
+
+    let cases = report["cases"].as_array().expect("cases is an array");
+    assert!(!cases.is_empty(), "the document carried no case");
+    for case in cases {
+        let reached = stage_names(case);
+        assert!(
+            reached.len() > 1,
+            "case {} recorded only {reached:?}, so the trace never says how far it got",
+            case["id"]
+        );
+    }
+
+    // The cases that run the pipeline record the pipeline, so a reader is
+    // promised no stage the reference path declines to report.
+    let resolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the fixture states a resolving case");
+    for stage in [
+        "prepare", "acquire", "extract", "derive", "validate", "sign",
+    ] {
+        assert!(
+            stage_names(resolved).contains(&stage),
+            "a resolving reference case never recorded {stage}: {:?}",
+            stage_names(resolved)
+        );
+    }
+
+    // An unresolved case reports the unresolved outcome on the stage that
+    // reached it, exactly as the acceptance path does.
+    let unresolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("no-match"))
+        .expect("the fixture states an unresolved case");
+    let extract = unresolved["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("an unresolved case records its extraction");
+    assert_eq!(extract["status"], json!("no-match"));
+}
+
+/// The stages one traced case recorded, in the order it recorded them.
+fn stage_names(case: &Value) -> Vec<&str> {
+    case["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("a stage is named"))
+        .collect()
 }
 
 /// The exact unexplained success output of the acceptance fixture.
@@ -195,6 +308,13 @@ fn explaining_a_failing_fixture_shows_where_the_case_stopped_and_keeps_its_messa
     assert!(
         stdout.contains("response keys available [\"total\"]"),
         "the trace never named the response shape the script saw: {stdout}"
+    );
+    // The expectation comparison is what rejected this case, so its own stage
+    // reports the rejection. A satisfied expectation printed immediately above
+    // `case failed` would point a reader away from the stage that failed.
+    assert!(
+        stdout.contains("expect     failed"),
+        "the stage that rejected the case reported success: {stdout}"
     );
     assert!(
         stdout
@@ -321,6 +441,33 @@ fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_messag
         extract["details"],
         json!(["response keys available [\"total\"]"])
     );
+    let expect = failed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("expect"))
+        .expect("the document carries the expectation comparison");
+    assert_eq!(
+        expect["status"],
+        json!("failed"),
+        "the stage that rejected the case reported success"
+    );
+
+    // A case the comparison accepted still reports a satisfied expectation, so
+    // the failed status above distinguishes cases rather than marking them all.
+    let passed = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the document carries the cases that passed");
+    let satisfied = passed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("expect"))
+        .expect("a passing case carries its expectation comparison");
+    assert_eq!(satisfied["status"], json!("ok"));
 }
 
 /// Asking for a format without asking for the trace is a mistake, not a no-op.

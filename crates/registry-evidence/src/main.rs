@@ -1791,6 +1791,11 @@ async fn evaluate_reference_fixture(
                 return Err(CliError("reference bundle mutation is invalid"));
             }
             validate_reference_bundle_mutation(bundle, requirement)?;
+            trace.record(
+                Stage::Validate,
+                StageStatus::Ok,
+                format!("the {mutation:?} bundle mutation is refused, as the case requires"),
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1804,6 +1809,11 @@ async fn evaluate_reference_fixture(
                 expected,
                 mutation,
             )?;
+            trace.record(
+                Stage::Prepare,
+                StageStatus::Ok,
+                format!("the {mutation:?} request mutation is refused, as the case requires"),
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1830,6 +1840,11 @@ async fn evaluate_reference_fixture(
         let prepared = match kernel.prepare(&requirement.id, &preparation_selectors) {
             Ok(prepared) => prepared,
             Err(error) if case.contains_key("selectorOverrides") => {
+                trace.record(
+                    Stage::Prepare,
+                    StageStatus::Failed,
+                    "the overridden selectors are refused before the credential boundary",
+                );
                 validate_reference_error(expected, error, false)?;
                 if expected.get("rejectedBefore").and_then(Value::as_str) != Some("credential") {
                     return Err(CliError(
@@ -1867,6 +1882,14 @@ async fn evaluate_reference_fixture(
                 transport,
             )?;
         }
+        trace.record(
+            Stage::Prepare,
+            StageStatus::Ok,
+            format!(
+                "the request for source {:?} matches its declared transport",
+                requirement.initial_source()
+            ),
+        );
         if case.contains_key("selectorOverrides") {
             if expected.contains_key("error")
                 || expected.contains_key("publicProblem")
@@ -1894,6 +1917,11 @@ async fn evaluate_reference_fixture(
         }
         if let Some(failure) = case.get("sourceFailure").and_then(Value::as_str) {
             validate_reference_source_failure(failure, expected)?;
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Failed,
+                format!("the source failed as {failure:?}, which the case states"),
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1906,6 +1934,11 @@ async fn evaluate_reference_fixture(
         )?;
         if let Some(mutation) = case.get("derivationMutation").and_then(Value::as_str) {
             validate_reference_derivation_mutation(kernel, requirement, expected, mutation)?;
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                format!("the {mutation:?} derivation mutation is refused, as the case requires"),
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1923,6 +1956,14 @@ async fn evaluate_reference_fixture(
                 observed_at,
                 expected,
             )?;
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                format!(
+                    "the derivation parameter mutation over {} is refused, as the case requires",
+                    name_list(&mutation.keys().cloned().collect::<Vec<_>>())
+                ),
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1942,6 +1983,15 @@ async fn evaluate_reference_fixture(
                     .ok_or(CliError("reference fixture response is unavailable"))?;
                 let projected = project_fixture_response(source, response)
                     .map_err(|_| CliError("reference fixture source projection failed"))?;
+                trace.record(
+                    Stage::Acquire,
+                    StageStatus::Ok,
+                    format!(
+                        "1 response from source {:?}, projected keys {}",
+                        requirement.initial_source(),
+                        name_list(&object_keys(&projected))
+                    ),
+                );
                 (
                     validate_reference_response(
                         response_context,
@@ -1949,6 +1999,7 @@ async fn evaluate_reference_fixture(
                         &derivation_selectors,
                         observed_at,
                         expected,
+                        trace,
                     )
                     .await?,
                     1,
@@ -1970,33 +2021,40 @@ async fn evaluate_reference_fixture(
                     .ok_or(CliError("reference search response is unavailable"))?;
                 let projected_search = project_fixture_response(source, search_response)
                     .map_err(|_| CliError("reference search response projection failed"))?;
-                let search_lookup =
-                    match kernel.extract_source(search, &projected_search, &BTreeMap::new()) {
-                        Ok(lookup) => lookup,
-                        Err(error) => {
-                            validate_reference_error(expected, error, false)?;
-                            require_reference_request_count(expected, 1)?;
-                            summary.evaluated_cases += 1;
-                            trace.pass_case();
-                            continue;
+                trace.record(
+                    Stage::Acquire,
+                    StageStatus::Ok,
+                    format!(
+                        "search response from {search:?}, projected keys {}",
+                        name_list(&object_keys(&projected_search))
+                    ),
+                );
+                let prior_facts = match record_lookup(
+                    trace,
+                    kernel.extract_source(search, &projected_search, &BTreeMap::new()),
+                    &projected_search,
+                ) {
+                    Ok(facts) => facts,
+                    Err(settled) => {
+                        match settled {
+                            Ok(KernelOutcome::NoMatch) => {
+                                validate_reference_unresolved(expected, "no_match")?
+                            }
+                            Ok(KernelOutcome::Ambiguous) => {
+                                validate_reference_unresolved(expected, "ambiguous")?
+                            }
+                            Ok(KernelOutcome::Match(_)) => {
+                                return Err(CliError(
+                                    "reference search settled on an unreachable outcome",
+                                ));
+                            }
+                            Err(error) => validate_reference_error(expected, error, false)?,
                         }
-                    };
-                let prior_facts = match search_lookup {
-                    LookupResult::NoMatch => {
-                        validate_reference_unresolved(expected, "no_match")?;
                         require_reference_request_count(expected, 1)?;
                         summary.evaluated_cases += 1;
                         trace.pass_case();
                         continue;
                     }
-                    LookupResult::Ambiguous => {
-                        validate_reference_unresolved(expected, "ambiguous")?;
-                        require_reference_request_count(expected, 1)?;
-                        summary.evaluated_cases += 1;
-                        trace.pass_case();
-                        continue;
-                    }
-                    LookupResult::Match(facts) => facts,
                 };
                 let fetch_source = bundle
                     .config
@@ -2034,9 +2092,26 @@ async fn evaluate_reference_fixture(
                     .ok_or(CliError("reference fetch response is unavailable"))?;
                 let projected_fetch = project_fixture_response(fetch_source, fetch_response)
                     .map_err(|_| CliError("reference fetch response projection failed"))?;
+                trace.record(
+                    Stage::Acquire,
+                    StageStatus::Ok,
+                    format!(
+                        "fetch response from {fetch:?}, projected keys {}",
+                        name_list(&object_keys(&projected_fetch))
+                    ),
+                );
                 let fetch_lookup =
                     match kernel.extract_source(fetch, &projected_fetch, &prior_facts) {
                         Ok(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            trace.record_with(
+                                Stage::Extract,
+                                StageStatus::Failed,
+                                "a fetch may only resolve uniquely, and this one did not",
+                                vec![format!(
+                                    "fetch response keys available {}",
+                                    name_list(&object_keys(&projected_fetch))
+                                )],
+                            );
                             validate_reference_error(expected, KernelError::SourceProtocol, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
@@ -2045,6 +2120,15 @@ async fn evaluate_reference_fixture(
                         }
                         Ok(lookup) => lookup,
                         Err(error) => {
+                            trace.record_with(
+                                Stage::Extract,
+                                StageStatus::Failed,
+                                format!("the fetch extraction failed: {error}"),
+                                vec![format!(
+                                    "fetch response keys available {}",
+                                    name_list(&object_keys(&projected_fetch))
+                                )],
+                            );
                             validate_reference_error(expected, error, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
@@ -2055,11 +2139,12 @@ async fn evaluate_reference_fixture(
                 (
                     validate_reference_lookup(
                         &response_context,
-                        fetch_lookup,
+                        Ok(fetch_lookup),
                         &Value::Object(responses.clone()),
                         &derivation_selectors,
                         observed_at,
                         expected,
+                        trace,
                     )
                     .await?,
                     2,
@@ -2104,140 +2189,173 @@ async fn validate_reference_response(
     selectors: &Value,
     observed_at: DateTime<Utc>,
     expected: &JsonMap<String, Value>,
+    trace: &mut FixtureTrace,
 ) -> Result<Option<Value>, CliError> {
-    let lookup = match context.kernel.extract(&context.requirement.id, response) {
-        Ok(lookup) => lookup,
-        Err(error) => {
-            validate_reference_error(expected, error, false)?;
-            return Ok(None);
-        }
-    };
-    validate_reference_lookup(&context, lookup, response, selectors, observed_at, expected).await
+    validate_reference_lookup(
+        &context,
+        context.kernel.extract(&context.requirement.id, response),
+        response,
+        selectors,
+        observed_at,
+        expected,
+        trace,
+    )
+    .await
 }
 
+/// Check one reference lookup, recording it through the same helpers the
+/// acceptance path records with.
+///
+/// A reader comparing an adopter's reference run against an acceptance run has
+/// to see one vocabulary for one event, so the stage lines come from
+/// `record_lookup` and `record_derivation` rather than from a second wording of
+/// the same outcomes here.
 async fn validate_reference_lookup(
     context: &ReferenceResponseContext<'_>,
-    lookup: LookupResult,
+    lookup: Result<LookupResult, KernelError>,
     protected_response: &Value,
     selectors: &Value,
     observed_at: DateTime<Utc>,
     expected: &JsonMap<String, Value>,
+    trace: &mut FixtureTrace,
 ) -> Result<Option<Value>, CliError> {
-    match lookup {
-        LookupResult::NoMatch => {
+    let facts = match record_lookup(trace, lookup, protected_response) {
+        Ok(facts) => facts,
+        Err(Ok(KernelOutcome::NoMatch)) => {
             validate_reference_unresolved(expected, "no_match")?;
-            Ok(None)
+            return Ok(None);
         }
-        LookupResult::Ambiguous => {
+        Err(Ok(KernelOutcome::Ambiguous)) => {
             validate_reference_unresolved(expected, "ambiguous")?;
-            Ok(None)
+            return Ok(None);
         }
-        LookupResult::Match(facts) => {
-            if expected.get("lookup").and_then(Value::as_str) != Some("match") {
-                return Err(CliError("reference lookup outcome did not match"));
-            }
-            if let Some(exact) = expected.get("facts") {
-                let actual = serde_json::to_value(&facts)
-                    .map_err(|_| CliError("reference facts are not representable"))?;
-                if exact != &actual {
-                    return Err(CliError("reference exact facts did not match"));
-                }
-            }
-            let values = match context.kernel.derive_and_validate_with_selectors(
-                &context.requirement.id,
-                &facts,
-                selectors,
-                observed_at,
-                ValueProjection {
-                    audience: OFFLINE_AUDIENCE,
-                    binding_key: &OFFLINE_BINDING_KEY,
-                    binding_key_version: 1,
-                },
-            ) {
-                Ok(values) => values,
-                Err(error) => {
-                    validate_reference_error(expected, error, true)?;
-                    return Ok(None);
-                }
-            };
-            if expected.get("derivationRuns").and_then(Value::as_bool) != Some(true) {
-                return Err(CliError("reference derivation execution did not match"));
-            }
-            if let Some(exact) = expected.get("value") {
-                if values.as_slice().len() != 1
-                    || public_json(&values.as_slice()[0].value)? != *exact
-                {
-                    return Err(CliError("reference scalar value did not match"));
-                }
-            }
-            if let Some(exact) = expected.get("values") {
-                let exact = exact
-                    .as_object()
-                    .ok_or(CliError("reference concept map is invalid"))?;
-                if values.as_slice().len() != exact.len() {
-                    return Err(CliError("reference concept value did not match"));
-                }
-                for (concept, expected_value) in exact {
-                    let disclosed = values
-                        .as_slice()
-                        .iter()
-                        .find(|value| value.provides_value_for == *concept)
-                        .ok_or(CliError("reference concept value did not match"))?;
-                    if public_json(&disclosed.value)? != *expected_value {
-                        return Err(CliError("reference concept value did not match"));
-                    }
-                }
-            }
-            if let Some(count) = expected.get("entityReferenceCount").and_then(Value::as_u64) {
-                let actual = match values.as_slice() {
-                    [value] => match &value.value {
-                        PublicValue::List(items) => items
-                            .iter()
-                            .filter(|item| {
-                                matches!(item, ScalarOrEntityReference::EntityReference(_))
-                            })
-                            .count() as u64,
-                        _ => 0,
-                    },
-                    _ => 0,
-                };
-                if actual != count {
-                    return Err(CliError("reference entity-reference count did not match"));
-                }
-            }
-            if expected
-                .get("rawReferencesDisclosed")
-                .and_then(Value::as_bool)
-                == Some(false)
-            {
-                let encoded = serde_json::to_string(values.as_slice())
-                    .map_err(|_| CliError("reference values are not representable"))?;
-                let mut protected_source_strings = Vec::new();
-                collect_strings(protected_response, &mut protected_source_strings);
-                if protected_source_strings
-                    .iter()
-                    .filter(|value| value.len() >= 8)
-                    .any(|value| encoded.contains(value))
-                {
-                    return Err(CliError("reference raw source reference was disclosed"));
-                }
-            }
-            if expected.get("signed").and_then(Value::as_bool) != Some(true) {
-                return Err(CliError("reference signing expectation did not match"));
-            }
-            sign_and_verify_fixture_evidence(
-                context.bundle,
-                context.kernel,
-                context.signer,
-                context.requirement,
-                context.resolved,
-                values,
-                observed_at,
-            )
-            .await
-            .map(Some)
+        Err(Ok(KernelOutcome::Match(_))) => {
+            return Err(CliError(
+                "reference lookup settled on an unreachable outcome",
+            ));
+        }
+        Err(Err(error)) => {
+            validate_reference_error(expected, error, false)?;
+            return Ok(None);
+        }
+    };
+    if expected.get("lookup").and_then(Value::as_str) != Some("match") {
+        return Err(CliError("reference lookup outcome did not match"));
+    }
+    if let Some(exact) = expected.get("facts") {
+        let actual = serde_json::to_value(&facts)
+            .map_err(|_| CliError("reference facts are not representable"))?;
+        if exact != &actual {
+            return Err(CliError("reference exact facts did not match"));
         }
     }
+    let values = match record_derivation(
+        trace,
+        context.kernel.derive_and_validate_with_selectors(
+            &context.requirement.id,
+            &facts,
+            selectors,
+            observed_at,
+            ValueProjection {
+                audience: OFFLINE_AUDIENCE,
+                binding_key: &OFFLINE_BINDING_KEY,
+                binding_key_version: 1,
+            },
+        ),
+        context.requirement,
+    ) {
+        Ok(KernelOutcome::Match(values)) => values,
+        Ok(_) => {
+            return Err(CliError(
+                "reference derivation settled on an unreachable outcome",
+            ));
+        }
+        Err(error) => {
+            validate_reference_error(expected, error, true)?;
+            return Ok(None);
+        }
+    };
+    if expected.get("derivationRuns").and_then(Value::as_bool) != Some(true) {
+        return Err(CliError("reference derivation execution did not match"));
+    }
+    if let Some(exact) = expected.get("value") {
+        if values.as_slice().len() != 1 || public_json(&values.as_slice()[0].value)? != *exact {
+            return Err(CliError("reference scalar value did not match"));
+        }
+    }
+    if let Some(exact) = expected.get("values") {
+        let exact = exact
+            .as_object()
+            .ok_or(CliError("reference concept map is invalid"))?;
+        if values.as_slice().len() != exact.len() {
+            return Err(CliError("reference concept value did not match"));
+        }
+        for (concept, expected_value) in exact {
+            let disclosed = values
+                .as_slice()
+                .iter()
+                .find(|value| value.provides_value_for == *concept)
+                .ok_or(CliError("reference concept value did not match"))?;
+            if public_json(&disclosed.value)? != *expected_value {
+                return Err(CliError("reference concept value did not match"));
+            }
+        }
+    }
+    if let Some(count) = expected.get("entityReferenceCount").and_then(Value::as_u64) {
+        let actual = match values.as_slice() {
+            [value] => match &value.value {
+                PublicValue::List(items) => items
+                    .iter()
+                    .filter(|item| matches!(item, ScalarOrEntityReference::EntityReference(_)))
+                    .count() as u64,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        if actual != count {
+            return Err(CliError("reference entity-reference count did not match"));
+        }
+    }
+    if expected
+        .get("rawReferencesDisclosed")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        let encoded = serde_json::to_string(values.as_slice())
+            .map_err(|_| CliError("reference values are not representable"))?;
+        let mut protected_source_strings = Vec::new();
+        collect_strings(protected_response, &mut protected_source_strings);
+        if protected_source_strings
+            .iter()
+            .filter(|value| value.len() >= 8)
+            .any(|value| encoded.contains(value))
+        {
+            return Err(CliError("reference raw source reference was disclosed"));
+        }
+    }
+    if expected.get("signed").and_then(Value::as_bool) != Some(true) {
+        return Err(CliError("reference signing expectation did not match"));
+    }
+    let evidence = sign_and_verify_fixture_evidence(
+        context.bundle,
+        context.kernel,
+        context.signer,
+        context.requirement,
+        context.resolved,
+        values,
+        observed_at,
+    )
+    .await?;
+    trace.record(
+        Stage::Sign,
+        StageStatus::Ok,
+        if context.signer.is_some() {
+            "the payload was constructed, signed, and verified offline"
+        } else {
+            "the payload was constructed; this seam does not sign"
+        },
+    );
+    Ok(Some(evidence))
 }
 
 async fn sign_and_verify_fixture_evidence(
@@ -2963,28 +3081,48 @@ fn stated_flag(value: Option<bool>) -> &'static str {
     }
 }
 
+/// Compare what a case declared against what the pipeline did, and record it.
+///
+/// The stage status is the comparison's own verdict rather than the fact that
+/// the comparison was reached, because a mismatch here is precisely the failure
+/// the fixed operator message reports. Recording success before comparing would
+/// print a satisfied expectation directly above the failure it caused, pointing
+/// a reader at the pipeline stages instead of at the case they mis-stated.
 fn validate_case_outcome(
     case: &serde_json::Map<String, Value>,
     outcome: Result<KernelOutcome, registry_evidence::kernel::KernelError>,
     trace: &mut FixtureTrace,
 ) -> Result<Option<ValidatedValues>, CliError> {
+    // What the case says it expects, beside what the pipeline just did. The
+    // pipeline half of it is already recorded above this line.
+    let declared = format!(
+        "the case expects lookup {:?}, public problem {:?}, derivation run {}, signed success {}",
+        optional_string(case, "expected_lookup")?.unwrap_or("match"),
+        optional_string(case, "expected_public_problem")?.unwrap_or("none"),
+        stated_flag(optional_boolean(case, "derivation_runs")?),
+        stated_flag(optional_boolean(case, "signed_success")?)
+    );
+    let compared = compare_case_outcome(case, outcome);
+    trace.record(
+        Stage::Expect,
+        if compared.is_ok() {
+            StageStatus::Ok
+        } else {
+            StageStatus::Failed
+        },
+        declared,
+    );
+    compared
+}
+
+/// Decide whether the outcome one case declared is the outcome it got.
+fn compare_case_outcome(
+    case: &serde_json::Map<String, Value>,
+    outcome: Result<KernelOutcome, registry_evidence::kernel::KernelError>,
+) -> Result<Option<ValidatedValues>, CliError> {
     let derivation_runs = optional_boolean(case, "derivation_runs")?;
     let signed_success = optional_boolean(case, "signed_success")?;
     let expected_problem = optional_string(case, "expected_public_problem")?;
-    // What the case says it expects, beside what the pipeline just did. A
-    // mismatch between these two is the failure the fixed message reports, and
-    // the pipeline half of it is already recorded above this line.
-    trace.record(
-        Stage::Expect,
-        StageStatus::Ok,
-        format!(
-            "the case expects lookup {:?}, public problem {:?}, derivation run {}, signed success {}",
-            optional_string(case, "expected_lookup")?.unwrap_or("match"),
-            expected_problem.unwrap_or("none"),
-            stated_flag(derivation_runs),
-            stated_flag(signed_success)
-        ),
-    );
 
     if let Some(expected_lookup @ ("no_match" | "ambiguous")) =
         optional_string(case, "expected_lookup")?
