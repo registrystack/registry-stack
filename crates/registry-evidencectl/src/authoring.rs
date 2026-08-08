@@ -41,7 +41,7 @@ pub(crate) use registry_evidence_authoring::{
         AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
         QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
     },
-    validate::{question_subjects, valid_local_identifier, validate_question},
+    validate::{collection_pointers, question_subjects, valid_local_identifier, validate_question},
     validate_authored_answer, Finding,
 };
 
@@ -1870,18 +1870,6 @@ fn validate_selected_schema_node(
         }
         _ => bail!("selected fact path continues past scalar `{pointer}`"),
     }
-}
-
-fn collection_pointers(pointer: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut collections = Vec::new();
-    for segment in pointer.split('/').skip(1) {
-        if segment == "*" {
-            collections.push(format!("/{}", parts.join("/")));
-        }
-        parts.push(segment);
-    }
-    collections
 }
 
 fn display_list(values: &[String]) -> String {
