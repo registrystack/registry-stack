@@ -4507,6 +4507,13 @@ outboundTls:
     /// identity that was validated has to be the file identity that was
     /// hashed. A file swapped between naming it and opening it is refused
     /// before a single byte reaches the digest.
+    ///
+    /// The replacement is a different length on purpose. A filesystem is free
+    /// to hand the same inode number back to the next file created in the same
+    /// directory, and several do, so an equal-length replacement would look
+    /// identical to `same_file` on those hosts and to nobody on the others.
+    /// Staging a length change keeps the refusal a property of the code rather
+    /// than of the filesystem the test happens to run on.
     #[cfg(unix)]
     #[test]
     fn a_streamed_read_refuses_an_extract_replaced_after_it_was_named() {
@@ -4515,7 +4522,7 @@ outboundTls:
         locked_extract(&path, b"extract-content-one");
         let scanned = fs::symlink_metadata(&path).expect("the scanned metadata reads");
         fs::remove_file(&path).expect("remove the named extract");
-        locked_extract(&path, b"extract-content-two");
+        locked_extract(&path, b"extract-content-two-and-longer");
 
         assert_eq!(
             refusal_cause(
