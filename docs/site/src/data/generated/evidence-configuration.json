@@ -2628,11 +2628,12 @@
           "constraints": [
             [
               "maxLength: 512",
-              "minLength: 1"
+              "minLength: 1",
+              "pattern: \\S"
             ]
           ],
           "conditional_constraints": [],
-          "description": "Fixed `aud` claim of the signed client assertion, for an authorization server that expects an identifier it is not reached at, such as its issuer or a host in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple String Comparison, so it is an opaque identifier rather than a URL and is signed byte for byte. It names who may accept the assertion, never where it is sent.",
+          "description": "Fixed `aud` claim of the signed client assertion, for an authorization server that expects an identifier it is not reached at, such as its issuer or a host in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple String Comparison, so it is an opaque identifier rather than a URL and is signed byte for byte. It names who may accept the assertion, never where it is sent. A blank value is refused here rather than at the first token request, where signing rejects a whitespace-only audience as empty.",
           "runtime_validation": null
         },
         {
