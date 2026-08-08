@@ -76,8 +76,10 @@ what that means in practice.
 - If the development extension does not compile, confirm `rustup` owns the active Rust installation
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
-  terminal. The launcher first looks for `registry-language-server`, then runs
-  `registryctl tooling language-server` when `registryctl` is on `PATH`. The two executables must
+  terminal. The launcher first looks for `registry-language-server`, which it trusts by name because
+  it has no subcommand to ask about. Failing that it asks each of `registryctl` and `evidencectl` on
+  `PATH` whether it answers `tooling language-server --help`, and runs the first that does, so a
+  `registryctl` too old to host the server is passed over rather than started. The executables must
   come from the same checkout or beta build that you are testing.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with
