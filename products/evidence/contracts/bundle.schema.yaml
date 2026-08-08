@@ -121,6 +121,26 @@ allOf:
             providerId:
               type: string
               pattern: '^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$'
+  # A gated acquisition kind is served only where the bundle opted in, so a
+  # document that uses one without declaring it is a document startup refuses.
+  # The loader refuses it too, and states which requirement is at fault; the
+  # contract states only that the pair is required, because that is the whole
+  # of what a schema can see. Naming the capability rather than counting the
+  # list keeps this true when a second gated kind joins the enumeration.
+  - if:
+      properties:
+        requirements:
+          contains:
+            required: [acquisition]
+            properties:
+              acquisition:
+                required: [kind]
+                properties: {kind: {const: search-then-fetch-set}}
+      required: [requirements]
+    then:
+      required: [acquisitionCapabilities]
+      properties:
+        acquisitionCapabilities: {contains: {const: search-then-fetch-set}}
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   uri: {type: string, format: uri, maxLength: 512}
