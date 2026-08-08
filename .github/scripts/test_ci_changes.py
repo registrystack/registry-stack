@@ -481,6 +481,17 @@ on:
                 classifier_path = path.replace("**", "service.rs")
                 self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
 
+    def test_evidence_contract_change_runs_docs_and_evidence_contracts(self) -> None:
+        """The docs Evidence configuration page is generated from these files."""
+        for path in (
+            "products/evidence/contracts/bundle.schema.yaml",
+            "products/evidence/contracts/runtime.schema.yaml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["evidence_contracts"])
+
     def test_first_country_docs_and_journey_routing_matrix(self) -> None:
         cases = (
             (

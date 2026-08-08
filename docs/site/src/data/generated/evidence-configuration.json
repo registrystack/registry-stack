@@ -1,0 +1,3172 @@
+{
+  "format_version": "1.0",
+  "generator": "docs/site/scripts/generate-evidence-configuration.mjs",
+  "contracts": [
+    {
+      "id": "bundle",
+      "file": "products/evidence/contracts/bundle.schema.yaml",
+      "title": "bundle/evidence.yaml",
+      "marker": "evidence-bundle-key-paths",
+      "field_count": 221,
+      "fields": [
+        {
+          "key_path": "assuranceProfile",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "evidence-grade",
+            "local",
+            "production"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "audit",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "audit.failClosed",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "true"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "audit.format",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "keyed-jsonl"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "audit.hashKeyVersion",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 2147483647",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "audit.hashSecretRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.actorClaim",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.algorithms",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 3",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.algorithms[]",
+          "kind": "array_item",
+          "type": null,
+          "required": false,
+          "values": [
+            "ES256",
+            "EdDSA",
+            "RS256"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.audiences",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.audiences[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.evidenceAudienceClaim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.grantAuthorityClaim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.grantIdClaim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.issuer",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "pattern: ^https?://"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.jwksUri",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "pattern: ^https?://"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "oidc-access-token"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.maximumTokenLifetimeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 86400",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.principalClaim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.requesterTagsClaim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.revokedKeyIds",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 32",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.revokedKeyIds[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 256",
+            "minLength: 1",
+            "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.tokenTypes",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 4",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authentication.tokenTypes[]",
+          "kind": "array_item",
+          "type": null,
+          "required": false,
+          "values": [
+            "application/at+jwt",
+            "at+jwt"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 128",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 128",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].audienceFrom",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "authenticated-requester"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].purpose",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].requirement",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].responseFormats",
+          "kind": "property",
+          "type": "array",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 3",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].responseFormats[]",
+          "kind": "array_item",
+          "type": null,
+          "required": false,
+          "values": [
+            "sd-jwt-vc",
+            "signed-jws",
+            "unsigned-json"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 8",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[].role",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[].selectorProfile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[].valueClaims",
+          "kind": "property",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxProperties: 16",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[].valueClaims.*",
+          "kind": "map_value",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjects[].valueOrigin",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "authenticated-context",
+            "authenticated-grant",
+            "request"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "consent",
+            "delegated",
+            "explicit-request",
+            "organizational",
+            "statutory"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.requesterTags",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 32",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.requesterTags[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "issuer",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "issuer.id",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "rateLimits",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "rateLimits.burstPerPrincipal",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 100000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "rateLimits.failedSelectorAttemptsPerPrincipalAuthorityPerMinute",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 100000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "rateLimits.requestsPerPrincipalPerMinute",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 1000000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 128",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].acquisition",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].acquisition.fetch",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].acquisition.kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "search-then-fetch",
+            "single"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].acquisition.search",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].acquisition.source",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints",
+          "kind": "property",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxProperties: 0"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.bucketScheme",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.categoryScheme",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.codelist",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.codelistVersion",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 128",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.maximum",
+          "kind": "property",
+          "type": "integer | string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 9007199254740991",
+            "minimum: -9007199254740991",
+            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.maximumBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 8192",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.maximumItems",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 64",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.maximumScale",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 9",
+            "minimum: 0"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.maximumSerializedBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 65536",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.minimum",
+          "kind": "property",
+          "type": "integer | string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 9007199254740991",
+            "minimum: -9007199254740991",
+            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.minimumItems",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 64",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.schema",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.schemeVersion",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 128",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].constraints.unique",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "true"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].form",
+          "kind": "property",
+          "type": null,
+          "required": false,
+          "values": [
+            "audience-scoped-entity-reference",
+            "boolean",
+            "bounded-decimal",
+            "bounded-integer",
+            "controlled-category",
+            "controlled-code",
+            "controlled-code-list",
+            "date-bucket",
+            "entity-reference-list",
+            "reviewed-structured-value",
+            "time-bucket"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].id",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].required",
+          "kind": "property",
+          "type": "boolean",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].sdJwtVc",
+          "kind": "property",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].sdJwtVc.claim",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z][A-Za-z0-9_]{0,63}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].concepts[].sdJwtVc.disclosure",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "top-level"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 32"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*",
+          "kind": "map_value",
+          "type": "array | boolean | integer | object | string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 64",
+            "maxLength: 1024",
+            "maximum: 9007199254740991",
+            "minItems: 1",
+            "minimum: -9007199254740991"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*.type",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "decimal"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*.value",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].code",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].maximumExclusive",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].maximumExclusive.type",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "decimal"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].maximumExclusive.value",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].minimumInclusive",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].minimumInclusive.type",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "decimal"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.parameters.*[].minimumInclusive.value",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.script",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs",
+          "kind": "property",
+          "type": "array",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 8"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].alternatives",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].alternatives[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].alternatives[].fields",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].alternatives[].fields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].alternatives[].profile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].derivation.selectorInputs[].role",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].disclosureGuard",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].disclosureGuard.families",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].disclosureGuard.families[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].evidenceType",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].existenceDisclosure",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "collapse-unresolved"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].fixtures",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].id",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "constraint",
+            "criterion",
+            "information-requirement"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].observationTimezone",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 128",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].purposes",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 32",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].purposes[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].referenceFrameworks",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].referenceFrameworks[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 8",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles[].cardinality",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "one"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles[].role",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles[].selectorProfiles",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].subjectRoles[].selectorProfiles[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].validitySeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 31536000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "responseFormats",
+          "kind": "property",
+          "type": "array",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 3",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "responseFormats[]",
+          "kind": "array_item",
+          "type": null,
+          "required": false,
+          "values": [
+            "sd-jwt-vc",
+            "signed-jws",
+            "unsigned-json"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 128",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 16",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.codelist",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.codelistVersion",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 128",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.maximum",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 9007199254740991",
+            "minimum: -9007199254740991"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.maximumBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 8192",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.minimum",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 9007199254740991",
+            "minimum: -9007199254740991"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.minimumBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 8192",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.fields.*.type",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "boolean",
+            "controlled-code",
+            "date",
+            "integer",
+            "string"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "selectorProfiles.*.maximumAggregateBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 8192",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "service",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "service.providerId",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "service.trustDomain",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "format: uri",
+            "maxLength: 512"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.activePublicJwkFile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.algorithm",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "ES256"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.format",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "flattened-jws-json"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.jwksPath",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "/.well-known/evidence/jwks.json"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.maximumAssertionValiditySeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 31536000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.publishedPublicJwkFiles",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 32",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.publishedPublicJwkFiles[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.revokedKeyIds",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 33",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.revokedKeyIds[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signing.verifierClockSkewSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 300",
+            "minimum: 0"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 128",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.assumedLifetimeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 86400",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.clientIdRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.clientSecretRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.credentialPlacement",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "basic-header",
+            "form-body"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.headerName",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 64",
+            "minLength: 1",
+            "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "basic",
+            "none",
+            "oauth2-client-credentials",
+            "static-api-key",
+            "static-bearer"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.maximumCacheSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 86400",
+            "minimum: 0"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.passwordRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.scope",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.tokenEndpoint",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?/[^?#]*$",
+            "pattern: ^https://[^?#]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.tokenRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.usernameRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.valueRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.baseUrl",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?$",
+            "pattern: ^https://[^/?#]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.extractScript",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.factSchema",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.posture",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "field-projected",
+            "record-transformed",
+            "source-derived"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.adapterParameters",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 64"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.adapterParameters.*",
+          "kind": "map_value",
+          "type": "array | boolean | integer | object | string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 256",
+            "maxLength: 16384",
+            "maxProperties: 256",
+            "maximum: 9223372036854776000",
+            "minimum: -9223372036854776000"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.adapterParameters.*.*",
+          "kind": "map_value",
+          "type": null,
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.adapterParameters.*[]",
+          "kind": "array_item",
+          "type": null,
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.adapterParametersSchema",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.concurrencyLimit",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 256",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.fixedHeaders",
+          "kind": "property",
+          "type": "array",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxItems: 32"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.fixedHeaders[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.fixedHeaders[].name",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 64",
+            "minLength: 1",
+            "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.fixedHeaders[].value",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 4096",
+            "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.maximumResponseBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 1048576",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.method",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "GET",
+            "POST"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.path",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings",
+          "kind": "property",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxProperties: 16",
+            "minProperties: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings.*.field",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings.*.from",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "prior-fact",
+            "selector"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings.*.profile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathBindings.*.role",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.pathTemplate",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 2048",
+            "minLength: 2",
+            "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{\\}-]*$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.jsonBody",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "allowed",
+            "forbidden",
+            "required"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumCollectionItems",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 256",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumJsonDepth",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 32",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumNormalizedBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 65536",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumQueryNameBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 64",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumQueryPairs",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 64",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumQueryValueBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 4096",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumStringBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maximum: 16384",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.query",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "allowed",
+            "forbidden",
+            "required"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.prepareScript",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.projection",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 64",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.projection[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "maxLength: 256",
+            "minLength: 2",
+            "pattern: ^/(?!/)([^/~]|~[01]|/|\\*)+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.redirects",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "deny"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 8",
+            "minItems: 0"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].alternatives",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].alternatives[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].alternatives[].fields",
+          "kind": "property",
+          "type": "array",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxItems: 16",
+            "minItems: 1",
+            "uniqueItems: true"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].alternatives[].fields[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].alternatives[].profile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.selectorInputs[].role",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.timeoutMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 30000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.responseSchema",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.tlsTrustProfile",
+          "kind": "property",
+          "type": "string",
+          "required": false,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.transport",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "http-json"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjectBinding",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjectBinding.keyVersion",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 2147483647",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjectBinding.secretRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "version",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "1"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "file": "products/evidence/contracts/runtime.schema.yaml",
+      "title": "runtime.yaml",
+      "marker": "evidence-runtime-key-paths",
+      "field_count": 33,
+      "fields": [
+        {
+          "key_path": "auditStorage",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "auditStorage.maximumFileBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 1099511627776",
+            "minimum: 1048576"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "auditStorage.path",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 2",
+            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "bundleDirectory",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 2",
+            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.bindHost",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 64",
+            "minLength: 2"
+          ],
+          "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
+          "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
+        },
+        {
+          "key_path": "listener.maximumConcurrentRequests",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 4096",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.maximumRequestBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 1048576",
+            "minimum: 1024"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.port",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 65535",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.requestTimeoutMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 30000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.shutdownGraceMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 120000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.tlsTermination",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "operator-controlled-upstream"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.trustProxyIdentityHeaders",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "false"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "metricsListener",
+          "kind": "property",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. It is a separate binding from the evidence listener and is not described by the public evidence contract.",
+          "runtime_validation": "Rejected at startup when bindHost and port together repeat the evidence listener binding."
+        },
+        {
+          "key_path": "metricsListener.bindHost",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 64",
+            "minLength: 2"
+          ],
+          "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
+          "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
+        },
+        {
+          "key_path": "metricsListener.port",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 65535",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "outboundTls",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "outboundTls.systemRoots",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "true"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "outboundTls.trustProfiles",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxProperties: 64"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "outboundTls.trustProfiles.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": false,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "outboundTls.trustProfiles.*.caBundleFile",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 2",
+            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "secretProviders",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "secretProviders.file",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "secretProviders.file.root",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 2",
+            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer",
+          "kind": "property",
+          "type": "object",
+          "required": true,
+          "values": null,
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.keyName",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.keyVersion",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 4294967295",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.kind",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "local-jwk",
+            "transit"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.mount",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.privateKeyRef",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.timeoutMilliseconds",
+          "kind": "property",
+          "type": "integer",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maximum: 30000",
+            "minimum: 1"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "signer.unixSocketPath",
+          "kind": "property",
+          "type": "string",
+          "required": true,
+          "values": null,
+          "constraints": [
+            "maxLength: 512",
+            "minLength: 2",
+            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+          ],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "version",
+          "kind": "property",
+          "type": null,
+          "required": true,
+          "values": [
+            "1"
+          ],
+          "constraints": [],
+          "description": null,
+          "runtime_validation": null
+        }
+      ]
+    }
+  ]
+}

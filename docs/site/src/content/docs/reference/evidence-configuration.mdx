@@ -1,0 +1,71 @@
+---
+title: Evidence Gateway configuration reference
+description: Generated key-path reference for the frozen Evidence Gateway bundle and runtime configuration grammars.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-08"
+doc_type: reference
+locale: en
+standards_referenced: []
+wide: true
+---
+
+import EvidenceConfigurationReference from '../../../components/EvidenceConfigurationReference.astro';
+
+This generated reference lists every key path an Evidence Gateway deployment may write, in the
+two frozen Version 1 configuration grammars: the deployment bundle and the runtime configuration.
+
+Each entry reports only what the grammar itself proves: the value type, whether the key is
+required, the fixed values it accepts, and the bounds it enforces. Read an entry to confirm a key
+exists, spell the key correctly, and stay inside its accepted values.
+
+## Contract status
+
+- Status: current, pre-1.0
+- Reference format: `1.0`
+- Generator: `npm run generate` in `docs/site`
+- Source: `products/evidence/contracts/bundle.schema.yaml` and
+  `products/evidence/contracts/runtime.schema.yaml`
+- Coverage gate: `products/evidence/scripts/check-config-key-paths.sh`
+
+The two contracts are the authority. JSON Schema validation and the runtime's own checks decide
+whether a configuration is accepted; this page never adds a rule of its own, and it does not
+inspect a deployment, live configuration, environment variables, or secret stores.
+
+The coverage gate holds the same key paths in exact parity with the product's configuration
+guide, so a key cannot reach one artifact and quietly skip the others.
+
+## Notation
+
+A property is written `name`, an item of an array `name[]`, and a value of a map `name.*`. A
+recursive definition, currently only nested adapter parameter values, appears once at the point
+it re-enters itself.
+
+Where a key is reachable through several alternative shapes, the entry shows the union of the
+types and values those alternatives accept, and reports the key as required only when every
+alternative requires it.
+
+{/* Generated from src/data/generated/evidence-configuration.json, built from
+    products/evidence/contracts/*.schema.yaml. Run npm run generate from docs/site. */}
+
+<EvidenceConfigurationReference />
+
+## What this page does not carry
+
+The contracts encode structure, not intent. They hold almost no prose, so this reference cannot
+explain why a key exists or how to choose its value. For that, read the configuration guide in
+`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`, which documents the
+same key paths with the reasoning behind them.
+
+A key path that this page lists is not a deployment that runs. Schema validity is one gate.
+Runtime, bundle, secret, and audit posture is a separate gate that `evidencectl doctor` reports,
+and fixture results are a third that `evidencectl fixtures run` reports.
+
+## Next
+
+- [Configuration reference](../project-configuration/)
+- [Evidencectl command reference](../evidencectl/)
+- [Evidence Gateway errors and problems reference](../evidence-problems/)
+- [Evidence Gateway API](../apis/registry-evidence/)

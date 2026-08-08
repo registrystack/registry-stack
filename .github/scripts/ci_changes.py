@@ -443,6 +443,10 @@ def classify(
             "crates/registryctl/tests/fixtures/project-reports/*",
             "docs/site/*",
             "products/manifest/docs/*",
+            # The Evidence configuration reference page is generated from the
+            # frozen contracts, so a contract change goes stale without a
+            # docs rebuild.
+            "products/evidence/contracts/*",
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
