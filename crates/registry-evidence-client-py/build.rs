@@ -15,8 +15,22 @@
 // `auto-initialize` dev-dependency) embeds Python instead, and linking
 // directly against libpython is exactly what that mode needs, so adding this
 // flag there would break it.
+//
+// That embedding build is the other branch below. It links against
+// `@rpath/libpython3.x.dylib` (`libpython3.x.so` on Linux) but records no
+// rpath of its own, so every test binary this crate produces dies at process
+// startup on any machine whose interpreter lives outside the dynamic linker's
+// default search path: a `mise`-, `pyenv`- or virtualenv-managed Python, which
+// is to say most development machines. That failure is not a test failure. It
+// happens before any test runs, and because `cargo test --workspace` stops at
+// the first non-zero exit, it also silently skips every suite ordered after
+// this crate. Recording the interpreter's own library directory as an rpath is
+// what `pyo3` recommends for embedding builds; the shipped extension module
+// never carries it, since the wheel is always built through the branch above.
 fn main() {
     if std::env::var_os("CARGO_FEATURE_EXTENSION_MODULE").is_some() {
         pyo3_build_config::add_extension_module_link_args();
+    } else {
+        pyo3_build_config::add_libpython_rpath_link_args();
     }
 }

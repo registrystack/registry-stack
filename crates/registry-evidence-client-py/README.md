@@ -166,18 +166,16 @@ For local development, install the package into a virtualenv with:
 uv run maturin develop
 ```
 
-For `cargo test` on macOS, the `auto-initialize` dev-dependency feature (see
-`Cargo.toml`) links the test binary directly against libpython, so the dynamic
-linker needs it on its search path, for example:
-
-```bash
-DYLD_LIBRARY_PATH=/path/to/python/lib cargo test -p registry-evidence-client-py
-```
-
-adjusted to the actual interpreter `cargo test` resolves at build time. This
-is not needed to import the built extension module from ordinary Python
-(`tests/python/bootstrap.py` never sets it), only for the Rust test binary's
-own process startup.
+The `auto-initialize` dev-dependency feature (see `Cargo.toml`) links every
+test binary this crate produces directly against libpython, so the dynamic
+linker has to find it at process startup. `build.rs` records the build-time
+interpreter's own library directory as an rpath for that build, which is why
+`cargo test -p registry-evidence-client-py` needs no `DYLD_LIBRARY_PATH` (macOS)
+or `LD_LIBRARY_PATH` (Linux) of its own, even for an interpreter outside the
+linker's default search path. Rebuilding after the interpreter moves is enough
+to follow it; the rpath is a build-time constant, not a lookup. The shipped
+wheel never carries that rpath: `maturin` always builds through this crate's
+`extension-module` feature, where libpython is left to the loading process.
 
 ## Testing
 
