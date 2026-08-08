@@ -74,9 +74,16 @@ impl ProjectFamily {
         }
     }
 
+    /// Builds one family's symbols, references, and diagnostics.
+    ///
+    /// Both the source text and the parsed tree are passed because the two answer different
+    /// questions. The tree gives a name its position, and it gives it whether or not the rest of the
+    /// document is finished. The text is what a deserializer reads, and Evidence checks a question's
+    /// shape by handing that text to the authoring library rather than by restating its rules here.
     pub(crate) fn build_index(
         self,
         root: &Path,
+        documents: &BTreeMap<PathBuf, String>,
         parsed: &BTreeMap<PathBuf, ParsedDocument>,
     ) -> (
         Vec<IndexedSymbol>,
@@ -85,7 +92,7 @@ impl ProjectFamily {
     ) {
         match self {
             Self::Relay => relay::build_index(root, parsed),
-            Self::Evidence => evidence::build_index(root, parsed),
+            Self::Evidence => evidence::build_index(root, documents, parsed),
         }
     }
 
@@ -98,6 +105,15 @@ impl ProjectFamily {
         match self {
             Self::Relay => "registry-stack",
             Self::Evidence => "evidence",
+        }
+    }
+
+    /// The code a diagnostic of this family carries for `rule`, for the rules that belong to no one
+    /// symbol kind. See [`crate::refs::SymbolKind::diagnostic_code`] for why Relay publishes none.
+    pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
+        match self {
+            Self::Relay => None,
+            Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
         }
     }
 }
@@ -402,6 +418,8 @@ mod tests {
     use super::*;
 
     const MANIFEST: &str = "version: 1\nregistry: { id: demo }\nservices: {}\n";
+    /// Enough of a question for the tests here, which are about which root owns which file. What a
+    /// whole question has to say for itself is `crates/registry-language-server/tests/`.
     const QUESTION: &str = "version: 1\nid: adult-status\n";
 
     fn project_in(directory: &Path) {
@@ -617,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn an_evidence_root_loads_its_documents_and_declares_nothing_yet() {
+    fn an_evidence_root_loads_its_documents_and_declares_what_they_name() {
         let temp = TempDir::new().unwrap();
         evidence_project_in(temp.path());
 
@@ -631,8 +649,24 @@ mod tests {
             .join(QUESTIONS_DIRECTORY)
             .join("adult-status.yaml");
         assert!(root.index().document_paths().any(|path| path == question));
-        assert!(root.index().workspace_symbols("adult-status").is_empty());
-        assert_eq!(root.index().diagnostics().len(), 0);
+        assert_eq!(
+            root.index()
+                .workspace_symbols("adult-status")
+                .into_iter()
+                .map(|symbol| symbol.location.path.clone())
+                .collect::<Vec<_>>(),
+            vec![question],
+            "the question document declares the question its file is named for"
+        );
+        // The stub above is not a whole question, and the authoring form says so once.
+        assert_eq!(
+            root.index()
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("evidence/question-shape")]
+        );
     }
 
     #[test]

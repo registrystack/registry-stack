@@ -21,7 +21,6 @@ pub(crate) struct YamlPair {
 pub(crate) enum YamlValue {
     Scalar(YamlScalar),
     Mapping(Vec<YamlPair>),
-    #[allow(dead_code)]
     Sequence(Vec<YamlValue>),
     Other,
 }
@@ -34,7 +33,6 @@ impl YamlValue {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn as_sequence(&self) -> Option<&[YamlValue]> {
         match self {
             Self::Sequence(entries) => Some(entries),

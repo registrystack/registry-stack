@@ -9,7 +9,10 @@ mod server;
 mod workspace;
 mod yaml;
 
-pub use refs::{EvidenceKind, ProjectIndex, RelayKind, SymbolKind};
+pub use refs::{
+    EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex, RelayKind,
+    SymbolKind,
+};
 pub use server::Backend;
 
 /// Serve the Registry Stack language protocol over standard input and output.

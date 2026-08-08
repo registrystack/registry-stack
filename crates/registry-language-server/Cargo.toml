@@ -11,13 +11,20 @@ repository.workspace = true
 anyhow.workspace = true
 registry-evidence-authoring.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 tower-lsp-server.workspace = true
 tree-sitter.workspace = true
 tree-sitter-yaml.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
+# The authoring library's own fixtures build the projects the Evidence tests index, so the editor is
+# tested against the shape the compiler is tested against rather than against a copy of it.
+registry-evidence-authoring = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

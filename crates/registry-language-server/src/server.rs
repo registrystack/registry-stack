@@ -15,8 +15,8 @@ use tower_lsp_server::{
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
         DocumentSymbolResponse, FileSystemWatcher, GlobPattern, GotoDefinitionParams,
         GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, Location,
-        MessageType, OneOf, PositionEncodingKind, ReferenceParams, Registration, SaveOptions,
-        ServerCapabilities, ServerInfo, SymbolInformation, TextDocumentSyncCapability,
+        MessageType, NumberOrString, OneOf, PositionEncodingKind, ReferenceParams, Registration,
+        SaveOptions, ServerCapabilities, ServerInfo, SymbolInformation, TextDocumentSyncCapability,
         TextDocumentSyncKind, TextDocumentSyncOptions, Uri, WorkspaceSymbolParams,
         WorkspaceSymbolResponse,
     },
@@ -66,7 +66,9 @@ impl Backend {
                         .push(Diagnostic::new(
                             diagnostic.range,
                             Some(diagnostic.severity),
-                            None,
+                            // The code names the rule, so a client can filter or suppress one rule
+                            // instead of the whole source.
+                            diagnostic.code.clone().map(NumberOrString::String),
                             // The root says which tool is talking, so a reader of a mixed workspace
                             // can tell one family's diagnostics from another's.
                             Some(root.diagnostic_source().to_owned()),

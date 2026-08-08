@@ -5746,10 +5746,13 @@ name = "registry-language-server"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "futures",
  "registry-evidence-authoring",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "tokio",
+ "tower",
  "tower-lsp-server",
  "tree-sitter",
  "tree-sitter-yaml",

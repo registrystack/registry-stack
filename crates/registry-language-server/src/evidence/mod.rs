@@ -6,6 +6,7 @@
 //! single implementation of the authoring form. The editor reads a project the same way the
 //! compiler does or it tells authors a story their build will contradict.
 
+pub(crate) mod diagnostics;
 pub(crate) mod index;
 pub(crate) mod layout;
 

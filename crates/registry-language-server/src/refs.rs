@@ -36,6 +36,20 @@ impl SymbolKind {
             Self::Evidence(kind) => kind.lsp_kind(),
         }
     }
+
+    /// The stable identifier a client filters or suppresses `rule` by, for the kinds that publish
+    /// one.
+    ///
+    /// Evidence names every rule it reports, so an author who disagrees with one can silence that
+    /// rule rather than the server. Relay's diagnostics have never carried a code, and a client
+    /// filtering them today filters on the message; giving them one now would change what that
+    /// client sees, which is a decision for the Relay surface rather than a side effect of this one.
+    pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
+        match self {
+            Self::Relay(_) => None,
+            Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
+        }
+    }
 }
 
 impl From<RelayKind> for SymbolKind {
@@ -135,6 +149,22 @@ impl EvidenceKind {
             Self::AccessPolicy => LspSymbolKind::PACKAGE,
         }
     }
+
+    /// The part of a diagnostic code that names this kind. It is [`Self::label`] without the
+    /// spaces, so `evidence/unknown-source` and `evidence/unknown-selector-profile` read as the
+    /// sentences they accompany.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::Concept => "concept",
+            Self::Source => "source",
+            Self::SelectorProfile => "selector-profile",
+            Self::DerivationFile => "derivation-file",
+            Self::SchemaFile => "schema-file",
+            Self::FixtureFile => "fixture-file",
+            Self::AccessPolicy => "access-policy",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -182,11 +212,20 @@ pub struct IndexedSymbol {
     pub(crate) resolvable: bool,
 }
 
+/// One problem an author can act on, at the place in the document that holds it.
+///
+/// Severity is [`DiagnosticSeverity::ERROR`] on every diagnostic this server publishes. The channel
+/// carries what the compiler refuses and nothing else, so an author who fixes everything the editor
+/// underlines has a project that builds, and one who ignores an underline is ignoring a build
+/// failure rather than an opinion.
+///
+/// `code` names the rule for the client that wants to filter or suppress one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IndexedDiagnostic {
     pub path: PathBuf,
     pub range: Range,
     pub severity: DiagnosticSeverity,
+    pub code: Option<String>,
     pub message: String,
 }
 
@@ -205,12 +244,30 @@ impl SymbolQuery {
             name: name.into(),
         }
     }
+
+    pub(crate) fn scoped(
+        kind: impl Into<SymbolKind>,
+        scope: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            scope: Some(scope.into()),
+            name: name.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct IndexedReference {
     pub(crate) target: SymbolQuery,
     pub(crate) location: IndexedLocation,
+    /// Whether a target this reference cannot find is reported here.
+    ///
+    /// A walker sets this false for the one kind of reference another check already speaks for, so
+    /// that navigation works from it without putting a second error on one mistake. It never means
+    /// the reference is allowed to dangle.
+    pub(crate) reports_unresolved: bool,
 }
 
 #[derive(Debug, Default)]
@@ -233,6 +290,20 @@ impl ProjectIndex {
         let loaded = relay::load_project_documents(&root)?;
         Ok(Self::from_documents_with_diagnostics(
             ProjectFamily::Relay,
+            &root,
+            &loaded.documents,
+            loaded.diagnostics,
+        ))
+    }
+
+    /// Loads and indexes one Evidence authoring project, the counterpart to [`Self::load`].
+    pub fn load_evidence(root: &Path) -> Result<Self> {
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("failed to resolve project root {}", root.display()))?;
+        let loaded = crate::evidence::load_project_documents(&root)?;
+        Ok(Self::from_documents_with_diagnostics(
+            ProjectFamily::Evidence,
             &root,
             &loaded.documents,
             loaded.diagnostics,
@@ -268,7 +339,8 @@ impl ProjectIndex {
             .filter_map(|(path, document)| document.syntax_error.map(|range| (path.clone(), range)))
             .collect::<BTreeMap<_, _>>();
 
-        let (symbols, references, semantic_diagnostics) = family.build_index(&root, &parsed);
+        let (symbols, references, semantic_diagnostics) =
+            family.build_index(&root, documents, &parsed);
 
         let mut index = Self {
             root,
@@ -290,6 +362,7 @@ impl ProjectIndex {
                     path,
                     range,
                     severity: DiagnosticSeverity::ERROR,
+                    code: family.diagnostic_code("syntax"),
                     message:
                         "Invalid YAML syntax; this document is indexed only as far as it parses"
                             .to_owned(),
@@ -441,6 +514,7 @@ impl ProjectIndex {
                     path: symbol.location.path.clone(),
                     range: symbol.location.range,
                     severity: DiagnosticSeverity::ERROR,
+                    code: key.kind.diagnostic_code("duplicate"),
                     message: format!(
                         "Duplicate {} definition '{}'{}",
                         key.kind.label(),
@@ -454,32 +528,43 @@ impl ProjectIndex {
             }
         }
 
-        for reference in &self.references {
+        for reference in self
+            .references
+            .iter()
+            .filter(|reference| reference.reports_unresolved)
+        {
             let candidates = self.definitions_for(&reference.target);
-            let message = match candidates.len() {
-                0 => Some(format!(
-                    "Unknown {} reference '{}'{}",
-                    reference.target.kind.label(),
-                    bounded_value(&reference.target.name),
-                    reference
-                        .target
-                        .scope
-                        .as_ref()
-                        .map(|scope| format!(" in service '{}'", bounded_value(scope)))
-                        .unwrap_or_default()
+            let reported = match candidates.len() {
+                0 => Some((
+                    "unknown",
+                    format!(
+                        "Unknown {} reference '{}'{}",
+                        reference.target.kind.label(),
+                        bounded_value(&reference.target.name),
+                        reference
+                            .target
+                            .scope
+                            .as_ref()
+                            .map(|scope| format!(" in service '{}'", bounded_value(scope)))
+                            .unwrap_or_default()
+                    ),
                 )),
                 1 => None,
-                count => Some(format!(
-                    "Ambiguous {} reference '{}': found {count} definitions",
-                    reference.target.kind.label(),
-                    bounded_value(&reference.target.name)
+                count => Some((
+                    "ambiguous",
+                    format!(
+                        "Ambiguous {} reference '{}': found {count} definitions",
+                        reference.target.kind.label(),
+                        bounded_value(&reference.target.name)
+                    ),
                 )),
             };
-            if let Some(message) = message {
+            if let Some((rule, message)) = reported {
                 diagnostics.push(IndexedDiagnostic {
                     path: reference.location.path.clone(),
                     range: reference.location.range,
                     severity: DiagnosticSeverity::ERROR,
+                    code: reference.target.kind.diagnostic_code(rule),
                     message,
                 });
             }
@@ -490,14 +575,29 @@ impl ProjectIndex {
     }
 }
 
+/// A problem with a whole document rather than a place in it, reported at its start.
 pub(crate) fn document_diagnostic(path: &Path, message: &str) -> IndexedDiagnostic {
     IndexedDiagnostic {
         path: path.to_path_buf(),
-        range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+        range: DOCUMENT_START,
         severity: DiagnosticSeverity::ERROR,
+        code: None,
         message: message.to_owned(),
     }
 }
+
+/// The empty range at the first character, where a diagnostic goes when the document holds no
+/// narrower place to put it.
+pub(crate) const DOCUMENT_START: Range = Range {
+    start: Position {
+        line: 0,
+        character: 0,
+    },
+    end: Position {
+        line: 0,
+        character: 0,
+    },
+};
 
 fn diagnostic_cmp(left: &IndexedDiagnostic, right: &IndexedDiagnostic) -> std::cmp::Ordering {
     left.path

@@ -348,6 +348,7 @@ impl IndexBuilder<'_> {
                 path: manifest_path.to_path_buf(),
                 range: file.map_or(alias.key.range, |file| file.range),
                 severity: DiagnosticSeverity::ERROR,
+                code: None,
                 message: format!(
                     "Declared {} '{}' {problem}; use a regular UTF-8 YAML file inside the documented project layout",
                     kind.label(),
@@ -453,6 +454,7 @@ impl IndexBuilder<'_> {
                 path: path.to_path_buf(),
                 range,
             },
+            reports_unresolved: true,
         });
     }
 }
