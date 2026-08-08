@@ -100,13 +100,15 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: source_executor_failure_matrix_is_exact_single_request_and_value_free}
   - id: acceptance-row-19
-    summary: OAuth token requests and responses are absent from all diagnostics, no placement can put client credentials in the token URL, and a source authenticates by client secret or by signed client assertion but never by both.
+    summary: OAuth token requests and responses are absent from all diagnostics, no placement can put client credentials in the token URL, a source authenticates by client secret or by signed client assertion but never by both, and the assertion audience is the token endpoint unless the bundle governs it.
     tests:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
       - {file: crates/registry-evidence/src/config.rs, name: source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_oauth_source_without_exactly_one_credential_form}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_signs_the_configured_assertion_audience}
+      - {file: crates/registry-evidence/src/config.rs, name: a_client_assertion_audience_without_an_assertion_key_is_refused}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: an_unreadable_client_assertion_key_fails_before_the_token_request}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: client_assertion_key_material_the_jwk_parser_refuses_never_signs}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_client_secret_that_is_not_utf8_is_refused_in_either_placement}

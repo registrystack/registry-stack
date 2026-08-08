@@ -201,6 +201,9 @@ enum OauthClientAuthentication {
     },
     PrivateKeyJwt {
         key_ref: SecretRef,
+        /// Resolved at compile time to the configured audience or, when the
+        /// bundle names none, the token endpoint.
+        audience: String,
     },
 }
 
@@ -872,6 +875,7 @@ fn compile_authentication(
             client_id_ref,
             client_secret_ref,
             client_assertion_key_ref,
+            client_assertion_audience,
             scope,
             audience,
             credential_placement,
@@ -888,6 +892,10 @@ fn compile_authentication(
                 client_assertion_key_ref,
             ) {
                 (Some(secret_ref), Some(placement), None) => {
+                    // An assertion audience has no assertion to travel in.
+                    if client_assertion_audience.is_some() {
+                        return Err(SourceError::InvalidPlan);
+                    }
                     OauthClientAuthentication::ClientSecret {
                         secret_ref: secret_ref.clone(),
                         placement: *placement,
@@ -895,6 +903,9 @@ fn compile_authentication(
                 }
                 (None, None, Some(key_ref)) => OauthClientAuthentication::PrivateKeyJwt {
                     key_ref: key_ref.clone(),
+                    audience: client_assertion_audience
+                        .clone()
+                        .unwrap_or_else(|| token_endpoint.as_str().to_owned()),
                 },
                 _ => return Err(SourceError::InvalidPlan),
             };
@@ -1172,8 +1183,9 @@ impl OauthPlan {
                     }
                 }
             }
-            OauthClientAuthentication::PrivateKeyJwt { key_ref } => {
-                let assertion = self.client_assertion(secrets, key_ref, client_id_text)?;
+            OauthClientAuthentication::PrivateKeyJwt { key_ref, audience } => {
+                let assertion =
+                    self.client_assertion(secrets, key_ref, audience, client_id_text)?;
                 // RFC 7523 section 2.2 lets the client identifier travel beside
                 // the assertion, and an authorization server that keys its
                 // client lookup on it rejects the request without it.
@@ -1187,13 +1199,16 @@ impl OauthPlan {
 
     /// Sign the RFC 7523 section 2.2 client assertion.
     ///
-    /// The audience is the token endpoint the assertion is sent to, which both
-    /// RFC 7523 section 3 and SMART on FHIR Backend Services fix, so no bundle
-    /// key can point an assertion at a different recipient.
+    /// The audience is resolved at compile time: the token endpoint the
+    /// assertion is sent to, which is what SMART on FHIR Backend Services
+    /// requires, unless the bundle names one. RFC 7523 section 3 has the
+    /// authorization server compare it by Simple String Comparison, so the
+    /// resolved value is signed byte for byte and never reparsed here.
     fn client_assertion(
         &self,
         secrets: &SecretResolver,
         key_ref: &SecretRef,
+        audience: &str,
         client_id: &str,
     ) -> Result<Zeroizing<String>, SourceError> {
         let key_material = resolve(secrets, key_ref)?;
@@ -1216,7 +1231,7 @@ impl OauthPlan {
             &key,
             &ClientAssertionRequest {
                 client_id,
-                audience: self.token_endpoint.as_str(),
+                audience,
                 lifetime_seconds: DEFAULT_ASSERTION_LIFETIME_SECONDS,
                 issued_at,
             },

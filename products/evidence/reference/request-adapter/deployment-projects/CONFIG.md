@@ -365,6 +365,10 @@ authentication:
   tokenEndpoint: https://auth.registry.gov.example/token
   clientIdRef: secret:file/source-client-id
   clientAssertionKeyRef: secret:file/source-client-key
+  # Only for a server that expects an identifier it is not reached at; the
+  # default is tokenEndpoint. Distinct from the audience below, which is a
+  # token-request parameter rather than a claim in the signed assertion.
+  clientAssertionAudience: https://auth.registry.gov.example/
   scope: recordsearch
   audience: https://api.registry.gov.example/
   maximumCacheSeconds: 300
@@ -397,10 +401,24 @@ An OAuth source declares exactly one client authentication form.
 admits neither. The referenced key file holds a private JWK, and the runtime
 signs a short-lived assertion under the algorithm that key declares: SMART on
 FHIR Backend Services names ES384 and RS384, and requires this form rather than
-a client secret. RFC 7523 section 2.2 fixes the assertion audience to
-`tokenEndpoint` and fixes the client-assertion type, so neither is configurable,
-and the assertion lifetime is fixed rather than governed. A key the runtime
-cannot read fails the request before any token call.
+a client secret. RFC 7523 section 2.2 fixes the client-assertion type, so it is
+not configurable, and the assertion lifetime is fixed rather than governed. A
+key the runtime cannot read fails the request before any token call.
+
+`clientAssertionAudience` is the assertion's `aud` claim, and it defaults to
+`tokenEndpoint`, which is the value SMART on FHIR Backend Services requires.
+State it only for a server that expects an identifier it is not reached at: one
+behind a proxy, or one naming its issuer. RFC 7523 section 3 asks only that the
+value identify the authorization server, says the token endpoint URL MAY be
+used, and leaves the string to out-of-band agreement, so no relationship to
+`tokenEndpoint` is imposed and the value is not a URL to the runtime. Section 3
+has the server compare it by Simple String Comparison, so it is signed byte for
+byte: a default port or trailing slash written here survives into the claim. It
+is admitted only beside `clientAssertionKeyRef`, because a shared secret carries
+no claim to put it in, and it names who may accept the assertion, never where
+the token request is sent. Register one assertion key per authorization server:
+a key registered at two servers is what lets an audience meant for one be
+presented to the other.
 
 OAuth `credentialPlacement` is one of `basic-header` or `form-body`. RFC 6749
 section 2.3.1 requires the client identifier and secret to travel in the
@@ -411,7 +429,10 @@ request is credential bootstrap, not a second evidence-data lookup.
 
 `audience` is sent as a token-request parameter only when the bundle states it.
 An authorization server that scopes a token to a named API needs it; without it
-it returns a token the source will reject.
+it returns a token the source will reject. It is not
+`clientAssertionAudience`: this one is a form field of the token request, that
+one is a claim inside the signed assertion, and a server may want both, neither,
+or different values for each.
 
 RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
 compliant provider may return only `access_token` and `token_type`. A token
@@ -998,6 +1019,7 @@ sources.*
 sources.*.authentication
 sources.*.authentication.assumedLifetimeSeconds
 sources.*.authentication.audience
+sources.*.authentication.clientAssertionAudience
 sources.*.authentication.clientAssertionKeyRef
 sources.*.authentication.clientIdRef
 sources.*.authentication.clientSecretRef

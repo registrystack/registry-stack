@@ -3003,10 +3003,10 @@ async fn a_static_authorization_source_sends_the_scheme_it_declares() {
 }
 
 /// RFC 7523 section 2.2 replaces the shared secret with a signed assertion, and
-/// SMART on FHIR Backend Services requires that form. The assertion has to be
-/// audienced to the token endpoint it is sent to, or a hostile authorization
-/// server could replay it elsewhere, and no shared-secret parameter may appear
-/// beside it.
+/// SMART on FHIR Backend Services requires that form. A bundle that names no
+/// assertion audience gets the token endpoint it is sent to, which is the value
+/// SMART requires and the one that cannot be replayed anywhere the assertion
+/// was not already going. No shared-secret parameter may appear beside it.
 #[tokio::test]
 async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret() {
     let server = MockServer::start().await;
@@ -3116,6 +3116,96 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
     assert!(
         claims["jti"].as_str().is_some_and(|jti| !jti.is_empty()),
         "the assertion carries no replay identifier"
+    );
+}
+
+/// An authorization server behind a proxy, or one following the RFC 7523
+/// revision that makes the issuer identifier the sole audience, expects a value
+/// the client never dials. RFC 7523 section 3 has the server compare that value
+/// by Simple String Comparison, so the configured bytes have to reach the claim
+/// unchanged: parsing them as a URL would drop a default port or add a path and
+/// silently produce an assertion the server rejects.
+#[tokio::test]
+async fn a_private_key_jwt_source_signs_the_configured_assertion_audience() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "synthetic-access-token",
+            "token_type": "Bearer",
+            "expires_in": 300
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .and(header("authorization", "Bearer synthetic-access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_root, secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", CLIENT_ASSERTION_PRIVATE_JWK),
+    ]);
+    // A different host from the token endpoint, carrying the explicit default
+    // port a URL parser would drop. Both halves matter: the host proves the
+    // audience is not derived from the endpoint, and the port proves the bytes
+    // are not normalized on the way to the claim.
+    let assertion_audience = "https://issuer.invalid:443/realms/main";
+    let token_endpoint = format!("{}/token", server.uri());
+    let source = fixed_source(
+        &server.uri(),
+        json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": token_endpoint,
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "clientAssertionAudience": assertion_audience,
+            "maximumCacheSeconds": 60
+        }),
+    );
+    SourceExecutor::new(&source, secrets)
+        .expect("assertion executor builds")
+        .execute(
+            &[selector("record")],
+            &RequestParts {
+                query: vec![],
+                body: Some(json!({})),
+            },
+        )
+        .await
+        .expect("assertion-authenticated source request succeeds");
+
+    let requests = server.received_requests().await.expect("request journal");
+    let token_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/token")
+        .expect("the token request was recorded");
+    let form = encoded_parameters(&token_request.body);
+    let assertion = form
+        .iter()
+        .find_map(|(name, value)| (name == "client_assertion").then_some(value.as_str()))
+        .expect("the form carries an assertion");
+    let segments = assertion.split('.').collect::<Vec<_>>();
+    assert_eq!(segments.len(), 3, "the assertion is not a compact JWS");
+    let claims = decode_jws_segment(segments[1]);
+    assert_eq!(
+        claims["aud"],
+        json!(assertion_audience),
+        "the configured assertion audience did not reach the claim unchanged"
+    );
+
+    // The token request still goes to the endpoint. A configured audience names
+    // who may accept the assertion, never where it is sent. The host half is
+    // carried by the mount itself: this server is the only one running, and its
+    // `expect(1)` on `/token` is verified when the mock drops.
+    assert_eq!(
+        token_request.url.path(),
+        "/token",
+        "the assertion audience redirected the token request"
     );
 }
 

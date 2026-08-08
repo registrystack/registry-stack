@@ -905,13 +905,17 @@ $defs:
           - description: >-
               Shared-secret client authentication. The secret names the credential and
               `credentialPlacement` names the channel it travels in, so neither is meaningful
-              without the other.
+              without the other. There is no assertion, so there is no audience to name.
             required:
               - clientSecretRef
               - credentialPlacement
-            not:
-              required:
-                - clientAssertionKeyRef
+            allOf:
+              - not:
+                  required:
+                    - clientAssertionKeyRef
+              - not:
+                  required:
+                    - clientAssertionAudience
           - description: >-
               Assertion client authentication. The signing key is the whole credential, so
               a shared secret and a placement for one have nothing to describe.
@@ -953,9 +957,21 @@ $defs:
             description: >-
               Logical file-secret reference for the private JWK the runtime signs an RFC 7523
               section 2.2 client assertion with, which is the client authentication SMART on
-              FHIR Backend Services requires. The assertion is audienced to `tokenEndpoint`
+              FHIR Backend Services requires. The assertion is audienced to
+              `clientAssertionAudience`, or to `tokenEndpoint` when the bundle names none,
               and lives 60 seconds; no private key leaves the process.
             $ref: '#/$defs/secret-ref'
+          clientAssertionAudience:
+            description: >-
+              Fixed `aud` claim of the signed client assertion, for an authorization server
+              that expects an identifier it is not reached at, such as its issuer or a host
+              in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting
+              to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple
+              String Comparison, so it is an opaque identifier rather than a URL and is signed
+              byte for byte. It names who may accept the assertion, never where it is sent.
+            type: string
+            minLength: 1
+            maxLength: 512
           scope:
             description: >-
               Fixed scope requested in the client-credentials exchange; a token response reporting
