@@ -337,15 +337,16 @@ candidate-ranking script to Evidence as a workaround.
 
 ## Source-shape contract suite
 
-The first implementation includes three minimal local mock profiles. They
-exercise different wire contracts while using the same source executor,
-evaluator, output gate, signer, and audit path.
+The suite is four minimal local mock profiles. They exercise different wire
+contracts while using the same source executor, evaluator, output gate, signer,
+and audit path.
 
 | Profile | Boundary shape | What it proves |
 |---|---|---|
 | `flat-rest` | Fixed JSON request and flat JSON object | Identifier and compound selector contracts plus direct fact extraction |
 | `dhis2-tracker` | `GET` query, selected fields, pager, collection, nested attribute array, Basic auth | REST query encoding, compound selectors, cardinality, pagination refusal, and code-based extraction |
 | `opencrvs-event-search` | OAuth client token, bounded JSON `POST`, nested event index, and country-configured declaration | Credential bootstrap, exact tracking-ID lookup, nested extraction, and selector-aware relational derivation |
+| `search-chain` | Fixed JSON `POST` search, then a path-bound dereference member and a body-filtered search member in declared order | Ordered multi-stage acquisition, per-member fact-input projection through both the path and the body channel, a provider count read as a value rather than a cardinality guard, and a silently widened query reaching ambiguity |
 
 These are compatibility-shaped mocks, not whole-product emulators or claims of
 certified DHIS2 or OpenCRVS support. Fixtures are small, invented, and
@@ -367,7 +368,8 @@ The suite must prove at least:
 - missing, extra, unknown, mistyped, oversized, or unauthorized selector input
   rejected before credential acquisition and source access;
 - no fetch after a search returns zero or multiple results, and no request
-  beyond the acquisition's fixed one- or two-call ceiling;
+  beyond the ceiling the acquisition fixes in configuration before any call is
+  made: one call, two calls, or one per declared stage of a gated set;
 - configured `pageSize` detects ambiguity rather than following pagination;
 - no broad candidate list, score, near-match diagnostic, or comparison detail
   is returned to the caller, logs, audit, or evidence;
@@ -397,7 +399,8 @@ derive(facts, declared_authorized_selectors, evaluation_context)
 
 `adapter_context` has the exact keys `parameters` and `prior_facts`.
 `prior_facts` is empty except when Rust supplies the schema-validated search
-FactSet to the fixed fetch source.
+FactSet to a fixed fetch source, whole or projected onto the allowlist that
+stage declares.
 
 `LookupResult` is exactly `match(FactSet)`, `no_match`, or `ambiguous`. The
 source adapter performs source-specific response parsing and cardinality
@@ -724,10 +727,10 @@ follow-up issue.
 | Initial assertion cases | Adult status, residence region, professional licence status, and legal-parent relationship each pass offline and through the real HTTP service, including authentication, authorization, response-format permission, source access, both audit gates, output validation, signed JWS, explicitly authorized unsigned output, and strict verification. |
 | Generic domain model | The four cases use one model and operation. Production Rust has no adult, age, residence, licence, parentage, personal-name-part, national-identifier, or other acceptance-case or jurisdiction-specific type, field, operation, route, feature, or conditional. Deployment-defined selector field names are opaque stable names. |
 | Source-product neutrality | Production code, Cargo metadata, and generated public contracts have no DHIS2 or OpenCRVS module, type, dependency, feature, configuration variant, route, CLI option, or conditional. Product names and shapes appear only in tests, sanitized fixtures, test-only bundles, and design or local-smoke documentation. |
-| Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
+| Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
 | Values and validation | Every Version 1 Supported Value form declared in `CONCEPT.md` passes positive, negative, boundary, size, cardinality, Evidence construction, JWS serialization, and verification tests. The four initial assertion cases exercise boolean, controlled-code, time-bucket, multiple-concept, and multi-subject behavior through the full service. |
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
-| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before the fixed fetch and never persist; no response can choose transport or create a third call. The effective posture is the weaker of both sources. Basic, static Bearer, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
+| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Bearer, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
 | Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
 | Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
@@ -740,7 +743,7 @@ follow-up issue.
 | Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor`, `evidencectl fixtures run`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit events pass `evidence verify-audit`. |
 | Optional Mint pairing | External HTTPS OIDC builds without Mint. When Mint is selected, `mint check`, the paired read-only doctor check, registered-client token acquisition, and Evidence acceptance pass. Issuer, JWKS URI, audience, algorithm, token type, and all configured claim-name mismatches fail generically without keys, tokens, credentials, selectors, or source values in output. Mint remains a single process with a memory-only replay cache. |
 | Compose and bare-binary journey | The maintained Compose guidance mounts the candidate bundle unchanged and read-only, uses a distinct container runtime revision, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. It documents service UID and secret modes, public-HTTPS Mint routing, and image provenance without generating Compose output. The production and optional-Mint tutorials execute from released bare binaries and include a real Curl boundary. |
-| Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed beyond the explicitly closed two-call acquisition. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, public or federated catalogs, runtime bundle mutation, script-selected transport, response-led or general multi-call planning, a third evidence-data call, general multi-source fulfillment, a policy engine, application database, message broker, or worker process. |
+| Stop boundary | No capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed beyond the explicitly closed acquisition kinds, each of which fixes every call it may make in configuration before any call is made. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, agents or MCP, federation, workflow, public or federated catalogs, runtime bundle mutation, script-selected transport, response-led or general multi-call planning, an evidence-data call no declared acquisition fixed, response-led multi-source fulfillment, a policy engine, application database, message broker, or worker process. |
 
 ## Required Version 1 acceptance tests
 
@@ -936,6 +939,20 @@ At minimum, pin these acceptance and negative cases:
     derivation; the effective posture is the weaker source posture; search
     no-match or ambiguity makes no fetch; no intermediate fact enters audit;
     and no script or response can select transport or cause a third call.
+65. A `search-then-fetch-set` requirement executes one fixed audited search
+    and, only after a unique schema-valid match, one fixed audited call per
+    declared member in declared order. Each member receives only its declared
+    fact-input allowlist through every channel, including the body its
+    preparation builds; derivation receives the union of the stage FactSets,
+    whose names startup proved disjoint; an unresolved stage contacts no later
+    member; and the disclosure-release event names every executed source in
+    order.
+66. A gated acquisition kind serves only where the bundle declares it and the
+    operator separately enabled it in the runtime configuration, refused
+    before the listener binds and reported by both `evidence check` and
+    `evidencectl doctor`. The declared acquisition ceiling bounds the source
+    exchanges and the transitions between stages as a dependency failure under
+    its own safe category, without ever cancelling a durable audit append.
 
 ## Verification gates
 
@@ -999,8 +1016,10 @@ extension APIs for them:
 - script-selected sources, URLs, methods, paths, path-binding origins, headers,
   credentials, retries, page traversal, response-led routing, or general
   multi-call source planning;
-- any acquisition beyond the fixed `single` and two-call `search-then-fetch`
-  kinds, including a third lookup or general multi-source fulfillment;
+- any acquisition beyond the closed kinds this release defines, including a
+  lookup no declared acquisition fixed, or response-led multi-source
+  fulfillment where a response chooses how many sources are called or which
+  one comes next;
 - evidence or raw-source persistence;
 - document retrieval or multipart responses;
 - OID4VCI, credential lifecycle, status lists, revocation, presentation or
