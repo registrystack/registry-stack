@@ -172,6 +172,9 @@ function occurrenceOf(schema, keyPath, kind, required, state) {
     // An entry that carries no shape of its own. It records requiredness or the
     // absence of a bound, and never brings a key path into the reference.
     assertionOnly: false,
+    // Set on entries an `if`/`then`/`else` clause produced, so a value the
+    // clause fixes can be told apart from one an alternative offers.
+    fromCondition: false,
   };
 }
 
@@ -188,6 +191,7 @@ function assertionOf(keyPath, kind, required, variantKey, conditional) {
     description: null,
     runtime_validation: null,
     assertionOnly: true,
+    fromCondition: false,
   };
 }
 
@@ -369,6 +373,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
         if (entry.required) {
           entry.conditional = true;
         }
+        entry.fromCondition = true;
         occurrences.push(entry);
       }
     }
@@ -414,6 +419,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
           description: null,
           runtime_validation: null,
           assertionOnly: false,
+          fromCondition: false,
         });
       }
     }
@@ -474,6 +480,18 @@ function merge(occurrences) {
   const shaped = occurrences.filter((occurrence) => !occurrence.assertionOnly);
   const first = shaped[0] ?? occurrences[0];
   const conditional = occurrences.some((occurrence) => occurrence.conditional);
+  const values = uniqueSorted(occurrences.flatMap((occurrence) => occurrence.values));
+  // A conditional rule that fixes a value narrows the accepted set rather than
+  // adding to it, and a union cannot show that. Grouping values per alternative
+  // the way bounds are grouped would split a key such as
+  // `requirements[].concepts[].form` into one group per branch and read worse
+  // than the union, so the narrowing is named beside the set instead.
+  const narrowedByCondition = occurrences.some(
+    (occurrence) =>
+      occurrence.fromCondition &&
+      occurrence.values.length > 0 &&
+      new Set(occurrence.values).size < values.length,
+  );
   return {
     key_path: first.key_path,
     kind: first.kind,
@@ -483,7 +501,8 @@ function merge(occurrences) {
       : occurrences.some((occurrence) => occurrence.required)
         ? 'yes'
         : 'no',
-    values: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.values)),
+    values,
+    values_conditional: narrowedByCondition,
     constraints: constraintAlternatives(occurrences),
     description: occurrences.find((occurrence) => occurrence.description)?.description ?? null,
     runtime_validation:

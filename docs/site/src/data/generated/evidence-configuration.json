@@ -15,6 +15,7 @@
           "type": "array",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 1",
@@ -32,6 +33,7 @@
           "values": [
             "search-then-fetch-set"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One gated acquisition kind this bundle declares, which is the bundle half of a two-sided gate; a requirement using a kind absent here is rejected at startup.",
           "runtime_validation": null
@@ -46,6 +48,7 @@
             "local",
             "production"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Declares the governed assurance boundary of the whole bundle, and the value is visible in every assertion, so an authentic `local` assertion never satisfies a relying procedure expecting a deployable profile. `local` is an authoring profile that lets a requirement omit `fixtures` and disables no other runtime boundary; the deployable profiles require every requirement to reference a fixture suite with complete coverage before the bundle loads.",
           "runtime_validation": null
@@ -56,6 +59,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Governs audit pseudonymization and the fail-closed policy for the whole deployment; `runtime.yaml` contributes only the storage location.",
           "runtime_validation": null
@@ -68,6 +72,7 @@
           "values": [
             "true"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Holds every audit gate closed, so an authorization refusal, access attempt, or disclosure release whose record cannot be durably written stops the response instead of being served unaudited.",
           "runtime_validation": null
@@ -80,6 +85,7 @@
           "values": [
             "keyed-jsonl"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes the audit record form to the keyed JSONL chain, whose sealed segments an operator replays out of band to prove retained history.",
           "runtime_validation": null
@@ -90,6 +96,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 2147483647",
@@ -105,6 +112,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -119,6 +127,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Verification policy for inbound bearer tokens: the runtime validates each token against these values itself and ignores upstream identity headers.",
           "runtime_validation": null
@@ -129,6 +138,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -143,6 +153,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 3",
@@ -163,6 +174,7 @@
             "EdDSA",
             "RS256"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One signature algorithm the token verifier accepts on an inbound access token.",
           "runtime_validation": null
@@ -173,6 +185,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -189,6 +202,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -204,6 +218,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -218,6 +233,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -232,6 +248,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -246,6 +263,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -271,6 +289,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -298,6 +317,7 @@
           "values": [
             "oidc-access-token"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects the inbound credential model, and Version 1 defines exactly one such profile.",
           "runtime_validation": null
@@ -308,6 +328,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 86400",
@@ -323,6 +344,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -337,6 +359,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
@@ -351,6 +374,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 32",
@@ -366,6 +390,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 256",
@@ -382,6 +407,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 4",
@@ -401,6 +427,7 @@
             "application/at+jwt",
             "at+jwt"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One exact protected-header `typ` value accepted on an inbound access token.",
           "runtime_validation": null
@@ -411,6 +438,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 128",
@@ -426,6 +454,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -440,6 +469,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 128",
@@ -455,6 +485,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One authorized path, binding a single requirement, a single purpose, the audience origin, and the referenced requirement's complete subject-role set.",
           "runtime_validation": null
@@ -467,6 +498,7 @@
           "values": [
             "authenticated-requester"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Binds the assertion audience to the requester's verified evidence audience claim, so the public request cannot name another audience.",
           "runtime_validation": null
@@ -477,6 +509,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
@@ -491,6 +524,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -506,6 +540,7 @@
           "type": "array",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 3",
@@ -526,6 +561,7 @@
             "signed-jws",
             "unsigned-json"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One permitted serialization of the same assertion, which introduces no separate issuance protocol and no credential state; a format reaches a response only when the bundle and the one matched grant both permit that format.",
           "runtime_validation": null
@@ -536,6 +572,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 8",
@@ -551,6 +588,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Authorization for one subject role, fixing which selector profile identifies the subject and where that subject's selector values may originate.",
           "runtime_validation": null
@@ -561,6 +599,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -575,6 +614,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -589,6 +629,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 16",
@@ -604,6 +645,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*$",
@@ -623,6 +665,7 @@
             "authenticated-grant",
             "request"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes where this role's selector values originate. A `request` origin takes values from the closed public request and prohibits `valueClaims`; `authenticated-context` rejects caller values and reads the exact `valueClaims` map; `authenticated-grant` reads that same map and additionally requires a verified grant id and a grant authority equal to the matched authority-profile id.",
           "runtime_validation": null
@@ -639,6 +682,7 @@
             "organizational",
             "statutory"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Declared basis of authority for this profile's grants; a request whose verified token carries an actor claim matches only a `delegated` profile.",
           "runtime_validation": null
@@ -649,6 +693,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 32",
@@ -665,6 +710,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -679,6 +725,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Carries the legal issuer identity placed in every assertion, kept separate from the technical provider that operates the process and signs.",
           "runtime_validation": null
@@ -689,6 +736,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -704,6 +752,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Governs the anti-enumeration budget for authenticated callers, counted against scoped pseudonyms of the principal and the authority rather than against any raw selector value.",
           "runtime_validation": null
@@ -714,6 +763,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 100000",
@@ -729,6 +779,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 100000",
@@ -744,6 +795,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 1000000",
@@ -759,6 +811,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 128",
@@ -774,6 +827,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One independently versioned evidence definition; its configuration revision spans only this requirement's own configuration and artifact closure, letting a relying party pin this requirement without depending on the rest of the deployment.",
           "runtime_validation": null
@@ -784,6 +838,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes this requirement's complete source-request shape to one call over a single source, or to a fixed sequence of calls named here; no response content chooses a different source or an additional call.",
           "runtime_validation": null
@@ -794,6 +849,7 @@
           "type": "array | string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -812,6 +868,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One declared fetch member of a `search-then-fetch-set` acquisition, called in the order the array declares and reached only after the search resolves to a unique schema-valid match. Members must be distinct from each other and from the search source.",
           "runtime_validation": null
@@ -822,6 +879,7 @@
           "type": "array",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -838,6 +896,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -852,6 +911,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -870,6 +930,7 @@
             "search-then-fetch-set",
             "single"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects this requirement's closed acquisition shape, and therefore how many fixed source calls the runtime issues; a gated kind serves only where the bundle and the deployment both name it under `acquisitionCapabilities`.",
           "runtime_validation": null
@@ -880,6 +941,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 30000",
@@ -895,6 +957,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -909,6 +972,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -923,6 +987,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -938,6 +1003,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One value the requirement may disclose, corresponding to exactly one `cccev:InformationConcept`, and becoming one entry of the assertion's supported values when the derivation produces that value.",
           "runtime_validation": null
@@ -948,6 +1014,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 0"
@@ -963,6 +1030,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -978,6 +1046,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -993,6 +1062,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -1007,6 +1077,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 128",
@@ -1022,6 +1093,7 @@
           "type": "integer | string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 9007199254740991",
@@ -1040,6 +1112,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 8192",
@@ -1055,6 +1128,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 64",
@@ -1070,6 +1144,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 9",
@@ -1085,6 +1160,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 65536",
@@ -1100,6 +1176,7 @@
           "type": "integer | string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 9007199254740991",
@@ -1118,6 +1195,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 64",
@@ -1133,6 +1211,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1148,6 +1227,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 128",
@@ -1165,6 +1245,7 @@
           "values": [
             "true"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Requires every item in a `controlled-code-list` or `entity-reference-list` concept's disclosed list to be pairwise distinct; a duplicate item fails validation instead of being deduplicated or disclosed twice.",
           "runtime_validation": null
@@ -1187,6 +1268,7 @@
             "reviewed-structured-value",
             "time-bucket"
           ],
+          "values_conditional": true,
           "constraints": [],
           "description": "Selects the concept's closed value shape, which fixes the exact set of keys `constraints` must declare and no others.",
           "runtime_validation": null
@@ -1197,6 +1279,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1212,6 +1295,7 @@
           "type": "boolean",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Whether the derivation must produce a value for this concept; a missing required concept fails the whole evaluation, and a missing optional concept is left out of the disclosed supported values.",
           "runtime_validation": null
@@ -1222,6 +1306,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Optional per-concept projection that the concept declaration may set only for `reviewed-structured-value` concepts, selecting how that structured value's fields are exposed as SD-JWT VC disclosures.",
           "runtime_validation": null
@@ -1232,6 +1317,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z][A-Za-z0-9_]{0,63}$"
@@ -1248,6 +1334,7 @@
           "values": [
             "top-level"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes where the structured value's field-level disclosures are exposed in the SD-JWT VC claim set: as an always-visible top-level object under `sdJwtVc.claim`.",
           "runtime_validation": null
@@ -1258,6 +1345,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Determines which Rhai script computes the requirement's concept values as `derive/3`, and what minimized selector inputs and closed typed parameters that script is allowed to see.",
           "runtime_validation": null
@@ -1268,6 +1356,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 32"
@@ -1282,6 +1371,7 @@
           "type": "array | boolean | integer | object | string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 1024"
@@ -1307,6 +1397,7 @@
           "values": [
             "decimal"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
           "runtime_validation": null
@@ -1317,6 +1408,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
@@ -1331,6 +1423,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One decimal bucket boundary in an ordered array parameter, evaluated by the `bucket_number` primitive to classify a derived decimal into the matching boundary's code; each lower bound must equal the previous boundary's upper bound, and a gap fails validation at startup.",
           "runtime_validation": null
@@ -1341,6 +1434,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
@@ -1355,6 +1449,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Exclusive upper bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
           "runtime_validation": null
@@ -1367,6 +1462,7 @@
           "values": [
             "decimal"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
           "runtime_validation": null
@@ -1377,6 +1473,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
@@ -1391,6 +1488,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Inclusive lower bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
           "runtime_validation": null
@@ -1403,6 +1501,7 @@
           "values": [
             "decimal"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Literal `decimal` discriminator marking the typed-decimal form, required wherever that form appears and present only alongside `value`.",
           "runtime_validation": null
@@ -1413,6 +1512,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
@@ -1427,6 +1527,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -1441,6 +1542,7 @@
           "type": "array",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 8"
@@ -1455,6 +1557,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Declares one subject role the derivation may read, together with the closed profile alternatives permitted for that role; only the alternative matching the authorized request subject reaches `derive/3`.",
           "runtime_validation": null
@@ -1465,6 +1568,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -1480,6 +1584,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
           "runtime_validation": null
@@ -1490,6 +1595,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -1506,6 +1612,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -1520,6 +1627,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -1534,6 +1642,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -1548,6 +1657,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Binds this requirement's release to the reviewed disclosure families a human combined-disclosure review has already assessed.",
           "runtime_validation": null
@@ -1558,6 +1668,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -1574,6 +1685,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1589,6 +1701,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1606,6 +1719,7 @@
           "values": [
             "collapse-unresolved"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Governs the outward shape of an unresolved outcome: the runtime returns one identical public problem whether the subject was absent, ambiguous, or found with inconsistent derivation inputs, so a caller cannot distinguish the cause from the response.",
           "runtime_validation": null
@@ -1616,6 +1730,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -1630,6 +1745,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1649,6 +1765,7 @@
             "criterion",
             "information-requirement"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Requirement classification carried unchanged into every assertion issued for this requirement.",
           "runtime_validation": null
@@ -1659,6 +1776,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 128",
@@ -1674,6 +1792,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 32",
@@ -1690,6 +1809,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
@@ -1704,6 +1824,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -1720,6 +1841,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -1735,6 +1857,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 8",
@@ -1750,6 +1873,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One subject position this requirement resolves; a request supplying a different number of subjects, a duplicate role, or a role this requirement does not declare is unauthorized.",
           "runtime_validation": null
@@ -1762,6 +1886,7 @@
           "values": [
             "one"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes this subject position to a single resolved value; Evidence Version 1 defines no plural or list-valued role.",
           "runtime_validation": null
@@ -1772,6 +1897,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -1786,6 +1912,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -1802,6 +1929,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -1816,6 +1944,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 31536000",
@@ -1831,6 +1960,7 @@
           "type": "array",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 3",
@@ -1851,6 +1981,7 @@
             "signed-jws",
             "unsigned-json"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One permitted serialization of the same assertion, which introduces no separate issuance protocol and no credential state; a format reaches a response only when the bundle and the one matched grant both permit that format.",
           "runtime_validation": null
@@ -1861,6 +1992,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 128",
@@ -1876,6 +2008,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -1890,6 +2023,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 16",
@@ -1905,6 +2039,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -1919,6 +2054,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -1933,6 +2069,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 128",
@@ -1948,6 +2085,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 9007199254740991",
@@ -1963,6 +2101,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 8192",
@@ -1978,6 +2117,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 9007199254740991",
@@ -1993,6 +2133,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 8192",
@@ -2014,6 +2155,7 @@
             "integer",
             "string"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects the field's scalar kind, fixing which other declaration keys are required; a supplied value of a different kind is rejected.",
           "runtime_validation": null
@@ -2024,6 +2166,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 8192",
@@ -2039,6 +2182,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Carries the identity this deployment asserts under: the technical Evidence provider identity placed in evidence and the operator-controlled trust domain of the process.",
           "runtime_validation": null
@@ -2049,6 +2193,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -2069,6 +2214,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "format: uri",
@@ -2084,6 +2230,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Governs signature format, active and published key selection, key retirement, and assertion validity; missing signing material fails readiness and no unsigned fallback exists.",
           "runtime_validation": null
@@ -2094,6 +2241,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
@@ -2110,6 +2258,7 @@
           "values": [
             "ES256"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Binds assertion signatures to ES256 over P-256, and a verifier rejects any protected header `alg` that differs from the algorithm bound to the trusted key.",
           "runtime_validation": null
@@ -2122,6 +2271,7 @@
           "values": [
             "flattened-jws-json"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes the wire serialization of a signed assertion to flattened JWS JSON, returned as `application/jose+json`.",
           "runtime_validation": null
@@ -2134,6 +2284,7 @@
           "values": [
             "/.well-known/evidence/jwks.json"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Route where the deployment serves its public key set; that route is not a trust anchor, because a verifier pins the provider identity and key location through its own governed configuration.",
           "runtime_validation": null
@@ -2144,6 +2295,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 31536000",
@@ -2159,6 +2311,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 32",
@@ -2174,6 +2327,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
@@ -2188,6 +2342,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 33",
@@ -2203,6 +2358,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
@@ -2217,6 +2373,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 300",
@@ -2232,6 +2389,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 128",
@@ -2247,6 +2405,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -2261,6 +2420,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One closed credential profile the runtime presents on this source's outbound calls, distinct from the inbound caller policy at the bundle's top-level `authentication`. Reference members name secrets that resolve only after authorization, durable access audit, and request-parts validation, and no secret reaches a script.",
           "runtime_validation": null
@@ -2271,6 +2431,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 86400",
@@ -2286,6 +2447,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2300,6 +2462,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2317,6 +2480,7 @@
             "basic-header",
             "form-body"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects whether the client identifier and secret travel in the Authorization header or the form body of the token request; Version 1 offers no query-string placement, so neither value can reach an authorization-server, proxy, or ingress URL log.",
           "runtime_validation": null
@@ -2327,6 +2491,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 64",
@@ -2349,6 +2514,7 @@
             "static-api-key",
             "static-bearer"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects which credential the runtime presents to this source and closes the member set to that profile. `none` sends no credential and is admitted only by a `local` assurance bundle at a canonical numeric-loopback origin; production and evidence-grade bundles reject that kind.",
           "runtime_validation": null
@@ -2359,6 +2525,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 86400",
@@ -2374,6 +2541,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2388,6 +2556,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -2403,6 +2572,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [],
             [
@@ -2421,6 +2591,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2435,6 +2606,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2449,6 +2621,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -2463,6 +2636,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^http://(?:127\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\\[::1\\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
@@ -2484,6 +2658,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -2498,6 +2673,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -2516,6 +2692,7 @@
             "record-transformed",
             "source-derived"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Describes how much of the underlying record crosses the source wire, weakest at `record-transformed` and strongest at `source-derived`. A chained search-then-fetch requirement can claim no stronger minimization than the weaker of its two sources' postures.",
           "runtime_validation": null
@@ -2526,6 +2703,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "The one fixed evidence-data request plan for this source; a preparation script, a caller, and a source response hold no authority over method, path, headers, redirects, bounds, or request count.",
           "runtime_validation": null
@@ -2536,6 +2714,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 64"
@@ -2550,6 +2729,7 @@
           "type": "array | boolean | integer | object | string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
@@ -2581,6 +2761,7 @@
           "type": null,
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
@@ -2595,6 +2776,7 @@
           "type": null,
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One element of a parameter array, which is a parameter value in turn, so the parameter shape nests rather than flattening.",
           "runtime_validation": null
@@ -2605,6 +2787,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -2619,6 +2802,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 256",
@@ -2634,6 +2818,7 @@
           "type": "array",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 32"
@@ -2648,6 +2833,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One constant name and value pair added to every request to this source, in the order declared.",
           "runtime_validation": null
@@ -2658,6 +2844,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 64",
@@ -2674,6 +2861,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 4096",
@@ -2689,6 +2877,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 1048576",
@@ -2707,6 +2896,7 @@
             "GET",
             "POST"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes the HTTP method for every request to this source; a `GET` source must also set `preparationLimits.jsonBody` to `forbidden`.",
           "runtime_validation": null
@@ -2717,6 +2907,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
@@ -2731,6 +2922,7 @@
           "type": "object",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 16",
@@ -2746,6 +2938,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -2760,6 +2953,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -2777,6 +2971,7 @@
             "prior-fact",
             "selector"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Chooses whether Rust reads the placeholder value from an already authorized selector or from a scalar prior fact, and a prior-fact binding is accepted only on a fetch source.",
           "runtime_validation": null
@@ -2787,6 +2982,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -2801,6 +2997,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -2815,6 +3012,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 2048",
@@ -2831,6 +3029,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Channel policy and output bounds Rust applies to the request parts a preparation script returns, all checked before credentials are resolved or the source is contacted.",
           "runtime_validation": null
@@ -2845,6 +3044,7 @@
             "forbidden",
             "required"
           ],
+          "values_conditional": true,
           "constraints": [],
           "description": "Decides whether a preparation script may, must, or must not return a JSON body, where JSON `null` counts as absent and an empty object or array counts as present.",
           "runtime_validation": null
@@ -2855,6 +3055,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 256",
@@ -2870,6 +3071,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 32",
@@ -2885,6 +3087,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 65536",
@@ -2900,6 +3103,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 64",
@@ -2915,6 +3119,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 64",
@@ -2930,6 +3135,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 4096",
@@ -2945,6 +3151,7 @@
           "type": "integer",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 16384",
@@ -2964,6 +3171,7 @@
             "forbidden",
             "required"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Decides whether a preparation script may, must, or must not return query pairs, where `required` means at least one pair. Setting this key and `jsonBody` both to `forbidden` fails startup, because one output channel must stay usable.",
           "runtime_validation": null
@@ -2974,6 +3182,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -2988,6 +3197,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 64",
@@ -3004,6 +3214,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 256",
@@ -3022,6 +3233,7 @@
           "values": [
             "deny"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Refuses to follow a redirect, so a source response cannot move the request to a different origin; a redirect is classed as a transport failure.",
           "runtime_validation": null
@@ -3032,6 +3244,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 8",
@@ -3047,6 +3260,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One subject role together with the alternative profiles and exact field sets a preparation script may receive for that role.",
           "runtime_validation": null
@@ -3057,6 +3271,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -3072,6 +3287,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
           "runtime_validation": null
@@ -3082,6 +3298,7 @@
           "type": "array",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 16",
@@ -3098,6 +3315,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,63}$"
@@ -3112,6 +3330,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3126,6 +3345,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3140,6 +3360,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 30000",
@@ -3155,6 +3376,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
@@ -3169,6 +3391,7 @@
           "type": "string",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3185,6 +3408,7 @@
           "values": [
             "http-json"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects the source's transport implementation. Version 1 defines exactly one, so every source uses the same HTTP-plus-JSON request and response contract for method, media type, and body shape.",
           "runtime_validation": null
@@ -3195,6 +3419,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Keys the audience- and purpose-scoped subject bindings an assertion carries in place of selector values, derived over the complete canonical role, profile, and value set rather than as per-field hashes.",
           "runtime_validation": null
@@ -3205,6 +3430,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 2147483647",
@@ -3220,6 +3446,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -3236,6 +3463,7 @@
           "values": [
             "1"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects the bundle grammar the rest of this document is read against, and a version the runtime does not implement is rejected at startup.",
           "runtime_validation": null
@@ -3255,6 +3483,7 @@
           "type": "array",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxItems: 1",
@@ -3272,6 +3501,7 @@
           "values": [
             "search-then-fetch-set"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "One gated acquisition kind this deployment permits; a bundle needing a kind absent here is refused before the listener binds.",
           "runtime_validation": null
@@ -3282,6 +3512,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Groups the physical destination and size bound for the audit log this process writes; the log format, pseudonymization key, and fail-closed policy are governed by the bundle's `audit` section, not by this one.",
           "runtime_validation": null
@@ -3292,6 +3523,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 1099511627776",
@@ -3307,6 +3539,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -3323,6 +3556,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -3339,6 +3573,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Groups the network binding and per-request admission limits for the process's evidence endpoint; `metricsListener`, when present, is an entirely separate binding with its own limits.",
           "runtime_validation": null
@@ -3349,6 +3584,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 64",
@@ -3364,6 +3600,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 4096",
@@ -3379,6 +3616,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 1048576",
@@ -3394,6 +3632,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 65535",
@@ -3409,6 +3648,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 30000",
@@ -3424,6 +3664,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 120000",
@@ -3441,6 +3682,7 @@
           "values": [
             "operator-controlled-upstream"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Declares that TLS terminates at an operator-controlled upstream in front of this listener; the runtime accepts no other value and exposes no direct-TLS or `insecure` mode of its own.",
           "runtime_validation": null
@@ -3453,6 +3695,7 @@
           "values": [
             "false"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes the listener to ignore proxy-supplied identity headers; authenticated identity and authority always come from the verified access token, never from a header a network intermediary can set.",
           "runtime_validation": null
@@ -3463,6 +3706,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. This listener is a separate binding from the evidence listener and is not described by the public evidence contract.",
           "runtime_validation": "Rejected at startup when bindHost and port together repeat the evidence listener binding."
@@ -3473,6 +3717,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 64",
@@ -3488,6 +3733,7 @@
           "type": "integer",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 65535",
@@ -3503,6 +3749,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Groups outbound TLS trust for calls to configured sources; it can add private certificate authorities through named trust profiles but carries no setting to weaken hostname verification or skip TLS.",
           "runtime_validation": null
@@ -3515,6 +3762,7 @@
           "values": [
             "true"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Fixes the system certificate authority store as always trusted for outbound calls; because Version 1 has no way to disable it, a source's public certificate must still chain to a trusted root even when a private trust profile also applies.",
           "runtime_validation": null
@@ -3525,6 +3773,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxProperties: 64"
@@ -3539,6 +3788,7 @@
           "type": "object",
           "required": "no",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3553,6 +3803,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -3569,6 +3820,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Configures how a `secret:file/...` reference resolves to bytes at startup; it supplies the storage location only, and which secret each governed field names is fixed by the bundle, not by this section.",
           "runtime_validation": null
@@ -3579,6 +3831,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Declares the file-based secret provider and its root directory; Version 1 defines no other provider kind, so every `secret:file/name` reference resolves through this one path.",
           "runtime_validation": null
@@ -3589,6 +3842,7 @@
           "type": "string",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -3605,6 +3859,7 @@
           "type": "object",
           "required": "yes",
           "values": null,
+          "values_conditional": false,
           "constraints": [],
           "description": "Binds the process to the private-key transport that produces every signature over the bundle's governed active public key; it can select and configure that transport but cannot change the governed key set or signing algorithm.",
           "runtime_validation": null
@@ -3615,6 +3870,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3629,6 +3885,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 4294967295",
@@ -3647,6 +3904,7 @@
             "local-jwk",
             "transit"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Selects the signer transport for this deployment: `local-jwk` resolves a file-provider secret directly, `transit` calls a workload-local signing proxy over a Unix socket; only the kind matching the bundle's assurance profile is accepted at startup.",
           "runtime_validation": null
@@ -3657,6 +3915,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^[a-z][a-z0-9._-]{0,127}$"
@@ -3671,6 +3930,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
@@ -3685,6 +3945,7 @@
           "type": "integer",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maximum: 30000",
@@ -3700,6 +3961,7 @@
           "type": "string",
           "required": "conditional",
           "values": null,
+          "values_conditional": false,
           "constraints": [
             [
               "maxLength: 512",
@@ -3718,6 +3980,7 @@
           "values": [
             "1"
           ],
+          "values_conditional": false,
           "constraints": [],
           "description": "Pins the runtime document to Version 1 of this grammar; the loader rejects any other value, so a future incompatible runtime shape is never read as if it were this one.",
           "runtime_validation": null

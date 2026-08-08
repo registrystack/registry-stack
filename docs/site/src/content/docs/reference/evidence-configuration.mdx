@@ -45,7 +45,9 @@ recursive definition, currently only nested adapter parameter values, appears on
 it re-enters itself.
 
 Where a key is reachable through several alternative shapes, the entry shows the union of the
-types and values those alternatives accept.
+types and values those alternatives accept. Accepted values is therefore the set the grammar
+accepts somewhere, not in every case; where a rule elsewhere fixes the value under a condition,
+the entry says so beneath the set.
 
 Required reads **Conditional** when whether you may or must write the key depends on the rest of
 the document: some alternative does not declare it at all, only some alternatives require it, or a

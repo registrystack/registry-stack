@@ -274,6 +274,27 @@ test('an `if`/`then` rule binds a key conditionally without binding what it reac
   ]);
 });
 
+test('a value a condition fixes is named as narrowing the set, not folded into it', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      method: { enum: ['GET', 'POST'] },
+      jsonBody: { enum: ['required', 'allowed', 'forbidden'] },
+      kind: { oneOf: [{ const: 'file' }, { const: 'env' }] },
+    },
+    if: { required: ['method'], properties: { method: { const: 'GET' } } },
+    then: { properties: { jsonBody: { const: 'forbidden' } } },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // The union is still the set the grammar accepts somewhere, but a reader who
+  // writes `allowed` beside a GET is rejected, so the narrowing has to show.
+  assert.deepEqual(byPath.get('jsonBody').values, ['allowed', 'forbidden', 'required']);
+  assert.equal(byPath.get('jsonBody').values_conditional, true);
+  // A value that selects an alternative is not a narrowing: either is writable.
+  assert.equal(byPath.get('kind').values_conditional, false);
+  assert.equal(byPath.get('method').values_conditional, false);
+});
+
 test('an alternative that adds no bound stays visible beside one that does', () => {
   const fields = collectFields({
     type: 'object',

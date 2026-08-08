@@ -7,6 +7,9 @@ type Field = {
   type: string | null;
   required: 'yes' | 'no' | 'conditional';
   values: string[] | null;
+  // Set when a conditional rule fixes the value in some cases, so the set above
+  // is what the grammar accepts somewhere rather than everywhere.
+  values_conditional: boolean;
   // One group per alternative the grammar offers. Bounds inside a group apply
   // together; separate groups are alternatives.
   constraints: string[][];
@@ -103,13 +106,18 @@ const segments = (text: string) =>
                 <td>{requiredLabels[field.required]}</td>
                 <td>
                   {field.values ? (
-                    <ul class="value-list">
-                      {field.values.map((value) => (
-                        <li>
-                          <code>{value}</code>
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <ul class="value-list">
+                        {field.values.map((value) => (
+                          <li>
+                            <code>{value}</code>
+                          </li>
+                        ))}
+                      </ul>
+                      {field.values_conditional && (
+                        <span class="note">A rule elsewhere fixes this value in some cases.</span>
+                      )}
+                    </>
                   ) : (
                     '—'
                   )}
