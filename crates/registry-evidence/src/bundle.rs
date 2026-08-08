@@ -305,13 +305,32 @@ pub struct RuntimeDocument {
 /// One validated process-local extract file, bound to a logical name.
 ///
 /// The bytes stay on disk. A CA bundle is kilobytes and is captured whole; an
-/// extract is sized for a register, so what travels is the path this validated
-/// and the digest taken over it while that validation still held.
+/// extract is sized for a register, so what travels is the path this validated,
+/// the digest taken over it while that validation still held, and the file
+/// identity both were taken over.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SourceExtract {
     path: PathBuf,
     digest: String,
+    identity: FileIdentity,
 }
+
+/// The identity a capture was taken over, kept so a later opener can prove it
+/// opened the file that was validated.
+///
+/// It holds the metadata rather than a copy of the fields [`same_file`]
+/// compares, so the two cannot drift apart: whatever identity a read brackets
+/// itself with is the identity a reopen is held to.
+#[derive(Debug, Clone)]
+struct FileIdentity(Metadata);
+
+impl PartialEq for FileIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        same_file(&self.0, &other.0)
+    }
+}
+
+impl Eq for FileIdentity {}
 
 impl SourceExtract {
     /// The validated file the statement executor opens.
@@ -322,6 +341,35 @@ impl SourceExtract {
     /// `sha256:` and lowercase hex over the extract's bytes, as they were read.
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+
+    /// Prove the bound path still names the file this validated and digested.
+    ///
+    /// The statement executor opens the extract by path, and it opens it after
+    /// the bundle is read, the kernel is compiled, and the audit log is
+    /// initialized. A publisher refreshing the bound path inside that window
+    /// would hand SQLite a file that passed none of the checks above: not the
+    /// symlink refusal, not the regular-file refusal, and not the writability
+    /// refusal that is what makes `immutable=1` a checked fact. Checking here
+    /// keeps a refresh landing mid-startup a startup failure rather than a
+    /// deployment answering from bytes its runtime revision does not name.
+    ///
+    /// Narrowing rather than proof: a path renamed away and back inside the
+    /// window still passes, and anyone who can write the containing directory
+    /// can do worse than this. The case it settles is the one that happens.
+    pub fn confirm_still_bound(&self) -> Result<(), BundleError> {
+        let current = fs::symlink_metadata(&self.path).map_err(|_| {
+            invalid_artifact("the source extract the runtime file names is unavailable")
+        })?;
+        if current.file_type().is_symlink()
+            || !current.is_file()
+            || FileIdentity(current) != self.identity
+        {
+            return Err(not_immutable(
+                "the source extract was replaced between digesting it and opening it",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -784,10 +832,11 @@ fn capture_source_extract(path: &Path) -> Result<SourceExtract, BundleError> {
         filesystem_read_only,
         "the source extract the runtime file names is writable",
     )?;
-    let digest = digest_stable_file(path, &metadata, filesystem_read_only)?;
+    let (digest, identity) = digest_stable_file(path, &metadata, filesystem_read_only)?;
     Ok(SourceExtract {
         path: path.to_path_buf(),
         digest,
+        identity,
     })
 }
 
@@ -802,7 +851,7 @@ fn digest_stable_file(
     path: &Path,
     scanned: &Metadata,
     filesystem_read_only: bool,
-) -> Result<String, BundleError> {
+) -> Result<(String, FileIdentity), BundleError> {
     let mut file = open_no_follow(path)?;
     let opened = file.metadata().map_err(|_| BundleError::Unavailable)?;
     validate_read_only(
@@ -837,7 +886,10 @@ fn digest_stable_file(
         folded,
         "the source extract changed while it was being read",
     )?;
-    sha256_label(hasher)
+    // The identity that travels out is the one the read bracketed itself with,
+    // not the one the caller scanned, so a later reopen is held to the file
+    // these bytes actually came from.
+    Ok((sha256_label(hasher)?, FileIdentity(opened)))
 }
 
 /// The closing half of a read's identity bracket.
@@ -4537,6 +4589,47 @@ outboundTls:
             false,
         )
         .expect("the extract that is still there digests");
+    }
+
+    /// The capture and the SQLite open are not the same moment: the bundle is
+    /// read, the kernel is compiled, and the audit log is initialized in
+    /// between. A publisher who refreshes the bound path inside that window
+    /// gets a startup failure rather than a deployment serving bytes its
+    /// runtime revision does not name.
+    ///
+    /// The replacement is a different length for the reason the test above
+    /// gives.
+    #[cfg(unix)]
+    #[test]
+    fn a_bound_extract_refuses_a_path_replaced_before_it_was_opened() {
+        let directory = tempfile::tempdir().expect("temporary extract root");
+        let path = directory.path().join("extract.sqlite");
+        locked_extract(&path, b"extract-content-one");
+        let bound = capture_source_extract(&path).expect("the staged extract captures");
+        bound
+            .confirm_still_bound()
+            .expect("an untouched extract is still bound");
+
+        fs::remove_file(&path).expect("remove the named extract");
+        locked_extract(&path, b"extract-content-two-and-longer");
+        assert_eq!(
+            refusal_cause(
+                bound
+                    .confirm_still_bound()
+                    .expect_err("a replaced extract is refused")
+            ),
+            "the source extract was replaced between digesting it and opening it"
+        );
+
+        fs::remove_file(&path).expect("remove the replacement");
+        assert_eq!(
+            refusal_cause(
+                bound
+                    .confirm_still_bound()
+                    .expect_err("a vanished extract is refused")
+            ),
+            "the source extract the runtime file names is unavailable"
+        );
     }
 
     /// The closing half of the read bracket, checked where it can be staged.

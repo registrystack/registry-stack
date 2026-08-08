@@ -324,15 +324,22 @@ entries:
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: statement_parameters_and_declared_bindings_must_agree}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_step_budget_stops_an_expensive_statement}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_time_budget_stops_a_slow_statement}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_view_that_never_terminates_is_refused}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: one_row_beyond_the_row_bound_is_refused}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_value_beyond_the_cell_bound_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_result_beyond_the_response_bound_is_refused_as_it_is_collected}
+      - {file: crates/registry-evidence/src/source.rs, name: an_oversized_statement_result_maps_to_the_response_size_refusal}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_cancelled_request_gives_back_its_connection_and_its_permit}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: an_extract_without_its_metadata_table_is_refused}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_configured_age_bound_refuses_a_stale_extract}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_fractional_publication_instant_is_compared_as_it_is_emitted}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_located_syntax_fault_carries_no_statement_text}
       - {file: crates/registry-evidence/src/config.rs, name: statement_parameters_are_named_selector_bindings_and_the_runtime_instant_is_reserved}
       - {file: crates/registry-evidence/src/config.rs, name: statement_source_bounds_reject_zero_and_an_oversized_value}
       - {file: crates/registry-evidence/src/config.rs, name: statement_preparation_stands_or_falls_with_a_prepared_parameter}
+      - {file: crates/registry-evidence/src/config.rs, name: a_prepared_statement_parameter_name_is_held_to_the_preparation_abi}
       - {file: crates/registry-evidence/tests/statement_source.rs, name: a_parameter_is_filled_from_its_one_declared_origin}
       - {file: crates/registry-evidence/src/bundle.rs, name: every_unusable_extract_is_refused_by_its_own_name_and_cause}
       - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_bound_extract_refuses_a_path_replaced_before_it_was_opened}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}
