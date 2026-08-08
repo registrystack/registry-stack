@@ -444,6 +444,36 @@ fn assert_coverage_index_resolves(root: &Path) {
     }
 }
 
+/// Every document in the published contract directory is YAML, but only a few
+/// of them are parsed by a test, so a document that stops parsing stays
+/// tracked, reviewed, and quoted while no longer being readable by a machine.
+/// Parse the whole directory rather than the documents that happen to have a
+/// consumer.
+#[test]
+fn every_published_contract_document_parses_as_yaml() {
+    let contracts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/contracts");
+    let mut documents: Vec<_> = fs::read_dir(&contracts)
+        .expect("contract directory reads")
+        .map(|entry| entry.expect("contract entry reads").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml")
+        })
+        .collect();
+    documents.sort();
+    assert!(
+        !documents.is_empty(),
+        "{} holds no contract document, so this check would pass vacuously",
+        contracts.display()
+    );
+    for document in documents {
+        let bytes = fs::read(&document).expect("contract document reads");
+        if let Err(error) = serde_norway::from_slice::<serde_norway::Value>(&bytes) {
+            panic!("{} is not parseable YAML: {error}", document.display());
+        }
+    }
+}
+
 /// Resolve one coverage-index path, which is written relative to the
 /// `conformance` directory, without allowing it to escape the fixture tree.
 fn fixture_path(fixtures: &Path, definition: &str, relative: &str) -> std::path::PathBuf {
