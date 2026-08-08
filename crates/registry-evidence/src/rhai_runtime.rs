@@ -16,7 +16,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    model::LookupResult,
+    model::{LookupResult, SelectorValue},
     values::{Decimal, EntityReferenceSeed},
 };
 
@@ -37,6 +37,9 @@ pub const MAXIMUM_REQUEST_PARTS_BYTES: usize = 65_536;
 pub const MAXIMUM_QUERY_PAIRS: usize = 64;
 pub const MAXIMUM_QUERY_NAME_BYTES: usize = 64;
 pub const MAXIMUM_QUERY_VALUE_BYTES: usize = 4_096;
+pub const MAXIMUM_STATEMENT_PARAMETERS: usize = 64;
+pub const MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES: usize = 64;
+pub const MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES: usize = 4_096;
 pub const MAXIMUM_JSON_BODY_DEPTH: usize = 32;
 
 const MAXIMUM_BUCKETS: usize = 64;
@@ -227,6 +230,54 @@ impl fmt::Debug for RequestParts {
             .debug_struct("RequestParts")
             .field("query_pairs", &self.query.len())
             .field("body_present", &self.body.is_some())
+            .finish()
+    }
+}
+
+/// Bounds on the parameter map a statement source's preparation may return.
+///
+/// A statement carries no URL, no query string and no body, so the whole
+/// preparation channel is that map and only its entry count and the size of one
+/// scalar value need a declared bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatementParametersLimits {
+    maximum_parameters: usize,
+    maximum_parameter_value_bytes: usize,
+}
+
+impl StatementParametersLimits {
+    pub fn new(
+        maximum_parameters: usize,
+        maximum_parameter_value_bytes: usize,
+    ) -> Result<Self, RhaiRuntimeError> {
+        if maximum_parameters == 0
+            || maximum_parameters > MAXIMUM_STATEMENT_PARAMETERS
+            || maximum_parameter_value_bytes == 0
+            || maximum_parameter_value_bytes > MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES
+        {
+            return Err(RhaiRuntimeError::PreparationResult);
+        }
+        Ok(Self {
+            maximum_parameters,
+            maximum_parameter_value_bytes,
+        })
+    }
+}
+
+/// The scalar values a statement source's preparation produced, by parameter name.
+///
+/// Which names are admissible is the caller's decision: this runtime holds the
+/// shape and the bounds, and the source plan holds the declared parameter names.
+#[derive(Clone, PartialEq)]
+pub struct StatementParameters {
+    pub parameters: BTreeMap<String, SelectorValue>,
+}
+
+impl fmt::Debug for StatementParameters {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StatementParameters")
+            .field("parameters", &self.parameters.len())
             .finish()
     }
 }
@@ -534,6 +585,46 @@ impl RhaiRuntime {
             )
             .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
         decode_request_parts(result, limits)
+    }
+
+    pub fn prepare_statement(
+        &self,
+        script: &CompiledPreparation,
+        selectors: &Value,
+        parameters: &Value,
+        limits: &StatementParametersLimits,
+    ) -> Result<StatementParameters, RhaiRuntimeError> {
+        self.prepare_statement_with_prior_facts(
+            script,
+            selectors,
+            parameters,
+            &BTreeMap::new(),
+            limits,
+        )
+    }
+
+    pub fn prepare_statement_with_prior_facts(
+        &self,
+        script: &CompiledPreparation,
+        selectors: &Value,
+        parameters: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+        limits: &StatementParametersLimits,
+    ) -> Result<StatementParameters, RhaiRuntimeError> {
+        validate_adapter_inputs(selectors, parameters, prior_facts)?;
+        let selectors = adapter_object_to_dynamic(selectors)?;
+        let context = adapter_context_to_dynamic(parameters, prior_facts)?;
+        let result = self
+            .engine
+            .call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut Scope::new(),
+                &script.ast,
+                "prepare",
+                (selectors, context),
+            )
+            .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
+        decode_statement_parameters(result, limits)
     }
 
     pub fn extract<V>(
@@ -1919,6 +2010,63 @@ fn decode_request_parts(
     Ok(RequestParts { query, body })
 }
 
+fn decode_statement_parameters(
+    result: Dynamic,
+    limits: &StatementParametersLimits,
+) -> Result<StatementParameters, RhaiRuntimeError> {
+    let map = result
+        .try_cast::<Map>()
+        .ok_or(RhaiRuntimeError::PreparationResult)?;
+    if !has_exact_keys(&map, &["parameters"]) {
+        return Err(RhaiRuntimeError::PreparationResult);
+    }
+    let entries = map["parameters"]
+        .clone()
+        .try_cast::<Map>()
+        .ok_or(RhaiRuntimeError::PreparationResult)?;
+    if entries.len() > limits.maximum_parameters || entries.len() > MAXIMUM_STATEMENT_PARAMETERS {
+        return Err(RhaiRuntimeError::PreparationResult);
+    }
+
+    let mut parameters = BTreeMap::new();
+    for (name, value) in entries {
+        let name = name.to_string();
+        if name.is_empty() || name.len() > MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES {
+            return Err(RhaiRuntimeError::PreparationResult);
+        }
+        // A statement binds scalars. Anything a SQLite value cannot be is refused
+        // here rather than flattened into one on the way to the binding.
+        let value = if value.is::<ImmutableString>() {
+            let text = value
+                .try_cast::<ImmutableString>()
+                .ok_or(RhaiRuntimeError::PreparationResult)?
+                .to_string();
+            if text.len() > limits.maximum_parameter_value_bytes
+                || text.len() > MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES
+            {
+                return Err(RhaiRuntimeError::PreparationResult);
+            }
+            SelectorValue::String(text)
+        } else if value.is::<bool>() {
+            SelectorValue::Boolean(
+                value
+                    .try_cast::<bool>()
+                    .ok_or(RhaiRuntimeError::PreparationResult)?,
+            )
+        } else if value.is::<INT>() {
+            SelectorValue::Integer(
+                value
+                    .try_cast::<INT>()
+                    .ok_or(RhaiRuntimeError::PreparationResult)?,
+            )
+        } else {
+            return Err(RhaiRuntimeError::PreparationResult);
+        };
+        parameters.insert(name, value);
+    }
+    Ok(StatementParameters { parameters })
+}
+
 fn validate_part_requirement(
     requirement: RequestPartRequirement,
     present: bool,
@@ -2472,6 +2620,90 @@ mod tests {
         }
         assert_eq!(selectors["subject"]["values"]["reference"], "person-1");
         assert_eq!(parameters["provider_name"], "source_a");
+    }
+
+    #[test]
+    fn statement_preparation_returns_bounded_scalar_parameters() {
+        let runtime = runtime();
+        let limits = StatementParametersLimits::new(4, 64).expect("limits");
+        let script = runtime
+            .compile_preparation(
+                "fn prepare(selectors, parameters) { #{ parameters: #{ code: selectors.subject.values.reference, count: 3, active: true } } }",
+            )
+            .expect("compiles");
+        let selectors = json!({"subject": {"values": {"reference": "person-1"}}});
+        assert_eq!(
+            runtime
+                .prepare_statement(&script, &selectors, &json!({}), &limits)
+                .expect("prepares"),
+            StatementParameters {
+                parameters: BTreeMap::from_iter([
+                    (
+                        "active".to_string(),
+                        crate::model::SelectorValue::Boolean(true)
+                    ),
+                    (
+                        "code".to_string(),
+                        crate::model::SelectorValue::String("person-1".to_string())
+                    ),
+                    ("count".to_string(), crate::model::SelectorValue::Integer(3)),
+                ]),
+            }
+        );
+
+        for source in [
+            "fn prepare(selectors, parameters) { #{ parameters: #{}, extra: true } }",
+            "fn prepare(selectors, parameters) { #{ query: [], body: () } }",
+            "fn prepare(selectors, parameters) { #{ parameters: [] } }",
+            "fn prepare(selectors, parameters) { #{ parameters: #{ code: () } } }",
+            "fn prepare(selectors, parameters) { #{ parameters: #{ code: [1] } } }",
+            "fn prepare(selectors, parameters) { #{ parameters: #{ code: #{a: 1} } } }",
+            "fn prepare(selectors, parameters) { #{ parameters: #{ code: parse_date(\"2026-08-02\") } } }",
+        ] {
+            let script = runtime.compile_preparation(source).expect("compiles");
+            assert_eq!(
+                runtime.prepare_statement(&script, &json!({}), &json!({}), &limits),
+                Err(RhaiRuntimeError::PreparationResult),
+                "{source}"
+            );
+        }
+
+        let wide = runtime
+            .compile_preparation(
+                "fn prepare(selectors, parameters) { #{ parameters: #{ a: 1, b: 2 } } }",
+            )
+            .expect("compiles");
+        let narrow = StatementParametersLimits::new(1, 8).expect("limits");
+        assert_eq!(
+            runtime.prepare_statement(&wide, &json!({}), &json!({}), &narrow),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+        let long = runtime
+            .compile_preparation(
+                "fn prepare(selectors, parameters) { #{ parameters: #{ a: \"123456789\" } } }",
+            )
+            .expect("compiles");
+        assert_eq!(
+            runtime.prepare_statement(&long, &json!({}), &json!({}), &narrow),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+
+        assert_eq!(
+            StatementParametersLimits::new(0, 8),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+        assert_eq!(
+            StatementParametersLimits::new(MAXIMUM_STATEMENT_PARAMETERS + 1, 8),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+        assert_eq!(
+            StatementParametersLimits::new(1, 0),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
+        assert_eq!(
+            StatementParametersLimits::new(1, MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES + 1),
+            Err(RhaiRuntimeError::PreparationResult)
+        );
     }
 
     #[test]

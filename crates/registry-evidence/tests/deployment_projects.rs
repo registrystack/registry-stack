@@ -2,27 +2,36 @@
 
 #![cfg(unix)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use registry_evidence::bundle::{Bundle, DeploymentInputs};
-use registry_evidence::config::{ConfigError, SelectorInput};
+use registry_evidence::bundle::{ArtifactFault, Bundle, DeploymentInputs, SourceExtract};
+use registry_evidence::config::{ArtifactPath, ConfigError, SchemaFault, SelectorInput};
 use registry_evidence::kernel::{
     EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValueProjection,
 };
 use registry_evidence::model::{
-    LookupResult, PublicValue, ScalarOrEntityReference, SubjectBinding,
+    LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue, SubjectBinding,
 };
 use registry_evidence::problem::ProblemCode;
-use registry_evidence::rhai_runtime::{QueryPair, RequestParts};
+use registry_evidence::rhai_runtime::QueryPair;
 use registry_evidence::runtime::source_failure_problem;
-use registry_evidence::selector::{resolve_offline_fixture_authorization, ResolvedAuthorization};
+use registry_evidence::secrets::{SecretProvider, SecretResolver};
+use registry_evidence::selector::{
+    resolve_offline_fixture_authorization, ResolvedAuthorization, ResolvedSelectorValue,
+};
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
-use registry_evidence::source::{project_fixture_response, SourceError};
+use registry_evidence::source::{
+    project_fixture_response, statement_inputs, MaterializedSourceRequest, PreparedSourceRequest,
+    ResolvedSourceSelector, SourceError, SourceExecutor,
+};
+use registry_evidence::source_sqlite::{
+    cause as sqlite_cause, check_statement_offline, materialize_seed_extract,
+};
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
 use serde::Deserialize;
@@ -55,6 +64,10 @@ struct FixtureCommon {
     verified_token_claims: Option<Value>,
     #[serde(default, rename = "derivationSelectorInputs")]
     derivation_selector_inputs: Option<Value>,
+    /// The world a statement fixture's cases answer from, as the SQL that builds
+    /// it. A source that answers over a network states no extract.
+    #[serde(default)]
+    extract: Option<String>,
     #[serde(rename = "expectedRequestParts")]
     expected_request_parts: ExpectedRequestParts,
     #[serde(rename = "expectedTransport")]
@@ -69,10 +82,15 @@ struct FixtureCase {
     purpose: Option<String>,
     #[serde(default)]
     response: Option<Value>,
+    /// The subject this case picks out of the one extract its fixture states.
+    #[serde(default)]
+    selectors: Option<Value>,
     #[serde(default, rename = "sourceFailure")]
     source_failure: Option<String>,
     #[serde(default, rename = "bundleMutation")]
     bundle_mutation: Option<String>,
+    #[serde(default, rename = "statementMutation")]
+    statement_mutation: Option<String>,
     #[serde(default, rename = "requestMutation")]
     request_mutation: Option<String>,
     #[serde(default, rename = "derivationMutation")]
@@ -121,11 +139,30 @@ struct Expected {
     expected_transport: Option<ExpectedTransport>,
 }
 
+/// The preparation a fixture expects, in the shape its transport consumes.
+///
+/// An HTTP request is stated as its query and body; a statement source is
+/// stated as the parameters it will be given. Keeping the forms apart is what
+/// lets a statement fixture state only its parameters while an HTTP fixture
+/// that omits its query still fails to parse.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectedRequestParts {
+    Http(ExpectedHttpRequestParts),
+    Statement(ExpectedStatementParameters),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExpectedRequestParts {
+struct ExpectedHttpRequestParts {
     query: Vec<ExpectedQueryPair>,
     body: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpectedStatementParameters {
+    parameters: JsonMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,9 +172,17 @@ struct ExpectedQueryPair {
     value: String,
 }
 
+/// What a fixture expects to cross the source boundary, per transport.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectedTransport {
+    Http(ExpectedHttpTransport),
+    Statement(ExpectedStatement),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExpectedTransport {
+struct ExpectedHttpTransport {
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -146,6 +191,19 @@ struct ExpectedTransport {
     body: Option<Value>,
     #[serde(default, rename = "fixedHeaders")]
     fixed_headers: Option<Vec<ExpectedHeader>>,
+}
+
+/// The reviewed statement artifact, and the values bound into it.
+///
+/// The statement is named rather than restated: its text is a bundle artifact
+/// hashed with the rest, so a second copy here would only be something to drift
+/// from.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpectedStatement {
+    statement: String,
+    #[serde(default)]
+    parameters: Option<JsonMap<String, Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,14 +229,50 @@ struct LoadedProject {
     runtime_path: PathBuf,
     bundle: Arc<Bundle>,
     kernel: OfflineKernel,
+    /// The extracts the temporary runtime document binds, exactly as the runtime
+    /// captured them. Empty for a project that binds none.
+    extracts: BTreeMap<String, SourceExtract>,
 }
 
 struct FixtureExecution<'a> {
     bundle: &'a Arc<Bundle>,
     kernel: &'a OfflineKernel,
     requirement: &'a registry_evidence::config::RequirementConfig,
-    fixture: &'a FixtureContract,
     signer: &'a EvidenceSigner,
+}
+
+impl LoadedProject {
+    /// The executor a statement source's cases run against, over the extract this
+    /// project's own fixture seed materialized.
+    ///
+    /// A statement fixture executes for real. An HTTP call needs a network, a
+    /// credential, and a live third party, so a fixture records what it returned;
+    /// reading a local extract needs none of those, so a recorded answer would
+    /// test everything except the statement. A source on any other transport
+    /// needs no executor here and returns none.
+    fn statement_executor(&self, project_name: &str, source_id: &str) -> Option<SourceExecutor> {
+        let source = self
+            .bundle
+            .config
+            .sources
+            .get(source_id)
+            .unwrap_or_else(|| panic!("{project_name}: requirement source is absent"));
+        let inputs = statement_inputs(source, &self.bundle, Some(&self.extracts))
+            .unwrap_or_else(|_| panic!("{project_name}: statement inputs are unavailable"))?;
+        let secrets = Arc::new(
+            SecretResolver::new([SecretProvider::File], "/")
+                .unwrap_or_else(|_| panic!("{project_name}: fixture secret resolver failed")),
+        );
+        Some(
+            SourceExecutor::new_for_offline_fixture(
+                source,
+                &self.bundle.config.source_selector_sets(source_id),
+                Some(inputs),
+                secrets,
+            )
+            .unwrap_or_else(|_| panic!("{project_name}: statement source did not compile")),
+        )
+    }
 }
 
 impl Drop for LoadedProject {
@@ -189,11 +283,8 @@ impl Drop for LoadedProject {
 
 #[tokio::test]
 async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
-    for project_name in [
-        "dhis2-tracker-evidence",
-        "opencrvs-family-evidence",
-        "relay-protected-read-evidence",
-    ] {
+    for project_name in discovered_projects() {
+        let project_name = project_name.as_str();
         let project = load_project(project_name);
         let signer = fixture_signer().await;
         for requirement in &project.bundle.config.requirements {
@@ -213,7 +304,8 @@ async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
                     .unwrap_or_else(|_| panic!("{project_name}: fixture conversion failed")),
             )
             .unwrap_or_else(|_| panic!("{project_name}: fixture vocabulary is not closed"));
-            validate_contract_shape(project_name, &fixture);
+            let statement = project.statement_executor(project_name, requirement.initial_source());
+            validate_contract_shape(project_name, &fixture, statement.is_some());
             execute_fixture(
                 project_name,
                 &project.bundle,
@@ -221,6 +313,7 @@ async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
                 requirement,
                 &fixture,
                 &signer,
+                statement.as_ref(),
             )
             .await;
         }
@@ -229,12 +322,38 @@ async fn reference_deployment_projects_execute_the_closed_fixture_contract() {
     }
 }
 
+/// Every reference deployment project on disk, in a stable order.
+///
+/// The list is read rather than written out. A project that exists and runs in
+/// no test is the failure this file is here to prevent, and a literal list is
+/// exactly what lets a new project arrive unnoticed.
+fn discovered_projects() -> Vec<String> {
+    let mut names = fs::read_dir(projects_root())
+        .expect("reference deployment projects are readable")
+        .map(|entry| entry.expect("reference project entry is readable"))
+        .filter(|entry| {
+            entry
+                .file_type()
+                .expect("reference project entry type is readable")
+                .is_dir()
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert!(
+        !names.is_empty(),
+        "no reference deployment project was discovered"
+    );
+    names
+}
+
 fn load_project(project_name: &str) -> LoadedProject {
     let project_root = projects_root().join(project_name);
     let original_runtime = fs::read_to_string(project_root.join("runtime.yaml"))
         .unwrap_or_else(|_| panic!("{project_name}: runtime is unreadable"));
-    registry_evidence::config::RuntimeConfig::parse_yaml(original_runtime.as_bytes())
-        .unwrap_or_else(|_| panic!("{project_name}: checked-in runtime is invalid"));
+    let runtime_config =
+        registry_evidence::config::RuntimeConfig::parse_yaml(original_runtime.as_bytes())
+            .unwrap_or_else(|_| panic!("{project_name}: checked-in runtime is invalid"));
 
     let temporary = tempfile::tempdir().expect("temporary project deployment");
     let bundle_root = temporary.path().join("bundle");
@@ -272,6 +391,28 @@ fn load_project(project_name: &str) -> LoadedProject {
             &ca_path.display().to_string(),
         );
     }
+    // The bundle does not load until the extract its runtime document binds
+    // exists, and the seed that builds that extract is itself a bundle artifact,
+    // so the fixture is read from the project directory here rather than through
+    // the bundle that is not loaded yet.
+    if let Some(seed) = project_extract_seed(project_name, &project_root) {
+        let extract_root = temporary.path().join("extracts");
+        fs::create_dir(&extract_root).expect("temporary extract root");
+        let extract_path = extract_root.join("fixture.sqlite");
+        materialize_seed_extract(&extract_path, &seed).unwrap_or_else(|_| {
+            panic!("{project_name}: the fixture extract seed did not materialize")
+        });
+        // Not hygiene. The loader refuses a writable extract because the
+        // executor opens it immutable, so the mode is part of what makes the
+        // file loadable at all.
+        fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o444))
+            .expect("temporary extract is immutable");
+        replace_once(
+            &mut local_runtime,
+            bound_extract_path(project_name, &runtime_config),
+            &extract_path.display().to_string(),
+        );
+    }
     let runtime_path = temporary.path().join("runtime.yaml");
     fs::write(&runtime_path, local_runtime).expect("temporary runtime writes");
     set_tree_mode(&bundle_root, 0o555, 0o444);
@@ -291,13 +432,64 @@ fn load_project(project_name: &str) -> LoadedProject {
         runtime_path,
         bundle,
         kernel,
+        extracts: deployment.runtime.source_extracts,
     }
 }
 
-fn validate_contract_shape(project_name: &str, fixture: &FixtureContract) {
+/// The extract seed a project's fixtures state, if any of them state one.
+///
+/// The fixtures are read off disk rather than out of the bundle because the
+/// bundle cannot be loaded until the file this seed builds already exists. A
+/// project whose sources all answer over a network states no seed and gets no
+/// extract.
+fn project_extract_seed(project_name: &str, project_root: &Path) -> Option<String> {
+    let fixtures_root = project_root.join("bundle/fixtures");
+    let mut seeds = fs::read_dir(&fixtures_root)
+        .unwrap_or_else(|_| panic!("{project_name}: fixture directory is unreadable"))
+        .map(|entry| entry.expect("fixture entry is readable").path())
+        .filter_map(|path| {
+            let text = fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("{project_name}: fixture artifact is unreadable"));
+            let fixture: FixtureContract = serde_norway::from_str(&text)
+                .unwrap_or_else(|_| panic!("{project_name}: fixture vocabulary is not closed"));
+            fixture.common.extract
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        seeds.len() <= 1,
+        "{project_name}: more than one fixture states an extract"
+    );
+    seeds.pop()
+}
+
+/// The host path a project's runtime document binds its one extract profile to.
+fn bound_extract_path<'a>(
+    project_name: &str,
+    runtime: &'a registry_evidence::config::RuntimeConfig,
+) -> &'a str {
+    let mut bindings = runtime.source_extracts.iter();
+    let binding = bindings
+        .next()
+        .unwrap_or_else(|| panic!("{project_name}: the runtime binds no extract"));
+    assert!(
+        bindings.next().is_none(),
+        "{project_name}: the runtime binds more than one extract"
+    );
+    binding.1.path.as_str()
+}
+
+fn validate_contract_shape(project_name: &str, fixture: &FixtureContract, statement_source: bool) {
     assert!(
         fixture.synthetic_only,
         "{project_name}: fixture is not synthetic"
+    );
+    // A statement source answers from an extract, so its fixture states the one
+    // it answers from. A source that answers over a network has no extract to
+    // state, and stating one would describe a world nothing reads.
+    assert_eq!(
+        fixture.common.extract.is_some(),
+        statement_source,
+        "{project_name}: the fixture extract does not match the source transport"
     );
     assert!(
         fixture.fixture.starts_with("registry.evidence.reference.")
@@ -316,8 +508,10 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract) {
         );
         let primary_inputs = [
             case.response.is_some(),
+            case.selectors.is_some(),
             case.source_failure.is_some(),
             case.bundle_mutation.is_some(),
+            case.statement_mutation.is_some(),
             case.request_mutation.is_some(),
             case.derivation_mutation.is_some(),
             case.derivation_parameter_mutation.is_some(),
@@ -329,6 +523,22 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract) {
         assert_eq!(
             primary_inputs, 1,
             "{project_name}/{}: case input form is not closed",
+            case.id
+        );
+        // A case states its world in the form its transport has. A recorded
+        // response belongs to a source that answers over a network; a subject
+        // picked out of the fixture's own extract, and a mutation of the
+        // statement that reads it, belong to one that does not. The remaining
+        // forms describe the bundle or the authorized request and read the same
+        // on either transport.
+        assert!(
+            !(case.response.is_some() && statement_source),
+            "{project_name}/{}: a recorded response is not this transport",
+            case.id
+        );
+        assert!(
+            !((case.selectors.is_some() || case.statement_mutation.is_some()) && !statement_source),
+            "{project_name}/{}: a statement case form is not this transport",
             case.id
         );
         assert!(
@@ -346,12 +556,12 @@ async fn execute_fixture(
     requirement: &registry_evidence::config::RequirementConfig,
     fixture: &FixtureContract,
     signer: &EvidenceSigner,
+    statement: Option<&SourceExecutor>,
 ) {
     let execution = FixtureExecution {
         bundle,
         kernel,
         requirement,
-        fixture,
         signer,
     };
     let mut verified_payloads = Vec::new();
@@ -360,6 +570,10 @@ async fn execute_fixture(
         if let Some(mutation) = &case.bundle_mutation {
             require_name(&label, mutation, "duplicate-disclosure-family");
             execute_bundle_mutation(&label, bundle, requirement, &case.expected);
+            continue;
+        }
+        if let Some(mutation) = &case.statement_mutation {
+            execute_statement_mutation(&label, bundle, requirement, mutation, &case.expected);
             continue;
         }
         if let Some(mutation) = &case.request_mutation {
@@ -382,11 +596,20 @@ async fn execute_fixture(
             .sources
             .get(requirement.initial_source())
             .unwrap_or_else(|| panic!("{label}: requirement source is absent"));
-        let preparation_selectors = selector_projection(&resolved, &source.request.selector_inputs)
+        let preparation_selectors = selector_projection(&resolved, source.selector_inputs())
             .unwrap_or_else(|| panic!("{label}: preparation selector projection failed"));
         let prepared = kernel
             .prepare(&requirement.id, &preparation_selectors)
             .unwrap_or_else(|_| panic!("{label}: request preparation failed"));
+        let source_selectors = source_selector_projection(&resolved, source.selector_inputs())
+            .unwrap_or_else(|| panic!("{label}: source selector projection failed"));
+        // What crosses a statement boundary is the reviewed statement and the
+        // values bound into it, and only the executor can say what those are.
+        let materialized = statement.map(|executor| {
+            executor
+                .materialize_request(&source_selectors, &prepared)
+                .unwrap_or_else(|_| panic!("{label}: statement materialization failed"))
+        });
         if case.selector_overrides.is_none() {
             assert_request_parts(&label, &prepared, &fixture.common.expected_request_parts);
         }
@@ -394,10 +617,11 @@ async fn execute_fixture(
             &label,
             source,
             &prepared,
+            materialized.as_ref(),
             &fixture.common.expected_transport,
         );
         if let Some(expected) = &case.expected.expected_transport {
-            assert_transport(&label, source, &prepared, expected);
+            assert_transport(&label, source, &prepared, materialized.as_ref(), expected);
         }
         let derivation_selectors =
             selector_projection(&resolved, &requirement.derivation.selector_inputs)
@@ -422,10 +646,36 @@ async fn execute_fixture(
             continue;
         }
         if let Some(failure) = &case.source_failure {
-            execute_source_failure(&label, failure, &case.expected);
+            execute_source_failure(&label, source, failure, &case.expected);
             continue;
         }
         let observed_at = observed_at(&label, fixture, case);
+        // A statement source answers here, for real, against the extract this
+        // fixture's own seed built. A source that answers over a network cannot,
+        // so its cases carry the response it returned. Either way a derivation
+        // mutation has no source input of its own and answers where the positive
+        // case answers.
+        let projected = match statement {
+            Some(executor) => match executor
+                .execute(&source_selectors, &prepared, observed_at)
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    assert_source_error(&label, &case.expected, &error);
+                    assert_expected_count(&label, &case.expected, 1);
+                    continue;
+                }
+            },
+            None => {
+                let response = match &case.response {
+                    Some(response) => response,
+                    None => positive_response(&label, fixture),
+                };
+                project_fixture_response(source, response)
+                    .unwrap_or_else(|_| panic!("{label}: production source projection failed"))
+            }
+        };
         if let Some(mutation) = &case.derivation_mutation {
             require_name(&label, mutation, "return-raw-reference");
             execute_derivation_mutation(
@@ -433,6 +683,7 @@ async fn execute_fixture(
                 &execution,
                 &derivation_selectors,
                 observed_at,
+                &projected,
                 &case.expected,
             );
             continue;
@@ -444,17 +695,12 @@ async fn execute_fixture(
                 mutation,
                 &derivation_selectors,
                 observed_at,
+                &projected,
                 &case.expected,
             );
             continue;
         }
 
-        let response = case
-            .response
-            .as_ref()
-            .unwrap_or_else(|| panic!("{label}: response is absent"));
-        let projected = project_fixture_response(source, response)
-            .unwrap_or_else(|_| panic!("{label}: production source projection failed"));
         let payload = execute_response(
             &label,
             &execution,
@@ -705,17 +951,60 @@ fn execute_request_mutation(
     assert_not_signed(label, &case.expected);
 }
 
-fn execute_source_failure(label: &str, failure: &str, expected: &Expected) {
-    let source_error = match failure {
-        "timeout" => SourceError::Timeout,
-        "connection-refused" => SourceError::Transport,
-        "invalid-media-type" => SourceError::WrongMediaType,
-        "oversized" => SourceError::ResponseTooLarge,
-        "malformed-json" => SourceError::InvalidJson,
-        _ => panic!("{label}: source failure name is not closed"),
+/// The closed mock failures a source may be stated to have, per transport.
+///
+/// A transport can only fail in the ways it has. A refused connection, a wrong
+/// media type, and malformed JSON describe a network answer and say nothing
+/// about a local file, so a statement source is refused those symbols rather
+/// than passing a case that cannot happen. A timeout and an oversized result
+/// belong to both, because both admit under a concurrency bound and both hold
+/// the assembled result to a declared size.
+fn execute_source_failure(
+    label: &str,
+    source: &registry_evidence::config::SourceConfig,
+    failure: &str,
+    expected: &Expected,
+) {
+    let statement = source.statement().map(ArtifactPath::as_str);
+    let fault = |cause: &'static str| {
+        ArtifactFault::new(statement.unwrap_or_default(), SchemaFault::because(cause))
     };
+    let source_error = match (failure, statement) {
+        ("timeout", _) => SourceError::Timeout,
+        ("oversized", _) => SourceError::ResponseTooLarge,
+        ("connection-refused", None) => SourceError::Transport,
+        ("invalid-media-type", None) => SourceError::WrongMediaType,
+        ("malformed-json", None) => SourceError::InvalidJson,
+        ("extract-unavailable", Some(_)) => {
+            SourceError::ExtractUnavailable(fault(sqlite_cause::EXTRACT_UNAVAILABLE))
+        }
+        ("extract-too-old", Some(_)) => {
+            SourceError::ExtractTooOld(fault(sqlite_cause::EXTRACT_TOO_OLD))
+        }
+        ("statement-refused", Some(_)) => {
+            SourceError::StatementRefused(fault(sqlite_cause::AUTHORIZER_REFUSED))
+        }
+        ("statement-parameter", Some(_)) => {
+            SourceError::StatementParameter(fault(sqlite_cause::MISSING_PARAMETER))
+        }
+        ("statement-budget", Some(_)) => {
+            SourceError::StatementBudget(fault(sqlite_cause::STEP_BUDGET_EXCEEDED))
+        }
+        ("statement-result", Some(_)) => {
+            SourceError::StatementResult(fault(sqlite_cause::TOO_MANY_ROWS))
+        }
+        ("statement-unavailable", Some(_)) => SourceError::StatementUnavailable,
+        _ => panic!("{label}: source failure name is not this transport"),
+    };
+    assert_source_error(label, expected, &source_error);
+    assert_expected_count(label, expected, 1);
+}
+
+/// A source that did not complete carries one public class, whichever transport
+/// it was and whether the case stated the failure or the run produced it.
+fn assert_source_error(label: &str, expected: &Expected, error: &SourceError) {
     assert_eq!(
-        source_failure_problem(&source_error),
+        source_failure_problem(error),
         ProblemCode::DependencyUnavailable,
         "{label}: source failure did not use the production safe mapping"
     );
@@ -724,8 +1013,42 @@ fn execute_source_failure(label: &str, failure: &str, expected: &Expected) {
         Some("dependency_unavailable"),
         "{label}: source failure public problem is not exact"
     );
-    assert_expected_count(label, expected, 1);
     assert_derivation(label, expected, false);
+    assert_not_signed(label, expected);
+}
+
+/// Refuse a statement the authorizer must never accept.
+///
+/// A refused statement is a bundle fault, not a request-time one: it is settled
+/// while the source is compiled, before a listener binds and before any fixture
+/// case runs. The mutation is applied to a disposable copy of the reviewed
+/// statement, so the project's own artifact is untouched.
+fn execute_statement_mutation(
+    label: &str,
+    bundle: &Bundle,
+    requirement: &registry_evidence::config::RequirementConfig,
+    mutation: &str,
+    expected: &Expected,
+) {
+    assert_eq!(
+        expected.bundle.as_deref(),
+        Some("rejected"),
+        "{label}: bundle rejection expectation is absent"
+    );
+    require_name(label, mutation, "attach-external-database");
+    let source = bundle
+        .config
+        .sources
+        .get(requirement.initial_source())
+        .unwrap_or_else(|| panic!("{label}: requirement source is absent"));
+    let error = check_statement_offline(source, "ATTACH DATABASE 'sidecar.sqlite' AS sidecar;")
+        .expect_err("the mutated statement is refused");
+    assert_eq!(
+        error.cause(),
+        Some(sqlite_cause::AUTHORIZER_REFUSED),
+        "{label}: the mutated statement failed for another reason"
+    );
+    assert_expected_count(label, expected, 0);
     assert_not_signed(label, expected);
 }
 
@@ -734,11 +1057,11 @@ fn execute_derivation_mutation(
     execution: &FixtureExecution<'_>,
     selectors: &Value,
     observed_at: DateTime<Utc>,
+    projected: &Value,
     expected: &Expected,
 ) {
     let bundle = execution.bundle;
     let requirement = execution.requirement;
-    let fixture = execution.fixture;
     assert_eq!(
         expected.output_gate.as_deref(),
         Some("rejected"),
@@ -756,18 +1079,10 @@ fn execute_derivation_mutation(
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
         .unwrap_or_else(|_| panic!("{label}: disposable derivation did not compile"));
-    let response = positive_response(label, fixture);
-    let source = disposable
-        .config
-        .sources
-        .get(requirement.initial_source())
-        .unwrap_or_else(|| panic!("{label}: source is absent"));
-    let projected = project_fixture_response(source, response)
-        .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));
     assert_eq!(
         kernel.evaluate_with_selectors(
             &requirement.id,
-            &projected,
+            projected,
             selectors,
             observed_at,
             ValueProjection {
@@ -789,11 +1104,11 @@ fn execute_parameter_mutation(
     mutation: &JsonMap<String, Value>,
     selectors: &Value,
     observed_at: DateTime<Utc>,
+    projected: &Value,
     expected: &Expected,
 ) {
     let bundle = execution.bundle;
     let requirement = execution.requirement;
-    let fixture = execution.fixture;
     let mut disposable = bundle.as_ref().clone();
     let mut config = serde_json::to_value(&disposable.config)
         .unwrap_or_else(|_| panic!("{label}: config is not representable"));
@@ -823,16 +1138,9 @@ fn execute_parameter_mutation(
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
         .unwrap_or_else(|_| panic!("{label}: disposable kernel compilation failed"));
-    let source = disposable
-        .config
-        .sources
-        .get(requirement.initial_source())
-        .unwrap_or_else(|| panic!("{label}: source is absent"));
-    let projected = project_fixture_response(source, positive_response(label, fixture))
-        .unwrap_or_else(|_| panic!("{label}: positive source projection failed"));
     let outcome = kernel.evaluate_with_selectors(
         &requirement.id,
-        &projected,
+        projected,
         selectors,
         observed_at,
         ValueProjection {
@@ -961,41 +1269,119 @@ fn assert_values(
     }
 }
 
-fn assert_request_parts(label: &str, actual: &RequestParts, expected: &ExpectedRequestParts) {
-    let expected_query = expected
-        .query
-        .iter()
-        .map(|pair| QueryPair {
-            name: pair.name.clone(),
-            value: pair.value.clone(),
-        })
-        .collect::<Vec<_>>();
+/// Preparation produces what its transport consumes, so the expectation is
+/// written in the same terms: a query and a body for an HTTP request, and the
+/// parameters a statement will be given for a statement source.
+fn assert_request_parts(
+    label: &str,
+    actual: &PreparedSourceRequest,
+    expected: &ExpectedRequestParts,
+) {
+    match (actual, expected) {
+        (PreparedSourceRequest::Http(actual), ExpectedRequestParts::Http(expected)) => {
+            let expected_query = expected
+                .query
+                .iter()
+                .map(|pair| QueryPair {
+                    name: pair.name.clone(),
+                    value: pair.value.clone(),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual.query, expected_query,
+                "{label}: request query mismatch"
+            );
+            assert!(
+                same_optional_json(expected.body.as_ref(), actual.body.as_ref()),
+                "{label}: request body mismatch"
+            );
+        }
+        (PreparedSourceRequest::Statement(actual), ExpectedRequestParts::Statement(expected)) => {
+            assert_statement_parameters(label, &expected.parameters, &actual.parameters);
+        }
+        _ => panic!("{label}: the request-parts expectation is not this transport"),
+    }
+}
+
+/// Compare a statement's parameters against a fixture expectation, exactly.
+///
+/// The runtime's own evaluation instant is never among them. It is bound where
+/// the statement executes rather than where its parameters are assembled, so a
+/// fixture neither states it nor could replace it.
+fn assert_statement_parameters(
+    label: &str,
+    expected: &JsonMap<String, Value>,
+    actual: &BTreeMap<String, SelectorValue>,
+) {
     assert_eq!(
-        actual.query, expected_query,
-        "{label}: request query mismatch"
+        expected.len(),
+        actual.len(),
+        "{label}: statement parameter count mismatch"
     );
-    assert!(
-        same_optional_json(expected.body.as_ref(), actual.body.as_ref()),
-        "{label}: request body mismatch"
-    );
+    for (name, value) in actual {
+        assert_eq!(
+            expected.get(name),
+            Some(&selector_value_json(value)),
+            "{label}: statement parameter mismatch"
+        );
+    }
+}
+
+/// A prepared value as a fixture writes it.
+fn selector_value_json(value: &SelectorValue) -> Value {
+    match value {
+        SelectorValue::String(text) => Value::String(text.clone()),
+        SelectorValue::Integer(number) => Value::Number((*number).into()),
+        SelectorValue::Boolean(flag) => Value::Bool(*flag),
+    }
 }
 
 fn assert_transport(
     label: &str,
     source: &registry_evidence::config::SourceConfig,
-    parts: &RequestParts,
+    prepared: &PreparedSourceRequest,
+    materialized: Option<&MaterializedSourceRequest>,
     expected: &ExpectedTransport,
 ) {
+    // A transport expectation names what actually crosses the boundary. For a
+    // statement source that is the reviewed artifact and the values bound into
+    // it, which is why the artifact path is asserted rather than its SQL: the
+    // text is reviewed in the bundle, and restating it here would only give a
+    // fixture a second copy to drift from.
+    if let ExpectedTransport::Statement(expected) = expected {
+        let Some(MaterializedSourceRequest::Sqlite { parameters, .. }) = materialized else {
+            panic!("{label}: the configured source does not run a statement");
+        };
+        assert_eq!(
+            source.statement().map(ArtifactPath::as_str),
+            Some(expected.statement.as_str()),
+            "{label}: statement artifact mismatch"
+        );
+        if let Some(expected) = &expected.parameters {
+            assert_statement_parameters(label, expected, parameters);
+        }
+        return;
+    }
+    let ExpectedTransport::Http(expected) = expected else {
+        unreachable!("the statement form returned above");
+    };
+    // Every expectation below describes an HTTP request, so a source on
+    // another transport is a fixture that does not match this assertion.
+    let registry_evidence::config::SourceConfig::HttpJson { request, .. } = source else {
+        panic!("{label}: the configured source does not use the http-json transport");
+    };
+    let parts = prepared.http_parts().unwrap_or_else(|| {
+        panic!("{label}: the configured source does not prepare an HTTP request")
+    });
     if let Some(path) = &expected.path {
         assert_eq!(
-            source.request.path.as_deref(),
+            request.path.as_deref(),
             Some(path.as_str()),
             "{label}: fixed transport path mismatch"
         );
     }
     if let Some(headers) = &expected.fixed_headers {
-        let actual = source
-            .request
+        let actual = request
             .fixed_headers
             .iter()
             .map(|header| (header.name.as_str(), header.value.as_str()))
@@ -1077,6 +1463,48 @@ fn selector_projection(
     Some(Value::Object(output))
 }
 
+/// The same minimized selectors, in the form the source executor binds from.
+fn source_selector_projection(
+    resolved: &ResolvedAuthorization,
+    inputs: &[SelectorInput],
+) -> Option<Vec<ResolvedSourceSelector>> {
+    inputs
+        .iter()
+        .map(|input| {
+            let subject = resolved
+                .subjects
+                .iter()
+                .find(|subject| subject.role == input.role)?;
+            let alternative = input
+                .alternatives
+                .iter()
+                .find(|alternative| alternative.profile == subject.selector_profile)?;
+            let values = alternative
+                .fields
+                .iter()
+                .map(|name| {
+                    let field = subject.fields.iter().find(|field| &field.name == name)?;
+                    let value = match &field.value {
+                        ResolvedSelectorValue::String(value)
+                        | ResolvedSelectorValue::Date(value)
+                        | ResolvedSelectorValue::ControlledCode(value) => {
+                            SelectorValue::String(value.clone())
+                        }
+                        ResolvedSelectorValue::Integer(value) => SelectorValue::Integer(*value),
+                        ResolvedSelectorValue::Boolean(value) => SelectorValue::Boolean(*value),
+                    };
+                    Some((name.clone(), value))
+                })
+                .collect::<Option<BTreeMap<_, _>>>()?;
+            Some(ResolvedSourceSelector {
+                role: input.role.clone(),
+                profile: alternative.profile.clone(),
+                values,
+            })
+        })
+        .collect()
+}
+
 fn fixture_common_object(fixture: &FixtureContract) -> JsonMap<String, Value> {
     let mut common = JsonMap::new();
     common.insert("selectors".to_owned(), fixture.common.selectors.clone());
@@ -1091,6 +1519,12 @@ fn fixture_common_object(fixture: &FixtureContract) -> JsonMap<String, Value> {
 
 fn fixture_case_object(fixture: &FixtureContract, case: &FixtureCase) -> JsonMap<String, Value> {
     let mut output = JsonMap::new();
+    // The case's own subject, where it states one. Every case of a statement
+    // fixture answers from the same extract, so picking a subject is how a case
+    // states which registrant it is about.
+    if let Some(selectors) = &case.selectors {
+        output.insert("selectors".to_owned(), selectors.clone());
+    }
     if let Some(overrides) = &case.selector_overrides {
         output.insert("selectorOverrides".to_owned(), overrides.clone());
     }

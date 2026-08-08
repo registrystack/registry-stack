@@ -45,6 +45,11 @@ The normative source set is:
   primitive allowlist, and resource limits;
 - `source-contract.yaml`: the fixed HTTP JSON source boundary and the closed set
   of acquisition kinds a requirement may declare; and
+- `sqlite-extract-source-contract.yaml`: the coequal `sqlite-extract` source
+  boundary, covering one reviewed statement executed against a read-only
+  mounted extract, the authorizer and bounds it runs under, the extract's
+  publication metadata and maximum age, and the runtime file binding that
+  names it; and
 - `security-invariant-matrix.yaml`: threat, enforcement point, and required
   negative test for every Version 1 trust and privacy invariant; and
 - `security-test-traceability.yaml`: exact executable Rust tests satisfying

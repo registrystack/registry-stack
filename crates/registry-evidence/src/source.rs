@@ -1,11 +1,14 @@
-//! Exact, bounded HTTP/JSON source execution for Evidence Version 1.
+//! Exact, bounded source execution for Evidence Version 1, over an HTTP/JSON
+//! request or a reviewed statement against a SQLite extract.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine as _;
+use chrono::{DateTime, Utc};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use registry_platform_authcommon::client_assertion::{
@@ -21,15 +24,20 @@ use tokio::sync::{Mutex, Semaphore};
 use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
     is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
     AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
-    PathBindingConfig, PreparationChannelPolicy, SecretRef, SourceAuthentication, SourceConfig,
-    SourceSelectorSet,
+    PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput,
+    SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
+    RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
-use crate::rhai_runtime::RequestParts;
+use crate::rhai_runtime::{RequestParts, StatementParameters};
 use crate::secrets::{ProtectedSecret, SecretResolver};
+use crate::source_sqlite::{
+    cause, check_statement_offline, SqliteExtractSource, SqliteSourceError,
+};
 
 const TOKEN_RESPONSE_MAXIMUM_BYTES: u64 = 8 * 1024;
 const PRIVATE_CA_MAXIMUM_BYTES: u64 = 1024 * 1024;
@@ -44,6 +52,19 @@ const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type
 /// Proves a client assertion key can sign and that its two halves belong
 /// together, without producing anything a server would accept as an assertion.
 const CLIENT_KEY_PROBE: &[u8] = b"registry-evidence source client key usability probe";
+/// Causes this module raises about a statement source's preparation, beside the
+/// ones `source_sqlite` raises about the statement itself.
+const PREPARED_PARAMETER_UNDECLARED: &str =
+    "the preparation returned a parameter the statement does not declare";
+const PREPARED_PARAMETER_RESERVED: &str =
+    "the preparation returned the parameter name the runtime reserves";
+const PREPARED_PARAMETER_NOT_PREPARED: &str =
+    "the preparation returned a parameter the statement fills from a selector";
+const MISSING_PREPARED_PARAMETER: &str =
+    "the preparation returned no value for a parameter declared prepared";
+const STATEMENT_ARTIFACT_UNREADABLE: &str = "the statement artifact is not readable UTF-8 text";
+const STATEMENT_EXTRACT_UNBOUND: &str =
+    "the deployment binds no file for the extract profile this statement reads";
 
 /// A role-bound selector that has already passed authentication,
 /// authorization, exact-field, type, and size validation.
@@ -96,11 +117,104 @@ pub enum SourceError {
     ErrorEnvelope,
     #[error("the source response did not satisfy its acquisition projection")]
     ProjectionViolation,
+    #[error("the source extract could not be read")]
+    ExtractUnavailable(ArtifactFault),
+    #[error("the source extract is older than the source allows")]
+    ExtractTooOld(ArtifactFault),
+    #[error("the source statement was refused")]
+    StatementRefused(ArtifactFault),
+    #[error("the source statement parameters are invalid")]
+    StatementParameter(ArtifactFault),
+    #[error("the source statement exceeded a declared budget")]
+    StatementBudget(ArtifactFault),
+    #[error("the source statement result left its declared contract")]
+    StatementResult(ArtifactFault),
+    #[error("the source statement could not be executed")]
+    StatementUnavailable,
 }
 
-/// Executes one immutable source plan. The client has redirects, retries,
+impl SourceError {
+    /// The artifact an adopter can open, where the failure named one.
+    ///
+    /// The fault never reaches a request-time rendering, which stays value-free
+    /// and categorical. It is the deployment path that wants it, so a statement
+    /// refused at startup names `queries/<name>.sql` and a line inside it rather
+    /// than reporting that a source is unavailable.
+    pub fn artifact_fault(&self) -> Option<&ArtifactFault> {
+        match self {
+            Self::ExtractUnavailable(fault)
+            | Self::ExtractTooOld(fault)
+            | Self::StatementRefused(fault)
+            | Self::StatementParameter(fault)
+            | Self::StatementBudget(fault)
+            | Self::StatementResult(fault) => Some(fault),
+            Self::InvalidPlan
+            | Self::InvalidSelectors
+            | Self::Credential
+            | Self::Concurrency
+            | Self::Timeout
+            | Self::Transport
+            | Self::Redirect
+            | Self::Status(_)
+            | Self::WrongMediaType
+            | Self::ResponseTooLarge
+            | Self::InvalidJson
+            | Self::ErrorEnvelope
+            | Self::ProjectionViolation
+            | Self::StatementUnavailable => None,
+        }
+    }
+}
+
+/// Carry a statement-source failure across into the closed source vocabulary.
+///
+/// The engine's own words never travel: `source_sqlite` has already classified
+/// the failure to one of its closed causes, and that cause is what selects the
+/// category here.
+fn map_statement_error(error: SqliteSourceError) -> SourceError {
+    let cause = error.cause();
+    let fault = match error {
+        SqliteSourceError::Statement(fault) | SqliteSourceError::Extract(fault) => fault,
+        SqliteSourceError::InvalidPlan => return SourceError::InvalidPlan,
+        SqliteSourceError::Concurrency => return SourceError::Concurrency,
+        SqliteSourceError::Timeout => return SourceError::Timeout,
+        SqliteSourceError::Unavailable => return SourceError::StatementUnavailable,
+    };
+    match cause {
+        Some(cause::EXTRACT_UNAVAILABLE | cause::NO_METADATA_TABLE | cause::MALFORMED_METADATA) => {
+            SourceError::ExtractUnavailable(fault)
+        }
+        Some(cause::EXTRACT_TOO_OLD) => SourceError::ExtractTooOld(fault),
+        Some(cause::MISSING_PARAMETER) => SourceError::StatementParameter(fault),
+        Some(cause::STEP_BUDGET_EXCEEDED | cause::TIME_BUDGET_EXCEEDED) => {
+            SourceError::StatementBudget(fault)
+        }
+        Some(cause::TOO_MANY_ROWS | cause::CELL_TOO_LARGE | cause::VALUE_TYPE_MISMATCH) => {
+            SourceError::StatementResult(fault)
+        }
+        // Every remaining cause, including a statement that failed while its
+        // result was read, says the statement itself did not hold up against
+        // the extract. That is one fix, in the one file the fault names.
+        _ => SourceError::StatementRefused(fault),
+    }
+}
+
+/// Executes one immutable source plan on the transport that plan names.
+///
+/// One executor type serves every transport, so a caller holds a source without
+/// holding a transport decision. The HTTP client has redirects, retries,
 /// ambient proxies, pagination, cookies, and caller-controlled headers absent.
 pub struct SourceExecutor {
+    transport: SourceTransport,
+}
+
+/// The transports this build has an executor for.
+enum SourceTransport {
+    Http(Box<HttpTransport>),
+    Statement(Box<StatementTransport>),
+}
+
+struct HttpTransport {
     client: reqwest::Client,
     request: RequestPlan,
     authentication: AuthenticationPlan,
@@ -109,40 +223,181 @@ pub struct SourceExecutor {
     concurrency_admission_timeout: Duration,
 }
 
+/// One reviewed statement, and the extract it reads.
+struct StatementTransport {
+    request: StatementRequestPlan,
+    /// The opened extract. Absent only in the offline fixture evaluator, which
+    /// has no runtime document to bind an extract profile to a file with. Such
+    /// an executor materializes a request and fails closed if asked to run one,
+    /// rather than standing in for an extract it does not have.
+    extract: Option<SqliteExtractSource>,
+}
+
+/// What a statement source needs from outside its own configuration.
+#[derive(Clone, Copy)]
+pub struct StatementInputs<'a> {
+    /// The reviewed statement, read from the bundle artifact the source names.
+    pub statement_sql: &'a str,
+    /// The file the runtime document bound the source's extract profile to.
+    pub extract_path: Option<&'a Path>,
+}
+
+/// Bind one source to what a statement transport needs from outside its own
+/// configuration, so every caller assembles it the same way.
+///
+/// `extracts` is `Some` wherever a runtime document was loaded, and a profile
+/// missing from it is a deployment fault rather than an executor that quietly
+/// cannot run. `None` says there is no runtime document at all, which is the
+/// offline fixture and bundle-check position: the statement is still compiled
+/// and checked, and no file is opened. A source on any other transport needs
+/// nothing here and binds nothing.
+pub fn statement_inputs<'a>(
+    source: &SourceConfig,
+    bundle: &'a Bundle,
+    extracts: Option<&'a BTreeMap<String, SourceExtract>>,
+) -> Result<Option<StatementInputs<'a>>, SourceError> {
+    let Some(artifact) = source.statement() else {
+        return Ok(None);
+    };
+    let artifact = artifact.as_str();
+    let statement_sql = bundle
+        .artifact(artifact)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .ok_or_else(|| {
+            SourceError::StatementRefused(ArtifactFault::new(
+                artifact,
+                SchemaFault::because(STATEMENT_ARTIFACT_UNREADABLE),
+            ))
+        })?;
+    let extract_path = match extracts {
+        Some(extracts) => {
+            let profile = source.extract_profile().ok_or(SourceError::InvalidPlan)?;
+            let extract = extracts.get(profile).ok_or_else(|| {
+                SourceError::ExtractUnavailable(ArtifactFault::new(
+                    artifact,
+                    SchemaFault::because(STATEMENT_EXTRACT_UNBOUND),
+                ))
+            })?;
+            Some(extract.path())
+        }
+        None => None,
+    };
+    Ok(Some(StatementInputs {
+        statement_sql,
+        extract_path,
+    }))
+}
+
 /// The validated non-credential transport material for one fixed source request.
 ///
-/// The full URL remains private so callers cannot obtain source authority, and
-/// this type deliberately exposes no fixed headers or authentication material.
-/// Path, query, and body access is intended for the trusted offline fixture
-/// harness. Its diagnostic representation is always value-free.
+/// For HTTP the full URL remains private so callers cannot obtain source
+/// authority, and this type deliberately exposes no fixed headers or
+/// authentication material. Path, query, body, statement, and parameter access
+/// is intended for the trusted offline fixture harness. Its diagnostic
+/// representation is always value-free.
 #[derive(Clone, PartialEq)]
-pub struct MaterializedSourceRequest {
-    url: Url,
-    body: Option<JsonValue>,
+pub enum MaterializedSourceRequest {
+    Http {
+        url: Url,
+        body: Option<JsonValue>,
+    },
+    /// The statement about to run, and the values bound into it. The runtime's
+    /// own evaluation instant is not among them: it is bound where the
+    /// statement executes, so no caller can observe or replace it.
+    Sqlite {
+        statement: String,
+        parameters: BTreeMap<String, SelectorValue>,
+    },
 }
 
 impl MaterializedSourceRequest {
-    pub fn path(&self) -> &str {
-        self.url.path()
+    /// The request path, for a transport that has one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Http { url, .. } => Some(url.path()),
+            Self::Sqlite { .. } => None,
+        }
     }
 
     pub fn query(&self) -> Option<&str> {
-        self.url.query()
+        match self {
+            Self::Http { url, .. } => url.query(),
+            Self::Sqlite { .. } => None,
+        }
     }
 
     pub fn body(&self) -> Option<&JsonValue> {
-        self.body.as_ref()
+        match self {
+            Self::Http { body, .. } => body.as_ref(),
+            Self::Sqlite { .. } => None,
+        }
+    }
+
+    /// The reviewed statement text, for a transport that runs one.
+    pub fn statement(&self) -> Option<&str> {
+        match self {
+            Self::Http { .. } => None,
+            Self::Sqlite { statement, .. } => Some(statement),
+        }
+    }
+
+    /// The values bound into the statement, for a transport that binds any.
+    pub fn parameters(&self) -> Option<&BTreeMap<String, SelectorValue>> {
+        match self {
+            Self::Http { .. } => None,
+            Self::Sqlite { parameters, .. } => Some(parameters),
+        }
     }
 }
 
 impl fmt::Debug for MaterializedSourceRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("MaterializedSourceRequest")
-            .field("path", &"<redacted>")
-            .field("query", &self.query().map(|_| "<redacted>"))
-            .field("body", &self.body().map(|_| "<redacted>"))
-            .finish()
+        match self {
+            Self::Http { .. } => formatter
+                .debug_struct("MaterializedSourceRequest::Http")
+                .field("path", &"<redacted>")
+                .field("query", &self.query().map(|_| "<redacted>"))
+                .field("body", &self.body().map(|_| "<redacted>"))
+                .finish(),
+            Self::Sqlite { parameters, .. } => formatter
+                .debug_struct("MaterializedSourceRequest::Sqlite")
+                .field("statement", &"<redacted>")
+                .field("parameters", &parameters.len())
+                .finish(),
+        }
+    }
+}
+
+/// The validated preparation output for one source, in the shape its transport
+/// consumes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreparedSourceRequest {
+    Http(RequestParts),
+    Statement(StatementParameters),
+}
+
+impl PreparedSourceRequest {
+    /// The HTTP request parts, where an HTTP source prepared them. Absent on
+    /// every other transport, which prepares something else entirely.
+    pub fn http_parts(&self) -> Option<&RequestParts> {
+        match self {
+            Self::Http(parts) => Some(parts),
+            Self::Statement(_) => None,
+        }
+    }
+
+    fn http(&self) -> Result<&RequestParts, SourceError> {
+        match self {
+            Self::Http(parts) => Ok(parts),
+            Self::Statement(_) => Err(SourceError::InvalidPlan),
+        }
+    }
+
+    fn statement(&self) -> Result<&StatementParameters, SourceError> {
+        match self {
+            Self::Statement(parameters) => Ok(parameters),
+            Self::Http(_) => Err(SourceError::InvalidPlan),
+        }
     }
 }
 
@@ -156,6 +411,30 @@ struct RequestPlan {
     posture: AcquisitionPosture,
     projection: ProjectionNode,
     maximum_response_bytes: u64,
+}
+
+struct StatementRequestPlan {
+    /// The bundle-relative statement artifact, so a fault this module raises
+    /// names the file an adopter opens.
+    artifact: String,
+    statement_sql: String,
+    selector_inputs: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    allowed_selector_sets: Vec<SourceSelectorSet>,
+    parameter_bindings: BTreeMap<String, StatementParameterPlan>,
+    projection: ProjectionNode,
+    maximum_response_bytes: u64,
+}
+
+/// Where one statement parameter's value comes from. An enum rather than an
+/// optional selector, so the match that fills a parameter is exhaustive and a
+/// later origin cannot be added without being handled.
+enum StatementParameterPlan {
+    Selector {
+        role: String,
+        profile: String,
+        field: String,
+    },
+    Prepared,
 }
 
 enum SourcePath {
@@ -258,33 +537,37 @@ struct ProjectionNode {
 }
 
 impl SourceExecutor {
-    /// Compile a standalone source with system TLS roots. Sources that name a
-    /// private trust profile require `new_with_selector_sets_and_tls`.
+    /// Compile a standalone HTTP source with system TLS roots. Sources that name
+    /// a private trust profile require `new_with_selector_sets_and_tls`.
     pub fn new(source: &SourceConfig, secrets: Arc<SecretResolver>) -> Result<Self, SourceError> {
         let allowed = conservative_selector_sets(source)?;
         Self::new_with_selector_sets(source, &allowed, secrets)
     }
 
-    /// Compile a source with system TLS roots and explicitly allowed selector
-    /// tuples.
+    /// Compile an HTTP source with system TLS roots and explicitly allowed
+    /// selector tuples.
     pub fn new_with_selector_sets(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
-        if source.tls_trust_profile.is_some() {
+        if source.tls_trust_profile().is_some() {
             return Err(SourceError::InvalidPlan);
         }
-        Self::compile(source, allowed_selector_sets, None, false, secrets)
+        Self::compile(source, allowed_selector_sets, None, false, None, secrets)
     }
 
     /// Compile a source against runtime-owned TLS trust bindings. System roots
     /// remain enabled and the selected private CA bundle is additive.
+    ///
+    /// `statement` carries what a statement source needs from outside its own
+    /// configuration, and is absent for every other transport.
     pub fn new_with_selector_sets_and_tls(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
         outbound_tls: &OutboundTlsConfig,
         captured_ca_bundles: &BTreeMap<String, Vec<u8>>,
+        statement: Option<StatementInputs<'_>>,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
         Self::compile(
@@ -292,19 +575,30 @@ impl SourceExecutor {
             allowed_selector_sets,
             Some((outbound_tls, captured_ca_bundles)),
             false,
+            statement,
             secrets,
         )
     }
 
     /// Compile the non-credential request material used only by the hidden
     /// bundle fixture evaluator. Runtime-owned private CA bytes are not needed
-    /// because this executor can materialize requests but is never executed.
+    /// because this executor can materialize requests but is never executed,
+    /// and a statement source compiled here is given no extract for the same
+    /// reason.
     pub fn new_for_offline_fixture(
         source: &SourceConfig,
         allowed_selector_sets: &[SourceSelectorSet],
+        statement: Option<StatementInputs<'_>>,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
-        Self::compile(source, allowed_selector_sets, None, true, secrets)
+        Self::compile(
+            source,
+            allowed_selector_sets,
+            None,
+            true,
+            statement,
+            secrets,
+        )
     }
 
     fn compile(
@@ -312,52 +606,48 @@ impl SourceExecutor {
         allowed_selector_sets: &[SourceSelectorSet],
         outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
         offline_fixture: bool,
+        statement: Option<StatementInputs<'_>>,
         secrets: Arc<SecretResolver>,
     ) -> Result<Self, SourceError> {
-        if matches!(source.authentication, SourceAuthentication::None {})
-            && (source.tls_trust_profile.is_some()
-                || validate_local_unauthenticated_source_origin(&source.base_url).is_err())
-        {
-            return Err(SourceError::InvalidPlan);
-        }
-        let timeout = Duration::from_millis(source.request.timeout_milliseconds);
-        if timeout.is_zero()
-            || source.request.timeout_milliseconds > 30_000
-            || source.request.maximum_response_bytes == 0
-            || source.request.maximum_response_bytes > 1_048_576
-            || source.request.concurrency_limit == 0
-            || source.request.concurrency_limit > 256
-        {
-            return Err(SourceError::InvalidPlan);
-        }
-        let base_url = validate_url(&source.base_url, true)?;
-        let authentication = compile_authentication(&source.authentication, timeout)?;
-        let request = compile_request(
-            &source.request,
-            allowed_selector_sets,
-            source.posture,
-            base_url,
-            &authentication,
-        )?;
-        let client = build_client(timeout, source, outbound_tls, offline_fixture)?;
-        Ok(Self {
-            client,
-            request,
-            authentication,
-            secrets,
-            concurrency: Semaphore::new(usize::from(source.request.concurrency_limit)),
-            concurrency_admission_timeout: timeout,
-        })
+        // The source's own transport selects the executor. A source whose
+        // transport this build has no executor for is refused here rather than
+        // served by a substitute.
+        let transport = match source {
+            SourceConfig::HttpJson { .. } => {
+                SourceTransport::Http(Box::new(HttpTransport::compile(
+                    source,
+                    allowed_selector_sets,
+                    outbound_tls,
+                    offline_fixture,
+                    secrets,
+                )?))
+            }
+            SourceConfig::SqliteExtract { .. } => {
+                SourceTransport::Statement(Box::new(StatementTransport::compile(
+                    source,
+                    allowed_selector_sets,
+                    statement.ok_or(SourceError::InvalidPlan)?,
+                )?))
+            }
+        };
+        Ok(Self { transport })
     }
 
-    /// Make exactly one evidence-data request using validated Rhai preparation
-    /// output. Path expansion remains Rust-owned and selector-bound.
+    /// Make exactly one evidence-data acquisition using validated Rhai
+    /// preparation output. Path expansion and parameter binding remain
+    /// Rust-owned and selector-bound.
+    ///
+    /// `evaluation_instant` is the runtime's one clock, captured before
+    /// acquisition begins. A transport that exposes an instant to its source
+    /// exposes this one, so an assertion and the data behind it are read as of
+    /// the same moment.
     pub async fn execute(
         &self,
         selectors: &[ResolvedSourceSelector],
-        request_parts: &RequestParts,
+        request: &PreparedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
     ) -> Result<JsonValue, SourceError> {
-        self.execute_with_prior_facts(selectors, &BTreeMap::new(), request_parts)
+        self.execute_with_prior_facts(selectors, &BTreeMap::new(), request, evaluation_instant)
             .await
     }
 
@@ -365,10 +655,138 @@ impl SourceExecutor {
         &self,
         selectors: &[ResolvedSourceSelector],
         prior_facts: &BTreeMap<String, JsonValue>,
-        request_parts: &RequestParts,
+        request: &PreparedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
     ) -> Result<JsonValue, SourceError> {
         let materialized =
-            self.materialize_request_with_prior_facts(selectors, prior_facts, request_parts)?;
+            self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
+        match &self.transport {
+            SourceTransport::Http(http) => http.execute(&materialized).await,
+            SourceTransport::Statement(statement) => {
+                statement.execute(&materialized, evaluation_instant).await
+            }
+        }
+    }
+
+    /// Validate and materialize only the transport material: path, encoded
+    /// query, and JSON body for HTTP, statement and bound parameters for a
+    /// statement source.
+    ///
+    /// This performs no concurrency admission, credential resolution, or I/O.
+    /// The same result is consumed directly by [`Self::execute`].
+    pub fn materialize_request(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        request: &PreparedSourceRequest,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
+        self.materialize_request_with_prior_facts(selectors, &BTreeMap::new(), request)
+    }
+
+    pub fn materialize_request_with_prior_facts(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prior_facts: &BTreeMap<String, JsonValue>,
+        request: &PreparedSourceRequest,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
+        match &self.transport {
+            SourceTransport::Http(http) => {
+                http.materialize_request(selectors, prior_facts, request.http()?)
+            }
+            SourceTransport::Statement(statement) => {
+                statement.materialize_request(selectors, request.statement()?)
+            }
+        }
+    }
+
+    /// Resolve and validate credentials without making an evidence-data
+    /// request. OAuth may perform its bounded token bootstrap.
+    pub async fn credentials_ready(&self) -> Result<(), SourceError> {
+        match &self.transport {
+            SourceTransport::Http(http) => http.authentication_header().await.map(|_| ()),
+            // A statement source reads a file the deployment mounted beside the
+            // process. There are no credentials to hold, which is the point of
+            // the transport, so it is ready as soon as it has compiled.
+            SourceTransport::Statement(_) => Ok(()),
+        }
+    }
+
+    /// The HTTP transport's concurrency boundary, for the tests that occupy it.
+    #[cfg(test)]
+    fn http_concurrency(&self) -> &Semaphore {
+        match &self.transport {
+            SourceTransport::Http(http) => &http.concurrency,
+            SourceTransport::Statement(_) => panic!("the source is not an HTTP source"),
+        }
+    }
+}
+
+impl HttpTransport {
+    fn compile(
+        source: &SourceConfig,
+        allowed_selector_sets: &[SourceSelectorSet],
+        outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
+        offline_fixture: bool,
+        secrets: Arc<SecretResolver>,
+    ) -> Result<Self, SourceError> {
+        let SourceConfig::HttpJson {
+            base_url: configured_base_url,
+            posture,
+            tls_trust_profile,
+            authentication: configured_authentication,
+            request: configured_request,
+            ..
+        } = source
+        else {
+            return Err(SourceError::InvalidPlan);
+        };
+        if matches!(**configured_authentication, SourceAuthentication::None {})
+            && (tls_trust_profile.is_some()
+                || validate_local_unauthenticated_source_origin(configured_base_url).is_err())
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+        let timeout = Duration::from_millis(configured_request.timeout_milliseconds);
+        if timeout.is_zero()
+            || configured_request.timeout_milliseconds > 30_000
+            || configured_request.maximum_response_bytes == 0
+            || configured_request.maximum_response_bytes > 1_048_576
+            || configured_request.concurrency_limit == 0
+            || configured_request.concurrency_limit > 256
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+        let base_url = validate_url(configured_base_url, true)?;
+        let authentication = compile_authentication(configured_authentication, timeout)?;
+        let request = compile_request(
+            configured_request,
+            allowed_selector_sets,
+            *posture,
+            base_url,
+            &authentication,
+        )?;
+        let client = build_client(
+            timeout,
+            tls_trust_profile.as_deref(),
+            outbound_tls,
+            offline_fixture,
+        )?;
+        Ok(Self {
+            client,
+            request,
+            authentication,
+            secrets,
+            concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
+            concurrency_admission_timeout: timeout,
+        })
+    }
+
+    async fn execute(
+        &self,
+        materialized: &MaterializedSourceRequest,
+    ) -> Result<JsonValue, SourceError> {
+        let MaterializedSourceRequest::Http { url, .. } = materialized else {
+            return Err(SourceError::InvalidPlan);
+        };
         let _permit =
             acquire_source_slot(&self.concurrency, self.concurrency_admission_timeout).await?;
         let method = match self.request.method {
@@ -377,7 +795,7 @@ impl SourceExecutor {
         };
         let mut request = self
             .client
-            .request(method, materialized.url.clone())
+            .request(method, url.clone())
             .headers(self.request.fixed_headers.clone());
         if let Some((authentication_name, authentication_value)) =
             self.authentication_header().await?
@@ -400,19 +818,7 @@ impl SourceExecutor {
         .await
     }
 
-    /// Validate and materialize only path, encoded query, and JSON body.
-    ///
-    /// This performs no concurrency admission, credential resolution, or I/O.
-    /// The same result is consumed directly by [`Self::execute`].
-    pub fn materialize_request(
-        &self,
-        selectors: &[ResolvedSourceSelector],
-        request_parts: &RequestParts,
-    ) -> Result<MaterializedSourceRequest, SourceError> {
-        self.materialize_request_with_prior_facts(selectors, &BTreeMap::new(), request_parts)
-    }
-
-    pub fn materialize_request_with_prior_facts(
+    fn materialize_request(
         &self,
         selectors: &[ResolvedSourceSelector],
         prior_facts: &BTreeMap<String, JsonValue>,
@@ -425,16 +831,10 @@ impl SourceExecutor {
         let url = self
             .request
             .materialize_url(&selectors, prior_facts, request_parts)?;
-        Ok(MaterializedSourceRequest {
+        Ok(MaterializedSourceRequest::Http {
             url,
             body: request_parts.body.clone(),
         })
-    }
-
-    /// Resolve and validate credentials without making an evidence-data
-    /// request. OAuth may perform its bounded token bootstrap.
-    pub async fn credentials_ready(&self) -> Result<(), SourceError> {
-        self.authentication_header().await.map(|_| ())
     }
 
     async fn authentication_header(
@@ -473,6 +873,219 @@ impl SourceExecutor {
     }
 }
 
+impl StatementTransport {
+    fn compile(
+        source: &SourceConfig,
+        allowed_selector_sets: &[SourceSelectorSet],
+        inputs: StatementInputs<'_>,
+    ) -> Result<Self, SourceError> {
+        let SourceConfig::SqliteExtract {
+            request: configured_request,
+            ..
+        } = source
+        else {
+            return Err(SourceError::InvalidPlan);
+        };
+        let selector_inputs = compile_selector_inputs(&configured_request.selector_inputs)?;
+        let allowed_selector_sets =
+            compile_allowed_selector_sets(&selector_inputs, allowed_selector_sets)?;
+        let parameter_bindings = compile_parameter_bindings(
+            configured_request,
+            &selector_inputs,
+            &allowed_selector_sets,
+        )?;
+        let projection = compile_projection(&configured_request.projection)?;
+        let request = StatementRequestPlan {
+            artifact: configured_request.statement.as_str().to_owned(),
+            statement_sql: inputs.statement_sql.to_owned(),
+            selector_inputs,
+            allowed_selector_sets,
+            parameter_bindings,
+            projection,
+            maximum_response_bytes: configured_request.maximum_response_bytes,
+        };
+        // The statement is checked as strongly as the caller's inputs allow.
+        // Opening the extract checks it against the schema it will actually
+        // read, so a statement that disagrees with the extract fails at startup
+        // rather than at the first request. Without an extract there is no
+        // schema to check against, so what is settleable without data is
+        // settled here instead of going unchecked.
+        let extract = match inputs.extract_path {
+            Some(path) => Some(
+                SqliteExtractSource::open(source, inputs.statement_sql, path)
+                    .map_err(map_statement_error)?,
+            ),
+            None => {
+                check_statement_offline(source, inputs.statement_sql)
+                    .map_err(map_statement_error)?;
+                None
+            }
+        };
+        Ok(Self { request, extract })
+    }
+
+    async fn execute(
+        &self,
+        materialized: &MaterializedSourceRequest,
+        evaluation_instant: DateTime<Utc>,
+    ) -> Result<JsonValue, SourceError> {
+        let MaterializedSourceRequest::Sqlite { parameters, .. } = materialized else {
+            return Err(SourceError::InvalidPlan);
+        };
+        let extract = self
+            .extract
+            .as_ref()
+            .ok_or(SourceError::StatementUnavailable)?;
+        // How old an extract may be is an evaluation-time question, not a
+        // load-time one, so it is asked here, against the instant this
+        // evaluation carries, and before a single row is read.
+        extract
+            .validate_extract_age(evaluation_instant)
+            .map_err(map_statement_error)?;
+        let response = extract
+            .execute(parameters, evaluation_instant)
+            .await
+            .map_err(map_statement_error)?;
+        if serde_json::to_vec(&response)
+            .map_err(|_| SourceError::InvalidJson)?
+            .len()
+            > usize::try_from(self.request.maximum_response_bytes)
+                .map_err(|_| SourceError::ResponseTooLarge)?
+        {
+            return Err(SourceError::ResponseTooLarge);
+        }
+        project_bounded_response(&response, &self.request.projection)
+    }
+
+    fn materialize_request(
+        &self,
+        selectors: &[ResolvedSourceSelector],
+        prepared: &StatementParameters,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
+        let selectors = validate_selectors(
+            &self.request.selector_inputs,
+            &self.request.allowed_selector_sets,
+            selectors,
+        )?;
+        let mut parameters = BTreeMap::new();
+        for (name, binding) in &self.request.parameter_bindings {
+            let StatementParameterPlan::Selector {
+                role,
+                profile,
+                field,
+            } = binding
+            else {
+                continue;
+            };
+            let selector = selectors
+                .get(&(role.as_str(), profile.as_str()))
+                .ok_or(SourceError::InvalidSelectors)?;
+            let value = selector
+                .values
+                .get(field)
+                .ok_or(SourceError::InvalidSelectors)?;
+            parameters.insert(name.clone(), value.clone());
+        }
+        // Preparation fills the parameters the source declared prepared, and
+        // those only. It cannot introduce a parameter the source did not
+        // declare, it cannot reach the name the runtime keeps for its own
+        // instant, and it cannot stand in for a selector the source named as a
+        // parameter's origin.
+        for (name, value) in &prepared.parameters {
+            let cause = if name == RESERVED_SQL_PARAMETER {
+                PREPARED_PARAMETER_RESERVED
+            } else {
+                match self.request.parameter_bindings.get(name) {
+                    None => PREPARED_PARAMETER_UNDECLARED,
+                    Some(StatementParameterPlan::Selector { .. }) => {
+                        PREPARED_PARAMETER_NOT_PREPARED
+                    }
+                    Some(StatementParameterPlan::Prepared) => {
+                        parameters.insert(name.clone(), value.clone());
+                        continue;
+                    }
+                }
+            };
+            return Err(SourceError::StatementParameter(ArtifactFault::new(
+                &self.request.artifact,
+                SchemaFault::because(cause),
+            )));
+        }
+        // A prepared parameter the script returned nothing for has no other
+        // origin to fall back on, so it is named here rather than reaching the
+        // statement as an unbound parameter.
+        if self
+            .request
+            .parameter_bindings
+            .iter()
+            .any(|(name, binding)| {
+                matches!(binding, StatementParameterPlan::Prepared)
+                    && !parameters.contains_key(name)
+            })
+        {
+            return Err(SourceError::StatementParameter(ArtifactFault::new(
+                &self.request.artifact,
+                SchemaFault::because(MISSING_PREPARED_PARAMETER),
+            )));
+        }
+        Ok(MaterializedSourceRequest::Sqlite {
+            statement: self.request.statement_sql.clone(),
+            parameters,
+        })
+    }
+}
+
+fn compile_parameter_bindings(
+    request: &SqliteRequest,
+    inputs: &BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    allowed: &[SourceSelectorSet],
+) -> Result<BTreeMap<String, StatementParameterPlan>, SourceError> {
+    let mut bindings = BTreeMap::new();
+    for (name, binding) in request.parameter_bindings.iter() {
+        if name == RESERVED_SQL_PARAMETER {
+            return Err(SourceError::InvalidPlan);
+        }
+        let plan = match binding {
+            SqliteParameterBinding::Selector {
+                role,
+                profile,
+                field,
+            } => {
+                if !inputs
+                    .get(role)
+                    .and_then(|profiles| profiles.get(profile))
+                    .is_some_and(|fields| fields.contains(field))
+                {
+                    return Err(SourceError::InvalidPlan);
+                }
+                // A parameter bound to a selector some admissible set does not
+                // carry could never be filled under that set, so it is refused
+                // as a plan fault here rather than as a missing value at
+                // request time.
+                for set in allowed {
+                    if !set.iter().any(|(active_role, active_profile)| {
+                        active_role == role && active_profile == profile
+                    }) {
+                        return Err(SourceError::InvalidPlan);
+                    }
+                }
+                StatementParameterPlan::Selector {
+                    role: role.clone(),
+                    profile: profile.clone(),
+                    field: field.clone(),
+                }
+            }
+            // A prepared parameter names no selector, so there is no selector
+            // input and no admissible set for it to be reachable under.
+            SqliteParameterBinding::Prepared {} => StatementParameterPlan::Prepared,
+        };
+        if bindings.insert(name.to_owned(), plan).is_some() {
+            return Err(SourceError::InvalidPlan);
+        }
+    }
+    Ok(bindings)
+}
+
 /// Apply the exact production response-size, envelope, and projection rules
 /// to an already parsed synthetic fixture response.
 pub fn project_fixture_response(
@@ -481,19 +1094,33 @@ pub fn project_fixture_response(
 ) -> Result<JsonValue, SourceError> {
     let raw = serde_json::to_vec(response).map_err(|_| SourceError::InvalidJson)?;
     if raw.len()
-        > usize::try_from(source.request.maximum_response_bytes)
+        > usize::try_from(source.maximum_response_bytes())
             .map_err(|_| SourceError::ResponseTooLarge)?
     {
         return Err(SourceError::ResponseTooLarge);
     }
+    let projection = compile_projection(source.projection())?;
+    project_bounded_response(response, &projection)
+}
+
+/// Refuse an error envelope, apply the acquisition projection, and hold the
+/// projected result to its own size bound.
+///
+/// Every transport and the fixture evaluator share this tail, so what reaches
+/// extraction is the same shape under the same rules whatever produced it. The
+/// bound each producer sets on the response it read is its own, and is applied
+/// before this.
+fn project_bounded_response(
+    response: &JsonValue,
+    projection: &ProjectionNode,
+) -> Result<JsonValue, SourceError> {
     if response
         .as_object()
         .is_some_and(|object| object.contains_key("errors"))
     {
         return Err(SourceError::ErrorEnvelope);
     }
-    let projection = compile_projection(&source.request.projection)?;
-    let projected = project_value(response, &projection)?;
+    let projected = project_value(response, projection)?;
     if serde_json::to_vec(&projected)
         .map_err(|_| SourceError::ProjectionViolation)?
         .len()
@@ -506,7 +1133,7 @@ pub fn project_fixture_response(
 
 fn build_client(
     timeout: Duration,
-    source: &SourceConfig,
+    tls_trust_profile: Option<&str>,
     outbound_tls: Option<(&OutboundTlsConfig, &BTreeMap<String, Vec<u8>>)>,
     offline_fixture: bool,
 ) -> Result<reqwest::Client, SourceError> {
@@ -525,7 +1152,7 @@ fn build_client(
         // did not ask for and is not accounted for in the one-request
         // contract.
         .retry(reqwest::retry::never());
-    if let Some(profile_name) = source.tls_trust_profile.as_deref() {
+    if let Some(profile_name) = tls_trust_profile {
         if offline_fixture && outbound_tls.is_none() {
             return builder.build().map_err(|_| SourceError::InvalidPlan);
         }
@@ -562,7 +1189,7 @@ fn conservative_selector_sets(
     source: &SourceConfig,
 ) -> Result<Vec<SourceSelectorSet>, SourceError> {
     let mut sets = vec![Vec::new()];
-    for input in &source.request.selector_inputs {
+    for input in source.selector_inputs() {
         if input.alternatives.is_empty() {
             return Err(SourceError::InvalidPlan);
         }
@@ -591,7 +1218,7 @@ fn compile_request(
     {
         return Err(SourceError::InvalidPlan);
     }
-    let selector_inputs = compile_selector_inputs(request)?;
+    let selector_inputs = compile_selector_inputs(&request.selector_inputs)?;
     let allowed_selector_sets =
         compile_allowed_selector_sets(&selector_inputs, allowed_selector_sets)?;
     let path = compile_source_path(request, &selector_inputs)?;
@@ -622,10 +1249,10 @@ async fn acquire_source_slot<'a>(
 }
 
 fn compile_selector_inputs(
-    request: &FixedRequest,
+    selector_inputs: &[SelectorInput],
 ) -> Result<BTreeMap<String, BTreeMap<String, BTreeSet<String>>>, SourceError> {
     let mut output = BTreeMap::new();
-    for input in &request.selector_inputs {
+    for input in selector_inputs {
         let profiles = output
             .entry(input.role.clone())
             .or_insert_with(BTreeMap::new);
@@ -937,42 +1564,55 @@ fn compile_authentication(
     }
 }
 
+/// Hold a resolved selector set to one source's declared inputs: one selector
+/// per role, exactly the declared fields, and an admissible role and profile
+/// combination. Every transport asks the same question of the same material.
+fn validate_selectors<'a>(
+    inputs: &BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    allowed: &[SourceSelectorSet],
+    selectors: &'a [ResolvedSourceSelector],
+) -> Result<BTreeMap<(&'a str, &'a str), &'a ResolvedSourceSelector>, SourceError> {
+    let mut index = BTreeMap::new();
+    let mut active = Vec::new();
+    let mut roles = BTreeSet::new();
+    for selector in selectors {
+        if !roles.insert(selector.role.as_str())
+            || index
+                .insert(
+                    (selector.role.as_str(), selector.profile.as_str()),
+                    selector,
+                )
+                .is_some()
+        {
+            return Err(SourceError::InvalidSelectors);
+        }
+        let fields = inputs
+            .get(&selector.role)
+            .and_then(|profiles| profiles.get(&selector.profile))
+            .ok_or(SourceError::InvalidSelectors)?;
+        if selector.values.keys().collect::<BTreeSet<_>>() != fields.iter().collect::<BTreeSet<_>>()
+        {
+            return Err(SourceError::InvalidSelectors);
+        }
+        active.push((selector.role.clone(), selector.profile.clone()));
+    }
+    active.sort();
+    if !allowed.contains(&active) {
+        return Err(SourceError::InvalidSelectors);
+    }
+    Ok(index)
+}
+
 impl RequestPlan {
     fn validate_selectors<'a>(
         &self,
         selectors: &'a [ResolvedSourceSelector],
     ) -> Result<BTreeMap<(&'a str, &'a str), &'a ResolvedSourceSelector>, SourceError> {
-        let mut index = BTreeMap::new();
-        let mut active = Vec::new();
-        let mut roles = BTreeSet::new();
-        for selector in selectors {
-            if !roles.insert(selector.role.as_str())
-                || index
-                    .insert(
-                        (selector.role.as_str(), selector.profile.as_str()),
-                        selector,
-                    )
-                    .is_some()
-            {
-                return Err(SourceError::InvalidSelectors);
-            }
-            let fields = self
-                .selector_inputs
-                .get(&selector.role)
-                .and_then(|profiles| profiles.get(&selector.profile))
-                .ok_or(SourceError::InvalidSelectors)?;
-            if selector.values.keys().collect::<BTreeSet<_>>()
-                != fields.iter().collect::<BTreeSet<_>>()
-            {
-                return Err(SourceError::InvalidSelectors);
-            }
-            active.push((selector.role.clone(), selector.profile.clone()));
-        }
-        active.sort();
-        if !self.allowed_selector_sets.contains(&active) {
-            return Err(SourceError::InvalidSelectors);
-        }
-        Ok(index)
+        validate_selectors(
+            &self.selector_inputs,
+            &self.allowed_selector_sets,
+            selectors,
+        )
     }
 
     fn materialize_url(
@@ -1865,7 +2505,7 @@ mod tests {
         );
         let executor = SourceExecutor::new(&source, secrets).expect("source executor builds");
         let _occupied = executor
-            .concurrency
+            .http_concurrency()
             .acquire()
             .await
             .expect("source slot is available");
@@ -1882,10 +2522,11 @@ mod tests {
             executor
                 .execute(
                     &selectors,
-                    &RequestParts {
+                    &PreparedSourceRequest::Http(RequestParts {
                         query: Vec::new(),
                         body: Some(json!({"requested": true})),
-                    },
+                    }),
+                    Utc::now(),
                 )
                 .await,
             Err(SourceError::Timeout)
@@ -1987,8 +2628,13 @@ mod tests {
             "factSchema": "schemas/facts.schema.yaml"
         }))
         .expect("source config deserializes");
-        let client =
-            build_client(Duration::from_secs(5), &source, None, false).expect("client builds");
+        let client = build_client(
+            Duration::from_secs(5),
+            source.tls_trust_profile(),
+            None,
+            false,
+        )
+        .expect("client builds");
         let error = client
             .get(format!("https://{address}/"))
             .send()

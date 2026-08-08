@@ -295,6 +295,33 @@ properties:
                 at startup; changing its bytes requires a restart and changes the computed
                 runtime digest.
               $ref: '#/$defs/absolute-path'
+  sourceExtracts:
+    description: >-
+      Closed map of process-local extract files a source may read by logical name; the set of
+      names present here must exactly match the `extractProfile` names the bundle's extract
+      sources declare, with no extra or missing name. Omission binds none, which is what a
+      runtime file for a bundle with no extract source says.
+    type: object
+    maxProperties: 64
+    propertyNames:
+      $ref: '#/$defs/local-id'
+    additionalProperties:
+      description: >-
+        One named extract binding, joining a logical name a source's `extractProfile` reference
+        declares to the process-local file that holds it, so the reviewed bundle names what it
+        reads and the operator decides where that file sits.
+      type: object
+      additionalProperties: false
+      required:
+        - path
+      properties:
+        path:
+          description: >-
+            Absolute path to one read-only regular file, validated at startup and digested
+            without being read into memory; it must be neither a symbolic link nor writable,
+            because the statement executor opens it as immutable, and its digest changes the
+            computed runtime digest.
+          $ref: '#/$defs/absolute-path'
   acquisitionCapabilities:
     description: >-
       Gated acquisition kinds this deployment enables, the operator half of the same two-sided
@@ -333,6 +360,7 @@ ownership:
     - signer binding to a local private JWK or workload-local Transit proxy
     - audit path and rotation bound
     - logical private-CA file bindings
+    - logical source-extract file bindings
     - >-
       optional enabled acquisition capabilities, which widen nothing a bundle did not already
       declare

@@ -121,6 +121,15 @@ impl SchemaFault {
         }
     }
 
+    /// The same fault, pointing at a position inside the artifact it came from.
+    ///
+    /// A line and a column are structure, so they are safe to keep. The text
+    /// standing at that position is content, and this type never sees it.
+    pub fn at(mut self, location: TextLocation) -> Self {
+        self.location = Some(location);
+        self
+    }
+
     pub fn cause(&self) -> &'static str {
         self.cause
     }
@@ -385,7 +394,7 @@ impl EvidenceConfig {
             .acquisition
             .source_ids()
             .into_iter()
-            .filter_map(|source_id| self.sources.get(source_id).map(|source| source.posture))
+            .filter_map(|source_id| self.sources.get(source_id).map(SourceConfig::posture))
             .reduce(AcquisitionPosture::weakest)
     }
 
@@ -442,17 +451,17 @@ impl EvidenceConfig {
         let response_schemas = self
             .sources
             .iter()
-            .map(|(_, source)| source.response_schema.as_str())
+            .map(|(_, source)| source.response_schema().as_str())
             .collect::<BTreeSet<_>>();
         let fact_schemas = self
             .sources
             .iter()
-            .map(|(_, source)| source.fact_schema.as_str())
+            .map(|(_, source)| source.fact_schema().as_str())
             .collect::<BTreeSet<_>>();
         let parameter_schemas = self
             .sources
             .iter()
-            .map(|(_, source)| source.request.adapter_parameters_schema.as_str())
+            .filter_map(|(_, source)| source.adapter_parameters_schema().map(ArtifactPath::as_str))
             .collect::<BTreeSet<_>>();
         if !fact_schemas.is_disjoint(&parameter_schemas)
             || !response_schemas.is_disjoint(&fact_schemas)
@@ -533,7 +542,7 @@ impl EvidenceConfig {
                     .subjects
                     .iter()
                     .filter(|subject| {
-                        source.request.selector_inputs.iter().any(|input| {
+                        source.selector_inputs().iter().any(|input| {
                             input.role == subject.role
                                 && input.alternatives.iter().any(|alternative| {
                                     alternative.profile == subject.selector_profile
@@ -542,7 +551,7 @@ impl EvidenceConfig {
                     })
                     .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
                     .collect::<SourceSelectorSet>();
-                if set.is_empty() && !source.request.selector_inputs.is_empty() {
+                if set.is_empty() && !source.selector_inputs().is_empty() {
                     continue;
                 }
                 set.sort();
@@ -554,7 +563,7 @@ impl EvidenceConfig {
 
     fn validate_cross_references(&self) -> Result<(), ConfigError> {
         for (_, source) in self.sources.iter() {
-            for input in &source.request.selector_inputs {
+            for input in source.selector_inputs() {
                 for alternative in &input.alternatives {
                     let profile = self.selector_profiles.get(&alternative.profile).ok_or(
                         ConfigError::Invalid(
@@ -572,31 +581,27 @@ impl EvidenceConfig {
                     }
                 }
             }
-            for (_, binding) in source.request.path_bindings.iter() {
-                if let PathBindingConfig::Selector {
-                    role,
-                    profile,
-                    field,
-                } = binding
-                {
-                    let profile_config =
-                        self.selector_profiles
-                            .get(profile)
-                            .ok_or(ConfigError::Invalid(
-                                "source path binding references an unknown selector profile",
-                            ))?;
-                    if !profile_config.fields.contains_key(field) {
-                        return invalid("source path binding references an unknown selector field");
-                    }
-                    if !source.request.selector_inputs.iter().any(|input| {
-                        input.role == *role
-                            && input.alternatives.iter().any(|alternative| {
-                                alternative.profile == *profile
-                                    && alternative.fields.contains(field)
-                            })
-                    }) {
-                        return invalid("source path binding is not declared as a selector input");
-                    }
+            for binding in source.selector_bindings() {
+                let profile_config =
+                    self.selector_profiles
+                        .get(binding.profile)
+                        .ok_or(ConfigError::Invalid(
+                            "source path binding references an unknown selector profile",
+                        ))?;
+                if !profile_config.fields.contains_key(binding.field) {
+                    return invalid("source path binding references an unknown selector field");
+                }
+                if !source.selector_inputs().iter().any(|input| {
+                    input.role == binding.role
+                        && input.alternatives.iter().any(|alternative| {
+                            alternative.profile == binding.profile
+                                && alternative
+                                    .fields
+                                    .iter()
+                                    .any(|field| field == binding.field)
+                        })
+                }) {
+                    return invalid("source path binding is not declared as a selector input");
                 }
             }
         }
@@ -612,15 +617,10 @@ impl EvidenceConfig {
             .flat_map(|requirement| requirement.acquisition.fetch_sources())
             .collect::<BTreeSet<_>>();
         for (source_id, source) in self.sources.iter() {
-            if initial_sources.contains(source_id) && source.request.selector_inputs.is_empty() {
+            if initial_sources.contains(source_id) && source.selector_inputs().is_empty() {
                 return invalid("single and search sources must declare selector inputs");
             }
-            if source
-                .request
-                .path_bindings
-                .iter()
-                .map(|(_, binding)| binding)
-                .any(PathBindingConfig::is_prior_fact)
+            if !source.prior_fact_bindings().is_empty()
                 && (!fetch_sources.contains(source_id) || initial_sources.contains(source_id))
             {
                 return invalid("prior-fact path bindings are permitted only on fetch sources");
@@ -722,7 +722,7 @@ impl EvidenceConfig {
                         .subjects
                         .iter()
                         .filter(|subject| {
-                            source.request.selector_inputs.iter().any(|input| {
+                            source.selector_inputs().iter().any(|input| {
                                 input.role == subject.role
                                     && input.alternatives.iter().any(|alternative| {
                                         alternative.profile == subject.selector_profile
@@ -731,8 +731,7 @@ impl EvidenceConfig {
                         })
                         .map(|subject| (subject.role.clone(), subject.selector_profile.clone()))
                         .collect::<SourceSelectorSet>();
-                    if source_selector_set.is_empty() && !source.request.selector_inputs.is_empty()
-                    {
+                    if source_selector_set.is_empty() && !source.selector_inputs().is_empty() {
                         return invalid(
                             "authority path does not activate any declared source selector input",
                         );
@@ -781,7 +780,7 @@ impl EvidenceConfig {
                 .flatten()
                 .map(|(role, profile)| (role.as_str(), profile.as_str()))
                 .collect::<BTreeSet<_>>();
-            if source.request.selector_inputs.iter().any(|input| {
+            if source.selector_inputs().iter().any(|input| {
                 input.alternatives.iter().any(|alternative| {
                     !reachable.contains(&(input.role.as_str(), alternative.profile.as_str()))
                 })
@@ -841,6 +840,11 @@ pub struct RuntimeConfig {
     pub signer: RuntimeSignerConfig,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
+    /// Process-local files bound to the logical extract names the bundle's
+    /// statement sources read. Absent binds none, which is what every runtime
+    /// file written before an extract source existed says.
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub source_extracts: OrderedMap<SourceExtractBinding>,
     /// Acquisition kinds this deployment enables beyond the frozen Version 1
     /// forms. Absent enables none of them, which is what every runtime file
     /// written before a gated form existed says, so adopting a form is a
@@ -876,6 +880,7 @@ impl RuntimeConfig {
         self.signer.validate()?;
         self.audit_storage.validate()?;
         self.outbound_tls.validate()?;
+        validate_named_map(&self.source_extracts, 0, 64, SourceExtractBinding::validate)?;
         declared_acquisition_capabilities(
             &self.acquisition_capabilities,
             "runtime acquisition capabilities name an unknown acquisition kind",
@@ -1029,6 +1034,23 @@ pub struct TrustProfileBinding {
 impl TrustProfileBinding {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_absolute_path(&self.ca_bundle_file)
+    }
+}
+
+/// One logical extract name bound to the process-local file that holds it.
+///
+/// A bundle names the extract its statement reads and never a filesystem
+/// location, so the operator decides where the file sits without editing
+/// reviewed material.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceExtractBinding {
+    pub path: String,
+}
+
+impl SourceExtractBinding {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_absolute_path(&self.path)
     }
 }
 
@@ -1713,12 +1735,13 @@ impl Serialize for ArtifactPath {
 }
 
 fn valid_artifact_path(value: &str) -> bool {
-    const ROOTS: [&str; 5] = [
+    const ROOTS: [&str; 6] = [
         "adapters/",
         "derivations/",
         "schemas/",
         "codelists/",
         "fixtures/",
+        "queries/",
     ];
     ROOTS.iter().any(|root| value.starts_with(root))
         && !value.starts_with('/')
@@ -1731,53 +1754,116 @@ fn valid_artifact_path(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+/// One reviewed source, closed over the transport that reaches it.
+///
+/// The transports agree on the acquisition posture, the three artifact roles,
+/// and the bounds a response is read under, and disagree on request material.
+/// A caller that only needs the agreed contract reads it through the accessors
+/// on this type rather than by matching a transport it does not care about:
+/// `posture`, `tls_trust_profile`, `extract_profile`, `response_schema`,
+/// `extract_script`, `fact_schema`, `statement`, `prepare_script`, `adapter_parameters`,
+/// `adapter_parameters_schema`, `selector_inputs`, `selector_bindings`,
+/// `prior_fact_bindings`, `fixed_headers`, `projection`,
+/// `timeout_milliseconds`, `maximum_response_bytes`, and `concurrency_limit`.
+///
+/// The tag is internal, so a field belonging to one transport is an unknown
+/// field of the other and the closed schema rejects it. Request and credential
+/// material sits behind a pointer, so one transport's request does not set the
+/// size of every source.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceConfig {
-    pub transport: SourceTransport,
-    pub base_url: String,
-    pub posture: AcquisitionPosture,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls_trust_profile: Option<String>,
-    pub authentication: SourceAuthentication,
-    pub request: FixedRequest,
-    /// Shape contract for the projected response, validated by Rust before
-    /// extraction runs, so the script maps a response it can rely on.
-    pub response_schema: ArtifactPath,
-    pub extract_script: ArtifactPath,
-    pub fact_schema: ArtifactPath,
+#[serde(tag = "transport", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SourceConfig {
+    /// One fixed HTTP request against a JSON API.
+    #[serde(rename_all = "camelCase")]
+    HttpJson {
+        base_url: String,
+        posture: AcquisitionPosture,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_trust_profile: Option<String>,
+        authentication: Box<SourceAuthentication>,
+        request: Box<FixedRequest>,
+        /// Shape contract for the projected response, validated by Rust before
+        /// extraction runs, so the script maps a response it can rely on.
+        response_schema: ArtifactPath,
+        extract_script: ArtifactPath,
+        fact_schema: ArtifactPath,
+    },
+    /// One reviewed SQL statement against a read-only extract file.
+    #[serde(rename_all = "camelCase")]
+    SqliteExtract {
+        posture: AcquisitionPosture,
+        /// Logical name of the extract this source reads. The runtime document
+        /// binds the name to a file, so no bundle names a filesystem location.
+        extract_profile: String,
+        request: Box<SqliteRequest>,
+        /// Oldest extract this source accepts, so a stale file is refused
+        /// rather than answered from.
+        maximum_extract_age_seconds: u64,
+        /// Shape contract for the projected result, validated by Rust before
+        /// extraction runs, so the script maps a result it can rely on.
+        response_schema: ArtifactPath,
+        extract_script: ArtifactPath,
+        fact_schema: ArtifactPath,
+    },
 }
 
 impl SourceConfig {
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
-        validate_source_origin(&self.base_url)?;
-        if self
-            .tls_trust_profile
-            .as_deref()
-            .is_some_and(|profile| !valid_local_id(profile))
-        {
-            return invalid("source TLS trust profile identifier is invalid");
-        }
-        if matches!(self.authentication, SourceAuthentication::None {}) {
-            if assurance_profile != AssuranceProfile::Local {
-                return invalid(
-                    "unauthenticated sources are permitted only by the local assurance profile",
-                );
+        match self {
+            Self::HttpJson {
+                base_url,
+                tls_trust_profile,
+                authentication,
+                request,
+                ..
+            } => {
+                validate_source_origin(base_url)?;
+                if tls_trust_profile
+                    .as_deref()
+                    .is_some_and(|profile| !valid_local_id(profile))
+                {
+                    return invalid("source TLS trust profile identifier is invalid");
+                }
+                if matches!(**authentication, SourceAuthentication::None {}) {
+                    if assurance_profile != AssuranceProfile::Local {
+                        return invalid(
+                            "unauthenticated sources are permitted only by the local assurance profile",
+                        );
+                    }
+                    validate_local_unauthenticated_source_origin(base_url)?;
+                    if tls_trust_profile.is_some() {
+                        return invalid(
+                            "an unauthenticated local HTTP source cannot use a TLS trust profile",
+                        );
+                    }
+                }
+                authentication.validate()?;
+                request.validate()?;
             }
-            validate_local_unauthenticated_source_origin(&self.base_url)?;
-            if self.tls_trust_profile.is_some() {
-                return invalid(
-                    "an unauthenticated local HTTP source cannot use a TLS trust profile",
-                );
+            Self::SqliteExtract {
+                extract_profile,
+                request,
+                maximum_extract_age_seconds,
+                ..
+            } => {
+                if !valid_local_id(extract_profile) {
+                    return invalid("source extract profile identifier is invalid");
+                }
+                request.validate()?;
+                validate_range(
+                    *maximum_extract_age_seconds,
+                    1,
+                    2_592_000,
+                    "source extract age",
+                )?;
             }
         }
-        self.authentication.validate()?;
-        self.request.validate()?;
-        require_artifact_prefix(&self.extract_script, "adapters/")?;
-        if !self.extract_script.as_str().ends_with(".rhai") {
+        let extract_script = self.extract_script();
+        require_artifact_prefix(extract_script, "adapters/")?;
+        if !extract_script.as_str().ends_with(".rhai") {
             return invalid("source extraction script must be a Rhai file");
         }
-        let adapter_id = Path::new(self.extract_script.as_str())
+        let adapter_id = Path::new(extract_script.as_str())
             .file_stem()
             .and_then(|value| value.to_str())
             .filter(|value| valid_local_id(value))
@@ -1785,25 +1871,212 @@ impl SourceConfig {
                 "source adapter name must be a local identifier",
             ))?;
         debug_assert!(!adapter_id.is_empty());
-        require_artifact_prefix(&self.response_schema, "schemas/")?;
-        require_artifact_prefix(&self.fact_schema, "schemas/")?;
-        let roles = [
-            self.response_schema.as_str(),
-            self.fact_schema.as_str(),
-            self.request.adapter_parameters_schema.as_str(),
-        ];
+        require_artifact_prefix(self.response_schema(), "schemas/")?;
+        require_artifact_prefix(self.fact_schema(), "schemas/")?;
+        let mut roles = vec![self.response_schema().as_str(), self.fact_schema().as_str()];
+        roles.extend(
+            self.adapter_parameters_schema()
+                .map(|schema| schema.as_str()),
+        );
         let distinct = roles.iter().collect::<BTreeSet<_>>();
         if distinct.len() != roles.len() {
             return invalid("source schema roles must be distinct artifacts");
         }
         Ok(())
     }
+
+    pub fn posture(&self) -> AcquisitionPosture {
+        match self {
+            Self::HttpJson { posture, .. } | Self::SqliteExtract { posture, .. } => *posture,
+        }
+    }
+
+    /// The private trust profile an outbound connection uses, where the
+    /// transport opens one.
+    pub fn tls_trust_profile(&self) -> Option<&str> {
+        match self {
+            Self::HttpJson {
+                tls_trust_profile, ..
+            } => tls_trust_profile.as_deref(),
+            Self::SqliteExtract { .. } => None,
+        }
+    }
+
+    /// The logical extract a source reads, where the transport reads one. The
+    /// runtime document binds the name to a file; this never names one.
+    pub fn extract_profile(&self) -> Option<&str> {
+        match self {
+            Self::HttpJson { .. } => None,
+            Self::SqliteExtract {
+                extract_profile, ..
+            } => Some(extract_profile),
+        }
+    }
+
+    pub fn response_schema(&self) -> &ArtifactPath {
+        match self {
+            Self::HttpJson {
+                response_schema, ..
+            }
+            | Self::SqliteExtract {
+                response_schema, ..
+            } => response_schema,
+        }
+    }
+
+    pub fn extract_script(&self) -> &ArtifactPath {
+        match self {
+            Self::HttpJson { extract_script, .. } | Self::SqliteExtract { extract_script, .. } => {
+                extract_script
+            }
+        }
+    }
+
+    pub fn fact_schema(&self) -> &ArtifactPath {
+        match self {
+            Self::HttpJson { fact_schema, .. } | Self::SqliteExtract { fact_schema, .. } => {
+                fact_schema
+            }
+        }
+    }
+
+    /// The reviewed statement artifact, where the transport runs one.
+    pub fn statement(&self) -> Option<&ArtifactPath> {
+        match self {
+            Self::HttpJson { .. } => None,
+            Self::SqliteExtract { request, .. } => Some(&request.statement),
+        }
+    }
+
+    /// The request-preparation script, which only a transport that prepares a
+    /// request declares.
+    pub fn prepare_script(&self) -> Option<&ArtifactPath> {
+        match self {
+            Self::HttpJson { request, .. } => Some(&request.prepare_script),
+            Self::SqliteExtract { request, .. } => request.prepare_script.as_ref(),
+        }
+    }
+
+    pub fn adapter_parameters(&self) -> &OrderedMap<AdapterParameterValue> {
+        match self {
+            Self::HttpJson { request, .. } => &request.adapter_parameters,
+            Self::SqliteExtract { request, .. } => &request.adapter_parameters,
+        }
+    }
+
+    /// The closed schema the adapter parameters are validated against, which
+    /// is present exactly when a transport declares parameters.
+    pub fn adapter_parameters_schema(&self) -> Option<&ArtifactPath> {
+        match self {
+            Self::HttpJson { request, .. } => Some(&request.adapter_parameters_schema),
+            Self::SqliteExtract { request, .. } => request.adapter_parameters_schema.as_ref(),
+        }
+    }
+
+    pub fn selector_inputs(&self) -> &[SelectorInput] {
+        match self {
+            Self::HttpJson { request, .. } => &request.selector_inputs,
+            Self::SqliteExtract { request, .. } => &request.selector_inputs,
+        }
+    }
+
+    /// Every request value this source fills from a selector field, whatever
+    /// the transport calls the channel.
+    pub fn selector_bindings(&self) -> Vec<SelectorBinding<'_>> {
+        match self {
+            Self::HttpJson { request, .. } => request
+                .path_bindings
+                .iter()
+                .filter_map(|(_, binding)| match binding {
+                    PathBindingConfig::Selector {
+                        role,
+                        profile,
+                        field,
+                    } => Some(SelectorBinding {
+                        role,
+                        profile,
+                        field,
+                    }),
+                    PathBindingConfig::PriorFact { .. } => None,
+                })
+                .collect(),
+            Self::SqliteExtract { request, .. } => request
+                .parameter_bindings
+                .iter()
+                .filter_map(|(_, binding)| match binding {
+                    SqliteParameterBinding::Selector {
+                        role,
+                        profile,
+                        field,
+                    } => Some(SelectorBinding {
+                        role,
+                        profile,
+                        field,
+                    }),
+                    SqliteParameterBinding::Prepared {} => None,
+                })
+                .collect(),
+        }
+    }
+
+    /// Every prior-fact field this source binds into its request. Only a
+    /// transport with a prior-fact channel returns any.
+    pub fn prior_fact_bindings(&self) -> Vec<&str> {
+        match self {
+            Self::HttpJson { request, .. } => request
+                .path_bindings
+                .iter()
+                .filter_map(|(_, binding)| match binding {
+                    PathBindingConfig::PriorFact { field } => Some(field.as_str()),
+                    PathBindingConfig::Selector { .. } => None,
+                })
+                .collect(),
+            Self::SqliteExtract { .. } => Vec::new(),
+        }
+    }
+
+    pub fn fixed_headers(&self) -> &[FixedHeader] {
+        match self {
+            Self::HttpJson { request, .. } => &request.fixed_headers,
+            Self::SqliteExtract { .. } => &[],
+        }
+    }
+
+    pub fn projection(&self) -> &[String] {
+        match self {
+            Self::HttpJson { request, .. } => &request.projection,
+            Self::SqliteExtract { request, .. } => &request.projection,
+        }
+    }
+
+    pub fn timeout_milliseconds(&self) -> u64 {
+        match self {
+            Self::HttpJson { request, .. } => request.timeout_milliseconds,
+            Self::SqliteExtract { request, .. } => request.timeout_milliseconds,
+        }
+    }
+
+    pub fn maximum_response_bytes(&self) -> u64 {
+        match self {
+            Self::HttpJson { request, .. } => request.maximum_response_bytes,
+            Self::SqliteExtract { request, .. } => request.maximum_response_bytes,
+        }
+    }
+
+    pub fn concurrency_limit(&self) -> u16 {
+        match self {
+            Self::HttpJson { request, .. } => request.concurrency_limit,
+            Self::SqliteExtract { request, .. } => request.concurrency_limit,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceTransport {
-    HttpJson,
+/// One request value filled from a named field of a named selector profile.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct SelectorBinding<'a> {
+    pub role: &'a str,
+    pub profile: &'a str,
+    pub field: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -2159,6 +2432,252 @@ impl FixedRequest {
         )?;
 
         Ok(())
+    }
+}
+
+/// The parameter name the runtime keeps for its own evaluation instant, so a
+/// statement never reads a clock of its own. A bundle that binds the name is
+/// rejected.
+pub const RESERVED_SQL_PARAMETER: &str = "evidence_now";
+
+/// One reviewed statement, and the bounds its result is read under.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteRequest {
+    /// The statement itself, held as a bundle artifact so review and revision
+    /// reach it the way they reach a script.
+    pub statement: ArtifactPath,
+    /// The result contract the statement is read against, in result order.
+    pub columns: Vec<SqliteColumn>,
+    pub selector_inputs: Vec<SelectorInput>,
+    /// Statement parameters, by the name the statement binds them under.
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub parameter_bindings: OrderedMap<SqliteParameterBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare_script: Option<ArtifactPath>,
+    #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+    pub adapter_parameters: OrderedMap<AdapterParameterValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_parameters_schema: Option<ArtifactPath>,
+    /// Bounds on what `prepare_script` may return, written only where there is
+    /// a preparation script to bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_limits: Option<SqlitePreparationLimits>,
+    pub maximum_rows: u64,
+    pub maximum_cell_bytes: u64,
+    pub maximum_statement_steps: u64,
+    pub projection: Vec<String>,
+    pub timeout_milliseconds: u64,
+    pub maximum_response_bytes: u64,
+    pub concurrency_limit: u16,
+}
+
+impl SqliteRequest {
+    fn validate(&self) -> Result<(), ConfigError> {
+        require_artifact_prefix(&self.statement, "queries/")?;
+        if !self.statement.as_str().ends_with(".sql") {
+            return invalid("source statement must be a SQL file");
+        }
+        validate_len(self.columns.len(), 1, 64, "statement columns")?;
+        let mut column_names = BTreeSet::new();
+        for column in &self.columns {
+            if !valid_field_name(&column.name) || !column_names.insert(column.name.as_str()) {
+                return invalid("statement column names must be valid and unique");
+            }
+        }
+        validate_selector_inputs(&self.selector_inputs)?;
+        validate_len(
+            self.parameter_bindings.len(),
+            0,
+            64,
+            "statement parameter bindings",
+        )?;
+        for (name, binding) in self.parameter_bindings.iter() {
+            if !valid_parameter_key(name) {
+                return invalid("statement parameter name is invalid");
+            }
+            if name == RESERVED_SQL_PARAMETER {
+                return invalid("statement parameter name is reserved by the runtime");
+            }
+            binding.validate()?;
+        }
+        if let Some(prepare_script) = &self.prepare_script {
+            require_artifact_prefix(prepare_script, "adapters/")?;
+            if !prepare_script.as_str().ends_with(".rhai") {
+                return invalid("source preparation script must be a Rhai file");
+            }
+        }
+        validate_len(self.adapter_parameters.len(), 0, 64, "adapter parameters")?;
+        for (name, value) in self.adapter_parameters.iter() {
+            if !valid_parameter_key(name) {
+                return invalid("adapter parameter name is invalid");
+            }
+            value.validate(0)?;
+        }
+        match &self.adapter_parameters_schema {
+            Some(schema) => require_artifact_prefix(schema, "schemas/")?,
+            // Parameters a reviewer cannot check against a closed schema are
+            // parameters the extraction script reads unchecked.
+            None if !self.adapter_parameters.is_empty() => {
+                return invalid("adapter parameters require their closed schema")
+            }
+            None => {}
+        }
+        // A script with nothing prepared to fill could only ever return a name
+        // the source refuses, and a prepared parameter with no script could
+        // never be filled at all, so the two are written together or not at all.
+        let prepared_parameters = self
+            .parameter_bindings
+            .iter()
+            .filter(|(_, binding)| matches!(binding, SqliteParameterBinding::Prepared {}))
+            .count() as u64;
+        match (&self.prepare_script, prepared_parameters) {
+            (Some(_), 0) => return invalid("statement preparation requires a prepared parameter"),
+            (None, 1..) => return invalid("a prepared parameter requires a preparation script"),
+            _ => {}
+        }
+        // Bounds on a preparation that does not happen say nothing, and a
+        // preparation nobody bounded is unbounded, so the two are written
+        // together or not at all.
+        match (&self.prepare_script, &self.preparation_limits) {
+            (Some(_), Some(limits)) => {
+                limits.validate()?;
+                // A script allowed to return fewer parameters than the source
+                // declares prepared can never fill them all, so the bound is
+                // read against the work it has to admit.
+                if limits.maximum_parameters < prepared_parameters {
+                    return invalid(
+                        "statement preparation limits must admit every prepared parameter",
+                    );
+                }
+            }
+            (Some(_), None) => {
+                return invalid("statement preparation requires its preparation limits")
+            }
+            (None, Some(_)) => {
+                return invalid("statement preparation limits require a preparation script")
+            }
+            (None, None) => {}
+        }
+        validate_projection(&self.projection)?;
+        validate_range(self.maximum_rows, 1, 256, "statement rows")?;
+        validate_range(self.maximum_cell_bytes, 1, 65_536, "statement cell size")?;
+        validate_range(
+            self.maximum_statement_steps,
+            1,
+            1_000_000,
+            "statement steps",
+        )?;
+        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
+        validate_range(
+            self.maximum_response_bytes,
+            1,
+            1_048_576,
+            "source response size",
+        )?;
+        validate_range(
+            u64::from(self.concurrency_limit),
+            1,
+            256,
+            "source concurrency",
+        )?;
+
+        Ok(())
+    }
+}
+
+/// One column of a statement result, named and typed by the deployment.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteColumn {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub value_type: SqliteColumnType,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SqliteColumnType {
+    String,
+    Integer,
+    Number,
+    Boolean,
+}
+
+/// How one statement parameter is filled.
+///
+/// A parameter has one origin and exactly one, so reading the declared bindings
+/// is enough to know where every value the statement binds came from.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SqliteParameterBinding {
+    Selector {
+        role: String,
+        profile: String,
+        field: String,
+    },
+    /// Filled by the preparation script, for a value no selector holds: a
+    /// normalized reference, a derived bound. It names no selector because
+    /// naming one would be a second origin.
+    ///
+    /// Written as a braced variant with no fields rather than a unit variant,
+    /// because serde applies `deny_unknown_fields` to an internally tagged unit
+    /// variant's siblings and not to the variant itself, so a unit variant would
+    /// silently accept `{kind: prepared, role: subject}`.
+    Prepared {},
+}
+
+impl SqliteParameterBinding {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self {
+            Self::Selector {
+                role,
+                profile,
+                field,
+            } => {
+                if !valid_local_id(role) || !valid_local_id(profile) || !valid_field_name(field) {
+                    return invalid("source selector binding identifier is invalid");
+                }
+            }
+            Self::Prepared {} => {}
+        }
+        Ok(())
+    }
+}
+
+/// What a statement source's preparation script may produce.
+///
+/// A statement takes no query string and no request body, so the script's one
+/// output channel is a `parameters` map, and a parameter value is a scalar
+/// bound straight into the statement. Two things about that map are not
+/// settled anywhere else in the source, so they are settled here: how many
+/// entries the script may return, and how large one entry's value may be.
+/// Nothing further needs a bound, because an integer and a boolean are
+/// fixed-width and a parameter name is already held to the declared
+/// `parameterBindings` keys.
+///
+/// `kernel.rs` compiles these bounds into the script host beside the compiled
+/// script, the way it does for the HTTP transport's own [`PreparationLimits`],
+/// and the host applies them to the returned `parameters` map before any value
+/// reaches the statement.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqlitePreparationLimits {
+    /// Entries the returned `parameters` map may carry.
+    pub maximum_parameters: u64,
+    /// Bytes one returned parameter value may carry.
+    pub maximum_parameter_value_bytes: u64,
+}
+
+impl SqlitePreparationLimits {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_range(self.maximum_parameters, 1, 64, "prepared parameters")?;
+        validate_range(
+            self.maximum_parameter_value_bytes,
+            1,
+            4_096,
+            "prepared parameter value size",
+        )
     }
 }
 
@@ -4204,6 +4723,43 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 mod tests {
     use super::*;
 
+    /// Borrow the base URL of a parsed fixture's first source.
+    ///
+    /// Every acceptance fixture these tests parse declares one `http-json`
+    /// source, so a test that mutates HTTP request material names the
+    /// transport through these four helpers rather than at each call.
+    fn http_base_url(config: &mut EvidenceConfig) -> &mut String {
+        match &mut config.sources.0[0].1 {
+            SourceConfig::HttpJson { base_url, .. } => base_url,
+            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
+        }
+    }
+
+    fn http_tls_trust_profile(config: &mut EvidenceConfig) -> &mut Option<String> {
+        match &mut config.sources.0[0].1 {
+            SourceConfig::HttpJson {
+                tls_trust_profile, ..
+            } => tls_trust_profile,
+            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
+        }
+    }
+
+    fn http_authentication(config: &mut EvidenceConfig) -> &mut SourceAuthentication {
+        match &mut config.sources.0[0].1 {
+            SourceConfig::HttpJson { authentication, .. } => authentication,
+            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
+        }
+    }
+
+    fn http_request(config: &mut EvidenceConfig) -> &mut FixedRequest {
+        match &mut config.sources.0[0].1 {
+            SourceConfig::HttpJson { request, .. } => request,
+            SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
+        }
+    }
+
+    const NOT_HTTP_JSON: &str = "the fixture source does not use the http-json transport";
+
     #[test]
     fn assurance_profile_is_explicit_and_strict_profiles_require_fixtures() {
         let strict = std::str::from_utf8(include_bytes!(
@@ -4380,7 +4936,7 @@ mod tests {
         ))
         .expect("strict fixture validates");
         local.assurance_profile = AssuranceProfile::Local;
-        local.sources.0[0].1.authentication = SourceAuthentication::None {};
+        *http_authentication(&mut local) = SourceAuthentication::None {};
 
         for origin in [
             "http://127.0.0.1:80",
@@ -4389,15 +4945,11 @@ mod tests {
             "http://[::1]:65535",
         ] {
             let mut candidate = local.clone();
-            candidate.sources.0[0].1.base_url = origin.to_owned();
+            *http_base_url(&mut candidate) = origin.to_owned();
             candidate
                 .validate()
                 .unwrap_or_else(|_| panic!("local assurance rejected {origin}"));
-            assert!(candidate.sources.0[0]
-                .1
-                .authentication
-                .secret_refs()
-                .is_empty());
+            assert!(http_authentication(&mut candidate).secret_refs().is_empty());
         }
 
         for origin in [
@@ -4416,7 +4968,7 @@ mod tests {
             "http://192.168.1.2:18081",
         ] {
             let mut candidate = local.clone();
-            candidate.sources.0[0].1.base_url = origin.to_owned();
+            *http_base_url(&mut candidate) = origin.to_owned();
             assert!(
                 candidate.validate().is_err(),
                 "local assurance accepted unauthenticated origin {origin}"
@@ -4424,8 +4976,8 @@ mod tests {
         }
 
         let mut with_tls_profile = local.clone();
-        with_tls_profile.sources.0[0].1.base_url = "http://127.0.0.1:18081".to_owned();
-        with_tls_profile.sources.0[0].1.tls_trust_profile = Some("unused-local-ca".to_owned());
+        *http_base_url(&mut with_tls_profile) = "http://127.0.0.1:18081".to_owned();
+        *http_tls_trust_profile(&mut with_tls_profile) = Some("unused-local-ca".to_owned());
         assert!(with_tls_profile.validate().is_err());
 
         for profile in [
@@ -4434,7 +4986,7 @@ mod tests {
         ] {
             let mut candidate = local.clone();
             candidate.assurance_profile = profile;
-            candidate.sources.0[0].1.base_url = "http://127.0.0.1:18081".to_owned();
+            *http_base_url(&mut candidate) = "http://127.0.0.1:18081".to_owned();
             assert!(
                 candidate.validate().is_err(),
                 "{profile:?} accepted an unauthenticated source"
@@ -4465,6 +5017,489 @@ mod tests {
             .is_err(),
             "the none variant is closed"
         );
+    }
+
+    /// The acceptance fixture's one source, restated on the statement
+    /// transport, so a whole document exercises it the way a bundle would.
+    const SQLITE_SOURCE: &str = r#"  source-a:
+    transport: sqlite-extract
+    posture: field-projected
+    extractProfile: residence-register
+    request:
+      statement: queries/residence-region.sql
+      columns: [{name: id, type: string}, {name: region, type: string}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
+      parameterBindings:
+        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
+      maximumRows: 2
+      maximumCellBytes: 4096
+      maximumStatementSteps: 50000
+      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]
+      timeoutMilliseconds: 1000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    maximumExtractAgeSeconds: 86400
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/source-a.rhai
+    factSchema: schemas/facts.schema.yaml
+"#;
+
+    fn acceptance_fixture() -> &'static str {
+        include_str!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml")
+    }
+
+    /// The acceptance fixture with its HTTP source replaced by a statement one.
+    fn sqlite_source_document() -> String {
+        let fixture = acceptance_fixture();
+        let (head, rest) = fixture
+            .split_once("sources:\n")
+            .expect("the fixture declares sources");
+        let (_, tail) = rest
+            .split_once("authorityProfiles:\n")
+            .expect("the fixture declares authority profiles after its sources");
+        format!("{head}sources:\n{SQLITE_SOURCE}authorityProfiles:\n{tail}")
+    }
+
+    /// Replace exactly one line of a document, and prove the edit applied.
+    fn edited(document: &str, from: &str, to: &str) -> String {
+        assert_eq!(document.matches(from).count(), 1, "{from} is not unique");
+        document.replace(from, to)
+    }
+
+    fn decode_cause(document: &str) -> &'static str {
+        let error =
+            EvidenceConfig::parse_yaml(document.as_bytes()).expect_err("the document was accepted");
+        let ConfigError::InvalidYaml(fault) = &error else {
+            panic!("the document was not rejected by the closed schema: {error}");
+        };
+        fault.cause()
+    }
+
+    fn invalid_reason(document: &str) -> &'static str {
+        let error =
+            EvidenceConfig::parse_yaml(document.as_bytes()).expect_err("the document was accepted");
+        let ConfigError::Invalid(reason) = error else {
+            panic!("the document was not rejected by a validation rule: {error}");
+        };
+        reason
+    }
+
+    #[test]
+    fn a_statement_source_parses_and_the_transports_reject_each_others_fields() {
+        let document = sqlite_source_document();
+        let config = EvidenceConfig::parse_yaml(document.as_bytes())
+            .expect("a sqlite-extract source parses and validates");
+        let SourceConfig::SqliteExtract {
+            extract_profile,
+            request,
+            maximum_extract_age_seconds,
+            ..
+        } = &config.sources.0[0].1
+        else {
+            panic!("the restated fixture source uses the sqlite-extract transport");
+        };
+        assert_eq!(extract_profile, "residence-register");
+        assert_eq!(request.statement.as_str(), "queries/residence-region.sql");
+        assert_eq!(*maximum_extract_age_seconds, 86_400);
+        assert_eq!(config.sources.0[0].1.prepare_script(), None);
+        assert_eq!(config.sources.0[0].1.adapter_parameters_schema(), None);
+        assert!(config.sources.0[0].1.fixed_headers().is_empty());
+        assert_eq!(config.sources.0[0].1.concurrency_limit(), 8);
+
+        for (label, candidate) in [
+            (
+                "baseUrl on a statement source",
+                edited(
+                    &document,
+                    "    extractProfile: residence-register\n",
+                    "    extractProfile: residence-register\n    baseUrl: https://source.invalid\n",
+                ),
+            ),
+            (
+                "an unknown key on a statement source",
+                edited(
+                    &document,
+                    "    maximumExtractAgeSeconds: 86400\n",
+                    "    maximumExtractAgeSeconds: 86400\n    surprise: true\n",
+                ),
+            ),
+            (
+                "an unknown key in a statement request",
+                edited(
+                    &document,
+                    "      maximumRows: 2\n",
+                    "      maximumRows: 2\n      surprise: true\n",
+                ),
+            ),
+            (
+                "extractProfile on an HTTP source",
+                edited(
+                    acceptance_fixture(),
+                    "    posture: field-projected\n",
+                    "    posture: field-projected\n    extractProfile: residence-register\n",
+                ),
+            ),
+            (
+                "an unknown key on an HTTP source",
+                edited(
+                    acceptance_fixture(),
+                    "    posture: field-projected\n",
+                    "    posture: field-projected\n    surprise: true\n",
+                ),
+            ),
+        ] {
+            assert_eq!(decode_cause(&candidate), "unknown field", "{label}");
+        }
+
+        assert_eq!(
+            decode_cause(&edited(
+                &document,
+                "    transport: sqlite-extract\n",
+                "    transport: sqlite-extracts\n",
+            )),
+            "field value is not one of the accepted variants",
+        );
+        assert_eq!(
+            decode_cause(&edited(&document, "    transport: sqlite-extract\n", "")),
+            "required field is missing",
+        );
+    }
+
+    #[test]
+    fn a_statement_is_a_reviewed_sql_artifact_under_the_queries_root() {
+        let document = sqlite_source_document();
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "      statement: queries/residence-region.sql\n",
+                "      statement: adapters/residence-region.sql\n",
+            )),
+            "artifact path has the wrong bundle directory",
+        );
+        assert_eq!(
+            decode_cause(&edited(
+                &document,
+                "      statement: queries/residence-region.sql\n",
+                "      statement: residence-region.sql\n",
+            )),
+            "document does not match the closed schema",
+            "a path under no bundle root is not an artifact path at all",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "      statement: queries/residence-region.sql\n",
+                "      statement: queries/residence-region.rhai\n",
+            )),
+            "source statement must be a SQL file",
+        );
+    }
+
+    #[test]
+    fn statement_parameters_are_named_selector_bindings_and_the_runtime_instant_is_reserved() {
+        let document = sqlite_source_document();
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "        record_reference: {kind: selector,",
+                "        evidence_now: {kind: selector,",
+            )),
+            "statement parameter name is reserved by the runtime",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "        record_reference: {kind: selector,",
+                "        record reference: {kind: selector,",
+            )),
+            "statement parameter name is invalid",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "profile: person-demographics-v1, field: given_name}",
+                "profile: person-demographics-v1, field: unknown_field}",
+            )),
+            "source path binding references an unknown selector field",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "record_reference: {kind: selector, role: subject,",
+                "record_reference: {kind: selector, role: unbound-role,",
+            )),
+            "source path binding is not declared as a selector input",
+        );
+        assert_eq!(
+            decode_cause(&edited(
+                &document,
+                "record_reference: {kind: selector,",
+                "record_reference: {kind: prior-fact,",
+            )),
+            "field value is not one of the accepted variants",
+        );
+    }
+
+    #[test]
+    fn statement_columns_declare_a_unique_typed_result_contract() {
+        let document = sqlite_source_document();
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "columns: [{name: id, type: string}, {name: region, type: string}]",
+                "columns: [{name: id, type: string}, {name: id, type: string}]",
+            )),
+            "statement column names must be valid and unique",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "columns: [{name: id, type: string}, {name: region, type: string}]",
+                "columns: [{name: Id, type: string}, {name: region, type: string}]",
+            )),
+            "statement column names must be valid and unique",
+        );
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "columns: [{name: id, type: string}, {name: region, type: string}]",
+                "columns: []",
+            )),
+            "collection cardinality is outside Version 1 bounds",
+        );
+        assert_eq!(
+            decode_cause(&edited(
+                &document,
+                "columns: [{name: id, type: string}, {name: region, type: string}]",
+                "columns: [{name: id, type: blob}, {name: region, type: string}]",
+            )),
+            "field value is not one of the accepted variants",
+        );
+    }
+
+    #[test]
+    fn statement_source_bounds_reject_zero_and_an_oversized_value() {
+        let document = sqlite_source_document();
+        for (declared, maximum) in [
+            ("      maximumRows: 2", 256_u64),
+            ("      maximumCellBytes: 4096", 65_536),
+            ("      maximumStatementSteps: 50000", 1_000_000),
+            ("      timeoutMilliseconds: 1000", 30_000),
+            ("      maximumResponseBytes: 65536", 1_048_576),
+            ("      concurrencyLimit: 8", 256),
+            ("    maximumExtractAgeSeconds: 86400", 2_592_000),
+        ] {
+            let (key, _) = declared
+                .split_once(':')
+                .expect("every bound is declared as a mapping entry");
+            for value in [0, maximum + 1] {
+                assert_eq!(
+                    invalid_reason(&edited(&document, declared, &format!("{key}: {value}"))),
+                    "numeric value is outside Version 1 bounds",
+                    "{key} accepted {value}",
+                );
+            }
+            EvidenceConfig::parse_yaml(
+                edited(&document, declared, &format!("{key}: {maximum}")).as_bytes(),
+            )
+            .unwrap_or_else(|error| panic!("{key} rejected its own maximum: {error}"));
+        }
+    }
+
+    /// One statement-source preparation limits mapping, written out in full.
+    fn preparation_limits(parameters: u64, value_bytes: u64) -> String {
+        format!("{{maximumParameters: {parameters}, maximumParameterValueBytes: {value_bytes}}}")
+    }
+
+    /// The selector binding the statement source already declares, restated so
+    /// a test can add a second binding beside it as a unique replacement.
+    const SELECTOR_BINDING: &str = "        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
+
+    /// The prepared parameter a preparation script exists to fill.
+    const PREPARED_BINDING: &str = "        normalized_reference: {kind: prepared}\n";
+
+    /// The statement source with a preparation script, its limits, or neither.
+    ///
+    /// The script and its limits are written immediately before `maximumRows`,
+    /// which is the one line of the request every variant keeps. The script also
+    /// brings the prepared parameter it exists to fill, because the source
+    /// refuses the two apart.
+    fn prepared_statement_document(prepare_script: bool, limits: Option<&str>) -> String {
+        let mut document = sqlite_source_document();
+        if let Some(limits) = limits {
+            document = edited(
+                &document,
+                "      maximumRows: 2\n",
+                &format!("      preparationLimits: {limits}\n      maximumRows: 2\n"),
+            );
+        }
+        if prepare_script {
+            document = edited(
+                &document,
+                "      maximumRows: 2\n",
+                "      prepareScript: adapters/source-a-prepare.rhai\n      maximumRows: 2\n",
+            );
+            document = edited(
+                &document,
+                SELECTOR_BINDING,
+                &format!("{SELECTOR_BINDING}{PREPARED_BINDING}"),
+            );
+        }
+        document
+    }
+
+    /// A source that prepares nothing states no bounds on the preparation it
+    /// does not do, and a source that prepares something states them all.
+    #[test]
+    fn statement_preparation_limits_stand_or_fall_with_the_preparation_script() {
+        let limits = preparation_limits(8, 1_024);
+        EvidenceConfig::parse_yaml(prepared_statement_document(false, None).as_bytes())
+            .expect("a statement source that prepares nothing needs no preparation limits");
+        EvidenceConfig::parse_yaml(prepared_statement_document(true, Some(&limits)).as_bytes())
+            .expect("a preparation script and its bounds are accepted together");
+        assert_eq!(
+            invalid_reason(&prepared_statement_document(true, None)),
+            "statement preparation requires its preparation limits",
+        );
+        assert_eq!(
+            invalid_reason(&prepared_statement_document(false, Some(&limits))),
+            "statement preparation limits require a preparation script",
+        );
+        assert_eq!(
+            decode_cause(&prepared_statement_document(
+                true,
+                Some("{maximumParameters: 8, maximumParameterValueBytes: 1024, surprise: 1}"),
+            )),
+            "unknown field",
+        );
+    }
+
+    /// A parameter states where its value comes from, and a prepared parameter
+    /// says the preparation script. Neither half stands alone: a script with
+    /// nothing prepared to fill could only ever return a name the source
+    /// refuses, and a prepared parameter with no script could never be filled.
+    #[test]
+    fn statement_preparation_stands_or_falls_with_a_prepared_parameter() {
+        let limits = preparation_limits(8, 1_024);
+        let script_without_a_prepared_parameter = edited(
+            &prepared_statement_document(true, Some(&limits)),
+            PREPARED_BINDING,
+            "",
+        );
+        let prepared_parameter_without_a_script = edited(
+            &sqlite_source_document(),
+            SELECTOR_BINDING,
+            &format!("{SELECTOR_BINDING}{PREPARED_BINDING}"),
+        );
+        assert_eq!(
+            invalid_reason(&script_without_a_prepared_parameter),
+            "statement preparation requires a prepared parameter",
+        );
+        assert_eq!(
+            invalid_reason(&prepared_parameter_without_a_script),
+            "a prepared parameter requires a preparation script",
+        );
+
+        // The published grammar refuses the same two halves, so an author
+        // editing a bundle against the contract is told before a deployment
+        // reads it.
+        let validator = bundle_contract_validator();
+        for refused in [
+            &script_without_a_prepared_parameter,
+            &prepared_parameter_without_a_script,
+        ] {
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(refused.as_bytes())),
+                "the bundle contract accepted half of a preparation",
+            );
+        }
+        for accepted in [
+            prepared_statement_document(true, Some(&limits)),
+            sqlite_source_document(),
+        ] {
+            assert!(
+                validator.is_valid(&bundle_contract_instance(accepted.as_bytes())),
+                "the bundle contract refused a whole statement source",
+            );
+        }
+    }
+
+    #[test]
+    fn a_prepared_parameter_carries_its_kind_and_nothing_else() {
+        let document = prepared_statement_document(true, Some(&preparation_limits(8, 1_024)));
+        let config = EvidenceConfig::parse_yaml(document.as_bytes())
+            .expect("a prepared parameter binding parses");
+        let SourceConfig::SqliteExtract { request, .. } = &config.sources.0[0].1 else {
+            panic!("the restated fixture source uses the sqlite-extract transport");
+        };
+        assert_eq!(
+            request.parameter_bindings.get("normalized_reference"),
+            Some(&SqliteParameterBinding::Prepared {}),
+        );
+        // A prepared parameter has no selector to name, so naming one is the
+        // author saying two origins where the source admits exactly one.
+        let two_origins = edited(
+            &document,
+            PREPARED_BINDING,
+            "        normalized_reference: {kind: prepared, role: subject}\n",
+        );
+        assert_eq!(decode_cause(&two_origins), "unknown field");
+        assert!(
+            !bundle_contract_validator()
+                .is_valid(&bundle_contract_instance(two_origins.as_bytes())),
+            "the bundle contract accepted a prepared parameter naming a selector",
+        );
+    }
+
+    #[test]
+    fn statement_preparation_bounds_must_admit_every_prepared_parameter() {
+        let two_prepared = edited(
+            &prepared_statement_document(true, Some(&preparation_limits(1, 1_024))),
+            PREPARED_BINDING,
+            &format!("{PREPARED_BINDING}        normalized_region: {{kind: prepared}}\n"),
+        );
+        assert_eq!(
+            invalid_reason(&two_prepared),
+            "statement preparation limits must admit every prepared parameter",
+        );
+        EvidenceConfig::parse_yaml(
+            edited(
+                &two_prepared,
+                "maximumParameters: 1",
+                "maximumParameters: 2",
+            )
+            .as_bytes(),
+        )
+        .expect("a bound equal to the prepared parameter count is admitted");
+    }
+
+    #[test]
+    fn statement_preparation_bounds_reject_zero_and_an_oversized_value() {
+        // Each bound is moved off its own maximum while the other stays valid,
+        // so the rejection can only have come from the bound under test.
+        for (key, maximum) in [
+            ("maximumParameters", 64),
+            ("maximumParameterValueBytes", 4_096),
+        ] {
+            let limits = |value| match key {
+                "maximumParameters" => preparation_limits(value, 1_024),
+                _ => preparation_limits(8, value),
+            };
+            for value in [0, maximum + 1] {
+                assert_eq!(
+                    invalid_reason(&prepared_statement_document(true, Some(&limits(value)))),
+                    "numeric value is outside Version 1 bounds",
+                    "{key} accepted {value}",
+                );
+            }
+            EvidenceConfig::parse_yaml(
+                prepared_statement_document(true, Some(&limits(maximum))).as_bytes(),
+            )
+            .unwrap_or_else(|error| panic!("{key} rejected its own maximum: {error}"));
+        }
     }
 
     fn bundle_contract_validator() -> jsonschema::JSONSchema {
@@ -4535,10 +5570,15 @@ mod tests {
                 true,
             ),
             (
+                // A source is read through an internally tagged transport, so
+                // the decoder buffers the whole source mapping to find the tag
+                // before it can reject a field inside it. The reported path is
+                // the map the buffered value was read under; the cause and the
+                // location still point the operator at the offending line.
                 "unknown nested field",
                 unknown_nested,
                 "unknown field",
-                Some("sources.registered-birth-date.request"),
+                Some("sources"),
                 true,
             ),
             (
@@ -5067,7 +6107,7 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml"
         ))
         .expect("fixture validates");
-        config.sources.0[0].1.request.selector_inputs[0]
+        http_request(&mut config).selector_inputs[0]
             .alternatives
             .push(SelectorInputAlternative {
                 profile: "person-reference-v1".to_owned(),
@@ -5106,9 +6146,7 @@ mod tests {
         grant.subjects[0].role = "alternate-subject".to_owned();
         config.authority_profiles.0[0].1.grants.push(grant);
 
-        let alternative_inputs = config.sources.0[0]
-            .1
-            .request
+        let alternative_inputs = http_request(&mut config)
             .selector_inputs
             .iter()
             .cloned()
@@ -5117,9 +6155,7 @@ mod tests {
                 input
             })
             .collect::<Vec<_>>();
-        config.sources.0[0]
-            .1
-            .request
+        http_request(&mut config)
             .selector_inputs
             .extend(alternative_inputs);
         config.requirements.push(alternative);
@@ -5252,7 +6288,7 @@ mod tests {
         ] {
             let mut oauth =
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
-            oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
+            *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: format!("https://source.invalid/token{query}"),
                 client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
                 client_secret_ref: Some(
@@ -5304,7 +6340,7 @@ mod tests {
         ] {
             let mut oauth =
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
-            oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
+            *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: "https://source.invalid/token".to_owned(),
                 client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
                 client_secret_ref: Some(
@@ -5661,7 +6697,7 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("fixture validates");
-        config.sources.0[0].1.request.method = HttpMethod::GET;
+        http_request(&mut config).method = HttpMethod::GET;
         assert_eq!(
             config.validate(),
             Err(ConfigError::Invalid(

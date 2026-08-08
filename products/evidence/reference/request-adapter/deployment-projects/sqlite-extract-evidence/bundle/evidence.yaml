@@ -1,0 +1,148 @@
+version: 1
+assuranceProfile: evidence-grade
+service:
+  providerId: urn:gov:example:evidence:licence-register
+  trustDomain: urn:gov:example:trust-domain:professional-registration
+issuer:
+  id: urn:gov:example:issuer:licence-authority
+# Inbound callers present access tokens from the deployment's own issuer. A
+# deployment with no identity provider runs Registry Mint as that issuer.
+# Nothing about that changes with the source transport: the extract is a local
+# file, so this is the only credential in the project.
+authentication:
+  kind: oidc-access-token
+  issuer: https://tokens.gov.example
+  audiences: [registry-evidence]
+  tokenTypes: [at+jwt]
+  algorithms: [ES256]
+  jwksUri: https://tokens.gov.example/.well-known/jwks.json
+  principalClaim: sub
+  requesterTagsClaim: evidence_tags
+  evidenceAudienceClaim: evidence_audience
+  grantIdClaim: evidence_grant_id
+  grantAuthorityClaim: evidence_authority
+  maximumTokenLifetimeSeconds: 300
+  revokedKeyIds: []
+audit:
+  format: keyed-jsonl
+  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+  failClosed: true
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 10
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+signing:
+  format: flattened-jws-json
+  algorithm: ES256
+  activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  verifierClockSkewSeconds: 30
+responseFormats: [signed-jws]
+
+selectorProfiles:
+  record-reference-v1:
+    maximumAggregateBytes: 96
+    fields:
+      record_reference:
+        type: string
+        minimumBytes: 1
+        maximumBytes: 64
+sources:
+  licence-register:
+    transport: sqlite-extract
+    # The statement decides what leaves the extract, and it returns one
+    # aggregate. Nothing in the file is field-projected on the way out, so the
+    # posture is the honest one: this deployment derives the answer itself.
+    posture: source-derived
+    # A logical name. runtime.yaml binds it to a file, so this reviewed bundle
+    # names no filesystem location and the same bytes promote unchanged from
+    # staging to production.
+    extractProfile: licence-register-extract
+    # A licence can be revoked on any day, so a week-old snapshot is the oldest
+    # this concept can be answered from. The judgement belongs to the concept
+    # rather than to the host, which is why it is reviewed here.
+    maximumExtractAgeSeconds: 604800
+    request:
+      statement: queries/professional-licence-lookup.sql
+      columns:
+        - {name: active_licence_count, type: integer}
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: record-reference-v1, fields: [record_reference]}
+      # No preparation script and no preparation limits. The binding already
+      # states where the parameter comes from, so Rust resolves the authorized
+      # selector field and binds it with nothing standing in between.
+      parameterBindings:
+        record_reference:
+          kind: selector
+          role: subject
+          profile: record-reference-v1
+          field: record_reference
+      projection:
+        - /rows/*/active_licence_count
+      # Two rows is the ambiguity signal: one registrant is a unique match, two
+      # registrants filed under one reference is ambiguity the extraction script
+      # reads, and a third row is a register this statement does not understand
+      # rather than a lookup with three answers.
+      maximumRows: 2
+      maximumCellBytes: 64
+      maximumStatementSteps: 100000
+      timeoutMilliseconds: 2000
+      maximumResponseBytes: 8192
+      concurrencyLimit: 8
+    # Shape contract for the projected result, checked before extraction runs.
+    responseSchema: schemas/professional-licence-response.schema.yaml
+    extractScript: adapters/professional-licence-extract.rhai
+    factSchema: schemas/professional-licence-facts.schema.yaml
+authorityProfiles:
+  licence-verifier-v1:
+    kind: statutory
+    requesterTags: [licence-verifier]
+    grants:
+      - requirement: urn:gov:example:requirement:licence-register-status:v1
+        purpose: professional-licence-verification
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - role: subject
+            selectorProfile: record-reference-v1
+            valueOrigin: request
+requirements:
+  - id: urn:gov:example:requirement:licence-register-status:v1
+    kind: criterion
+    acquisition:
+      kind: single
+      source: licence-register
+    purposes: [professional-licence-verification]
+    subjectRoles:
+      - role: subject
+        cardinality: one
+        selectorProfiles: [record-reference-v1]
+    referenceFrameworks: [urn:gov:example:framework:professional-practice-licence:v1]
+    evidenceType: urn:gov:example:evidence-type:professional-licence-status:v1
+    validitySeconds: 300
+    # The derivation declares no selector inputs, so it receives an empty
+    # selector map. It needs none: Rust binds the authorized reference into the
+    # statement's own WHERE clause, so the rows can only be this subject's.
+    # That is a structural guarantee, where an HTTP source has to compare the
+    # identifier the provider echoed back.
+    derivation:
+      script: derivations/professional-licence.rhai
+      parameters: {}
+    concepts:
+      - id: urn:gov:example:concept:professional-licence-active
+        form: boolean
+        required: true
+        constraints: {}
+    fixtures: fixtures/professional-licence-cases.yaml
+    disclosureGuard:
+      families: [urn:gov:example:disclosure-family:professional-licence]
+    existenceDisclosure: collapse-unresolved

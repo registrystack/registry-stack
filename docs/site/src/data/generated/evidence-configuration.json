@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 232,
+      "field_count": 250,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -2571,14 +2571,14 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "One fixed source referenced by this map key from a requirement's `acquisition` field, combining a fixed origin, transport, and minimization posture with the extraction script and schemas that turn the source's response into facts.",
+          "description": "One fixed source referenced by this map key from a requirement's `acquisition` field, combining a transport, the fixed request that transport carries, and a minimization posture with the extraction script and schemas that turn the source's response into facts.",
           "runtime_validation": null
         },
         {
           "key_path": "sources.*.authentication",
           "kind": "property",
           "type": "object",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -2726,7 +2726,7 @@
           "key_path": "sources.*.authentication.kind",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "basic",
             "none",
@@ -2880,10 +2880,11 @@
           "key_path": "sources.*.baseUrl",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
+            [],
             [
               "pattern: ^https://[^/?#]+$"
             ],
@@ -2897,6 +2898,22 @@
             ]
           ],
           "description": "Fixed HTTPS origin the source's evidence-data requests target, with no path, query, fragment, user information, or runtime substitution. An HTTP numeric-loopback origin is accepted only when `sources.*.authentication.kind` is `none`.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.extractProfile",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical name resolved to an exact extract file bound in `runtime.yaml` under `sourceExtracts`. The bundle never names a filesystem location, and startup refuses a profile no runtime binds as well as a bound profile no source reads.",
           "runtime_validation": null
         },
         {
@@ -2932,6 +2949,23 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.maximumExtractAgeSeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 2592000",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bounds how far the extract's published instant may lag the evaluation instant before the request fails as stale. Staleness tolerance belongs to the bundle because it is a property of the concept being asserted rather than of the deployment, and the runtime reads the published instant from the extract's reserved metadata table, never from the file's modification time.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.posture",
           "kind": "property",
           "type": "string",
@@ -2963,7 +2997,7 @@
           "key_path": "sources.*.request.adapterParameters",
           "kind": "property",
           "type": "object",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -2986,22 +3020,19 @@
             [
               "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
             ],
+            [],
             [
               "maximum: 9223372036854775807",
-              "minimum: -9223372036854775808",
-              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+              "minimum: -9223372036854775808"
             ],
             [
-              "maxLength: 16384",
-              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+              "maxLength: 16384"
             ],
             [
-              "maxItems: 256",
-              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+              "maxItems: 256"
             ],
             [
-              "maxProperties: 256",
-              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+              "maxProperties: 256"
             ]
           ],
           "conditional_constraints": [],
@@ -3040,7 +3071,7 @@
           "key_path": "sources.*.request.adapterParametersSchema",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3050,6 +3081,68 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.columns",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 64",
+              "minItems: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Closes the result shape by naming every column the statement returns and the type each carries, in order. A result whose column count, names, or value types differ fails as a source-protocol error, so a statement edited without its declaration cannot silently change what the extraction script sees.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.columns[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One declared result column, whose name is unique across the declaration and opaque to Rust.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.columns[].name",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Name this column carries into the result object, unique across the declaration and opaque to Rust; it need not equal the column's name in the extract.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.columns[].type",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "boolean",
+            "integer",
+            "number",
+            "string"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Exact value type Rust admits for this column. A null is admitted for any declared type, and any other mismatch fails as a source-protocol error rather than being coerced.",
           "runtime_validation": null
         },
         {
@@ -3073,7 +3166,7 @@
           "key_path": "sources.*.request.fixedHeaders",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3089,7 +3182,7 @@
           "key_path": "sources.*.request.fixedHeaders[]",
           "kind": "array_item",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -3101,7 +3194,7 @@
           "key_path": "sources.*.request.fixedHeaders[].name",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3119,7 +3212,7 @@
           "key_path": "sources.*.request.fixedHeaders[].value",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3130,6 +3223,23 @@
           ],
           "conditional_constraints": [],
           "description": "Constant value sent verbatim, with any control character rejected at startup, which closes header injection through configuration.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.maximumCellBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 65536",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Caps one returned value, so a single oversized cell fails the request rather than being read.",
           "runtime_validation": null
         },
         {
@@ -3150,10 +3260,44 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.request.maximumRows",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 256",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Caps the rows the statement may return before the request fails, so a statement that matches more broadly than intended fails rather than moving a bulk result into the runtime.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.maximumStatementSteps",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 1000000",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Caps the virtual-machine steps the statement may take, which bounds work the wall clock does not: a scan that is slow because it is large is stopped by this bound rather than by the timeout.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.request.method",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "GET",
             "POST"
@@ -3165,6 +3309,102 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.request.parameterBindings",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxProperties: 64"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "States where each named statement parameter's value comes from, so no value reaches the statement by string substitution. A parameter has one origin and exactly one: a `selector` parameter is filled from the authorized selector field it names and from nothing else, and a `prepared` parameter is filled by the preparation script and by nothing else. A parameter the statement uses and no binding supplies fails the request, as does a binding the statement never names. The reserved name `evidence_now` may not be bound, because Rust binds it.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.parameterBindings.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ],
+            []
+          ],
+          "conditional_constraints": [],
+          "description": "One parameter's tagged binding, filling exactly one named statement parameter from a value Rust has already validated.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.parameterBindings.*.field",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Exact field of that profile whose resolved value Rust binds to the parameter.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.parameterBindings.*.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "prepared",
+            "selector"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Selects the binding origin. This parameter is filled from the authorized selector field named below and from nothing else, so the preparation script cannot stand in for it.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.parameterBindings.*.profile",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Selector profile the value is taken from, which must be an alternative that role declares.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.parameterBindings.*.role",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Subject role the value is taken from, which must be one the request's `selectorInputs` declares.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.request.path",
           "kind": "property",
           "type": "string",
@@ -3172,6 +3412,7 @@
           "values": null,
           "values_conditional": false,
           "constraints": [
+            [],
             [
               "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
             ]
@@ -3188,6 +3429,7 @@
           "values": null,
           "values_conditional": false,
           "constraints": [
+            [],
             [
               "maxProperties: 16",
               "minProperties: 1"
@@ -3201,13 +3443,14 @@
           "key_path": "sources.*.request.pathBindings.*",
           "kind": "map_value",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
             [
               "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
-            ]
+            ],
+            []
           ],
           "conditional_constraints": [],
           "description": "One placeholder's tagged binding, filling exactly one complete path segment from a value Rust has already validated.",
@@ -3217,7 +3460,7 @@
           "key_path": "sources.*.request.pathBindings.*.field",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3233,7 +3476,7 @@
           "key_path": "sources.*.request.pathBindings.*.from",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "prior-fact",
             "selector"
@@ -3284,6 +3527,7 @@
           "values": null,
           "values_conditional": false,
           "constraints": [
+            [],
             [
               "maxLength: 2048",
               "minLength: 2",
@@ -3298,7 +3542,7 @@
           "key_path": "sources.*.request.preparationLimits",
           "kind": "property",
           "type": "object",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [],
@@ -3310,7 +3554,7 @@
           "key_path": "sources.*.request.preparationLimits.jsonBody",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "allowed",
             "forbidden",
@@ -3326,7 +3570,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumCollectionItems",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3343,7 +3587,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumJsonDepth",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3360,7 +3604,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumNormalizedBytes",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3374,10 +3618,44 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.request.preparationLimits.maximumParameterValueBytes",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 4096",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Caps one returned parameter value.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.request.preparationLimits.maximumParameters",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 64",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Caps how many parameters a preparation script may return.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.request.preparationLimits.maximumQueryNameBytes",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3394,7 +3672,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumQueryPairs",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3411,7 +3689,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumQueryValueBytes",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3428,7 +3706,7 @@
           "key_path": "sources.*.request.preparationLimits.maximumStringBytes",
           "kind": "property",
           "type": "integer",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3445,7 +3723,7 @@
           "key_path": "sources.*.request.preparationLimits.query",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "allowed",
             "forbidden",
@@ -3461,13 +3739,14 @@
           "key_path": "sources.*.request.prepareScript",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
             [
               "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
-            ]
+            ],
+            []
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the minimized authorized selectors, closed parameters, and any prior facts into ordered query pairs and at most one JSON body.",
@@ -3513,7 +3792,7 @@
           "key_path": "sources.*.request.redirects",
           "kind": "property",
           "type": "string",
-          "required": "yes",
+          "required": "conditional",
           "values": [
             "deny"
           ],
@@ -3648,6 +3927,22 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.request.statement",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^queries/[A-Za-z0-9._/-]+\\.sql$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bundle-relative SQL file holding exactly one statement, hash-identified like every other bundle artifact and reviewed with the bundle. A second statement in the file fails the request, and the statement text is fixed: no caller, script, or extract contributes to it.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.request.timeoutMilliseconds",
           "kind": "property",
           "type": "integer",
@@ -3684,7 +3979,7 @@
           "key_path": "sources.*.tlsTrustProfile",
           "kind": "property",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "values_conditional": false,
           "constraints": [
@@ -3702,12 +3997,13 @@
           "type": "string",
           "required": "yes",
           "values": [
-            "http-json"
+            "http-json",
+            "sqlite-extract"
           ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Selects the source's transport implementation. Version 1 defines exactly one, so every source uses the same HTTP-plus-JSON request and response contract for method, media type, and body shape.",
+          "description": "Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the network under one request and response contract for method, media type, and body shape. The tag chooses the shape of the whole source, so a key belonging to another transport is an unknown key here rather than an ignored one.",
           "runtime_validation": null
         },
         {
@@ -3778,7 +4074,7 @@
       "marker": "evidence-runtime-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 35,
+      "field_count": 38,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -4307,6 +4603,56 @@
           ],
           "conditional_constraints": [],
           "description": "Absolute Unix socket path used to reach the workload-local Transit signing proxy; the runtime supplies no provider token over this connection, because token custody and renewal stay with the proxy.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceExtracts",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxProperties: 64"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Closed map of process-local extract files a source may read by logical name; the set of names present here must exactly match the `extractProfile` names the bundle's extract sources declare, with no extra or missing name. Omission binds none, which is what a runtime file for a bundle with no extract source says.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceExtracts.*",
+          "kind": "map_value",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "One named extract binding, joining a logical name a source's `extractProfile` reference declares to the process-local file that holds it, so the reviewed bundle names what it reads and the operator decides where that file sits.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sourceExtracts.*.path",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Absolute path to one read-only regular file, validated at startup and digested without being read into memory; it must be neither a symbolic link nor writable, because the statement executor opens it as immutable, and its digest changes the computed runtime digest.",
           "runtime_validation": null
         },
         {

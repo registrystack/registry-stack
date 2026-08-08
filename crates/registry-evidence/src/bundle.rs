@@ -22,7 +22,7 @@ use url::Url;
 
 use crate::config::{
     ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
-    RuntimeConfig, SchemaFault, SelectorField,
+    RuntimeConfig, SchemaFault, SelectorField, TextLocation,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -43,13 +43,18 @@ const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 /// Projected member holding the bundle's declared acquisition capabilities.
 const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
-const ALLOWED_DIRECTORIES: [&str; 6] = [
+/// Bytes folded into an extract's digest per read. An extract is sized by the
+/// register it holds rather than by a byte cap, so it is digested in chunks of
+/// this size and never held whole.
+const EXTRACT_DIGEST_CHUNK_BYTES: usize = 64 * 1024;
+const ALLOWED_DIRECTORIES: [&str; 7] = [
     "adapters",
     "derivations",
     "schemas",
     "codelists",
     "fixtures",
     "public-keys",
+    "queries",
 ];
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
@@ -123,6 +128,14 @@ impl ArtifactFault {
             artifact: artifact.into(),
             fault,
         }
+    }
+
+    /// A diagnostic that also says where inside the artifact the fault is.
+    ///
+    /// Only the position travels. The line an adopter is sent to is theirs to
+    /// open; its text is content, and this type carries none.
+    pub fn at(artifact: impl Into<String>, fault: SchemaFault, location: TextLocation) -> Self {
+        Self::new(artifact, fault.at(location))
     }
 
     /// A cause raised before the artifact being loaded is in scope.
@@ -277,7 +290,8 @@ pub struct Bundle {
 /// One captured operator runtime configuration and its bound trust anchors.
 ///
 /// Secret values and audit contents are deliberately not captured. The
-/// runtime digest covers only the reviewed runtime YAML and private-CA bytes.
+/// runtime digest covers the reviewed runtime YAML, the private-CA bytes, and
+/// the digest of every process-local extract the document binds.
 #[derive(Debug, Clone)]
 pub struct RuntimeDocument {
     path: PathBuf,
@@ -285,6 +299,30 @@ pub struct RuntimeDocument {
     revision: String,
     bytes: Vec<u8>,
     pub ca_bundles: BTreeMap<String, Vec<u8>>,
+    pub source_extracts: BTreeMap<String, SourceExtract>,
+}
+
+/// One validated process-local extract file, bound to a logical name.
+///
+/// The bytes stay on disk. A CA bundle is kilobytes and is captured whole; an
+/// extract is sized for a register, so what travels is the path this validated
+/// and the digest taken over it while that validation still held.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SourceExtract {
+    path: PathBuf,
+    digest: String,
+}
+
+impl SourceExtract {
+    /// The validated file the statement executor opens.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// `sha256:` and lowercase hex over the extract's bytes, as they were read.
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 impl RuntimeDocument {
@@ -335,13 +373,21 @@ impl RuntimeDocument {
             validate_ca_bundle(&ca_bytes).map_err(|error| error.in_artifact(RUNTIME_FILE))?;
             ca_bundles.insert(profile.to_owned(), ca_bytes);
         }
-        let revision = compute_runtime_revision(&bytes, &ca_bundles)?;
+
+        let mut source_extracts = BTreeMap::new();
+        for (profile, binding) in config.source_extracts.iter() {
+            let extract = capture_source_extract(Path::new(&binding.path))
+                .map_err(|error| error.in_artifact(&source_extract_artifact(profile)))?;
+            source_extracts.insert(profile.to_owned(), extract);
+        }
+        let revision = compute_runtime_revision(&bytes, &ca_bundles, &source_extracts)?;
         Ok(Self {
             path: path.to_path_buf(),
             config,
             revision,
             bytes,
             ca_bundles,
+            source_extracts,
         })
     }
 
@@ -646,7 +692,12 @@ fn filesystem_is_read_only(_path: &Path) -> Result<bool, BundleError> {
 }
 
 fn file_size_cap(path: &str) -> u64 {
-    if path.starts_with("adapters/") || path.starts_with("derivations/") {
+    // A statement is reviewed, bounded, executable text, so it is bounded like
+    // the other executable artifacts rather than like a data file.
+    if path.starts_with("adapters/")
+        || path.starts_with("derivations/")
+        || path.starts_with("queries/")
+    {
         MAX_SCRIPT_BYTES
     } else if path.starts_with("public-keys/") {
         MAX_PUBLIC_JWK_BYTES
@@ -682,12 +733,130 @@ fn read_stable_file(
         return Err(BundleError::TooLarge);
     }
     let after = file.metadata().map_err(|_| BundleError::Unavailable)?;
-    if !same_file(&opened, &after)
-        || after.len() != u64::try_from(bytes.len()).map_err(|_| BundleError::TooLarge)?
-    {
-        return Err(not_immutable("the file changed while it was being read"));
-    }
+    confirm_unchanged(
+        &opened,
+        &after,
+        u64::try_from(bytes.len()).map_err(|_| BundleError::TooLarge)?,
+        "the file changed while it was being read",
+    )?;
     Ok(bytes)
+}
+
+/// The diagnostic name for one extract the runtime document binds.
+///
+/// The profile is a closed local identifier that both the bundle grammar and
+/// the runtime grammar validate before anything here runs, so it is a
+/// structural name rather than a document value and is safe to print. The file
+/// bound to it is an operator path and never appears.
+fn source_extract_artifact(profile: &str) -> String {
+    format!("sourceExtracts/{profile}")
+}
+
+/// Validate and digest one process-local extract the runtime document names.
+///
+/// This is the capture [`RuntimeDocument::load`] performs for a CA bundle with
+/// the bytes left on disk, and each way the file can be unusable carries its
+/// own cause: an operator holding a deployment that will not start needs to
+/// know whether the file is absent, indirect, of the wrong kind, or writable,
+/// and those are four different pieces of work.
+fn capture_source_extract(path: &Path) -> Result<SourceExtract, BundleError> {
+    let unavailable = invalid_artifact("the source extract the runtime file names is unavailable");
+    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable.clone())?;
+    if metadata.file_type().is_symlink() {
+        return Err(invalid_artifact(
+            "the source extract the runtime file names is a symbolic link",
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(invalid_artifact(
+            "the source extract the runtime file names is not a regular file",
+        ));
+    }
+    let filesystem_read_only = filesystem_is_read_only(path).map_err(|_| unavailable)?;
+    // Not hygiene. The statement executor opens this file `mode=ro` with
+    // `immutable=1`, which promises SQLite that no other connection can change
+    // it. A file that is still writable makes that promise false, and an
+    // immutable connection over a file that changes is undefined behaviour
+    // rather than a stale read. Dropping this check would move that undefined
+    // behaviour into every assertion the deployment answers.
+    validate_read_only(
+        &metadata,
+        filesystem_read_only,
+        "the source extract the runtime file names is writable",
+    )?;
+    let digest = digest_stable_file(path, &metadata, filesystem_read_only)?;
+    Ok(SourceExtract {
+        path: path.to_path_buf(),
+        digest,
+    })
+}
+
+/// Digest one file without holding it in memory.
+///
+/// [`read_stable_file`]'s identity discipline over a file too large to
+/// capture: the bytes are folded into the digest in bounded chunks, and the
+/// same before-and-after identity checks bracket the read, so the file
+/// identity that was validated is the file identity that was hashed. There is
+/// no byte cap, because an extract is a register rather than an artifact.
+fn digest_stable_file(
+    path: &Path,
+    scanned: &Metadata,
+    filesystem_read_only: bool,
+) -> Result<String, BundleError> {
+    let mut file = open_no_follow(path)?;
+    let opened = file.metadata().map_err(|_| BundleError::Unavailable)?;
+    validate_read_only(
+        &opened,
+        filesystem_read_only,
+        "the source extract the runtime file names is writable",
+    )?;
+    if !opened.is_file() || !same_file(scanned, &opened) {
+        return Err(not_immutable(
+            "the source extract was replaced between naming it and opening it",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; EXTRACT_DIGEST_CHUNK_BYTES];
+    let mut folded = 0_u64;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| BundleError::Unavailable)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        folded = folded
+            .checked_add(u64::try_from(read).map_err(|_| BundleError::TooLarge)?)
+            .ok_or(BundleError::TooLarge)?;
+    }
+    let after = file.metadata().map_err(|_| BundleError::Unavailable)?;
+    confirm_unchanged(
+        &opened,
+        &after,
+        folded,
+        "the source extract changed while it was being read",
+    )?;
+    sha256_label(hasher)
+}
+
+/// The closing half of a read's identity bracket.
+///
+/// The file that was open when the read started must still be the file that is
+/// open now, and the byte count folded in must be the byte count the file
+/// still reports. Both readers close their bracket here, so neither can drift
+/// from the other on the property that makes a capture trustworthy.
+fn confirm_unchanged(
+    opened: &Metadata,
+    after: &Metadata,
+    folded: u64,
+    cause: &'static str,
+) -> Result<(), BundleError> {
+    if same_file(opened, after) && after.len() == folded {
+        Ok(())
+    } else {
+        Err(not_immutable(cause))
+    }
 }
 
 #[cfg(unix)]
@@ -733,11 +902,7 @@ fn validate_file_closure(
 ) -> Result<(), BundleError> {
     let mut expected = BTreeSet::from([CONFIG_FILE.to_owned()]);
     for (_, source) in config.sources.iter() {
-        expected.insert(source.request.prepare_script.as_str().to_owned());
-        expected.insert(source.extract_script.as_str().to_owned());
-        expected.insert(source.request.adapter_parameters_schema.as_str().to_owned());
-        expected.insert(source.response_schema.as_str().to_owned());
-        expected.insert(source.fact_schema.as_str().to_owned());
+        expected.extend(source_artifact_paths(source));
     }
     for requirement in &config.requirements {
         expected.insert(requirement.derivation.script.as_str().to_owned());
@@ -783,6 +948,26 @@ fn validate_file_closure(
         ));
     }
     Ok(())
+}
+
+/// Every bundle artifact one source references, whatever its transport.
+///
+/// A transport that declares no request preparation, no adapter parameters, or
+/// no statement contributes nothing for that role rather than a placeholder,
+/// so bundle closure stays exact in both directions.
+fn source_artifact_paths(source: &crate::config::SourceConfig) -> Vec<String> {
+    [
+        source.statement(),
+        source.prepare_script(),
+        Some(source.extract_script()),
+        source.adapter_parameters_schema(),
+        Some(source.response_schema()),
+        Some(source.fact_schema()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|path| path.as_str().to_owned())
+    .collect()
 }
 
 /// Every concept the configuration declares, in configuration order.
@@ -873,14 +1058,12 @@ fn load_scripts(
 ) -> Result<BTreeMap<String, CompiledScript>, BundleError> {
     let mut expected = BTreeMap::new();
     for (_, source) in config.sources.iter() {
+        if let Some(prepare_script) = source.prepare_script() {
+            insert_script_contract(&mut expected, prepare_script.as_str(), ("prepare", 2))?;
+        }
         insert_script_contract(
             &mut expected,
-            source.request.prepare_script.as_str(),
-            ("prepare", 2),
-        )?;
-        insert_script_contract(
-            &mut expected,
-            source.extract_script.as_str(),
+            source.extract_script().as_str(),
             ("extract", 2),
         )?;
     }
@@ -1029,24 +1212,26 @@ fn load_fact_schemas(
     let parameter_paths = config
         .sources
         .iter()
-        .map(|(_, source)| source.request.adapter_parameters_schema.as_str())
+        .filter_map(|(_, source)| source.adapter_parameters_schema())
+        .map(|schema| schema.as_str())
         .collect::<BTreeSet<_>>();
     let response_paths = config
         .sources
         .iter()
-        .map(|(_, source)| source.response_schema.as_str())
+        .map(|(_, source)| source.response_schema().as_str())
         .collect::<BTreeSet<_>>();
     let mut paths = config
         .sources
         .iter()
         .flat_map(|(_, source)| {
             [
-                source.fact_schema.as_str(),
-                source.response_schema.as_str(),
-                source.request.adapter_parameters_schema.as_str(),
+                Some(source.fact_schema()),
+                Some(source.response_schema()),
+                source.adapter_parameters_schema(),
             ]
         })
-        .map(ToOwned::to_owned)
+        .flatten()
+        .map(|schema| schema.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
     let mut schemas = BTreeMap::new();
@@ -1063,7 +1248,9 @@ fn load_fact_schemas(
         schemas.insert(path, schema);
     }
     for (_, source) in config.sources.iter() {
-        let schema_path = source.request.adapter_parameters_schema.as_str();
+        let schema_path = source
+            .adapter_parameters_schema()
+            .map_or(CONFIG_FILE, |schema| schema.as_str());
         validate_adapter_parameters(source, &schemas)
             .map_err(|error| error.in_artifact(schema_path))?;
     }
@@ -1094,7 +1281,7 @@ fn validate_prior_fact_bindings(
                     .get(fetch)
                     .ok_or(invalid_artifact("fetch source is unavailable"))?;
                 let search_schema = schemas
-                    .get(search_source.fact_schema.as_str())
+                    .get(search_source.fact_schema().as_str())
                     .and_then(JsonValue::as_object)
                     .and_then(|schema| schema.get("properties"))
                     .and_then(JsonValue::as_object)
@@ -1125,17 +1312,14 @@ fn validate_bound_prior_facts(
     search_properties: &JsonMap<String, JsonValue>,
     declared: Option<&BTreeSet<&str>>,
 ) -> Result<(), BundleError> {
-    for (_, binding) in fetch_source.request.path_bindings.iter() {
-        let crate::config::PathBindingConfig::PriorFact { field } = binding else {
-            continue;
-        };
-        if declared.is_some_and(|allowlist| !allowlist.contains(field.as_str())) {
+    for field in fetch_source.prior_fact_bindings() {
+        if declared.is_some_and(|allowlist| !allowlist.contains(field)) {
             return Err(invalid_artifact(
                 "fetch path binding references a fact the member did not declare",
             ));
         }
         let property = search_properties
-            .get(field.as_str())
+            .get(field)
             .and_then(JsonValue::as_object)
             .ok_or(invalid_artifact(
                 "fetch path binding references an unknown search fact",
@@ -1171,7 +1355,7 @@ fn stage_facts<'a>(
     unavailable: &'static str,
 ) -> Result<StageFacts<'a>, BundleError> {
     let schema = schemas
-        .get(source.fact_schema.as_str())
+        .get(source.fact_schema().as_str())
         .and_then(JsonValue::as_object)
         .ok_or(invalid_artifact(unavailable))?;
     let properties = schema
@@ -1290,15 +1474,24 @@ fn validate_adapter_parameters(
     source: &crate::config::SourceConfig,
     schemas: &BTreeMap<String, JsonValue>,
 ) -> Result<(), BundleError> {
+    let Some(schema_path) = source.adapter_parameters_schema() else {
+        // A source that declares no schema for adapter parameters may declare
+        // no adapter parameters either, which the configuration has proven.
+        return source
+            .adapter_parameters()
+            .is_empty()
+            .then_some(())
+            .ok_or(invalid_artifact("missing adapter-parameter schema"));
+    };
     let schema = schemas
-        .get(source.request.adapter_parameters_schema.as_str())
+        .get(schema_path.as_str())
         .ok_or(invalid_artifact("missing adapter-parameter schema"))?;
     let compiled = JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         .compile(schema)
         .map_err(|_| invalid_artifact("adapter-parameter schema is not valid JSON Schema"))?;
-    let parameters = serde_json::to_value(&source.request.adapter_parameters)
+    let parameters = serde_json::to_value(source.adapter_parameters())
         .map_err(|_| invalid_artifact("adapter parameters are not JSON-compatible"))?;
     if !compiled.is_valid(&parameters) {
         return Err(invalid_artifact(
@@ -2142,7 +2335,7 @@ fn validate_runtime_bindings(
     let required = bundle
         .sources
         .iter()
-        .filter_map(|(_, source)| source.tls_trust_profile.as_deref())
+        .filter_map(|(_, source)| source.tls_trust_profile())
         .collect::<BTreeSet<_>>();
     let configured = runtime
         .outbound_tls
@@ -2160,6 +2353,28 @@ fn validate_runtime_bindings(
             unused,
             "the runtime configuration binds a TLS trust profile no bundle source names",
         ));
+    }
+    // Extracts bind exactly, in both directions, and each direction says which
+    // profile is at fault. An unbound profile is a deployment that cannot
+    // answer; a profile nothing names is a file the operator believes is in
+    // use and is not. The remedies differ, so the diagnostics do too.
+    let named_extracts = bundle
+        .sources
+        .iter()
+        .filter_map(|(_, source)| source.extract_profile())
+        .collect::<BTreeSet<_>>();
+    let bound_extracts = runtime.source_extracts.keys().collect::<BTreeSet<_>>();
+    if let Some(unbound) = named_extracts.difference(&bound_extracts).next() {
+        return Err(invalid_artifact(
+            "the runtime configuration binds no file for a source extract profile the bundle names",
+        )
+        .in_artifact(&source_extract_artifact(unbound)));
+    }
+    if let Some(unused) = bound_extracts.difference(&named_extracts).next() {
+        return Err(invalid_artifact(
+            "the runtime configuration binds a source extract profile no bundle source names",
+        )
+        .in_artifact(&source_extract_artifact(unused)));
     }
     // The operator half of the acquisition gate, and the half that gates.
     // A bundle declaring the kinds it needs states an intent beside the
@@ -2261,10 +2476,20 @@ fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
 fn compute_runtime_revision(
     runtime_bytes: &[u8],
     ca_bundles: &BTreeMap<String, Vec<u8>>,
+    source_extracts: &BTreeMap<String, SourceExtract>,
 ) -> Result<String, BundleError> {
     let mut files = BTreeMap::from([("runtime.yaml".to_owned(), runtime_bytes.to_vec())]);
     for (profile, bytes) in ca_bundles {
         files.insert(format!("trust-profile/{profile}.pem"), bytes.clone());
+    }
+    // An extract enters the revision as its digest rather than its bytes. The
+    // revision still covers every byte that was read, because a digest changes
+    // whenever the file it was taken over changes.
+    for (profile, extract) in source_extracts {
+        files.insert(
+            format!("source-extract/{profile}"),
+            extract.digest().as_bytes().to_vec(),
+        );
     }
     compute_named_revision(RUNTIME_REVISION_DOMAIN, &files)
 }
@@ -2329,11 +2554,7 @@ fn requirement_artifact_paths(
         let source = config.sources.get(source_id).ok_or_else(|| {
             invalid_artifact("the requirement names a source the configuration does not define")
         })?;
-        paths.insert(source.request.prepare_script.as_str().to_owned());
-        paths.insert(source.extract_script.as_str().to_owned());
-        paths.insert(source.request.adapter_parameters_schema.as_str().to_owned());
-        paths.insert(source.response_schema.as_str().to_owned());
-        paths.insert(source.fact_schema.as_str().to_owned());
+        paths.extend(source_artifact_paths(source));
     }
     paths.insert(requirement.derivation.script.as_str().to_owned());
     if let Some(fixtures) = &requirement.fixtures {
@@ -2591,14 +2812,20 @@ fn compute_named_revision(
         );
         hasher.update(bytes);
     }
+    sha256_label(hasher)
+}
+
+/// A finished digest in the form every revision and extract carries: the
+/// `sha256:` label and lowercase hexadecimal.
+fn sha256_label(hasher: Sha256) -> Result<String, BundleError> {
     let digest = hasher.finalize();
-    let mut revision = String::with_capacity("sha256:".len() + 64);
-    revision.push_str("sha256:");
+    let mut label = String::with_capacity("sha256:".len() + 64);
+    label.push_str("sha256:");
     for byte in digest {
         use std::fmt::Write as _;
-        write!(&mut revision, "{byte:02x}").map_err(|_| BundleError::TooLarge)?;
+        write!(&mut label, "{byte:02x}").map_err(|_| BundleError::TooLarge)?;
     }
-    Ok(revision)
+    Ok(label)
 }
 
 #[cfg(test)]
@@ -3879,9 +4106,12 @@ outboundTls:
     /// deployment would keep its revision either way.
     #[test]
     fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
-        let revision =
-            compute_runtime_revision(OPERATOR_RUNTIME_DOCUMENT.as_bytes(), &BTreeMap::new())
-                .expect("the runtime revision computes");
+        let revision = compute_runtime_revision(
+            OPERATOR_RUNTIME_DOCUMENT.as_bytes(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("the runtime revision computes");
         assert_eq!(
             revision, "sha256:1693e61df2bdad3835fefb03ca6a3990045d77e8f8468e84f68e547596039fe3",
             "an operator who adopted nothing must keep the revision they published"
@@ -3904,9 +4134,514 @@ outboundTls:
             "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
         );
         assert_ne!(
-            compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new())
+            compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new(), &BTreeMap::new())
                 .expect("the runtime revision computes"),
             revision
+        );
+    }
+
+    /// The acceptance bundle's one source, restated on the statement transport.
+    ///
+    /// It keeps the fixture's selector profile, schemas and extraction script,
+    /// so the only thing the rewrite changes is how the source is reached.
+    const STATEMENT_SOURCE: &str = r#"  source-a:
+    transport: sqlite-extract
+    posture: field-projected
+    extractProfile: residence-register
+    request:
+      statement: queries/adult-status.sql
+      columns: [{name: total, type: integer}, {name: date_of_birth, type: string}]
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
+      parameterBindings:
+        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
+      maximumRows: 2
+      maximumCellBytes: 4096
+      maximumStatementSteps: 50000
+      projection: [/rows/*/total, /rows/*/date_of_birth]
+      timeoutMilliseconds: 1000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    maximumExtractAgeSeconds: 86400
+    responseSchema: schemas/response.schema.yaml
+    extractScript: adapters/source-a.rhai
+    factSchema: schemas/facts.schema.yaml
+"#;
+
+    const STATEMENT_PATH: &str = "queries/adult-status.sql";
+    const STATEMENT_TEXT: &[u8] =
+        b"SELECT total, date_of_birth FROM residents WHERE id = :record_reference;\n";
+    const EXTRACT_PROFILE: &str = "residence-register";
+    const EXTRACT_ARTIFACT: &str = "sourceExtracts/residence-register";
+    const EXTRACT_CHANGED: &str = "the source extract changed while it was being read";
+
+    /// The acceptance configuration with its HTTP source restated as a
+    /// statement source.
+    fn statement_configuration() -> String {
+        let fixture = include_str!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let (head, rest) = fixture
+            .split_once("sources:\n")
+            .expect("the fixture declares sources");
+        let (_, tail) = rest
+            .split_once("authorityProfiles:\n")
+            .expect("the fixture declares authority profiles after its sources");
+        format!("{head}sources:\n{STATEMENT_SOURCE}authorityProfiles:\n{tail}")
+    }
+
+    /// The acceptance bundle rewritten onto the statement transport, so a whole
+    /// bundle carries a `queries/` artifact.
+    ///
+    /// The statement transport prepares no request and declares no adapter
+    /// parameters, so the artifacts filling those roles leave the closure with
+    /// them.
+    #[cfg(unix)]
+    fn write_statement_bundle(destination: &Path, statement: &[u8]) {
+        copy_acceptance_bundle("adult-status", destination);
+        fs::write(destination.join(CONFIG_FILE), statement_configuration())
+            .expect("the statement configuration writes");
+        fs::remove_file(destination.join("adapters/source-a-prepare.rhai"))
+            .expect("remove the displaced preparation script");
+        fs::remove_file(destination.join("schemas/adapter-parameters.schema.yaml"))
+            .expect("remove the displaced adapter-parameter schema");
+        fs::create_dir(destination.join("queries")).expect("create the statement directory");
+        fs::write(destination.join(STATEMENT_PATH), statement).expect("the statement writes");
+    }
+
+    /// A statement is reviewed, bounded, executable text, so it is bounded like
+    /// the other executable artifacts rather than like a data file. A megabyte
+    /// of SQL is not a statement anybody reviewed.
+    #[test]
+    fn a_statement_is_capped_as_a_script_rather_than_as_a_data_artifact() {
+        assert_eq!(file_size_cap(STATEMENT_PATH), MAX_SCRIPT_BYTES);
+        assert_eq!(file_size_cap("adapters/source-a.rhai"), MAX_SCRIPT_BYTES);
+        assert_eq!(
+            file_size_cap("derivations/adult-status.rhai"),
+            MAX_SCRIPT_BYTES
+        );
+        assert_eq!(
+            file_size_cap("schemas/facts.schema.yaml"),
+            MAX_ARTIFACT_BYTES
+        );
+    }
+
+    /// One statement exactly at the cap loads, and one byte more does not.
+    #[cfg(unix)]
+    #[test]
+    fn a_statement_loads_at_the_script_cap_and_not_one_byte_over_it() {
+        let padded = |length: usize| {
+            let mut statement = STATEMENT_TEXT.to_vec();
+            statement.resize(length, b' ');
+            statement
+        };
+
+        let at_cap = tempfile::tempdir().expect("temporary bundle");
+        write_statement_bundle(
+            at_cap.path(),
+            &padded(usize::try_from(MAX_SCRIPT_BYTES).expect("the cap fits a length")),
+        );
+        set_tree_mode(at_cap.path(), 0o555, 0o444);
+        Bundle::load(at_cap.path()).expect("a statement at the cap loads");
+        set_tree_mode(at_cap.path(), 0o755, 0o644);
+
+        let over_cap = tempfile::tempdir().expect("temporary bundle");
+        write_statement_bundle(
+            over_cap.path(),
+            &padded(usize::try_from(MAX_SCRIPT_BYTES).expect("the cap fits a length") + 1),
+        );
+        set_tree_mode(over_cap.path(), 0o555, 0o444);
+        assert!(matches!(
+            Bundle::load(over_cap.path()),
+            Err(BundleError::TooLarge)
+        ));
+        set_tree_mode(over_cap.path(), 0o755, 0o644);
+    }
+
+    /// A statement is bundle material like any other artifact: it loads, it has
+    /// to be referenced, and an unreferenced one is refused by name.
+    #[cfg(unix)]
+    #[test]
+    fn a_statement_bundle_closes_over_its_query_directory() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        write_statement_bundle(directory.path(), STATEMENT_TEXT);
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let bundle = Bundle::load(directory.path()).expect("a statement bundle loads");
+        assert_eq!(bundle.artifact(STATEMENT_PATH), Some(STATEMENT_TEXT));
+        assert_eq!(
+            bundle
+                .config
+                .sources
+                .get("source-a")
+                .expect("the statement source is configured")
+                .statement()
+                .expect("the statement transport names a statement")
+                .as_str(),
+            STATEMENT_PATH
+        );
+        set_tree_mode(directory.path(), 0o755, 0o644);
+
+        fs::write(
+            directory.path().join("queries/unreferenced.sql"),
+            b"SELECT 1;\n",
+        )
+        .expect("write an unreferenced statement");
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let unreferenced =
+            Bundle::load(directory.path()).expect_err("an unreferenced statement is refused");
+        let fault = unreferenced
+            .artifact_fault()
+            .expect("closure names the statement");
+        assert_eq!(fault.artifact(), "queries/unreferenced.sql");
+        assert_eq!(
+            fault.fault().cause(),
+            "the bundle contains an artifact the configuration does not reference"
+        );
+        set_tree_mode(directory.path(), 0o755, 0o644);
+    }
+
+    /// The statement decides what the source returns, so editing it has to move
+    /// the revision the requirement's relying parties pinned. A statement left
+    /// out of the closure would let a deployment change its answers under an
+    /// unchanged revision.
+    #[cfg(unix)]
+    #[test]
+    fn editing_the_statement_moves_the_requirement_revision() {
+        const REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        write_statement_bundle(directory.path(), STATEMENT_TEXT);
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let before = Bundle::load(directory.path())
+            .expect("a statement bundle loads")
+            .configuration_revision(REQUIREMENT)
+            .expect("the requirement has a revision")
+            .to_owned();
+
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        fs::write(
+            directory.path().join(STATEMENT_PATH),
+            b"SELECT total, date_of_birth FROM residents WHERE id = :record_reference LIMIT 1;\n",
+        )
+        .expect("the statement rewrites");
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let after = Bundle::load(directory.path())
+            .expect("the edited statement bundle loads")
+            .configuration_revision(REQUIREMENT)
+            .expect("the requirement has a revision")
+            .to_owned();
+        set_tree_mode(directory.path(), 0o755, 0o644);
+
+        assert_ne!(before, after);
+    }
+
+    /// The operator runtime document in a temporary root, with a secret root
+    /// created and locked and the operator's own blocks appended.
+    #[cfg(unix)]
+    fn locked_runtime_document(directory: &Path, blocks: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let secret_root = directory.join("secrets");
+        fs::create_dir_all(&secret_root).expect("create secret root");
+        fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+            .expect("lock secret root");
+        let path = directory.join(RUNTIME_FILE);
+        let document = OPERATOR_RUNTIME_DOCUMENT.replace(
+            "/run/secrets/registry-evidence",
+            &secret_root.display().to_string(),
+        );
+        fs::write(&path, format!("{document}{blocks}")).expect("write runtime document");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444))
+            .expect("lock runtime document");
+        path
+    }
+
+    /// One `sourceExtracts` block binding the fixture profile to a path.
+    fn extract_block(path: &Path) -> String {
+        format!(
+            "sourceExtracts:\n  {EXTRACT_PROFILE}: {{path: {}}}\n",
+            path.display()
+        )
+    }
+
+    #[cfg(unix)]
+    fn locked_extract(path: &Path, contents: &[u8]) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        if path.exists() {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o644))
+                .expect("unlock the extract");
+        }
+        fs::write(path, contents).expect("write the extract");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o444)).expect("lock the extract");
+        path.to_path_buf()
+    }
+
+    /// Bind whatever the caller staged as the deployment's one extract, and
+    /// load the runtime document over it.
+    #[cfg(unix)]
+    fn load_with_extract(
+        stage: impl FnOnce(&Path) -> PathBuf,
+    ) -> Result<RuntimeDocument, BundleError> {
+        let directory = tempfile::tempdir().expect("temporary runtime root");
+        let bound = stage(directory.path());
+        let runtime_path = locked_runtime_document(directory.path(), &extract_block(&bound));
+        RuntimeDocument::load(&runtime_path)
+    }
+
+    /// The artifact one refusal names, and the value-free cause it carries.
+    fn named_refusal(error: &BundleError) -> (&str, &'static str) {
+        let fault = error
+            .artifact_fault()
+            .expect("a deployment refusal names its subject");
+        (fault.artifact(), fault.fault().cause())
+    }
+
+    /// An extract is bound by digest, never by its bytes: a register-sized file
+    /// does not belong in a serving process's memory. The digest still has to
+    /// reach the runtime revision, or a deployment could answer from different
+    /// data under a revision it already published.
+    #[cfg(unix)]
+    #[test]
+    fn an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes() {
+        let directory = tempfile::tempdir().expect("temporary runtime root");
+        let extract = directory.path().join("residence-register.sqlite");
+        locked_extract(&extract, b"extract-content-one");
+        let runtime_path = locked_runtime_document(directory.path(), &extract_block(&extract));
+
+        let first = RuntimeDocument::load(&runtime_path).expect("the runtime document loads");
+        let bound = first
+            .source_extracts
+            .get(EXTRACT_PROFILE)
+            .expect("the bound extract is captured");
+        assert_eq!(bound.path(), extract);
+        let mut hasher = Sha256::new();
+        hasher.update(b"extract-content-one");
+        assert_eq!(
+            bound.digest(),
+            sha256_label(hasher).expect("the expected digest computes"),
+            "the digest is taken over the extract's bytes and nothing else"
+        );
+
+        let again = RuntimeDocument::load(&runtime_path).expect("the runtime document reloads");
+        assert_eq!(first.revision(), again.revision());
+        assert_eq!(
+            first.bytes(),
+            again.bytes(),
+            "the runtime file itself did not move"
+        );
+
+        locked_extract(&extract, b"extract-content-two");
+        let replaced =
+            RuntimeDocument::load(&runtime_path).expect("the replaced extract still loads");
+        assert_ne!(replaced.revision(), first.revision());
+        assert_eq!(
+            replaced.bytes(),
+            first.bytes(),
+            "only the extract changed, so only its digest can have moved the revision"
+        );
+    }
+
+    /// Every way an extract can be unusable is its own refusal, naming the
+    /// profile the operator has to look at. Collapsing them would leave an
+    /// operator with a deployment that will not start and no way to tell a
+    /// missing file from a writable one.
+    #[cfg(unix)]
+    #[test]
+    fn every_unusable_extract_is_refused_by_its_own_name_and_cause() {
+        let missing =
+            load_with_extract(|root| root.join("absent.sqlite")).expect_err("a missing extract");
+        assert_eq!(
+            named_refusal(&missing),
+            (
+                EXTRACT_ARTIFACT,
+                "the source extract the runtime file names is unavailable"
+            )
+        );
+
+        let symlinked = load_with_extract(|root| {
+            use std::os::unix::fs::symlink;
+            let target = locked_extract(&root.join("target.sqlite"), b"extract");
+            let link = root.join("link.sqlite");
+            symlink(&target, &link).expect("create the extract symlink");
+            link
+        })
+        .expect_err("a symlinked extract");
+        assert_eq!(
+            named_refusal(&symlinked),
+            (
+                EXTRACT_ARTIFACT,
+                "the source extract the runtime file names is a symbolic link"
+            )
+        );
+
+        let not_a_file = load_with_extract(|root| {
+            let path = root.join("extract-directory");
+            fs::create_dir(&path).expect("create the bound directory");
+            path
+        })
+        .expect_err("an extract that is not a regular file");
+        assert_eq!(
+            named_refusal(&not_a_file),
+            (
+                EXTRACT_ARTIFACT,
+                "the source extract the runtime file names is not a regular file"
+            )
+        );
+
+        let writable = load_with_extract(|root| {
+            let path = root.join("writable.sqlite");
+            fs::write(&path, b"extract").expect("write the extract");
+            path
+        })
+        .expect_err("a writable extract");
+        assert_eq!(
+            named_refusal(&writable),
+            (
+                EXTRACT_ARTIFACT,
+                "the source extract the runtime file names is writable"
+            )
+        );
+    }
+
+    /// The statement executor opens the extract `immutable=1`, so the file
+    /// identity that was validated has to be the file identity that was
+    /// hashed. A file swapped between naming it and opening it is refused
+    /// before a single byte reaches the digest.
+    #[cfg(unix)]
+    #[test]
+    fn a_streamed_read_refuses_an_extract_replaced_after_it_was_named() {
+        let directory = tempfile::tempdir().expect("temporary extract root");
+        let path = directory.path().join("extract.sqlite");
+        locked_extract(&path, b"extract-content-one");
+        let scanned = fs::symlink_metadata(&path).expect("the scanned metadata reads");
+        fs::remove_file(&path).expect("remove the named extract");
+        locked_extract(&path, b"extract-content-two");
+
+        assert_eq!(
+            refusal_cause(
+                digest_stable_file(&path, &scanned, false)
+                    .expect_err("a replaced extract is refused")
+            ),
+            "the source extract was replaced between naming it and opening it"
+        );
+        digest_stable_file(
+            &path,
+            &fs::symlink_metadata(&path).expect("the current metadata reads"),
+            false,
+        )
+        .expect("the extract that is still there digests");
+    }
+
+    /// The closing half of the read bracket, checked where it can be staged.
+    ///
+    /// A read that is genuinely raced cannot be produced on demand, so the
+    /// check is exercised against the two identities it separates: a different
+    /// file, and the same file reporting a size the fold did not see.
+    #[cfg(unix)]
+    #[test]
+    fn a_streamed_read_refuses_an_extract_that_moved_while_it_was_read() {
+        let directory = tempfile::tempdir().expect("temporary extract root");
+        let first = locked_extract(&directory.path().join("first.sqlite"), b"extract-one");
+        let second = locked_extract(&directory.path().join("second.sqlite"), b"extract-two");
+        let first_metadata = fs::symlink_metadata(&first).expect("the first metadata reads");
+        let second_metadata = fs::symlink_metadata(&second).expect("the second metadata reads");
+
+        confirm_unchanged(
+            &first_metadata,
+            &first_metadata,
+            first_metadata.len(),
+            EXTRACT_CHANGED,
+        )
+        .expect("an untouched file passes the bracket");
+        assert_eq!(
+            refusal_cause(
+                confirm_unchanged(
+                    &first_metadata,
+                    &second_metadata,
+                    first_metadata.len(),
+                    EXTRACT_CHANGED,
+                )
+                .expect_err("a different file is refused")
+            ),
+            EXTRACT_CHANGED
+        );
+        assert_eq!(
+            refusal_cause(
+                confirm_unchanged(
+                    &first_metadata,
+                    &first_metadata,
+                    first_metadata.len() + 1,
+                    EXTRACT_CHANGED,
+                )
+                .expect_err("a fold that did not see the whole file is refused")
+            ),
+            EXTRACT_CHANGED
+        );
+    }
+
+    /// The extract binding is exact in both directions, and each direction is
+    /// somebody's separate job: an unbound profile is a file the deployment
+    /// still has to name, and a bound profile no source reads is a file the
+    /// deployment is holding open for nothing.
+    #[test]
+    fn a_source_extract_binding_must_be_exact_in_both_directions() {
+        const BOUND: &str =
+            "  residence-register: {path: /var/lib/registry-evidence/extracts/residence.sqlite}\n";
+        let bundle = EvidenceConfig::parse_yaml(statement_configuration().as_bytes())
+            .expect("the statement configuration validates");
+
+        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        let unbound = validate_runtime_bindings(&bundle, &silent)
+            .expect_err("a deployment binding no extract refuses the bundle");
+        assert_eq!(
+            named_refusal(&unbound),
+            (
+                EXTRACT_ARTIFACT,
+                "the runtime configuration binds no file for a source extract profile the bundle names"
+            )
+        );
+
+        let exact = RuntimeConfig::parse_yaml(
+            format!("{OPERATOR_RUNTIME_DOCUMENT}sourceExtracts:\n{BOUND}").as_bytes(),
+        )
+        .expect("the bound operator runtime document parses");
+        validate_runtime_bindings(&bundle, &exact)
+            .expect("a deployment binding exactly the named extract accepts the bundle");
+
+        let surplus = RuntimeConfig::parse_yaml(
+            format!(
+                "{OPERATOR_RUNTIME_DOCUMENT}sourceExtracts:\n{BOUND}  civil-register: {{path: /var/lib/registry-evidence/extracts/civil.sqlite}}\n"
+            )
+            .as_bytes(),
+        )
+        .expect("the surplus operator runtime document parses");
+        let unused = validate_runtime_bindings(&bundle, &surplus)
+            .expect_err("a deployment binding an unread extract refuses the bundle");
+        assert_eq!(
+            named_refusal(&unused),
+            (
+                "sourceExtracts/civil-register",
+                "the runtime configuration binds a source extract profile no bundle source names"
+            )
+        );
+
+        // A bundle that reads no extract keeps binding against every runtime
+        // file written before extracts existed.
+        let frozen = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("the acceptance bundle validates");
+        validate_runtime_bindings(&frozen, &silent)
+            .expect("a bundle reading no extract needs no binding");
+        let orphaned = validate_runtime_bindings(&frozen, &exact)
+            .expect_err("an extract no bundle source reads is refused");
+        assert_eq!(
+            named_refusal(&orphaned),
+            (
+                EXTRACT_ARTIFACT,
+                "the runtime configuration binds a source extract profile no bundle source names"
+            )
         );
     }
 }

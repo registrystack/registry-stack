@@ -49,7 +49,7 @@ use crate::{
         ResolvedAuthorization, ResolvedSelectorValue,
     },
     signing::EvidenceSigner,
-    source::{ResolvedSourceSelector, SourceError, SourceExecutor},
+    source::{statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor},
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
@@ -414,11 +414,19 @@ impl EvidenceRuntime {
         let mut sources = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
             let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
+            // A serving deployment has a runtime document, so a statement
+            // source is compiled against the file it will actually read. The
+            // statement's strong check runs here, at startup, rather than on
+            // the first request that needs it.
+            let statement =
+                statement_inputs(source, &bundle, Some(&runtime_document.source_extracts))
+                    .map_err(|_| RuntimeInitializationError::Source)?;
             let executor = SourceExecutor::new_with_selector_sets_and_tls(
                 source,
                 &allowed_selector_sets,
                 &runtime_config.outbound_tls,
                 &runtime_document.ca_bundles,
+                statement,
                 Arc::clone(&secrets),
             )
             .map_err(|_| RuntimeInitializationError::Source)?;
@@ -819,6 +827,13 @@ impl EvidenceRuntime {
             return Err(failure(ProblemCode::MalformedRequest, "holder-key"));
         }
         let started = Instant::now();
+        // One evaluation reads one clock, once, here. Every later question that
+        // needs the wall clock is answered from this instant: what a statement
+        // source sees as the current time, whether an extract is too old to
+        // answer from, and the instant the assertion says it was observed at.
+        // Reading the clock again anywhere below would let those three disagree
+        // by however long acquisition took.
+        let observed_at = evaluation_time.unwrap_or_else(Utc::now);
         let context = self
             .authenticator
             .authenticate(access_token)
@@ -943,6 +958,7 @@ impl EvidenceRuntime {
                         &empty_facts,
                         None,
                         started,
+                        observed_at,
                     )
                     .await?;
                 match stage.lookup {
@@ -985,6 +1001,7 @@ impl EvidenceRuntime {
                         &empty_facts,
                         None,
                         started,
+                        observed_at,
                     )
                     .await?;
                 let search_facts = match search_stage.lookup {
@@ -1025,6 +1042,7 @@ impl EvidenceRuntime {
                         &search_facts,
                         None,
                         started,
+                        observed_at,
                     )
                     .await?;
                 match fetch_stage.lookup {
@@ -1108,6 +1126,7 @@ impl EvidenceRuntime {
                             &stage_facts,
                             deadline,
                             started,
+                            observed_at,
                         )
                         .await?;
                     source_ids.push(source_id.clone());
@@ -1207,7 +1226,6 @@ impl EvidenceRuntime {
                 (merged, source_id, adapter_id)
             }
         };
-        let observed_at = evaluation_time.unwrap_or_else(Utc::now);
         let derivation_selectors =
             selector_input_value(&resolved, &requirement.derivation.selector_inputs)?;
         let values = match self.kernel.derive_and_validate_with_selectors(
@@ -1223,8 +1241,8 @@ impl EvidenceRuntime {
         ) {
             Ok(values) => values,
             Err(error) => {
-                let category = kernel_failure_category(error);
-                let problem = kernel_failure_problem(error);
+                let category = kernel_failure_category(&error);
+                let problem = kernel_failure_problem(&error);
                 let decision = match error {
                     KernelError::Extraction | KernelError::DerivationInput => {
                         AuditDecision::FactMissing
@@ -1500,6 +1518,7 @@ impl EvidenceRuntime {
         prior_facts: &BTreeMap<String, Value>,
         deadline: Option<Instant>,
         started: Instant,
+        observed_at: chrono::DateTime<Utc>,
     ) -> Result<SourceStageOutcome, RuntimeFailure> {
         let (source_id, adapter_id) = self.source_identity(source_id)?;
         // Every actual evidence-data call has its own durable access event,
@@ -1528,16 +1547,16 @@ impl EvidenceRuntime {
             .get(&source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
         let preparation_selector_value =
-            source_selector_input_value(resolved, &source.request.selector_inputs)?;
-        let selectors = source_selectors(resolved, &source.request.selector_inputs)?;
-        let request_parts =
+            source_selector_input_value(resolved, source.selector_inputs())?;
+        let selectors = source_selectors(resolved, source.selector_inputs())?;
+        let request =
             match self
                 .kernel
                 .prepare_source(&source_id, &preparation_selector_value, prior_facts)
             {
-                Ok(parts) => parts,
+                Ok(prepared) => prepared,
                 Err(error) => {
-                    let category = kernel_failure_category(error);
+                    let category = kernel_failure_category(&error);
                     self.append_failure(
                         material,
                         operation,
@@ -1548,7 +1567,7 @@ impl EvidenceRuntime {
                         started,
                     )
                     .await?;
-                    return Err(failure(kernel_failure_problem(error), category));
+                    return Err(failure(kernel_failure_problem(&error), category));
                 }
             };
         // Only the source round-trip is bounded by the acquisition deadline.
@@ -1563,7 +1582,8 @@ impl EvidenceRuntime {
         // that no longer matches its tail hash while the service keeps serving.
         // That silent audit-integrity break is worse than a refusal, and it is
         // why the timeout never crosses an append.
-        let execution = executor.execute_with_prior_facts(&selectors, prior_facts, &request_parts);
+        let execution =
+            executor.execute_with_prior_facts(&selectors, prior_facts, &request, observed_at);
         let executed = match deadline {
             Some(deadline) => {
                 // A ceiling already spent by the durable append above, or by
@@ -1618,8 +1638,8 @@ impl EvidenceRuntime {
         {
             Ok(lookup) => lookup,
             Err(error) => {
-                let category = kernel_failure_category(error);
-                let problem = kernel_failure_problem(error);
+                let category = kernel_failure_category(&error);
+                let problem = kernel_failure_problem(&error);
                 let decision = match error {
                     KernelError::Extraction | KernelError::DerivationInput => {
                         AuditDecision::FactMissing
@@ -1655,7 +1675,7 @@ impl EvidenceRuntime {
             .sources
             .get(source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let adapter_id = Path::new(source.extract_script.as_str())
+        let adapter_id = Path::new(source.extract_script().as_str())
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty() && name.len() <= 128)
@@ -2055,6 +2075,18 @@ fn source_failure_category(error: &SourceError) -> &'static str {
         SourceError::InvalidPlan | SourceError::InvalidSelectors | SourceError::Transport => {
             "source-unavailable"
         }
+        // A statement source has more than one way to fail and each one has a
+        // different fix: mount the file, refresh it, correct the statement,
+        // correct the parameters, raise a budget, or bring the result back
+        // inside its declared contract. One shared label would tell an operator
+        // only that something is wrong somewhere.
+        SourceError::ExtractUnavailable(_) => "source-extract-unavailable",
+        SourceError::ExtractTooOld(_) => "source-extract-stale",
+        SourceError::StatementRefused(_) => "source-statement-refused",
+        SourceError::StatementParameter(_) => "source-statement-parameter",
+        SourceError::StatementBudget(_) => "source-statement-budget",
+        SourceError::StatementResult(_) => "source-statement-result",
+        SourceError::StatementUnavailable => "source-statement-unavailable",
     }
 }
 
@@ -2062,11 +2094,18 @@ fn source_failure_category(error: &SourceError) -> &'static str {
 ///
 /// The offline fixture command uses this same function, so its symbolic
 /// failure cases cannot drift from the production release pipeline.
+///
+/// Every source failure, on either transport, is one dependency this
+/// deployment could not read. A statement source names a file rather than a
+/// host, but the relying party's position is the same and the extra shape a
+/// statement could carry is exactly the shape that would tell a caller
+/// something about the extract's contents. The acting detail lives in the
+/// audit category and, for the deployment path, in the artifact fault.
 pub fn source_failure_problem(_error: &SourceError) -> ProblemCode {
     ProblemCode::DependencyUnavailable
 }
 
-fn kernel_failure_category(error: KernelError) -> &'static str {
+fn kernel_failure_category(error: &KernelError) -> &'static str {
     match error {
         KernelError::Preparation => "request-preparation",
         KernelError::Extraction => "fact-unavailable",
@@ -2074,7 +2113,10 @@ fn kernel_failure_category(error: KernelError) -> &'static str {
         KernelError::SourceProtocol => "source-protocol",
         KernelError::Script => "script-failure",
         KernelError::Output => "output-gate",
-        KernelError::Bundle | KernelError::Requirement | KernelError::Evidence => "kernel",
+        KernelError::Bundle
+        | KernelError::Artifact(_)
+        | KernelError::Requirement
+        | KernelError::Evidence => "kernel",
     }
 }
 
@@ -2082,7 +2124,7 @@ fn kernel_failure_category(error: KernelError) -> &'static str {
 /// classes, including derivation-input inconsistency over a uniquely found
 /// record, collapse to one public shape so status codes cannot become an
 /// existence oracle. Native audit keeps only a value-free category.
-fn kernel_failure_problem(error: KernelError) -> ProblemCode {
+fn kernel_failure_problem(error: &KernelError) -> ProblemCode {
     match error {
         KernelError::Preparation => ProblemCode::ServiceUnavailable,
         KernelError::Extraction | KernelError::DerivationInput => ProblemCode::EvidenceNotAvailable,
@@ -2090,6 +2132,7 @@ fn kernel_failure_problem(error: KernelError) -> ProblemCode {
         KernelError::Script
         | KernelError::Output
         | KernelError::Bundle
+        | KernelError::Artifact(_)
         | KernelError::Requirement
         | KernelError::Evidence => ProblemCode::ServiceUnavailable,
     }
@@ -2193,6 +2236,52 @@ mod tests {
     }
 
     #[test]
+    fn every_statement_source_failure_audits_under_its_own_category() {
+        use crate::bundle::ArtifactFault;
+        use crate::config::SchemaFault;
+
+        let fault = ArtifactFault::new("queries/example.sql", SchemaFault::because("a cause"));
+        let failures = [
+            SourceError::ExtractUnavailable(fault.clone()),
+            SourceError::ExtractTooOld(fault.clone()),
+            SourceError::StatementRefused(fault.clone()),
+            SourceError::StatementParameter(fault.clone()),
+            SourceError::StatementBudget(fault.clone()),
+            SourceError::StatementResult(fault),
+            SourceError::StatementUnavailable,
+        ];
+
+        let mut categories = BTreeSet::new();
+        for failure in &failures {
+            let category = source_failure_category(failure);
+            assert!(
+                categories.insert(category),
+                "two statement failures share the category {category}"
+            );
+            // The public problem class stays one class for every transport, so
+            // the category is the only place the acting difference is recorded.
+            assert_eq!(
+                source_failure_problem(failure),
+                ProblemCode::DependencyUnavailable
+            );
+            // An audit category is a label, never a value.
+            assert!(!category.contains("queries/example.sql"));
+        }
+
+        for other in [
+            SourceError::Credential,
+            SourceError::Timeout,
+            SourceError::Transport,
+            SourceError::ResponseTooLarge,
+        ] {
+            assert!(
+                categories.insert(source_failure_category(&other)),
+                "a statement failure took an existing category"
+            );
+        }
+    }
+
+    #[test]
     fn a_spent_acquisition_ceiling_leaves_no_time_for_one_more_source_call() {
         let now = Instant::now();
 
@@ -2247,12 +2336,12 @@ mod tests {
     #[test]
     fn fact_absence_and_trusted_script_failures_have_distinct_public_classes() {
         assert_eq!(
-            kernel_failure_problem(KernelError::Extraction),
+            kernel_failure_problem(&KernelError::Extraction),
             ProblemCode::EvidenceNotAvailable
         );
         for failure in [KernelError::Script, KernelError::Output] {
             assert_eq!(
-                kernel_failure_problem(failure),
+                kernel_failure_problem(&failure),
                 ProblemCode::ServiceUnavailable
             );
         }
@@ -2261,16 +2350,39 @@ mod tests {
     #[test]
     fn derivation_input_inconsistency_collapses_with_the_unresolved_classes() {
         assert_eq!(
-            kernel_failure_problem(KernelError::DerivationInput),
-            kernel_failure_problem(KernelError::Extraction)
+            kernel_failure_problem(&KernelError::DerivationInput),
+            kernel_failure_problem(&KernelError::Extraction)
         );
         assert_eq!(
-            kernel_failure_problem(KernelError::DerivationInput),
+            kernel_failure_problem(&KernelError::DerivationInput),
             ProblemCode::EvidenceNotAvailable
         );
         assert_ne!(
-            kernel_failure_category(KernelError::DerivationInput),
-            kernel_failure_category(KernelError::Extraction)
+            kernel_failure_category(&KernelError::DerivationInput),
+            kernel_failure_category(&KernelError::Extraction)
+        );
+    }
+
+    /// Naming the artifact an adopter has to fix is a startup diagnostic. It
+    /// must not become a second externally visible failure class, so it keeps
+    /// the audit category and the public problem the bundle class already has.
+    #[test]
+    fn a_named_artifact_failure_classifies_exactly_as_a_bundle_failure() {
+        use crate::bundle::ArtifactFault;
+        use crate::config::SchemaFault;
+
+        let artifact = KernelError::Artifact(ArtifactFault::new(
+            "derivations/adult-status.rhai",
+            SchemaFault::because("script does not compile"),
+        ));
+
+        assert_eq!(
+            kernel_failure_category(&artifact),
+            kernel_failure_category(&KernelError::Bundle)
+        );
+        assert_eq!(
+            kernel_failure_problem(&artifact),
+            kernel_failure_problem(&KernelError::Bundle)
         );
     }
 }

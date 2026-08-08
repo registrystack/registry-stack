@@ -27,8 +27,8 @@ Most adopters should need to edit only:
 
 - deployment URIs, hosts, identifiers, purposes, authority tags, and selector
   field names in `evidence.yaml`;
-- one small preparation script and one extraction script per distinct provider
-  request/response shape;
+- one small preparation script, where the source's transport needs one, and one
+  extraction script per distinct provider request/response shape;
 - one derivation script per requirement;
 - the closed parameter and fact schemas beside those scripts;
 - sanitized fixtures;
@@ -41,7 +41,13 @@ configuration variant is not part of ordinary adoption.
 
 ## Provider prerequisites
 
-Decide compatibility before authoring scripts. A Version 1 provider must:
+Decide compatibility before authoring scripts. These are the prerequisites for
+an `http-json` source, which reads the provider's own API. A provider that meets
+none of them may still be reachable as a `sqlite-extract` source, whose
+prerequisite is a different one: the publisher must be able to produce a
+snapshot of the data and to state when it was published.
+
+An `http-json` provider must:
 
 - expose a bounded lookup at a fixed origin over HTTPS, except numeric loopback
   HTTP used only by deterministic local tests;
@@ -269,6 +275,56 @@ secrets or runtime authority.
 
 ### Source
 
+A source declares one `transport`, and that tag decides the rest of the object.
+Version 1 defines two, and they are peers. `http-json` reaches a fixed HTTPS
+origin over the network. `sqlite-extract` runs one reviewed SQL statement
+against a read-only SQLite extract file mounted beside the process. A key
+belonging to the other transport is an unknown key rather than an ignored one,
+so `baseUrl` on a `sqlite-extract` source fails startup instead of being
+skipped.
+
+Every source carries the same keys whichever transport it names:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `transport` | yes | `http-json` or `sqlite-extract`. Selects which further keys the source declares. |
+| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source boundary. |
+| `request` | yes | One fixed request plan, shaped by the transport. |
+| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before `extract/2` runs. |
+| `extractScript` | yes | Bundle-relative Rhai script implementing `extract/2`. |
+| `factSchema` | yes | Bundle-relative closed JSON Schema for match facts. |
+
+Choosing a transport is a choice about where the authoritative data sits and
+what the deployment can promise about it. `http-json` reads the authority live,
+so the answer is as current as the provider's own API, and the deployment
+carries an origin, a credential, a TLS trust decision, and a network failure
+mode. `sqlite-extract` reads a published snapshot, so the deployment carries a
+file and a declared staleness tolerance and no credential at all, and the answer
+is exactly as current as the snapshot states it is. Nothing after the request
+differs: both transports run the same projection, the same response schema
+check, the same `extract/2`, and the same fact schema.
+
+`responseSchema` states the shape the adapter was reviewed against, so the
+script never has to prove it by hand. A response outside that shape is a
+source-protocol failure and no script runs. Two rules differ from the fact and
+adapter-parameter roles, because the projected tree is not what the source
+returned:
+
+- A response schema may require fewer members than it declares properties.
+  Projection drops a selected leaf the record did not carry, and a page decided
+  ambiguous is never read record by record, so a record on that page need not
+  be complete.
+- A response schema node may write its type as the pair `[T, "null"]`. A source
+  that reports an explicit null where it holds no value has that null carried
+  through projection verbatim; the script reads it with `is_missing`, exactly as
+  it reads an absent leaf. This is the only union the subset admits.
+
+What stays with the script is what a shape cannot state: how a reported total
+agrees with the records returned, page-count arithmetic, uniqueness across
+fields, and which values must agree with the closed adapter parameters.
+
+### HTTP source
+
 ```yaml
 sources:
   source-a:
@@ -285,35 +341,16 @@ sources:
     factSchema: schemas/source-a-facts.schema.yaml
 ```
 
+Beyond the shared keys, an `http-json` source declares:
+
 | Key | Required | Meaning |
 |---|---|---|
-| `transport` | yes | Exactly `http-json` in Version 1. |
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
-| `posture` | yes | `source-derived`, `field-projected`, or `record-transformed`, describing what crosses the source wire. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
-| `request` | yes | One fixed evidence-data request plan. |
-| `responseSchema` | yes | Bundle-relative closed JSON Schema for the projected source response. Checked before `extract/2` runs. |
-| `extractScript` | yes | Bundle-relative Rhai script implementing `extract/2`. |
-| `factSchema` | yes | Bundle-relative closed JSON Schema for match facts. |
 
-`responseSchema` states the shape the adapter was reviewed against, so the
-script never has to prove it by hand. A response outside that shape is a
-source-protocol failure and no script runs. Two rules differ from the fact and
-adapter-parameter roles, because the projected tree is not the wire response:
-
-- A response schema may require fewer members than it declares properties.
-  Projection drops a selected leaf the record did not carry, and a page decided
-  ambiguous is never read record by record, so a record on that page need not
-  be complete.
-- A response schema node may write its type as the pair `[T, "null"]`. A source
-  that reports an explicit null where it holds no value has that null carried
-  through projection verbatim; the script reads it with `is_missing`, exactly as
-  it reads an absent leaf. This is the only union the subset admits.
-
-What stays with the script is what a shape cannot state: how a reported total
-agrees with the records returned, page-count arithmetic, uniqueness across
-fields, and which values must agree with the closed adapter parameters.
+Its `request` is the fixed evidence-data request plan in
+[Request](#request).
 
 ### Source authentication
 
@@ -466,6 +503,10 @@ the configured grant id and authority claims.
 
 ### Request
 
+This is the `request` an `http-json` source declares. A `sqlite-extract`
+source declares the statement request in
+[Statement request](#statement-request) instead.
+
 ```yaml
 request:
   method: POST
@@ -552,6 +593,11 @@ are required.
 
 ### Preparation limits
 
+These are the preparation limits of an `http-json` request, whose output
+channels are a query string and a JSON body. A statement request has neither,
+so it bounds its own two-key preparation in
+[Statement request](#statement-request).
+
 `query` and `jsonBody` are independently `required`, `allowed`, or `forbidden`.
 The remaining keys are optional stricter limits beneath the ABI hard ceilings:
 
@@ -573,6 +619,244 @@ fails preparation, and no source request is made.
 At least one output channel must be usable. `required` means non-empty. For a
 JSON body, JSON `null` is absent; an empty object or array is present.
 
+### Extract source
+
+An extract is a published snapshot, not a live authoritative read. The
+deployment answers from it because the publisher stated what it holds and when,
+and the runtime carries that statement rather than inferring one.
+
+Every extract carries the reserved `evidence_extract` metadata table, with the
+columns `published_at`, `publisher`, and `extract_id` and exactly one row. A
+file without that table, with any other row count, or with a value the runtime
+cannot read is refused at startup, so a mis-published extract stops the process
+rather than answering a request from it. The three values reach the statement
+result as `publishedAt`, `publisher`, and `extractId` under `/extract`, and a
+projection selects them the way it selects a row value.
+
+The published instant is read from that table and never from the file's
+modification time. An mtime records when a byte range last landed on this host.
+That is an artifact of the filesystem the file was copied across, not a
+statement by the publisher about the data inside.
+
+`maximumExtractAgeSeconds` is bundle-declared because staleness tolerance is a
+property of the concept being asserted rather than of the deployment. A snapshot
+a month old is irrelevant to adult status, because a date of birth does not
+change once recorded. It is material to professional licence status, because a
+licence can be revoked on any day. The bundle is where that judgement was
+reviewed, so the bundle is where it is written. The bound is inclusive and is
+checked against the evaluation instant before any row is read.
+
+```yaml
+sources:
+  source-b:
+    transport: sqlite-extract
+    posture: source-derived
+    extractProfile: reference-extract
+    maximumExtractAgeSeconds: 604800
+    request:
+      statement: queries/source-b-lookup.sql
+      columns:
+        - {name: match_count, type: integer}
+      selectorInputs:
+        - role: subject
+          alternatives:
+            - {profile: record-reference-v1, fields: [record_reference]}
+      parameterBindings:
+        record_reference:
+          kind: selector
+          role: subject
+          profile: record-reference-v1
+          field: record_reference
+      projection:
+        - /rows/*/match_count
+        - /extract/publishedAt
+      maximumRows: 1
+      maximumCellBytes: 256
+      maximumStatementSteps: 100000
+      timeoutMilliseconds: 2000
+      maximumResponseBytes: 8192
+      concurrencyLimit: 8
+    responseSchema: schemas/source-b-response.schema.yaml
+    extractScript: adapters/source-b-extract.rhai
+    factSchema: schemas/source-b-facts.schema.yaml
+```
+
+with `queries/source-b-lookup.sql`:
+
+```sql
+SELECT COUNT(*) AS match_count
+FROM records
+WHERE reference = :record_reference;
+```
+
+and the operator's binding in `runtime.yaml`:
+
+```yaml
+sourceExtracts:
+  reference-extract:
+    path: /var/lib/registry-evidence/extracts/reference-2026-08-01.sqlite
+```
+
+That is the common case, and it declares no `prepareScript` and no
+`preparationLimits`. It needs neither: `parameterBindings` already states where
+every parameter comes from, so Rust resolves the authorized selector field and
+binds the value with no script standing between the selector and the statement.
+
+Beyond the shared keys, a `sqlite-extract` source declares:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `extractProfile` | yes | Logical extract name bound by `runtime.yaml` under `sourceExtracts`. The bundle never names a filesystem location. |
+| `maximumExtractAgeSeconds` | yes | 1 through 2,592,000 seconds. |
+
+The bound file must be a regular, non-symlink, read-only file, and read-only is
+a correctness requirement rather than hygiene. The runtime opens the extract
+with SQLite's `immutable=1`, which tells SQLite the bytes will not change while
+the connection is open and lets it skip locking and journal replay. That flag is
+sound only because the read-only check passed. A file the process or anything
+else can still write makes the promise false, and an immutable connection over a
+file that changes is undefined behaviour rather than a stale read, because
+SQLite is entitled to trust pages it has already cached. Publish a new extract
+as a new file, mount it read-only, and restart. Startup digests each bound file
+into the runtime digest, so a replacement shows up in the digest instead of
+passing silently.
+
+Startup opens one connection for each `concurrencyLimit` permit, reads the
+metadata, and runs the statement against the real extract. A statement whose
+result columns disagree with `columns`, a parameter no binding supplies, and a
+binding the statement never names all fail before the listener binds.
+`evidence bundle-check` runs a weaker check without the extract: it settles that
+the artifact holds exactly one statement, that the statement parses, and that
+the authorizer accepts it. It cannot settle columns, parameters, metadata, or
+age, because only the extract can. That check never reports a false failure,
+only an incomplete pass.
+
+### Statement request
+
+This is the `request` a `sqlite-extract` source declares.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `statement` | yes | Bundle-relative `queries/*.sql` artifact holding exactly one statement, hash-identified and reviewed with the bundle. |
+| `columns` | yes | 1 through 64 declared result columns in result order. Names are unique, and each `type` is `string`, `integer`, `number`, or `boolean`. |
+| `selectorInputs` | yes | Exact minimized authorized selector alternatives the bindings may draw on. `[]` is valid for a statement that binds no selector. |
+| `parameterBindings` | no | At most 64 bindings, keyed by the parameter name the statement uses, each stating its one origin. Omission and `{}` are the same. |
+| `prepareScript` | no | Bundle-relative Rhai script implementing `prepare/2`. Declared together with `preparationLimits`, and with at least one `prepared` binding, or not at all. |
+| `adapterParameters` | no | Closed non-secret JSON constants, at most 64, read by the extraction script. |
+| `adapterParametersSchema` | with parameters | Closed bundle-relative JSON Schema for those parameters, required as soon as `adapterParameters` is non-empty. |
+| `preparationLimits` | with script | `maximumParameters` 1 through 64, never below the declared `prepared` binding count, and `maximumParameterValueBytes` 1 through 4,096. |
+| `projection` | yes | 1 through 64 unique pointers of 2 through 256 bytes each, over `/rows` and `/extract`, using the allowlist defined by `ADAPTER-API.md`. |
+| `maximumRows` | yes | 1 through 256 rows. A statement matching more broadly than intended fails here rather than moving a bulk result into the runtime. |
+| `maximumCellBytes` | yes | 1 through 65,536 bytes for one returned value. |
+| `maximumStatementSteps` | yes | 1 through 1,000,000 virtual-machine steps. |
+| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds, covering concurrency admission and statement execution. |
+| `maximumResponseBytes` | yes | 1 through 1,048,576 bytes for the assembled result before projection. |
+| `concurrencyLimit` | yes | 1 through 256 statements held against this extract at once. |
+
+`maximumStatementSteps` and `timeoutMilliseconds` bound different things. The
+timeout bounds elapsed time, which a loaded host inflates; the step budget
+bounds the work itself, so a statement that is slow because it scans more than
+the author expected is stopped by the step budget on a fast host as well as a
+slow one. Set both.
+
+Each `parameterBindings` entry is keyed by the parameter name as the statement
+writes it, without its sigil, and Rust accepts `:name`, `@name`, and `$name`.
+Positional parameters have no name to bind, so `?` reads as an undeclared
+parameter and fails. Each entry is a closed tagged binding whose `kind` states
+the one origin its value comes from.
+
+A `kind: selector` binding is filled from an authorized selector field and from
+nothing else, so a preparation script cannot stand in for an authorized value:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `kind` | yes | Exactly `selector`. |
+| `role` | yes | Subject role the value comes from, which `selectorInputs` must declare. |
+| `profile` | yes | Selector profile the value comes from, which must be an alternative that role declares. |
+| `field` | yes | Exact field of that profile whose resolved value Rust binds. |
+
+A `kind: prepared` binding is filled by `prepareScript` and by nothing else,
+which is how a value no selector holds, such as a normalized reference or a
+derived bound, reaches the statement:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `kind` | yes | Exactly `prepared`. The entry names no selector, because naming one would give the parameter a second origin. |
+
+A parameter has one origin and exactly one, so reading the declared bindings is
+enough to know where every value the statement binds came from. Four request-time
+failures hold that line, each naming the statement artifact: the script returned
+a value for a `selector` parameter, the script returned a name no binding
+declares, the script returned the reserved `evidence_now` name, and the script
+returned no value for a declared `prepared` parameter.
+
+A `prepareScript` and a `prepared` binding exist for each other, and startup
+refuses either half alone. A script with nothing prepared to fill could only ever
+return a name the source refuses, and a `prepared` parameter with no script could
+never be filled at all. `maximumParameters` is refused below the declared
+`prepared` count for the same reason: a script allowed to return fewer parameters
+than the source declares prepared can never fill them all.
+
+A value reaches the statement only as a bound parameter. Nothing concatenates,
+interpolates, or substitutes into the statement text, and a string, integer, and
+boolean bind as SQLite text, integer, and integer 0 or 1 respectively. A null in
+the extract is admitted for any declared column type; every other type mismatch
+is a source-protocol failure rather than a coercion.
+
+### Statement SQL
+
+The statement is a reviewed, hash-identified bundle artifact, so it is allowed
+to be a real query. Joins, `GROUP BY`, common table expressions, and window
+functions are all in scope. Pushing aggregation down into SQL is a
+minimum-disclosure win rather than a shortcut: `SELECT COUNT(*)` moves one
+number across the source boundary, where fetching 500 rows so the extraction
+script can count them moves 500 records. Declare the aggregate as the only
+column, project it, and the script never observes a record at all.
+
+Everything else is refused by the authorizer while the statement is prepared,
+before a row is read: every write and every DDL statement, `ATTACH`, `DETACH`,
+every `PRAGMA`, extension loading, transaction and savepoint control, and any
+action the authorizer does not recognize. A file holding more than one statement
+is refused, so a second statement cannot ride in behind a `;`.
+
+These functions are denied by name:
+
+```text
+changes            current_date       current_time       current_timestamp
+date               datetime           julianday          last_insert_rowid
+load_extension     random             randomblob         sqlite_offset
+strftime           time               timediff           total_changes
+unixepoch
+```
+
+The time functions in that list are denied for one reason: the deployment has
+exactly one clock, and it is the runtime's evaluation instant. Where the
+statement names the reserved parameter `evidence_now`, Rust binds that instant
+as fixed-width RFC 3339 UTC text with milliseconds, so text stored in the same
+form orders lexically the way it orders in time. A bundle cannot bind the name
+itself; startup rejects a `parameterBindings` entry that uses it. One clock is
+what makes a pinned fixture run reproduce exactly: the same extract and the same
+pinned instant give the same rows on every run and on every host.
+
+### Building an extract
+
+An extract is an ordinary SQLite file, which is why the transport reads one. A
+deployment whose authoritative data lives elsewhere converts it with tooling it
+already has, and each of these is one command:
+
+| Source | Path |
+|---|---|
+| CSV, Parquet, XLSX | DuckDB, reading the file and writing through `ATTACH '<file>' (TYPE sqlite)` |
+| CSV, JSON | `sqlite-utils insert` |
+| PostgreSQL, MySQL, SQL Server, Oracle | `db-to-sqlite`, or DuckDB's database scanners writing through the same `ATTACH` |
+| An existing SQLite database | `sqlite3` with `.dump`, or `VACUUM INTO` for a consistent copy |
+
+Publish the result the way the deployment publishes any reviewed artifact: add
+the `evidence_extract` row, make the file read-only, and give it a name that
+identifies the snapshot. Selecting only the columns an assertion needs at
+conversion time is worth doing, because a column that is not in the extract
+cannot be disclosed by any later mistake.
+
 ### Requirement derivation selector inputs
 
 `requirements[].derivation.selectorInputs` is optional. Omission means the
@@ -589,7 +873,10 @@ lookup selector unless it explicitly declares it.
 ## Referenced bundle artifacts
 
 All referenced paths are bundle-relative and captured in the immutable bundle
-revision. Scripts end in `.rhai`. Parameter, fact, and reviewed-value schemas
+revision. Scripts end in `.rhai` and live under `adapters/` or `derivations/`.
+Statements end in `.sql` and live under `queries/`; a statement is reviewed,
+bounded, executable text, so it is bounded like a script rather than like a data
+file. Parameter, fact, and reviewed-value schemas
 are closed JSON Schema 2020-12 documents; fact and reviewed-value schemas close
 every reachable object and bound every reachable string, array, and number.
 Fixtures use the exact contract in [`FIXTURES.md`](FIXTURES.md).
@@ -649,6 +936,9 @@ outboundTls:
   trustProfiles:
     government-internal-pki:
       caBundleFile: /etc/registry-evidence/ca/government-internal.pem
+sourceExtracts:
+  reference-extract:
+    path: /var/lib/registry-evidence/extracts/reference-2026-08-01.sqlite
 ```
 
 | Key | Required | Meaning and Version 1 bounds |
@@ -670,6 +960,8 @@ outboundTls:
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
+| `sourceExtracts` | no | Closed map of at most 64 logical extract names. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
+| `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 | `acquisitionCapabilities` | no | Gated acquisition kinds this deployment enables, at most one entry. Omission and `[]` both enable nothing, so a bundle needing a gated kind is refused before the listener binds. |
 
 `bundleDirectory`, secret roots, audit destinations, and CA files must be
@@ -682,6 +974,17 @@ file is loaded and validated at startup. Hostname verification and source-origin
 checks remain mandatory. There is no `insecure`, `skipVerification`, or
 `trustAll` setting. Changing a trust file requires restart and changes the
 runtime digest.
+
+A bundle source that reads an extract names one `extractProfile` and never a
+filesystem location, so the operator decides where the file sits without
+editing reviewed material. Each bound file must be a regular, non-symlink,
+read-only file. Read-only is a correctness requirement rather than hygiene: the
+statement executor opens the file as immutable, and an immutable connection
+over a file that can change is undefined behaviour. Startup digests each file
+without reading it into memory and folds that digest into the runtime digest,
+so replacing an extract requires restart and changes the digest. Startup
+refuses a profile the bundle names and the runtime does not bind, and a profile
+the runtime binds and no source reads, naming the profile in each case.
 
 Version 1 has no application-level HTTP proxy and ignores `HTTP_PROXY`,
 `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`. Deployments needing mediated egress
@@ -845,7 +1148,9 @@ errors.
 Every key path the frozen contracts define, in one machine-checked list. A
 property is written `name`, an array item `name[]`, and a map value `name.*`.
 A recursive definition, currently only nested adapter parameter values, appears
-once at the point it re-enters itself.
+once at the point it re-enters itself. A key path only one alternative declares
+still appears once, so the `sources.*` entries cover both transports together
+and no single source writes all of them.
 
 `products/evidence/scripts/check-config-key-paths.sh` fails when either block
 and its contract disagree in either direction, so a key added to a contract
@@ -1036,8 +1341,10 @@ sources.*.authentication.tokenRef
 sources.*.authentication.usernameRef
 sources.*.authentication.valueRef
 sources.*.baseUrl
+sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema
+sources.*.maximumExtractAgeSeconds
 sources.*.posture
 sources.*.request
 sources.*.request.adapterParameters
@@ -1045,13 +1352,26 @@ sources.*.request.adapterParameters.*
 sources.*.request.adapterParameters.*.*
 sources.*.request.adapterParameters.*[]
 sources.*.request.adapterParametersSchema
+sources.*.request.columns
+sources.*.request.columns[]
+sources.*.request.columns[].name
+sources.*.request.columns[].type
 sources.*.request.concurrencyLimit
 sources.*.request.fixedHeaders
 sources.*.request.fixedHeaders[]
 sources.*.request.fixedHeaders[].name
 sources.*.request.fixedHeaders[].value
+sources.*.request.maximumCellBytes
 sources.*.request.maximumResponseBytes
+sources.*.request.maximumRows
+sources.*.request.maximumStatementSteps
 sources.*.request.method
+sources.*.request.parameterBindings
+sources.*.request.parameterBindings.*
+sources.*.request.parameterBindings.*.field
+sources.*.request.parameterBindings.*.kind
+sources.*.request.parameterBindings.*.profile
+sources.*.request.parameterBindings.*.role
 sources.*.request.path
 sources.*.request.pathBindings
 sources.*.request.pathBindings.*
@@ -1065,6 +1385,8 @@ sources.*.request.preparationLimits.jsonBody
 sources.*.request.preparationLimits.maximumCollectionItems
 sources.*.request.preparationLimits.maximumJsonDepth
 sources.*.request.preparationLimits.maximumNormalizedBytes
+sources.*.request.preparationLimits.maximumParameterValueBytes
+sources.*.request.preparationLimits.maximumParameters
 sources.*.request.preparationLimits.maximumQueryNameBytes
 sources.*.request.preparationLimits.maximumQueryPairs
 sources.*.request.preparationLimits.maximumQueryValueBytes
@@ -1082,6 +1404,7 @@ sources.*.request.selectorInputs[].alternatives[].fields
 sources.*.request.selectorInputs[].alternatives[].fields[]
 sources.*.request.selectorInputs[].alternatives[].profile
 sources.*.request.selectorInputs[].role
+sources.*.request.statement
 sources.*.request.timeoutMilliseconds
 sources.*.responseSchema
 sources.*.tlsTrustProfile
@@ -1131,6 +1454,9 @@ signer.mount
 signer.privateKeyRef
 signer.timeoutMilliseconds
 signer.unixSocketPath
+sourceExtracts
+sourceExtracts.*
+sourceExtracts.*.path
 version
 ```
 <!-- evidence-runtime-key-paths:end -->

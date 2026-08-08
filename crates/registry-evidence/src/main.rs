@@ -21,10 +21,12 @@ use registry_evidence::{
         verified_last_local_audit_operation, verify_audit_chain, AuditChainSummary,
         EvidenceAuditError,
     },
-    bundle::{ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument},
+    bundle::{
+        ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument, SourceExtract,
+    },
     config::{
-        AcquisitionConfig, AssuranceProfile, ConfigError, EvidenceConfig, OutboundTlsConfig,
-        SelectorInput, StageRole,
+        AcquisitionConfig, ArtifactPath, AssuranceProfile, ConfigError, EvidenceConfig,
+        OutboundTlsConfig, SchemaFault, SelectorInput, StageRole,
     },
     kernel::{
         EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
@@ -36,7 +38,7 @@ use registry_evidence::{
         SubjectBinding,
     },
     problem::ProblemCode,
-    rhai_runtime::{DerivedConceptValue, DerivedValue, RequestParts},
+    rhai_runtime::{DerivedConceptValue, DerivedValue},
     runtime::{
         source_failure_problem, validate_secret_material, AuditInitializationFault,
         EvidenceRuntime, RuntimeInitializationError,
@@ -49,8 +51,11 @@ use registry_evidence::{
     server,
     signing::{jwks_document, EvidenceSigner},
     source::{
-        project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
+        project_fixture_response, statement_inputs, MaterializedSourceRequest,
+        PreparedSourceRequest, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
+        StatementInputs,
     },
+    source_sqlite::{cause as sqlite_cause, check_statement_offline, materialize_seed_extract},
     trace::{json_type, name_list, object_keys, FixtureReport, FixtureTrace, Stage, StageStatus},
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
@@ -261,8 +266,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
             OfflineKernel::compile(Arc::clone(&bundle))
-                .map_err(|_| CliError("bundle compilation failed"))?;
-            let _source_plans = compile_source_plans(&bundle.config, &runtime)?;
+                .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
+            let _source_plans = compile_source_plans(&bundle, &runtime)?;
             // Deployment secret material is validated exactly as startup
             // validates it, without opening the audit chain, so a deployment
             // the server would refuse fails check instead of first start.
@@ -291,9 +296,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
-            let kernel = OfflineKernel::compile(Arc::clone(&bundle))
-                .map_err(|_| CliError("fixture bundle compilation failed"))?;
-            let source_plans = compile_source_plans(&bundle.config, &runtime)?;
+            let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
+                kernel_compile_error("fixture bundle compilation failed", error)
+            })?;
+            let source_plans = compile_source_plans(&bundle, &runtime)?;
             let mut trace = FixtureTrace::default();
             let summary =
                 evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true, &mut trace).await;
@@ -336,8 +342,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::BundleCheck { bundle } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
             OfflineKernel::compile(Arc::clone(&bundle))
-                .map_err(|_| CliError("bundle compilation failed"))?;
-            let _source_plans = compile_bundle_source_plans(&bundle.config)?;
+                .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
+            let _source_plans = compile_bundle_source_plans(&bundle)?;
             println!(
                 "Evidence bundle {} passed check ({} requirements)",
                 bundle.revision(),
@@ -347,9 +353,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::BundleEvaluate { bundle, fixture } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
-            let kernel = OfflineKernel::compile(Arc::clone(&bundle))
-                .map_err(|_| CliError("fixture bundle compilation failed"))?;
-            let source_plans = compile_bundle_source_plans(&bundle.config)?;
+            let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
+                kernel_compile_error("fixture bundle compilation failed", error)
+            })?;
+            let source_plans = compile_bundle_source_plans(&bundle)?;
             // This hidden seam is driven by Evidencectl, which reports the
             // command's own output. It records a trace and discards it rather
             // than growing a second explained surface. The canaries are still
@@ -436,6 +443,20 @@ fn deployment_load_error(error: BundleError) -> CommandError {
     }
 }
 
+/// Report a kernel compilation failure with the artifact diagnostic it carries.
+///
+/// The kernel is the first pass that reads every reviewed artifact under the
+/// hardened script grammar and the full schema draft, so it is where an
+/// adopter learns that a file the loader accepted is still refused. The
+/// failure class stays a fixed operator message and the value-free diagnostic
+/// names the file, exactly as a load failure does.
+fn kernel_compile_error(message: &'static str, error: KernelError) -> CommandError {
+    match error.artifact_fault() {
+        Some(fault) => CommandError::Deployment(message, fault.clone()),
+        None => CommandError::Cli(CliError(message)),
+    }
+}
+
 fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandError {
     match error {
         RuntimeInitializationError::Bundle => {
@@ -459,12 +480,46 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
     }
 }
 
+/// Bind every statement source in a bundle to the material its transport needs
+/// from outside its own configuration.
+///
+/// `extracts` carries the runtime document's extract bindings where one was
+/// loaded, and is absent where the caller has a bundle and nothing else.
+fn source_statements<'a>(
+    bundle: &'a Bundle,
+    extracts: Option<&'a BTreeMap<String, SourceExtract>>,
+) -> Result<BTreeMap<String, StatementInputs<'a>>, CommandError> {
+    let mut statements = BTreeMap::new();
+    for (source_id, source) in bundle.config.sources.iter() {
+        if let Some(inputs) =
+            statement_inputs(source, bundle, extracts).map_err(source_plan_error)?
+        {
+            statements.insert(source_id.to_owned(), inputs);
+        }
+    }
+    Ok(statements)
+}
+
+/// Report a source plan failure as the artifact it names, where it named one.
+///
+/// A statement that will not prepare, an extract nothing mounted, and a
+/// statement whose result leaves its declared contract are all faults in one
+/// file an adopter can open. Saying only that plan compilation failed would
+/// leave them to find that file themselves.
+fn source_plan_error(error: SourceError) -> CommandError {
+    match error.artifact_fault() {
+        Some(fault) => CommandError::Deployment("source plan compilation failed", fault.clone()),
+        None => CliError("source plan compilation failed").into(),
+    }
+}
+
 fn compile_source_plans(
-    config: &EvidenceConfig,
+    bundle: &Bundle,
     runtime: &RuntimeDocument,
-) -> Result<BTreeMap<String, SourceExecutor>, CliError> {
+) -> Result<BTreeMap<String, SourceExecutor>, CommandError> {
     compile_source_plans_with_runtime(
-        config,
+        &bundle.config,
+        &source_statements(bundle, Some(&runtime.source_extracts))?,
         &runtime.config.secret_providers.file.root,
         &runtime.config.outbound_tls,
         &runtime.ca_bundles,
@@ -473,10 +528,11 @@ fn compile_source_plans(
 
 fn compile_source_plans_with_runtime(
     config: &EvidenceConfig,
+    statements: &BTreeMap<String, StatementInputs<'_>>,
     secret_root: &str,
     outbound_tls: &OutboundTlsConfig,
     ca_bundles: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, SourceExecutor>, CliError> {
+) -> Result<BTreeMap<String, SourceExecutor>, CommandError> {
     let secrets = Arc::new(
         SecretResolver::new([SecretProvider::File], secret_root)
             .map_err(|_| CliError("source plan compilation failed"))?,
@@ -489,30 +545,35 @@ fn compile_source_plans_with_runtime(
             &allowed_selector_sets,
             outbound_tls,
             ca_bundles,
+            statements.get(source_id).copied(),
             Arc::clone(&secrets),
         )
-        .map_err(|_| CliError("source plan compilation failed"))?;
+        .map_err(source_plan_error)?;
         plans.insert(source_id.to_owned(), plan);
     }
     Ok(plans)
 }
 
 fn compile_bundle_source_plans(
-    config: &EvidenceConfig,
-) -> Result<BTreeMap<String, SourceExecutor>, CliError> {
+    bundle: &Bundle,
+) -> Result<BTreeMap<String, SourceExecutor>, CommandError> {
     let secrets = Arc::new(
         SecretResolver::new([SecretProvider::File], "/")
             .map_err(|_| CliError("source plan compilation failed"))?,
     );
+    // A bundle arrives without a deployment, so no extract is mounted and a
+    // statement source is checked as far as a bundle alone allows.
+    let statements = source_statements(bundle, None)?;
     let mut plans = BTreeMap::new();
-    for (source_id, source) in config.sources.iter() {
-        let allowed_selector_sets = config.source_selector_sets(source_id);
+    for (source_id, source) in bundle.config.sources.iter() {
+        let allowed_selector_sets = bundle.config.source_selector_sets(source_id);
         let plan = SourceExecutor::new_for_offline_fixture(
             source,
             &allowed_selector_sets,
+            statements.get(source_id).copied(),
             Arc::clone(&secrets),
         )
-        .map_err(|_| CliError("source plan compilation failed"))?;
+        .map_err(source_plan_error)?;
         plans.insert(source_id.to_owned(), plan);
     }
     Ok(plans)
@@ -1791,6 +1852,85 @@ fn fact_keys(facts: &BTreeMap<String, Value>) -> Vec<String> {
     facts.keys().cloned().collect()
 }
 
+/// The extract a statement fixture materialized, for as long as its cases run.
+///
+/// A fixture commits its extract as a text seed, so the file itself is built
+/// for one evaluation and removed with it. Nothing outside this process ever
+/// sees it, which is what lets the reviewed statement run for real without the
+/// run leaving state behind.
+struct FixtureExtract {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl FixtureExtract {
+    fn create() -> Result<Self, CliError> {
+        let directory =
+            std::env::temp_dir().join(format!("evidence-fixture-extract-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&directory)
+            .map_err(|_| CliError("reference fixture extract directory is unavailable"))?;
+        let path = directory.join("fixture.sqlite");
+        Ok(Self { directory, path })
+    }
+}
+
+impl Drop for FixtureExtract {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Compile the statement source a fixture's cases run against, over the extract
+/// its seed describes.
+///
+/// A statement fixture executes for real. An HTTP call needs a network, a
+/// credential, and a live third party, so a fixture records what it returned;
+/// reading a local extract needs none of those, so recording what the statement
+/// would have returned would test everything except the statement. The extract
+/// this builds is the fixture's own, in both the runtime and the bundle entry
+/// points, so a fixture run answers from the world it states and never from a
+/// file the deployment happens to have mounted.
+///
+/// A source on any other transport needs nothing here and returns nothing.
+fn reference_statement_executor(
+    bundle: &Bundle,
+    source_id: &str,
+    common: &JsonMap<String, Value>,
+) -> Result<Option<(SourceExecutor, FixtureExtract)>, CliError> {
+    let source = bundle
+        .config
+        .sources
+        .get(source_id)
+        .ok_or(CliError("reference fixture source is unavailable"))?;
+    let Some(inputs) = statement_inputs(source, bundle, None)
+        .map_err(|_| CliError("reference fixture statement is unavailable"))?
+    else {
+        return Ok(None);
+    };
+    let seed = common
+        .get("extract")
+        .and_then(Value::as_str)
+        .ok_or(CliError("reference fixture extract seed is invalid"))?;
+    let extract = FixtureExtract::create()?;
+    materialize_seed_extract(&extract.path, seed)
+        .map_err(|_| CliError("reference fixture extract seed did not materialize"))?;
+    let secrets = Arc::new(
+        SecretResolver::new([SecretProvider::File], "/")
+            .map_err(|_| CliError("reference fixture source did not compile"))?,
+    );
+    let executor = SourceExecutor::new_for_offline_fixture(
+        source,
+        &bundle.config.source_selector_sets(source_id),
+        Some(StatementInputs {
+            extract_path: Some(&extract.path),
+            ..inputs
+        }),
+        secrets,
+    )
+    .map_err(|_| CliError("reference fixture source did not compile"))?;
+    Ok(Some((executor, extract)))
+}
+
 async fn evaluate_reference_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1827,6 +1967,7 @@ async fn evaluate_reference_fixture(
             "selectors",
             "verified_token_claims",
             "derivationSelectorInputs",
+            "extract",
             "expectedRequestParts",
             "expectedTransport",
             "expectedFetchRequestParts",
@@ -1839,6 +1980,14 @@ async fn evaluate_reference_fixture(
         "expectedRequestParts",
         "expectedTransport",
     ];
+    if bundle
+        .config
+        .sources
+        .get(requirement.initial_source())
+        .is_some_and(|source| source.statement().is_some())
+    {
+        required_common.push("extract");
+    }
     if matches!(
         requirement.acquisition,
         AcquisitionConfig::SearchThenFetch { .. }
@@ -1850,6 +1999,11 @@ async fn evaluate_reference_fixture(
             return Err(CliError("reference fixture common block is incomplete"));
         }
     }
+    // A statement fixture answers from the extract its own seed describes, so
+    // the executor its cases run against is built here and belongs to this
+    // evaluation alone.
+    let statement_source =
+        reference_statement_executor(bundle, requirement.initial_source(), common)?;
     let cases = fixture
         .get("cases")
         .and_then(Value::as_array)
@@ -1870,8 +2024,10 @@ async fn evaluate_reference_fixture(
                 "purpose",
                 "response",
                 "responses",
+                "selectors",
                 "sourceFailure",
                 "bundleMutation",
+                "statementMutation",
                 "requestMutation",
                 "derivationMutation",
                 "derivationParameterMutation",
@@ -1918,8 +2074,10 @@ async fn evaluate_reference_fixture(
         let forms = [
             "response",
             "responses",
+            "selectors",
             "sourceFailure",
             "bundleMutation",
+            "statementMutation",
             "requestMutation",
             "derivationMutation",
             "derivationParameterMutation",
@@ -1932,6 +2090,21 @@ async fn evaluate_reference_fixture(
             .collect::<Vec<_>>();
         if selected_forms.len() != 1 {
             return Err(CliError("reference fixture case form is not closed"));
+        }
+        // A case states its world in the form its transport has. A recorded
+        // response belongs to a source that answers over a network; a lookup
+        // against the fixture's own extract belongs to one that does not. The
+        // remaining forms describe the bundle or the authorized request and
+        // read the same on either transport.
+        let refused_here = match selected_forms[0] {
+            "response" | "responses" => statement_source.is_some(),
+            "selectors" | "statementMutation" => statement_source.is_none(),
+            _ => false,
+        };
+        if refused_here {
+            return Err(CliError(
+                "reference fixture case form is not this transport",
+            ));
         }
         validate_reference_expectation_keys(selected_forms[0], expected)?;
         trace.record(
@@ -1951,6 +2124,20 @@ async fn evaluate_reference_fixture(
                 Stage::Validate,
                 StageStatus::Ok,
                 format!("the {mutation:?} bundle mutation is refused, as the case requires"),
+            );
+            summary.evaluated_cases += 1;
+            trace.pass_case();
+            continue;
+        }
+        if let Some(mutation) = case.get("statementMutation").and_then(Value::as_str) {
+            if expected.get("bundle").and_then(Value::as_str) != Some("rejected") {
+                return Err(CliError("reference statement mutation is invalid"));
+            }
+            validate_reference_statement_mutation(bundle, requirement, mutation)?;
+            trace.record(
+                Stage::Validate,
+                StageStatus::Ok,
+                format!("the {mutation:?} statement mutation is refused, as the case requires"),
             );
             summary.evaluated_cases += 1;
             trace.pass_case();
@@ -1988,11 +2175,13 @@ async fn evaluate_reference_fixture(
             .sources
             .get(requirement.initial_source())
             .ok_or(CliError("reference fixture source is unavailable"))?;
-        let source_plan = source_plans
-            .get(requirement.initial_source())
-            .ok_or(CliError("reference fixture source plan is unavailable"))?;
-        let preparation_selectors =
-            fixture_selector_value(&resolved, &source.request.selector_inputs)?;
+        let source_plan = match &statement_source {
+            Some((executor, _)) => executor,
+            None => source_plans
+                .get(requirement.initial_source())
+                .ok_or(CliError("reference fixture source plan is unavailable"))?,
+        };
+        let preparation_selectors = fixture_selector_value(&resolved, source.selector_inputs())?;
         let prepared = match kernel.prepare(&requirement.id, &preparation_selectors) {
             Ok(prepared) => prepared,
             Err(error) if case.contains_key("selectorOverrides") => {
@@ -2017,8 +2206,7 @@ async fn evaluate_reference_fixture(
         if !case.contains_key("selectorOverrides") {
             validate_reference_request_parts(common, &prepared)?;
         }
-        let source_selectors =
-            reference_source_selectors(&resolved, &source.request.selector_inputs)?;
+        let source_selectors = reference_source_selectors(&resolved, source.selector_inputs())?;
         validate_reference_transport(
             source,
             source_plan,
@@ -2072,7 +2260,7 @@ async fn evaluate_reference_fixture(
             ));
         }
         if let Some(failure) = case.get("sourceFailure").and_then(Value::as_str) {
-            validate_reference_source_failure(failure, expected)?;
+            validate_reference_source_failure(source, failure, expected)?;
             trace.record(
                 Stage::Acquire,
                 StageStatus::Failed,
@@ -2134,15 +2322,50 @@ async fn evaluate_reference_fixture(
         };
         let (values, source_request_count) = match &requirement.acquisition {
             AcquisitionConfig::Single { .. } => {
-                let response = case
-                    .get("response")
-                    .ok_or(CliError("reference fixture response is unavailable"))?;
-                let projected = record_projection(
-                    trace,
-                    project_fixture_response(source, response),
-                    &format!("1 response from source {:?}", requirement.initial_source()),
-                    CliError("reference fixture source projection failed"),
-                )?;
+                let acquired = format!("1 response from source {:?}", requirement.initial_source());
+                let projected = match &statement_source {
+                    // The statement runs against the fixture's own extract, so
+                    // what the extraction script sees is what the reviewed SQL
+                    // actually returned rather than what a fixture said it would.
+                    // A statement that will not complete is an outcome a case
+                    // may state, because the extract it reads is stated too.
+                    Some((executor, _)) => {
+                        match executor
+                            .execute(&source_selectors, &prepared, observed_at)
+                            .await
+                        {
+                            Ok(response) => record_projection(
+                                trace,
+                                Ok(response),
+                                &acquired,
+                                CliError("reference fixture source projection failed"),
+                            )?,
+                            Err(error) => {
+                                trace.record(
+                                    Stage::Acquire,
+                                    StageStatus::Failed,
+                                    format!("{acquired}, and the statement did not complete it"),
+                                );
+                                validate_reference_source_error(expected, &error)?;
+                                require_reference_request_count(expected, 1)?;
+                                summary.evaluated_cases += 1;
+                                trace.pass_case();
+                                continue;
+                            }
+                        }
+                    }
+                    None => {
+                        let response = case
+                            .get("response")
+                            .ok_or(CliError("reference fixture response is unavailable"))?;
+                        record_projection(
+                            trace,
+                            project_fixture_response(source, response),
+                            &acquired,
+                            CliError("reference fixture source projection failed"),
+                        )?
+                    }
+                };
                 (
                     validate_reference_response(
                         response_context,
@@ -2212,7 +2435,7 @@ async fn evaluate_reference_fixture(
                     .get(fetch)
                     .ok_or(CliError("reference fetch source plan is unavailable"))?;
                 let fetch_preparation_selectors =
-                    fixture_selector_value(&resolved, &fetch_source.request.selector_inputs)?;
+                    fixture_selector_value(&resolved, fetch_source.selector_inputs())?;
                 let fetch_parts = kernel
                     .prepare_source(fetch, &fetch_preparation_selectors, &prior_facts)
                     .map_err(|_| CliError("reference fetch request preparation failed"))?;
@@ -2222,7 +2445,7 @@ async fn evaluate_reference_fixture(
                     &fetch_parts,
                 )?;
                 let fetch_selectors =
-                    reference_source_selectors(&resolved, &fetch_source.request.selector_inputs)?;
+                    reference_source_selectors(&resolved, fetch_source.selector_inputs())?;
                 validate_reference_transport_with_prior_facts(
                     fetch_source,
                     fetch_plan,
@@ -2653,7 +2876,7 @@ fn validate_reference_expectation_keys(
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
     let allowed: &[&str] = match form {
-        "response" | "responses" => &[
+        "response" | "responses" | "selectors" => &[
             "lookup",
             "facts",
             "value",
@@ -2667,7 +2890,7 @@ fn validate_reference_expectation_keys(
             "sourceRequestCount",
         ],
         "sourceFailure" => &["publicProblem", "signed", "sourceRequestCount"],
-        "bundleMutation" => &["bundle"],
+        "bundleMutation" | "statementMutation" => &["bundle"],
         "requestMutation" => &["rejectedBefore", "signed", "sourceRequestCount"],
         "derivationMutation" => &["outputGate", "signed"],
         "derivationParameterMutation" => &["error", "publicProblem", "signed", "derivationRuns"],
@@ -2722,9 +2945,38 @@ fn validate_reference_error(
     Ok(())
 }
 
+/// A prepared value as a fixture writes it.
+fn selector_value_json(value: &SelectorValue) -> Value {
+    match value {
+        SelectorValue::String(text) => Value::String(text.clone()),
+        SelectorValue::Integer(number) => Value::Number((*number).into()),
+        SelectorValue::Boolean(flag) => Value::Bool(*flag),
+    }
+}
+
+/// Compare a statement's parameters against a fixture expectation, exactly.
+///
+/// The runtime's own evaluation instant is never among them. It is bound where
+/// the statement executes rather than where its parameters are assembled, so a
+/// fixture neither states it nor could replace it.
+fn validate_reference_statement_parameters(
+    expected: &JsonMap<String, Value>,
+    actual: &BTreeMap<String, SelectorValue>,
+) -> Result<(), CliError> {
+    if expected.len() != actual.len() {
+        return Err(CliError("reference statement parameters did not match"));
+    }
+    for (name, value) in actual {
+        if expected.get(name) != Some(&selector_value_json(value)) {
+            return Err(CliError("reference statement parameters did not match"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_reference_request_parts(
     common: &JsonMap<String, Value>,
-    actual: &RequestParts,
+    actual: &PreparedSourceRequest,
 ) -> Result<(), CliError> {
     validate_reference_request_parts_named(common, "expectedRequestParts", actual)
 }
@@ -2732,12 +2984,28 @@ fn validate_reference_request_parts(
 fn validate_reference_request_parts_named(
     common: &JsonMap<String, Value>,
     expectation_name: &str,
-    actual: &RequestParts,
+    actual: &PreparedSourceRequest,
 ) -> Result<(), CliError> {
     let expected = common
         .get(expectation_name)
         .and_then(Value::as_object)
         .ok_or(CliError("reference request-parts expectation is invalid"))?;
+    // Preparation produces what its transport consumes, so the expectation is
+    // written in the same terms: a query and a body for an HTTP request, and
+    // the parameters a statement will be given for a statement source. A source
+    // whose parameters all come from declared bindings prepares none, and
+    // stating that empty map is what proves no script added one.
+    let actual = match actual {
+        PreparedSourceRequest::Http(parts) => parts,
+        PreparedSourceRequest::Statement(prepared) => {
+            require_exact_keys(expected, &["parameters"])?;
+            let parameters = expected
+                .get("parameters")
+                .and_then(Value::as_object)
+                .ok_or(CliError("reference parameter expectation is invalid"))?;
+            return validate_reference_statement_parameters(parameters, &prepared.parameters);
+        }
+    };
     require_exact_keys(expected, &["query", "body"])?;
     let query = expected
         .get("query")
@@ -2768,7 +3036,7 @@ fn validate_reference_transport(
     source: &registry_evidence::config::SourceConfig,
     source_plan: &SourceExecutor,
     selectors: &[ResolvedSourceSelector],
-    parts: &RequestParts,
+    request: &PreparedSourceRequest,
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
     validate_reference_transport_with_prior_facts(
@@ -2776,7 +3044,7 @@ fn validate_reference_transport(
         source_plan,
         selectors,
         &BTreeMap::new(),
-        parts,
+        request,
         expected,
     )
 }
@@ -2786,17 +3054,34 @@ fn validate_reference_transport_with_prior_facts(
     source_plan: &SourceExecutor,
     selectors: &[ResolvedSourceSelector],
     prior_facts: &BTreeMap<String, Value>,
-    parts: &RequestParts,
+    request: &PreparedSourceRequest,
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
-    require_allowed_keys(expected, &["path", "query", "body", "fixedHeaders"])?;
     let materialized = source_plan
-        .materialize_request_with_prior_facts(selectors, prior_facts, parts)
+        .materialize_request_with_prior_facts(selectors, prior_facts, request)
         .map_err(|_| CliError("reference transport materialization failed"))?;
+    // A transport expectation names what actually crosses the boundary. For a
+    // statement source that is the reviewed artifact and the values bound into
+    // it, which is why the artifact path is asserted rather than its SQL: the
+    // text is reviewed in the bundle, and restating it here would only give a
+    // fixture a second copy to drift from.
+    if let MaterializedSourceRequest::Sqlite { parameters, .. } = &materialized {
+        require_allowed_keys(expected, &["statement", "parameters"])?;
+        if let Some(statement) = expected.get("statement").and_then(Value::as_str) {
+            if source.statement().map(ArtifactPath::as_str) != Some(statement) {
+                return Err(CliError("reference statement artifact did not match"));
+            }
+        }
+        if let Some(expected) = expected.get("parameters").and_then(Value::as_object) {
+            validate_reference_statement_parameters(expected, parameters)?;
+        }
+        return Ok(());
+    }
+    require_allowed_keys(expected, &["path", "query", "body", "fixedHeaders"])?;
     if expected
         .get("path")
         .and_then(Value::as_str)
-        .is_some_and(|path| materialized.path() != path)
+        .is_some_and(|path| materialized.path() != Some(path))
     {
         return Err(CliError("reference materialized path did not match"));
     }
@@ -2811,10 +3096,10 @@ fn validate_reference_transport_with_prior_facts(
         }
     }
     if let Some(headers) = expected.get("fixedHeaders").and_then(Value::as_array) {
-        if headers.len() != source.request.fixed_headers.len() {
+        if headers.len() != source.fixed_headers().len() {
             return Err(CliError("reference fixed headers did not match"));
         }
-        for (expected, actual) in headers.iter().zip(&source.request.fixed_headers) {
+        for (expected, actual) in headers.iter().zip(source.fixed_headers()) {
             let expected = expected
                 .as_object()
                 .ok_or(CliError("reference fixed-header expectation is invalid"))?;
@@ -2876,25 +3161,101 @@ fn reference_source_selectors(
         .collect()
 }
 
+/// The closed mock failures a source may be stated to have, per transport.
+///
+/// A transport can only fail in the ways it has. A refused connection, a wrong
+/// media type, and malformed JSON describe a network answer and say nothing
+/// about a local file, so a statement source is refused those symbols rather
+/// than passing a case that cannot happen. A timeout and an oversized result
+/// belong to both, because both admit under a concurrency bound and both hold
+/// the assembled result to a declared size.
 fn validate_reference_source_failure(
+    source: &registry_evidence::config::SourceConfig,
     failure: &str,
     expected: &JsonMap<String, Value>,
 ) -> Result<(), CliError> {
-    let error = match failure {
-        "timeout" => SourceError::Timeout,
-        "connection-refused" => SourceError::Transport,
-        "invalid-media-type" => SourceError::WrongMediaType,
-        "oversized" => SourceError::ResponseTooLarge,
-        "malformed-json" => SourceError::InvalidJson,
+    let statement = source.statement().map(ArtifactPath::as_str);
+    let fault = |cause: &'static str| {
+        ArtifactFault::new(statement.unwrap_or_default(), SchemaFault::because(cause))
+    };
+    let error = match (failure, statement) {
+        ("timeout", _) => SourceError::Timeout,
+        ("oversized", _) => SourceError::ResponseTooLarge,
+        ("connection-refused", None) => SourceError::Transport,
+        ("invalid-media-type", None) => SourceError::WrongMediaType,
+        ("malformed-json", None) => SourceError::InvalidJson,
+        ("extract-unavailable", Some(_)) => {
+            SourceError::ExtractUnavailable(fault(sqlite_cause::EXTRACT_UNAVAILABLE))
+        }
+        ("extract-too-old", Some(_)) => {
+            SourceError::ExtractTooOld(fault(sqlite_cause::EXTRACT_TOO_OLD))
+        }
+        ("statement-refused", Some(_)) => {
+            SourceError::StatementRefused(fault(sqlite_cause::AUTHORIZER_REFUSED))
+        }
+        ("statement-parameter", Some(_)) => {
+            SourceError::StatementParameter(fault(sqlite_cause::MISSING_PARAMETER))
+        }
+        ("statement-budget", Some(_)) => {
+            SourceError::StatementBudget(fault(sqlite_cause::STEP_BUDGET_EXCEEDED))
+        }
+        ("statement-result", Some(_)) => {
+            SourceError::StatementResult(fault(sqlite_cause::TOO_MANY_ROWS))
+        }
+        ("statement-unavailable", Some(_)) => SourceError::StatementUnavailable,
         _ => return Err(CliError("reference source-failure name is invalid")),
     };
-    if source_failure_problem(&error) != ProblemCode::DependencyUnavailable
+    validate_reference_source_error(expected, &error)?;
+    require_reference_request_count(expected, 1)
+}
+
+/// A source that did not complete carries one public class, whichever transport
+/// it was and whether the case stated the failure or the run produced it.
+fn validate_reference_source_error(
+    expected: &JsonMap<String, Value>,
+    error: &SourceError,
+) -> Result<(), CliError> {
+    if source_failure_problem(error) != ProblemCode::DependencyUnavailable
         || expected.get("publicProblem").and_then(Value::as_str) != Some("dependency_unavailable")
         || expected.get("signed").and_then(Value::as_bool) != Some(false)
+        || expected
+            .get("derivationRuns")
+            .is_some_and(|runs| runs.as_bool() != Some(false))
     {
         return Err(CliError("reference source-failure mapping is invalid"));
     }
-    require_reference_request_count(expected, 1)
+    Ok(())
+}
+
+/// Refuse a statement the authorizer must never accept.
+///
+/// A refused statement is a bundle fault, not a request-time one: it is settled
+/// while the source is compiled, before a listener binds and before any fixture
+/// case runs. The mutation is applied to a disposable copy of the reviewed
+/// statement, so the project's own artifact is untouched.
+fn validate_reference_statement_mutation(
+    bundle: &Bundle,
+    requirement: &registry_evidence::config::RequirementConfig,
+    mutation: &str,
+) -> Result<(), CliError> {
+    let source = bundle
+        .config
+        .sources
+        .get(requirement.initial_source())
+        .ok_or(CliError("reference fixture source is unavailable"))?;
+    let mutated = match mutation {
+        "attach-external-database" => "ATTACH DATABASE 'sidecar.sqlite' AS sidecar;",
+        _ => return Err(CliError("reference statement mutation is unknown")),
+    };
+    let Err(error) = check_statement_offline(source, mutated) else {
+        return Err(CliError("reference mutated statement was not refused"));
+    };
+    if error.cause() != Some(sqlite_cause::AUTHORIZER_REFUSED) {
+        return Err(CliError(
+            "reference mutated statement failed for another reason",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reference_bundle_mutation(
@@ -3308,6 +3669,7 @@ fn compare_case_outcome(
                 Err(registry_evidence::kernel::KernelError::Script
                     | registry_evidence::kernel::KernelError::Output
                     | registry_evidence::kernel::KernelError::Bundle
+                    | registry_evidence::kernel::KernelError::Artifact(_)
                     | registry_evidence::kernel::KernelError::Requirement
                     | registry_evidence::kernel::KernelError::Evidence)
             )
@@ -3816,6 +4178,42 @@ mod tests {
     use registry_evidence::config::AssuranceProfile;
     use registry_evidence::verifier::ExpectedValueForm;
     use std::fs;
+
+    /// Every command that compiles a kernel renders the same two things: the
+    /// failure class it owns, and the artifact diagnostic the kernel produced.
+    #[test]
+    fn every_kernel_compile_command_renders_the_artifact_and_its_cause() {
+        use registry_evidence::bundle::ArtifactFault;
+        use registry_evidence::config::SchemaFault;
+
+        let fault = ArtifactFault::new(
+            "derivations/adult-status.rhai",
+            SchemaFault::because("script does not compile"),
+        );
+        for message in [
+            "bundle compilation failed",
+            "fixture bundle compilation failed",
+        ] {
+            let rendered =
+                kernel_compile_error(message, KernelError::Artifact(fault.clone())).to_string();
+            assert_eq!(
+                rendered,
+                format!(
+                    "{message}: artifact derivations/adult-status.rhai: script does not compile"
+                )
+            );
+        }
+    }
+
+    /// A kernel failure that names no artifact stays the class it was, so a
+    /// command cannot report a file the kernel never blamed.
+    #[test]
+    fn a_kernel_failure_without_an_artifact_stays_a_fixed_message() {
+        let rendered =
+            kernel_compile_error("bundle compilation failed", KernelError::Bundle).to_string();
+
+        assert_eq!(rendered, "bundle compilation failed");
+    }
 
     #[test]
     fn local_shell_seams_are_hidden_from_adopter_help() {
@@ -4434,6 +4832,7 @@ mod tests {
         assert_eq!(
             compile_source_plans_with_runtime(
                 &valid_config,
+                &BTreeMap::new(),
                 "/run/secrets/evidence",
                 &outbound_tls,
                 &Default::default(),
@@ -4449,12 +4848,13 @@ mod tests {
         assert_eq!(
             compile_source_plans_with_runtime(
                 &invalid_config,
+                &BTreeMap::new(),
                 "/run/secrets/evidence",
                 &outbound_tls,
                 &Default::default(),
             )
             .map(|_| ()),
-            Err(CliError("source plan compilation failed"))
+            Err(CliError("source plan compilation failed").into())
         );
     }
 
@@ -4664,6 +5064,7 @@ mod tests {
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
+            &source_statements(&bundle, None).expect("statement sources bind"),
             "/run/secrets/evidence",
             &OutboundTlsConfig {
                 system_roots: true,
@@ -4805,6 +5206,7 @@ mod tests {
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
             let source_plans = compile_source_plans_with_runtime(
                 &bundle.config,
+                &source_statements(&bundle, None).expect("statement sources bind"),
                 "/run/secrets/evidence",
                 &OutboundTlsConfig {
                     system_roots: true,
@@ -4858,6 +5260,7 @@ mod tests {
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
+            &source_statements(&bundle, None).expect("statement sources bind"),
             "/run/secrets/evidence",
             &OutboundTlsConfig {
                 system_roots: true,
@@ -4934,6 +5337,7 @@ mod tests {
             };
             let source_plans = compile_source_plans_with_runtime(
                 &bundle.config,
+                &source_statements(&bundle, None).expect("statement sources bind"),
                 "/run/secrets/evidence",
                 &outbound_tls,
                 &ca_bundles,

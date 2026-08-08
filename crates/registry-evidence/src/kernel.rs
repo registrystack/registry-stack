@@ -17,9 +17,10 @@ use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
 
 use crate::binding::entity_reference;
-use crate::bundle::{Bundle, Codelist};
+use crate::bundle::{ArtifactFault, Bundle, Codelist};
 use crate::config::{
     ConceptConfig, ConceptForm, PreparationChannelPolicy, PreparationLimits, RequirementConfig,
+    SchemaFault, SourceConfig, SqlitePreparationLimits,
 };
 use crate::model::{
     BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
@@ -29,9 +30,10 @@ use crate::model::{
 use crate::rhai_runtime::{
     CalendarDate, CodelistHandle, CompiledDerivation, CompiledExtraction, CompiledPreparation,
     DerivedConceptValue, DerivedValue, EvaluationContext, LegalLocalTime, RequestPartRequirement,
-    RequestParts, RequestPartsBounds, RequestPartsLimits, RhaiRuntime, RhaiRuntimeError,
-    UtcInstant, MAXIMUM_RESULT_BYTES,
+    RequestPartsBounds, RequestPartsLimits, RhaiRuntime, RhaiRuntimeError, StatementParameters,
+    StatementParametersLimits, UtcInstant, MAXIMUM_RESULT_BYTES,
 };
+use crate::source::PreparedSourceRequest;
 use crate::values::Decimal;
 
 const MAXIMUM_PUBLIC_STRING_BYTES: usize = 1_024;
@@ -45,10 +47,24 @@ const DEFAULT_MAXIMUM_COLLECTION_ITEMS: usize = 256;
 const DEFAULT_MAXIMUM_STRING_BYTES: usize = 16_384;
 const DEFAULT_MAXIMUM_NORMALIZED_BYTES: usize = 65_536;
 
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum KernelError {
+    /// A bundle invariant configuration validation already proved, or a
+    /// bundle-level refusal that names no single artifact.
     #[error("the Evidence bundle cannot initialize the offline kernel")]
     Bundle,
+    /// One named bundle artifact was refused while the kernel compiled it.
+    ///
+    /// This is the same bundle-level failure class as `Bundle` and shares its
+    /// audit category and public problem. It exists so an adopter learns which
+    /// reviewed file to fix, because the kernel is the first pass that reads
+    /// every artifact under the hardened grammar and the full schema draft.
+    ///
+    /// The message stays value-free. The diagnostic it carries names a
+    /// bundle-relative artifact and one static cause, and is rendered by the
+    /// adopter-facing command rather than by this message.
+    #[error("an Evidence bundle artifact cannot compile")]
+    Artifact(ArtifactFault),
     #[error("the requested Evidence requirement is unavailable")]
     Requirement,
     #[error("the Evidence extraction failed")]
@@ -68,6 +84,41 @@ pub enum KernelError {
     Output,
     #[error("the Evidence payload metadata is invalid")]
     Evidence,
+}
+
+impl KernelError {
+    /// The value-free diagnostic, when this failure names one bundle artifact.
+    ///
+    /// Every other variant describes an evaluation the bundle asked for rather
+    /// than a file the bundle contains, so there is no artifact to name.
+    pub fn artifact_fault(&self) -> Option<&ArtifactFault> {
+        match self {
+            Self::Artifact(fault) => Some(fault),
+            _ => None,
+        }
+    }
+}
+
+/// Refuse one named bundle artifact with a value-free cause.
+///
+/// The artifact is a bundle-relative path taken from the reviewed bundle
+/// layout, never from document content.
+fn refuse_artifact(artifact: &str, cause: &'static str) -> KernelError {
+    KernelError::Artifact(ArtifactFault::new(artifact, SchemaFault::because(cause)))
+}
+
+/// Reduce a script compilation failure to one static cause.
+///
+/// The engine's own message quotes script text and offsets into it, so the
+/// hardened runtime discards it at its boundary and reports only this closed
+/// set. Every other runtime failure belongs to an evaluation rather than to a
+/// compilation, and collapses to the general cause.
+fn script_compile_cause(error: RhaiRuntimeError) -> &'static str {
+    match error {
+        RhaiRuntimeError::EntryPoint => "script entry point is invalid",
+        RhaiRuntimeError::InputBound => "script exceeds its size bound",
+        _ => "script does not compile",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +230,20 @@ fn compile_request_parts_limits(
     .map_err(|_| KernelError::Bundle)
 }
 
+fn compile_statement_parameters_limits(
+    configured: &SqlitePreparationLimits,
+) -> Result<StatementParametersLimits, KernelError> {
+    fn bounded(value: u64) -> Result<usize, KernelError> {
+        usize::try_from(value).map_err(|_| KernelError::Bundle)
+    }
+
+    StatementParametersLimits::new(
+        bounded(configured.maximum_parameters)?,
+        bounded(configured.maximum_parameter_value_bytes)?,
+    )
+    .map_err(|_| KernelError::Bundle)
+}
+
 /// A kernel compiled entirely from the bytes captured in one immutable bundle.
 pub struct OfflineKernel {
     bundle: Arc<Bundle>,
@@ -186,6 +251,7 @@ pub struct OfflineKernel {
     preparations: BTreeMap<String, CompiledPreparation>,
     extractions: BTreeMap<String, CompiledExtraction>,
     request_parts_limits: BTreeMap<String, RequestPartsLimits>,
+    statement_parameters_limits: BTreeMap<String, StatementParametersLimits>,
     derivations: BTreeMap<String, CompiledDerivation>,
     response_schemas: BTreeMap<String, JSONSchema>,
     fact_schemas: BTreeMap<String, JSONSchema>,
@@ -210,38 +276,84 @@ impl OfflineKernel {
         let mut preparations = BTreeMap::new();
         let mut extractions = BTreeMap::new();
         let mut request_parts_limits = BTreeMap::new();
+        let mut statement_parameters_limits = BTreeMap::new();
         let mut response_schemas = BTreeMap::new();
         let mut fact_schemas = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
-            let preparation = bundle
-                .script(&source.request.prepare_script)
-                .ok_or(KernelError::Bundle)?;
-            let compiled_preparation = runtime
-                .compile_preparation(&preparation.source)
-                .map_err(|_| KernelError::Bundle)?;
-            preparations.insert(source_id.to_owned(), compiled_preparation);
+            // Request preparation is compiled in the shape the source's own
+            // transport consumes, and only where there is something to prepare.
+            // A statement source without a preparation script binds every
+            // parameter declaratively and gets no preparation channel at all,
+            // so asking for one later fails rather than running an absent
+            // script.
+            match source {
+                SourceConfig::HttpJson { request, .. } => {
+                    let preparation = bundle
+                        .script(&request.prepare_script)
+                        .ok_or(KernelError::Bundle)?;
+                    let compiled_preparation = runtime
+                        .compile_preparation(&preparation.source)
+                        .map_err(|error| {
+                            refuse_artifact(
+                                request.prepare_script.as_str(),
+                                script_compile_cause(error),
+                            )
+                        })?;
+                    preparations.insert(source_id.to_owned(), compiled_preparation);
+                    request_parts_limits.insert(
+                        source_id.to_owned(),
+                        compile_request_parts_limits(&request.preparation_limits)?,
+                    );
+                }
+                SourceConfig::SqliteExtract { request, .. } => {
+                    if let (Some(prepare_script), Some(limits)) =
+                        (&request.prepare_script, &request.preparation_limits)
+                    {
+                        let preparation =
+                            bundle.script(prepare_script).ok_or(KernelError::Bundle)?;
+                        let compiled_preparation = runtime
+                            .compile_preparation(&preparation.source)
+                            .map_err(|error| {
+                                refuse_artifact(
+                                    prepare_script.as_str(),
+                                    script_compile_cause(error),
+                                )
+                            })?;
+                        preparations.insert(source_id.to_owned(), compiled_preparation);
+                        statement_parameters_limits.insert(
+                            source_id.to_owned(),
+                            compile_statement_parameters_limits(limits)?,
+                        );
+                    }
+                }
+            }
 
             let extraction = bundle
-                .script(&source.extract_script)
+                .script(source.extract_script())
                 .ok_or(KernelError::Bundle)?;
-            let compiled_extraction = runtime
-                .compile_extraction(&extraction.source)
-                .map_err(|_| KernelError::Bundle)?;
+            let compiled_extraction =
+                runtime
+                    .compile_extraction(&extraction.source)
+                    .map_err(|error| {
+                        refuse_artifact(
+                            source.extract_script().as_str(),
+                            script_compile_cause(error),
+                        )
+                    })?;
             extractions.insert(source_id.to_owned(), compiled_extraction);
-            request_parts_limits.insert(
-                source_id.to_owned(),
-                compile_request_parts_limits(&source.request.preparation_limits)?,
-            );
 
             let response_schema = bundle
-                .fact_schema(&source.response_schema)
+                .fact_schema(source.response_schema())
                 .ok_or(KernelError::Bundle)?;
-            response_schemas.insert(source_id.to_owned(), compile_schema(response_schema)?);
+            response_schemas.insert(
+                source_id.to_owned(),
+                compile_schema(source.response_schema().as_str(), response_schema)?,
+            );
 
             let schema = bundle
-                .fact_schema(&source.fact_schema)
+                .fact_schema(source.fact_schema())
                 .ok_or(KernelError::Bundle)?;
-            let compiled_schema = compile_schema(schema)?;
+            let compiled_schema = compile_schema(source.fact_schema().as_str(), schema)?;
             fact_schemas.insert(source_id.to_owned(), compiled_schema);
         }
 
@@ -252,18 +364,23 @@ impl OfflineKernel {
                 .ok_or(KernelError::Bundle)?;
             let compiled = runtime
                 .compile_derivation(&script.source)
-                .map_err(|_| KernelError::Bundle)?;
+                .map_err(|error| {
+                    refuse_artifact(
+                        requirement.derivation.script.as_str(),
+                        script_compile_cause(error),
+                    )
+                })?;
             derivations.insert(requirement.id.clone(), compiled);
         }
 
         let mut reviewed_schemas = BTreeMap::new();
-        for schema in bundle.fact_schemas.values() {
+        for (path, schema) in bundle.fact_schemas.iter() {
             if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
                 if reviewed_schemas
-                    .insert(identifier.to_owned(), compile_schema(schema)?)
+                    .insert(identifier.to_owned(), compile_schema(path, schema)?)
                     .is_some()
                 {
-                    return Err(KernelError::Bundle);
+                    return Err(refuse_artifact(path, "schema declares a duplicate $id"));
                 }
             }
         }
@@ -283,6 +400,7 @@ impl OfflineKernel {
             preparations,
             extractions,
             request_parts_limits,
+            statement_parameters_limits,
             derivations,
             response_schemas,
             fact_schemas,
@@ -296,7 +414,7 @@ impl OfflineKernel {
         &self,
         requirement_id: &str,
         selectors: &Value,
-    ) -> Result<RequestParts, KernelError> {
+    ) -> Result<PreparedSourceRequest, KernelError> {
         let requirement = self
             .requirement(requirement_id)
             .ok_or(KernelError::Requirement)?;
@@ -312,26 +430,55 @@ impl OfflineKernel {
         source_id: &str,
         selectors: &Value,
         prior_facts: &BTreeMap<String, Value>,
-    ) -> Result<RequestParts, KernelError> {
+    ) -> Result<PreparedSourceRequest, KernelError> {
         let source = self
             .bundle
             .config
             .sources
             .get(source_id)
             .ok_or(KernelError::Bundle)?;
-        let script = self
-            .preparations
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let limits = self
-            .request_parts_limits
-            .get(source_id)
-            .ok_or(KernelError::Bundle)?;
-        let parameters = serde_json::to_value(&source.request.adapter_parameters)
-            .map_err(|_| KernelError::Bundle)?;
-        self.runtime
-            .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
-            .map_err(|_| KernelError::Preparation)
+        let parameters =
+            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
+        match source {
+            SourceConfig::HttpJson { .. } => {
+                let script = self
+                    .preparations
+                    .get(source_id)
+                    .ok_or(KernelError::Bundle)?;
+                let limits = self
+                    .request_parts_limits
+                    .get(source_id)
+                    .ok_or(KernelError::Bundle)?;
+                self.runtime
+                    .prepare_with_prior_facts(script, selectors, &parameters, prior_facts, limits)
+                    .map(PreparedSourceRequest::Http)
+                    .map_err(|_| KernelError::Preparation)
+            }
+            // A statement source without a preparation script prepares nothing:
+            // every parameter it binds comes from its declared bindings, and an
+            // empty preparation result says exactly that.
+            SourceConfig::SqliteExtract { .. } => {
+                let Some(script) = self.preparations.get(source_id) else {
+                    return Ok(PreparedSourceRequest::Statement(StatementParameters {
+                        parameters: BTreeMap::new(),
+                    }));
+                };
+                let limits = self
+                    .statement_parameters_limits
+                    .get(source_id)
+                    .ok_or(KernelError::Bundle)?;
+                self.runtime
+                    .prepare_statement_with_prior_facts(
+                        script,
+                        selectors,
+                        &parameters,
+                        prior_facts,
+                        limits,
+                    )
+                    .map(PreparedSourceRequest::Statement)
+                    .map_err(|_| KernelError::Preparation)
+            }
+        }
     }
 
     pub fn bundle(&self) -> &Bundle {
@@ -387,11 +534,11 @@ impl OfflineKernel {
             .get(source_id)
             .ok_or(KernelError::Bundle)?;
         if let Err(errors) = response_schema.validate(source_response) {
-            report_response_shape_rejection(source_id, source.response_schema.as_str(), errors);
+            report_response_shape_rejection(source_id, source.response_schema().as_str(), errors);
             return Err(KernelError::SourceProtocol);
         }
-        let parameters = serde_json::to_value(&source.request.adapter_parameters)
-            .map_err(|_| KernelError::Bundle)?;
+        let parameters =
+            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
         self.runtime
             .extract_with_prior_facts(script, source_response, &parameters, prior_facts, schema)
             .map_err(|error| match error {
@@ -664,12 +811,16 @@ fn display_pointer(pointer: &jsonschema::paths::JSONPointer) -> String {
     }
 }
 
-fn compile_schema(schema: &Value) -> Result<JSONSchema, KernelError> {
+/// Compile one reviewed schema artifact under the full Draft 2020-12 gate.
+///
+/// The compiler's own message quotes the schema node it rejected, so only the
+/// artifact and a static cause survive the boundary.
+fn compile_schema(artifact: &str, schema: &Value) -> Result<JSONSchema, KernelError> {
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         .compile(schema)
-        .map_err(|_| KernelError::Bundle)
+        .map_err(|_| refuse_artifact(artifact, "schema is not a valid JSON Schema"))
 }
 
 fn build_codelist_handles(
@@ -717,9 +868,12 @@ fn build_codelist_handles(
                 .collect(),
             Codelist::Mapping { entries, .. } => entries.clone(),
         };
-        let handle = CodelistHandle::new(entries).map_err(|_| KernelError::Bundle)?;
+        let handle = CodelistHandle::new(entries)
+            .map_err(|_| refuse_artifact(path, "codelist exceeds a runtime bound"))?;
+        // Derivation names a codelist by file stem, so two codelists that share
+        // one stem in different directories are indistinguishable to a script.
         if handles.insert(name.to_owned(), handle).is_some() {
-            return Err(KernelError::Bundle);
+            return Err(refuse_artifact(path, "codelist file stem is duplicated"));
         }
     }
     Ok(handles)
@@ -1216,6 +1370,13 @@ mod tests {
     const AUDIENCE: &str = "urn:example:fixture:audience";
     const SUPPORTED_VALUE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
     const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    /// A value a diagnostic must never echo, in the shape a script scalar has.
+    const SCRIPT_CANARY: &str = "0451-mrs-hunt-was-born-in-caracas";
+    /// A function the loader's permissive engine accepts and the hardened
+    /// kernel grammar refuses, so the kernel is the pass that has to report it.
+    fn refused_by_the_hardened_grammar() -> String {
+        format!("\nfn unreviewed() {{\n    let value = \"{SCRIPT_CANARY}\";\n    while false {{ }}\n    value\n}}\n")
+    }
 
     fn projection() -> ValueProjection<'static> {
         ValueProjection {
@@ -1223,6 +1384,70 @@ mod tests {
             binding_key: KEY,
             binding_key_version: 1,
         }
+    }
+
+    #[test]
+    fn kernel_compilation_names_every_script_artifact_it_refuses() {
+        for artifact in [
+            "adapters/source-a-prepare.rhai",
+            "adapters/source-a.rhai",
+            "derivations/adult-status.rhai",
+        ] {
+            let copied = fixture_with_appended_artifact(
+                "adult-status",
+                artifact,
+                &refused_by_the_hardened_grammar(),
+            );
+            let bundle = Arc::new(Bundle::load(copied.path()).expect("the loader accepts it"));
+
+            let error = OfflineKernel::compile(bundle).expect_err("the kernel refuses it");
+
+            let fault = error
+                .artifact_fault()
+                .unwrap_or_else(|| panic!("{artifact}: the failure names no artifact"));
+            assert_eq!(fault.artifact(), artifact);
+            assert_eq!(fault.fault().cause(), "script does not compile");
+        }
+    }
+
+    /// The engine reports a compilation failure by quoting the source it
+    /// rejected. That text reaches an operator ticket, so the boundary keeps
+    /// the artifact and one static cause and discards everything else.
+    #[test]
+    fn a_refused_artifact_discloses_no_script_text() {
+        let copied = fixture_with_appended_artifact(
+            "adult-status",
+            "derivations/adult-status.rhai",
+            &refused_by_the_hardened_grammar(),
+        );
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("the loader accepts it"));
+
+        let error = OfflineKernel::compile(bundle).expect_err("the kernel refuses it");
+
+        let rendered = format!(
+            "{error}: {}",
+            error
+                .artifact_fault()
+                .expect("the failure names an artifact")
+        );
+        assert!(!rendered.contains(SCRIPT_CANARY), "{rendered}");
+        assert!(!rendered.contains("while"), "{rendered}");
+        assert!(!rendered.contains("unreviewed"), "{rendered}");
+    }
+
+    /// A lookup that configuration validation already proved is an internal
+    /// invariant, not an artifact an adopter can repair. It names no file, and
+    /// gaining an artifact diagnostic would invent one.
+    #[test]
+    fn an_internal_invariant_failure_is_not_dressed_up_as_an_artifact_fault() {
+        assert!(KernelError::Bundle.artifact_fault().is_none());
+        assert!(KernelError::Requirement.artifact_fault().is_none());
+        assert!(KernelError::Script.artifact_fault().is_none());
+        assert!(
+            refuse_artifact("codelists/regions.yaml", "codelist file stem is duplicated")
+                .artifact_fault()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1373,9 +1598,10 @@ mod tests {
             .get(requirement.acquisition.initial_source())
             .expect("the requirement names a configured source");
         let schema = bundle
-            .fact_schema(&source.response_schema)
+            .fact_schema(source.response_schema())
             .expect("the response schema is a bundle artifact");
-        let compiled = compile_schema(schema).expect("the response schema compiles");
+        let compiled = compile_schema(source.response_schema().as_str(), schema)
+            .expect("the response schema compiles");
 
         let canary = "0451-mrs-hunt-was-born-in-caracas";
         let response = json!({"total": 1, "date_of_birth": canary});
@@ -1712,18 +1938,21 @@ mod tests {
         assert!(matches!(projected, PublicValue::List(_)));
 
         let schema_id = "urn:example:structured";
-        let schema = compile_schema(&json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$id": schema_id,
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["status", "effective_date", "observed_at"],
-            "properties": {
-                "status": {"type": "string", "enum": ["A"]},
-                "effective_date": {"type": "string", "format": "date"},
-                "observed_at": {"type": "string", "format": "date-time"}
-            }
-        }))
+        let schema = compile_schema(
+            "schemas/structured.schema.yaml",
+            &json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": schema_id,
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["status", "effective_date", "observed_at"],
+                "properties": {
+                    "status": {"type": "string", "enum": ["A"]},
+                    "effective_date": {"type": "string", "format": "date"},
+                    "observed_at": {"type": "string", "format": "date-time"}
+                }
+            }),
+        )
         .expect("schema compiles");
         let schemas = BTreeMap::from([(schema_id.to_owned(), schema)]);
         let structured = concept(
@@ -1992,14 +2221,17 @@ mod tests {
         );
 
         let aggregate_schema_id = "urn:example:fixture:schema:aggregate:v1";
-        let aggregate_schema = compile_schema(&json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$id": aggregate_schema_id,
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["blob"],
-            "properties": {"blob": {"type": "string", "maxLength": 5000}}
-        }))
+        let aggregate_schema = compile_schema(
+            "schemas/aggregate.schema.yaml",
+            &json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": aggregate_schema_id,
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["blob"],
+                "properties": {"blob": {"type": "string", "maxLength": 5000}}
+            }),
+        )
         .expect("aggregate schema compiles");
         let aggregate_concepts = (0..16)
             .map(|index| {
@@ -2346,6 +2578,24 @@ mod tests {
         format!("{local_date}T00:00:00Z")
             .parse()
             .expect("observed time")
+    }
+
+    /// One acceptance bundle whose named artifact gained text before loading.
+    ///
+    /// The bundle is still immutable when it loads, so the copy is locked after
+    /// the edit exactly as an untouched copy is.
+    fn fixture_with_appended_artifact(name: &str, artifact: &str, appended: &str) -> TempDir {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance")
+            .join(name);
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        copy_tree(&source, temporary.path());
+        let path = temporary.path().join(artifact);
+        let mut text = fs::read_to_string(&path).expect("reads copied artifact");
+        text.push_str(appended);
+        fs::write(&path, text).expect("writes copied artifact");
+        make_read_only(temporary.path());
+        temporary
     }
 
     fn immutable_fixture(name: &str) -> TempDir {

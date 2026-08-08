@@ -139,22 +139,23 @@ impl PreparedService {
             .sources
             .get(&source_id)
             .expect("source exists");
-        let preparation_selectors = selector_value(&resolved, &source.request.selector_inputs);
+        let preparation_selectors = selector_value(&resolved, source.selector_inputs());
         let request_parts = self
             .kernel
             .prepare(&request.requirement, &preparation_selectors)
             .expect("request preparation succeeds");
+        let observed_at = Utc::now();
         let source_response = self
             .sources
             .get(&source_id)
             .expect("requirement source executor exists")
             .execute(
-                &source_selectors(&resolved, &source.request.selector_inputs),
+                &source_selectors(&resolved, source.selector_inputs()),
                 &request_parts,
+                observed_at,
             )
             .await
             .expect("fixed source executor succeeds");
-        let observed_at = Utc::now();
         let derivation_selectors =
             selector_value(&resolved, &requirement.derivation.selector_inputs);
         let values = match self
@@ -1382,7 +1383,7 @@ fn source_identity(bundle: &Bundle, requirement_id: &str) -> (String, String) {
         .sources
         .get(requirement.initial_source())
         .expect("source is configured");
-    let adapter = Path::new(source.extract_script.as_str())
+    let adapter = Path::new(source.extract_script().as_str())
         .file_stem()
         .and_then(|name| name.to_str())
         .expect("adapter has a local identifier");

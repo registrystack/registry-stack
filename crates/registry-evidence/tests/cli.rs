@@ -1020,6 +1020,22 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
             prefix: "evidence: deployment script is invalid: artifact derivations/adult-status.rhai: script does not compile\n",
             suffix: "",
         },
+        // The bundle loader compiles a script on a permissive engine that only
+        // proves an entrypoint. The kernel is the pass that applies the
+        // hardened grammar, so a script using a construct the runtime disables
+        // is refused there and has to name its artifact there too.
+        FailureCase {
+            label: "script the hardened kernel grammar refuses",
+            bundle: "all-definitions",
+            break_deployment: |deployment| {
+                deployment.append(
+                    "bundle/derivations/adult-status.rhai",
+                    &format!("\nfn unreviewed() {{\n    let value = \"{CANARY}\";\n    while false {{ }}\n    value\n}}\n"),
+                );
+            },
+            prefix: "evidence: bundle compilation failed: artifact derivations/adult-status.rhai: script does not compile\n",
+            suffix: "",
+        },
         FailureCase {
             label: "fact schema",
             bundle: "all-definitions",

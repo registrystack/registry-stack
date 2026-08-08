@@ -1,0 +1,329 @@
+fixture: registry.evidence.reference.licence-register-extract/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: record-reference-v1
+      values: {record_reference: REC-0001}
+  # The world these cases run against, as the SQL that builds it rather than as
+  # a database file. It is reviewable in a diff, it hashes over text a reader
+  # can read, and no table name arrives in this tree inside an opaque binary.
+  #
+  # Every case answers from this one extract and picks its subject with
+  # `selectors`, because that is what a real extract is: one published snapshot
+  # holding many registrants, not one file per outcome.
+  #
+  # The validity bounds are written fixed-width in UTC so they compare lexically
+  # against the evaluation instant the runtime binds, which is the only clock
+  # the statement has.
+  extract: |
+    CREATE TABLE evidence_extract (
+      published_at TEXT NOT NULL,
+      publisher    TEXT NOT NULL,
+      extract_id   TEXT NOT NULL
+    );
+    INSERT INTO evidence_extract (published_at, publisher, extract_id) VALUES
+      ('2026-08-01T00:00:00Z',
+       'urn:gov:example:publisher:licence-authority',
+       '2026-08-01-licence-register');
+
+    CREATE TABLE registrants (
+      registrant_id     TEXT NOT NULL PRIMARY KEY,
+      reference         TEXT NOT NULL,
+      contact_reference TEXT NOT NULL
+    );
+
+    CREATE TABLE licences (
+      licence_id     TEXT NOT NULL PRIMARY KEY,
+      registrant_id  TEXT NOT NULL,
+      status_code    TEXT NOT NULL,
+      valid_from     TEXT NOT NULL,
+      valid_until    TEXT NOT NULL,
+      issuing_office TEXT NOT NULL
+    );
+
+    -- contact_reference and issuing_office are in the extract and are never
+    -- selected. They are the standing proof that the statement is the narrowing:
+    -- if either reached a fact, a derivation, or an assertion, the canary would
+    -- appear where the privacy expectation forbids it.
+    INSERT INTO registrants (registrant_id, reference, contact_reference) VALUES
+      ('REG-0001', 'REC-0001', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0002', 'REC-0002', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0003', 'REC-0003', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0004', 'REC-0004', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0005', 'REC-0005', 'SOURCE-UNRELATED-CANARY'),
+      -- Two registrants filed under one reference: the ambiguity a register
+      -- accumulates in practice, and the reason uniqueness is decided by
+      -- counting rows rather than assumed.
+      ('REG-0006', 'REC-0006', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0007', 'REC-0006', 'SOURCE-UNRELATED-CANARY'),
+      -- Three, which is past the declared row bound: a register this statement
+      -- does not understand rather than a lookup with three answers.
+      ('REG-0008', 'REC-0007', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0009', 'REC-0007', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0010', 'REC-0007', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0011', 'REC-0008', 'SOURCE-UNRELATED-CANARY'),
+      ('REG-0012', 'REC-0009', 'SOURCE-UNRELATED-CANARY');
+
+    INSERT INTO licences
+      (licence_id, registrant_id, status_code, valid_from, valid_until, issuing_office)
+    VALUES
+      ('LIC-0001', 'REG-0001', 'ACTIVE',
+       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0002', 'REG-0002', 'ACTIVE',
+       '2026-02-01T00:00:00.000Z', '2027-02-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0003', 'REG-0002', 'ACTIVE',
+       '2026-03-01T00:00:00.000Z', '2027-03-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0004', 'REG-0003', 'SUSPENDED',
+       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0005', 'REG-0004', 'ACTIVE',
+       '2025-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0006', 'REG-0005', 'ACTIVE',
+       '2026-12-01T00:00:00.000Z', '2027-12-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      ('LIC-0007', 'REG-0006', 'ACTIVE',
+       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      -- Ends exactly at the evaluation instant, and the window is half-open, so
+      -- this registrant holds no current licence.
+      ('LIC-0008', 'REG-0011', 'ACTIVE',
+       '2026-01-15T00:00:00.000Z', '2026-08-02T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+      -- Starts exactly at it, and is therefore current.
+      ('LIC-0009', 'REG-0012', 'ACTIVE',
+       '2026-08-02T00:00:00.000Z', '2027-01-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY');
+  # A statement source with no preparation script prepares nothing: every
+  # parameter it binds comes from a declared binding. Stating the empty map is
+  # what proves no script added a parameter of its own.
+  expectedRequestParts:
+    parameters: {}
+  # The statement is named, not restated. Its text is a reviewed bundle artifact
+  # hashed with the rest, so a second copy here would only be something to drift
+  # from. The bound value varies per subject, so cases that assert one say so
+  # themselves.
+  expectedTransport:
+    statement: queries/professional-licence-lookup.sql
+cases:
+  # One registrant, one current licence. The extract holds the licence
+  # identifier, its dates, and its issuing office; the count is what left.
+  - id: positive
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        active_licence_count: 1
+      value: true
+
+  # Two current licences is still one answer. How many a registrant holds is a
+  # fact about their practice that nobody asked for, so the aggregate collapses
+  # to the same disclosed value as one.
+  - id: boundary-two-current-licences
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0002}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts:
+        active_licence_count: 2
+      value: true
+
+  # A suspended licence is on file with a window covering the evaluation
+  # instant. The status filter is inside the statement, so a suspended licence
+  # is never counted and never leaves the extract.
+  - id: negative-suspended-licence
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0003}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: false
+
+  - id: negative-expired-licence
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0004}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: false
+
+  - id: negative-licence-not-yet-valid
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0005}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: false
+
+  # The window is half-open, so a licence ending at the evaluation instant has
+  # ended. Both boundary cases run against the same pinned instant, which is why
+  # the answer is the same on every host and on every day.
+  - id: boundary-window-ends-at-the-evaluation-instant
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0008}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: false
+
+  - id: boundary-window-starts-at-the-evaluation-instant
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0009}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: true
+
+  # A registrant with no licence at all and a reference the register has never
+  # heard of are different answers, and the left join is what keeps them
+  # distinguishable: no row at all is no match.
+  - id: no-match
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0099}
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: ambiguous-duplicated-reference
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0006}
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  # Past the declared row bound. The transport refuses the result rather than
+  # moving a bulk answer into the runtime for a script to narrow, so this is a
+  # dependency failure and not an ambiguous lookup.
+  - id: too-many-registrant-rows
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0007}
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  # The extract was published exactly the declared maximum age before this
+  # instant. The bound is inclusive, so it is still answered from.
+  - id: boundary-extract-published-exactly-at-the-bound
+    observed_at: "2026-08-08T00:00:00Z"
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: true
+
+  # One second later the same extract is too old. Nothing about the file
+  # changed: the age is checked against the evaluation instant before a row is
+  # read, so a stale snapshot fails as a dependency rather than answering.
+  - id: stale-extract
+    observed_at: "2026-08-08T00:00:01Z"
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  # A bound extract that is not there at request time. It is the local-file
+  # equivalent of a refused connection, and it collapses into the same public
+  # class as every other source that did not complete.
+  - id: source-failure
+    sourceFailure: extract-unavailable
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+
+  # The statement names a parameter nothing bound. A missing input is settled
+  # before the statement runs, so it is a dependency that did not answer rather
+  # than a lookup that found nothing.
+  - id: missing-statement-parameter
+    sourceFailure: statement-parameter
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+
+  # A statement that reaches for a second database is refused while the source
+  # is compiled, before a listener binds and before any request arrives. The
+  # mutation runs against a disposable copy; the reviewed artifact is untouched.
+  - id: statement-refused
+    statementMutation: attach-external-database
+    expected: {bundle: rejected}
+
+  # The reference is caller-supplied. Nothing concatenates it into the
+  # statement: it arrives as a bound parameter, so a value shaped like SQL is
+  # compared against a column as text and cannot become syntax.
+  - id: hostile-reference
+    selectorOverrides:
+      subject:
+        values: {record_reference: "X' OR '1'='1"}
+    expected:
+      sourceRequestCount: 1
+      expectedTransport:
+        statement: queries/professional-licence-lookup.sql
+        parameters:
+          record_reference: "X' OR '1'='1"
+
+  - id: output-gate-refuses-a-raw-reference
+    derivationMutation: return-raw-reference
+    expected:
+      outputGate: rejected
+      signed: false
+
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
+privacyExpectation:
+  evidenceContains:
+    - urn:gov:example:concept:professional-licence-active
+  evidenceExcludes:
+    - active_licence_count
+    - record_reference
+    - record-reference-v1
+    - REC-0001
+    - REC-0002
+    - REG-0001
+    - LIC-0001
+    - ACTIVE
+    - SUSPENDED
+    - registrants
+    - licences
+    - issuing_office
+    - contact_reference
+    - SOURCE-UNRELATED-CANARY
+  diagnosticsExclude: [REC-0001, REC-0002, REG-0001, LIC-0001, SOURCE-UNRELATED-CANARY]
