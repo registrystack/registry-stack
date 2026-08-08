@@ -1880,6 +1880,41 @@ impl Drop for FixtureExtract {
     }
 }
 
+/// Refuse a requirement whose statement source is not the one a fixture runs.
+///
+/// A statement is proven by executing it, and a reference fixture executes only
+/// the initial source's, against the single extract its seed describes. A later
+/// stage would therefore be answered from the case's recorded response, and the
+/// case would assert that stage's statement artifact and bound parameters while
+/// the reviewed SQL never ran, which reads as coverage and is not. Refusing here
+/// keeps the harness honest about which stages it proves, the same way the
+/// fetch-set form is refused for having no reference-fixture shape at all.
+///
+/// This is a limit of the offline harness, not of the runtime: an acquisition
+/// kind places no constraint on stage transport, and a deployment mixing them is
+/// served normally. Lifting it means letting one case state two worlds at once,
+/// a recorded response and an extract, which is a change to the fixture case
+/// vocabulary rather than to a transport.
+fn refuse_replayed_statement_stages(
+    config: &EvidenceConfig,
+    acquisition: &AcquisitionConfig,
+) -> Result<(), CliError> {
+    let executed = acquisition.initial_source();
+    for source_id in acquisition.source_ids() {
+        if source_id != executed
+            && config
+                .sources
+                .get(source_id)
+                .is_some_and(|source| source.statement().is_some())
+        {
+            return Err(CliError(
+                "a replayed statement stage has no reference fixture form",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Compile the statement source a fixture's cases run against, over the extract
 /// its seed describes.
 ///
@@ -1940,6 +1975,10 @@ async fn evaluate_reference_fixture(
     fixture: &JsonMap<String, Value>,
     trace: &mut FixtureTrace,
 ) -> Result<FixtureSummary, CliError> {
+    // Asked before the fixture is read at all, because the requirement decides
+    // this on its own and an author who has written an unprovable stage should
+    // be told that, not that some key their case shape cannot supply is missing.
+    refuse_replayed_statement_stages(&bundle.config, &requirement.acquisition)?;
     require_exact_keys(
         fixture,
         &[
@@ -4701,6 +4740,137 @@ mod tests {
         set_tree_mode(directory.path(), 0o755, 0o444);
         (Arc::new(bundle), fixture)
     }
+
+    /// A fixture executes the initial source's statement and replays every
+    /// other stage from the case. A statement on a later stage would therefore
+    /// be reported as covered without having run, so the requirement is refused
+    /// rather than half-proven.
+    #[test]
+    fn a_replayed_statement_stage_has_no_reference_fixture_form() {
+        let statement = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence/bundle/evidence.yaml"
+        ))
+        .expect("the statement project config validates");
+        let single = &statement
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == STATEMENT_REQUIREMENT)
+            .expect("the statement requirement is declared")
+            .acquisition;
+        assert_eq!(refuse_replayed_statement_stages(&statement, single), Ok(()));
+
+        let mut chained =
+            serde_json::to_value(&statement).expect("the statement config is representable");
+        let fetch = chained["sources"][STATEMENT_SOURCE].clone();
+        chained["sources"]
+            .as_object_mut()
+            .expect("sources are an object")
+            .insert(format!("{STATEMENT_SOURCE}-fetch"), fetch);
+        let chained: EvidenceConfig =
+            serde_json::from_value(chained).expect("the duplicated config parses");
+        assert_eq!(
+            refuse_replayed_statement_stages(
+                &chained,
+                &AcquisitionConfig::SearchThenFetch {
+                    search: STATEMENT_SOURCE.to_owned(),
+                    fetch: format!("{STATEMENT_SOURCE}-fetch"),
+                },
+            ),
+            Err(CliError(
+                "a replayed statement stage has no reference fixture form"
+            ))
+        );
+
+        // The refusal is about what a replayed stage would hide, so a chained
+        // requirement whose stages both answer over a network keeps its form.
+        let recorded = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml"
+        ))
+        .expect("the recorded project config validates");
+        assert_eq!(
+            refuse_replayed_statement_stages(
+                &recorded,
+                &AcquisitionConfig::SearchThenFetch {
+                    search: "registered-birth-date".to_owned(),
+                    fetch: "registered-birth-parents".to_owned(),
+                },
+            ),
+            Ok(())
+        );
+    }
+
+    /// The refusal is asked before the fixture is, so an author sees the stage
+    /// they cannot prove rather than a missing key in a case shape that could
+    /// never have carried it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_replayed_statement_stage_is_refused_before_the_fixture_is_read() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence/bundle",
+        );
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let mut bundle = Bundle::load(directory.path()).expect("the statement bundle loads");
+        let fixture = serde_json::to_value(
+            bundle
+                .fixtures
+                .get("fixtures/professional-licence-cases.yaml")
+                .expect("the statement fixture is captured"),
+        )
+        .expect("the fixture is representable");
+        let mut config = serde_json::to_value(&bundle.config).expect("config is representable");
+        let fetch = config["sources"][STATEMENT_SOURCE].clone();
+        config["sources"]
+            .as_object_mut()
+            .expect("sources are an object")
+            .insert(format!("{STATEMENT_SOURCE}-fetch"), fetch);
+        let requirement = config["requirements"]
+            .as_array_mut()
+            .expect("requirements are an array")
+            .iter_mut()
+            .find(|requirement| requirement["id"] == STATEMENT_REQUIREMENT)
+            .expect("the statement requirement is available");
+        requirement["acquisition"] = serde_json::json!({
+            "kind": "search-then-fetch",
+            "search": STATEMENT_SOURCE,
+            "fetch": format!("{STATEMENT_SOURCE}-fetch"),
+        });
+        bundle.config = serde_json::from_value(config).expect("the chained config parses");
+        bundle
+            .config
+            .validate()
+            .expect("the chained config validates");
+        set_tree_mode(directory.path(), 0o755, 0o444);
+
+        let bundle = Arc::new(bundle);
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == STATEMENT_REQUIREMENT)
+            .expect("the chained requirement is captured");
+        assert_eq!(
+            evaluate_reference_fixture(
+                &bundle,
+                &kernel,
+                &BTreeMap::new(),
+                None,
+                requirement,
+                fixture.as_object().expect("the fixture is an object"),
+                &mut FixtureTrace::default(),
+            )
+            .await
+            .err(),
+            Some(CliError(
+                "a replayed statement stage has no reference fixture form"
+            ))
+        );
+    }
+
+    const STATEMENT_REQUIREMENT: &str = "urn:gov:example:requirement:licence-register-status:v1";
+    const STATEMENT_SOURCE: &str = "licence-register";
 
     #[test]
     fn privacy_expectations_check_exact_projected_strings() {
