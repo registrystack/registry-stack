@@ -20,7 +20,9 @@ mod support;
 
 use std::{fs, path::Path};
 
-use registry_evidence_authoring::{testing::ProjectFile, validate::validate_answer_schema_path};
+use registry_evidence_authoring::{
+    model::Question, testing::ProjectFile, validate::validate_answer_schema_path,
+};
 use registry_language_server::{CompletionCandidate, ProjectIndex};
 use serde_json::{json, Value};
 use support::{
@@ -86,11 +88,14 @@ fn reported_codes(index: &ProjectIndex) -> Vec<&str> {
 /// converts the way a conforming client converts. A test that applied a candidate by byte offsets
 /// would be testing its own arithmetic against the server's rather than the server against the
 /// protocol.
+///
+/// What lands in the document is the candidate's text rather than its label, which is what a client
+/// applies: the label is what the menu draws, and the two are the same name spelled for two places.
 fn accepted(text: &str, candidate: &CompletionCandidate) -> String {
     let mut edited = text.to_owned();
     edited.replace_range(
         byte_offset(text, candidate.range.start)..byte_offset(text, candidate.range.end),
-        &candidate.label,
+        &candidate.new_text,
     );
     edited
 }
@@ -574,7 +579,7 @@ fn accepting_a_candidate_beside_multibyte_text_leaves_the_document_the_author_me
         );
         assert_eq!(
             edited.len(),
-            text.len() + label.len() - replaced_bytes(&text, candidate.range),
+            text.len() + candidate.new_text.len() - replaced_bytes(&text, candidate.range),
             "the edit replaced more or less of the document than the value the author wrote"
         );
     }
@@ -616,6 +621,133 @@ fn accepting_a_leaf_over_a_multibyte_fact_path_leaves_the_document_the_author_me
         accepted(&text, &candidate).contains("      path: /records/*/date_of_birth\n"),
         "accepting a leaf left {:?}",
         accepted(&text, &candidate)
+    );
+}
+
+/// Accepting a name that carries YAML's own punctuation leaves the field holding that name.
+///
+/// What a candidate is called is unrestricted: an `operationId` is whatever the description's author
+/// wrote, and nothing in the form checks its characters. The range an offer replaces is the value
+/// the author wrote and not the quotes around it, so a name put there is read back by the scalar it
+/// lands in and has to be spelled for it. Each document below is read back with the deserializer the
+/// compiler reads a question with, which is both the proof that it still parses and the proof that
+/// the field holds the name that was offered.
+#[test]
+fn accepting_a_name_carrying_yaml_punctuation_leaves_the_field_holding_that_name() {
+    for (published, written, label, expected) in [
+        (
+            "'<|operation-id|>read: person'",
+            "operation: <|operation|>readPerson",
+            "read: person",
+            "  operation: \"read: person\"\n",
+        ),
+        (
+            "'<|operation-id|>say \"hi\"'",
+            "operation: \"<|operation|>readPerson\"",
+            "say \"hi\"",
+            "  operation: \"say \\\"hi\\\"\"\n",
+        ),
+        (
+            "\"<|operation-id|>it's\"",
+            "operation: '<|operation|>readPerson'",
+            "it's",
+            "  operation: 'it''s'\n",
+        ),
+    ] {
+        let project = EvidenceProject::new(&replacing(
+            &replacing(
+                &operation_question_project(),
+                OPENAPI_PATH,
+                &OPERATION_OPENAPI.replace("<|operation-id|>readPerson", published),
+            ),
+            QUESTION_PATH,
+            &OPERATION_QUESTION.replace("operation: <|operation|>readPerson", written),
+        ));
+        let index = project.index();
+        let text = text_of(&project, QUESTION_PATH);
+
+        let candidate = candidate_named(&index, &project, QUESTION_PATH, "operation", label);
+        let edited = accepted(&text, &candidate);
+
+        assert!(
+            edited.contains(expected),
+            "accepting '{label}' over {written:?} left {edited:?}"
+        );
+        let question = serde_norway::from_str::<Question>(&edited)
+            .unwrap_or_else(|error| panic!("accepting '{label}' left {edited:?}: {error}"));
+        assert_eq!(question.source.operation.as_deref(), Some(label));
+    }
+}
+
+/// The same, where the value the author is writing is a mapping key.
+///
+/// A bound is written as the key of `source.collectionBounds`, so the text put there is followed by
+/// the `:` that ends the key. A name carrying its own `: ` would end the key early, which is a
+/// document that does not parse rather than one holding the wrong name.
+#[test]
+fn accepting_a_collection_bound_that_carries_a_separator_leaves_a_document_that_parses() {
+    let collection = "/rec: ords";
+    let project = EvidenceProject::new(&replacing(
+        &replacing(
+            &operation_question_project(),
+            OPENAPI_PATH,
+            &OPERATION_OPENAPI.replace(
+                "                  records:",
+                "                  \"rec: ords\":",
+            ),
+        ),
+        QUESTION_PATH,
+        &OPERATION_QUESTION.replace(
+            "path: <|fact-path|>/records/*/date_of_birth",
+            "path: '<|fact-path|>/rec: ords/*/date_of_birth'",
+        ),
+    ));
+    let index = project.index();
+    let text = text_of(&project, QUESTION_PATH);
+
+    let candidate = candidate_named(
+        &index,
+        &project,
+        QUESTION_PATH,
+        "collection-bound",
+        collection,
+    );
+    let edited = accepted(&text, &candidate);
+
+    assert!(
+        edited.contains("    \"/rec: ords\": 16\n"),
+        "accepting '{collection}' left {edited:?}"
+    );
+    let question = serde_norway::from_str::<Question>(&edited)
+        .unwrap_or_else(|error| panic!("accepting '{collection}' left {edited:?}: {error}"));
+    assert!(
+        question.source.collection_bounds.contains_key(collection),
+        "the bound the author accepted is the one the field holds: {:?}",
+        question.source.collection_bounds
+    );
+}
+
+/// A value written as a block scalar is offered nothing, which is the other side of the same rule.
+///
+/// A block scalar's text is not its value, so `scalar_from_node` indexes none, and there is no
+/// fourth style for a candidate to be spelled for. That leaves the list empty at such a field. The
+/// invariant is one-sided, so a name the author is not offered costs them a keystroke, while a name
+/// spelled for a style this could not read would cost them a document that no longer parses.
+#[test]
+fn a_name_written_as_a_block_scalar_is_offered_nothing() {
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &QUESTION.replace(
+            "  ref: <|source-ref|>people",
+            "  ref: |-\n    <|source-ref|>people",
+        ),
+    ));
+    let index = project.index();
+
+    assert_eq!(
+        labels_at(&index, &project, QUESTION_PATH, "source-ref"),
+        Vec::<String>::new()
     );
 }
 

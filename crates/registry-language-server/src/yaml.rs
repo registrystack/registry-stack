@@ -9,6 +9,80 @@ use tree_sitter::{Node, Parser};
 pub(crate) struct YamlScalar {
     pub(crate) value: String,
     pub(crate) range: Range,
+    pub(crate) style: ScalarStyle,
+}
+
+/// How a scalar is written, which is what decides how text put in its place has to be spelled.
+///
+/// A quoted scalar's range covers the value and not the quotes around it, so what goes there is
+/// escaped for that quote and brings no delimiters of its own. A plain scalar has no quotes to sit
+/// inside, so what goes there brings whatever punctuation it needs.
+///
+/// A block scalar is not here because [`scalar_from_node`] indexes none: its text is not its value,
+/// so nothing points at one, nothing is offered at one, and there is no place for a fourth answer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScalarStyle {
+    Plain,
+    SingleQuoted,
+    DoubleQuoted,
+}
+
+/// How `value` is written to occupy the place a scalar of this style occupies, or `None` when it
+/// cannot be written there at all.
+///
+/// A value carrying a line break or another control character is refused rather than escaped. A
+/// single-quoted scalar has no escape for either, so there is one style that could not take it, and
+/// a name that holds one is a name no author typed and no source published on purpose.
+pub(crate) fn written_as(value: &str, style: ScalarStyle) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(match style {
+        ScalarStyle::Plain if is_plain(value) => value.to_owned(),
+        // A plain scalar that would not read back as itself is written as a quoted one instead. The
+        // range covers the whole of what the author wrote and none of a quote, so the delimiters go
+        // in with it. A JSON string is a YAML double-quoted scalar, so the escaping is the one
+        // `serde_json` writes.
+        ScalarStyle::Plain => quoted(value),
+        ScalarStyle::DoubleQuoted => {
+            let quoted = quoted(value);
+            quoted[1..quoted.len() - 1].to_owned()
+        }
+        ScalarStyle::SingleQuoted => value.replace('\'', "''"),
+    })
+}
+
+/// `value` as a double-quoted scalar, delimiters and all.
+fn quoted(value: &str) -> String {
+    serde_json::to_string(value).expect("a string writes as a JSON string")
+}
+
+/// Whether `value` is read back as this exact string wherever a plain scalar may sit.
+///
+/// The rule is narrower than YAML's, deliberately. A flow collection gives `[`, `]`, `{`, `}`, and
+/// `,` a meaning a block context does not, and the same field of the same form is written both
+/// ways, so a value holding any of them is refused here rather than judged against a context this
+/// cannot see. What is left is refused too if the reader resolves it to something other than the
+/// string it is spelled with, which is what `null`, `true`, and `42` are. A value refused here is
+/// quoted, which is never wrong and at worst is more punctuation than the author would have typed.
+///
+/// An indicator character only opens a node, so the first character is judged by a shorter list than
+/// the rest. That is what lets a fact path keep its `*` and stay the plain scalar its author wrote.
+fn is_plain(value: &str) -> bool {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphanumeric() || first == '_' || first == '/') {
+        return false;
+    }
+    if value
+        .chars()
+        .any(|character| !(character.is_ascii_alphanumeric() || "-_./*".contains(character)))
+    {
+        return false;
+    }
+    serde_norway::from_str::<String>(value).is_ok_and(|read| read == value)
 }
 
 #[derive(Clone, Debug)]
@@ -221,25 +295,33 @@ fn scalar_from_node(
         return None;
     }
 
-    let (value, start_byte, end_byte) = match node.kind() {
+    let (value, style, start_byte, end_byte) = match node.kind() {
         "double_quote_scalar" => {
             let value = serde_json::from_str::<String>(raw)
                 .unwrap_or_else(|_| raw.trim_matches('"').to_owned());
             (
                 value,
+                ScalarStyle::DoubleQuoted,
                 node.start_byte() + 1,
                 node.end_byte().saturating_sub(1),
             )
         }
         "single_quote_scalar" => (
             raw.trim_matches('\'').replace("''", "'"),
+            ScalarStyle::SingleQuoted,
             node.start_byte() + 1,
             node.end_byte().saturating_sub(1),
         ),
-        _ => (raw.to_owned(), node.start_byte(), node.end_byte()),
+        _ => (
+            raw.to_owned(),
+            ScalarStyle::Plain,
+            node.start_byte(),
+            node.end_byte(),
+        ),
     };
     Some(YamlScalar {
         value,
+        style,
         range: source_map.range(start_byte, end_byte),
     })
 }
@@ -383,6 +465,63 @@ mod tests {
                     .is_none(),
                 "{source:?}"
             );
+        }
+    }
+
+    /// A name written for the style of the scalar it lands in reads back as that name.
+    ///
+    /// The check is the reading rather than the spelling. The document is built the way an accepted
+    /// offer builds one, by putting the text where the value stood, and it is read back with the
+    /// reader the form itself uses, so a rule that escaped a character wrongly fails here whatever
+    /// the escaping looks like.
+    #[test]
+    fn a_name_written_for_a_style_reads_back_as_that_name() {
+        for name in [
+            "readPerson",
+            "/records/*/date_of_birth",
+            "read: person",
+            "say \"hi\"",
+            "it's",
+            "both ' and \"",
+            "null",
+            "42",
+            "a, b",
+            "]",
+            "#comment",
+            " leading",
+            "trailing ",
+            "",
+        ] {
+            for (style, document) in [
+                (ScalarStyle::Plain, "concept: {}\n"),
+                (ScalarStyle::DoubleQuoted, "concept: \"{}\"\n"),
+                (ScalarStyle::SingleQuoted, "concept: '{}'\n"),
+            ] {
+                let written =
+                    written_as(name, style).expect("a name free of control characters is written");
+                let source = document.replace("{}", &written);
+                let read = serde_norway::from_str::<BTreeMap<String, String>>(&source)
+                    .unwrap_or_else(|error| panic!("{source:?} does not parse: {error}"));
+                assert_eq!(
+                    read.get("concept").map(String::as_str),
+                    Some(name),
+                    "{source:?}"
+                );
+            }
+        }
+    }
+
+    /// A name carrying a control character is written for no style at all. A single-quoted scalar
+    /// has no escape for one, so refusing it everywhere keeps the three styles answerable by the
+    /// same rule.
+    #[test]
+    fn a_name_carrying_a_control_character_is_written_for_no_style() {
+        for style in [
+            ScalarStyle::Plain,
+            ScalarStyle::DoubleQuoted,
+            ScalarStyle::SingleQuoted,
+        ] {
+            assert_eq!(written_as("two\nlines", style), None, "{style:?}");
         }
     }
 

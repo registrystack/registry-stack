@@ -17,7 +17,7 @@ use crate::{
     },
     safety::{plain_file, secure_directory, secure_regular_file},
     workspace::LoadedProjectDocuments,
-    yaml::{ParsedDocument, YamlValue},
+    yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
 
 pub(crate) const PROJECT_FILE: &str = "registry-stack.yaml";
@@ -262,7 +262,7 @@ impl IndexBuilder<'_> {
                 self.add_reference(
                     SymbolQuery::global(RelayKind::Entity, &entity.value),
                     path,
-                    entity.range,
+                    entity,
                 );
             }
 
@@ -286,7 +286,7 @@ impl IndexBuilder<'_> {
                         self.add_reference(
                             SymbolQuery::global(RelayKind::Integration, &integration.value),
                             path,
-                            integration.range,
+                            integration,
                         );
                     }
                 }
@@ -321,7 +321,7 @@ impl IndexBuilder<'_> {
                 self.add_reference(
                     SymbolQuery::global(kind, &alias.key.value),
                     manifest_path,
-                    alias.key.range,
+                    &alias.key,
                 );
                 continue;
             }
@@ -399,7 +399,7 @@ impl IndexBuilder<'_> {
                     self.add_reference(
                         SymbolQuery::global(kind, &entry.key.value),
                         path,
-                        entry.key.range,
+                        &entry.key,
                     );
                 }
             }
@@ -447,14 +447,15 @@ impl IndexBuilder<'_> {
         });
     }
 
-    fn add_reference(&mut self, target: SymbolQuery, path: &Path, range: Range) {
+    fn add_reference(&mut self, target: SymbolQuery, path: &Path, at: &YamlScalar) {
         self.references.push(IndexedReference {
             target,
             location: IndexedLocation {
                 path: path.to_path_buf(),
-                range,
+                range: at.range,
             },
             reports_unresolved: true,
+            style: at.style,
             // No field of a manifest is narrower than the kind it holds: a name of the right kind,
             // declared anywhere the manifest reaches, is a name that field may hold.
             offers: None,

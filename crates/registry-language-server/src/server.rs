@@ -590,14 +590,20 @@ fn to_lsp_location(location: IndexedLocation) -> Option<Location> {
 /// The edit is explicit rather than left to the client's own idea of the word under the cursor: a
 /// fact path and a file name both hold characters an editor treats as word boundaries, so a client
 /// guessing the replaced range would leave half of the old value beside the new one.
+/// The three texts a candidate carries are three different things, and an item that collapsed them
+/// would be wrong in one of the three places. The label is what an author reads, so it is bounded.
+/// The edit is what lands in the document, so it is the name spelled for the scalar it is written
+/// into, never bounded. The filter is what a client matches typing against, so it is the name as it
+/// stands; without it a client would filter a cut label against the whole name and offer nothing.
 fn completion_item(candidate: CompletionCandidate) -> CompletionItem {
     CompletionItem {
-        label: candidate.label.clone(),
+        label: candidate.label,
         kind: Some(candidate.kind),
         detail: Some(candidate.detail),
+        filter_text: Some(candidate.filter_text),
         text_edit: Some(CompletionTextEdit::Edit(TextEdit {
             range: candidate.range,
-            new_text: candidate.label,
+            new_text: candidate.new_text,
         })),
         ..CompletionItem::default()
     }

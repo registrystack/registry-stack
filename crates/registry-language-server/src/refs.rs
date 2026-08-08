@@ -12,7 +12,11 @@ use tower_lsp_server::ls_types::{
     CompletionItemKind, DiagnosticSeverity, Position, Range, SymbolKind as LspSymbolKind,
 };
 
-use crate::{relay, workspace::ProjectFamily};
+use crate::{
+    relay,
+    workspace::ProjectFamily,
+    yaml::{written_as, ScalarStyle},
+};
 
 /// The kind of a symbol, qualified by the document family that declares it. Keys, queries, and
 /// diagnostics compare whole kinds, so one family's names never resolve another family's
@@ -344,6 +348,9 @@ pub(crate) struct IndexedReference {
     /// that navigation works from it without putting a second error on one mistake. It never means
     /// the reference is allowed to dangle.
     pub(crate) reports_unresolved: bool,
+    /// How the value this reference reads was written, so a name offered here is spelled for the
+    /// place it will be written into.
+    pub(crate) style: ScalarStyle,
     /// The names this field will actually take, where its kind does not say it all. `None` is every
     /// name of the kind, which is what almost every field takes.
     ///
@@ -376,6 +383,8 @@ pub(crate) struct IndexedReference {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct IndexedChoices {
     pub(crate) location: IndexedLocation,
+    /// How the value at this place was written. See [`IndexedReference::style`].
+    pub(crate) style: ScalarStyle,
     pub(crate) kind: CompletionItemKind,
     /// The form's own word for what these are, drawn beside each one.
     pub(crate) detail: &'static str,
@@ -397,7 +406,20 @@ pub(crate) struct IndexedProject {
 /// holding that candidate and nothing of what was there before.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompletionCandidate {
+    /// The name as the menu draws it. This is the one part of a candidate that is a rendered
+    /// surface rather than a value, and it is bounded like every other piece of a project's own
+    /// text this server draws: a name is cut to the width names are quoted at everywhere else, and
+    /// a control character or a display directive inside one becomes a character that carries no
+    /// instruction. Without that, a name from a description the reader did not write could reorder
+    /// the line it is drawn on or run past the menu.
     pub label: String,
+    /// The name as the document will hold it, spelled for the scalar it lands in. This is never
+    /// bounded: what an author accepts has to be exactly the name the compiler reads, and a cut one
+    /// would write a name that resolves to nothing while looking like the one that was offered.
+    pub new_text: String,
+    /// The name the client filters the menu against, which is the name itself. It is stated rather
+    /// than left to default to the label, because the two differ for a name long enough to be cut.
+    pub filter_text: String,
     pub kind: CompletionItemKind,
     pub detail: String,
     pub range: Range,
@@ -643,18 +665,21 @@ impl ProjectIndex {
                             .as_ref()
                             .is_none_or(|offers| offers.contains(&symbol.name))
                 })
-                .map(|symbol| CompletionCandidate {
-                    label: symbol.name.clone(),
-                    kind: symbol.kind.lsp_completion_kind(),
-                    detail: symbol.kind.label().to_owned(),
-                    range: reference.location.range,
+                .filter_map(|symbol| {
+                    candidate(
+                        &symbol.name,
+                        reference.style,
+                        symbol.kind.lsp_completion_kind(),
+                        symbol.kind.label().to_owned(),
+                        reference.location.range,
+                    )
                 })
                 .collect::<Vec<_>>();
             // One entry per name, however many places define it. A name two documents declare is
             // one thing the author may write, and the duplicate that makes it ambiguous is a
             // finding rather than a second menu entry.
-            candidates.sort_by(|left, right| left.label.cmp(&right.label));
-            candidates.dedup_by(|left, right| left.label == right.label);
+            candidates.sort_by(|left, right| left.filter_text.cmp(&right.filter_text));
+            candidates.dedup_by(|left, right| left.filter_text == right.filter_text);
             return candidates;
         }
 
@@ -663,11 +688,14 @@ impl ProjectIndex {
                 choices
                     .values
                     .iter()
-                    .map(|value| CompletionCandidate {
-                        label: value.clone(),
-                        kind: choices.kind,
-                        detail: choices.detail.to_owned(),
-                        range: choices.location.range,
+                    .filter_map(|value| {
+                        candidate(
+                            value,
+                            choices.style,
+                            choices.kind,
+                            choices.detail.to_owned(),
+                            choices.location.range,
+                        )
                     })
                     .collect()
             })
@@ -982,6 +1010,35 @@ fn bounded_hover(markdown: &str) -> String {
         .map_or(&markdown[..ceiling], |newline| &markdown[..newline])
         .trim_end_matches('\n');
     format!("{kept}\n\n…")
+}
+
+/// One name offered at one place, or nothing when the name cannot be written there.
+///
+/// The two spellings of a name part company here. What the menu draws is bounded the way every other
+/// piece of a project's own text this server renders is bounded, because a name out of a description
+/// the reader did not write is drawn on a line beside names they did. What the document will hold is
+/// bounded by nothing: it is the name, spelled for the scalar it lands in, and cutting it would
+/// write a name the compiler cannot resolve in the moment the author was told it could. This is how
+/// a list is presented rather than what a list is allowed to say, and it takes nothing out of the
+/// reader's reach: the name is filtered on and written whole.
+///
+/// A name that cannot be written in that scalar at all is not offered. Shortening a list is
+/// something the editor may always do, and the alternative is a keystroke that breaks the document.
+fn candidate(
+    name: &str,
+    style: ScalarStyle,
+    kind: CompletionItemKind,
+    detail: String,
+    range: Range,
+) -> Option<CompletionCandidate> {
+    Some(CompletionCandidate {
+        label: bounded_value(name),
+        new_text: written_as(name, style)?,
+        filter_text: name.to_owned(),
+        kind,
+        detail,
+        range,
+    })
 }
 
 /// One name an author wrote, made safe to quote inside a message and cut to the width of a name.

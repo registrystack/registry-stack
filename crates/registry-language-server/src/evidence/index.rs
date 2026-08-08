@@ -246,7 +246,7 @@ impl IndexBuilder<'_> {
                 self.refer(
                     SymbolQuery::global(EvidenceKind::SelectorProfile, profile.value.as_str()),
                     path,
-                    profile.range,
+                    profile,
                 );
             }
         }
@@ -258,7 +258,7 @@ impl IndexBuilder<'_> {
             self.refer(
                 SymbolQuery::global(EvidenceKind::Source, source.value.as_str()),
                 path,
-                source.range,
+                source,
             );
         }
 
@@ -306,7 +306,7 @@ impl IndexBuilder<'_> {
             self.refer_quietly(
                 SymbolQuery::scoped(EvidenceKind::Concept, name, allowed.value.as_str()),
                 path,
-                allowed.range,
+                allowed,
             );
         }
 
@@ -373,7 +373,7 @@ impl IndexBuilder<'_> {
         self.refer_narrowed(
             SymbolQuery::global(EvidenceKind::Operation, operation_id),
             path,
-            written.range,
+            written,
             Narrowing::PublishedUnderGet,
         );
         // What the rungs below need, taken now: reading the response leaves needs the description
@@ -444,6 +444,7 @@ impl IndexBuilder<'_> {
                     path: path.to_path_buf(),
                     range: written.range,
                 },
+                style: written.style,
                 kind: CompletionItemKind::VALUE,
                 detail: "selectable leaf",
                 values: leaves.clone(),
@@ -527,7 +528,7 @@ impl IndexBuilder<'_> {
             self.refer(
                 SymbolQuery::scoped(EvidenceKind::Collection, name, bound.key.value.as_str()),
                 path,
-                bound.key.range,
+                &bound.key,
             );
         }
     }
@@ -563,7 +564,7 @@ impl IndexBuilder<'_> {
                     self.add_reference(
                         SymbolQuery::global(EvidenceKind::SelectorProfile, profile.value.as_str()),
                         path,
-                        profile.range,
+                        profile,
                         read_by_a_question,
                     );
                 }
@@ -603,7 +604,7 @@ impl IndexBuilder<'_> {
             self.refer(
                 SymbolQuery::global(EvidenceKind::Question, question.value.as_str()),
                 path,
-                question.range,
+                question,
             );
         }
     }
@@ -648,8 +649,8 @@ impl IndexBuilder<'_> {
     ) {
         let target = SymbolQuery::global(kind, pointer.value.as_str());
         match narrowing {
-            Some(narrowing) => self.refer_narrowed(target, path, pointer.range, narrowing),
-            None => self.refer(target, path, pointer.range),
+            Some(narrowing) => self.refer_narrowed(target, path, pointer, narrowing),
+            None => self.refer(target, path, pointer),
         }
 
         let Some(role) = referenced_file_role(kind) else {
@@ -674,7 +675,7 @@ impl IndexBuilder<'_> {
         self.add_reference(
             SymbolQuery::global(EvidenceKind::SchemaFile, pointer.value.as_str()),
             path,
-            pointer.range,
+            pointer,
             reported,
         );
 
@@ -749,12 +750,12 @@ impl IndexBuilder<'_> {
         });
     }
 
-    fn refer(&mut self, target: SymbolQuery, path: &Path, range: Range) {
-        self.add_reference(target, path, range, true);
+    fn refer(&mut self, target: SymbolQuery, path: &Path, at: &YamlScalar) {
+        self.add_reference(target, path, at, true);
     }
 
-    fn refer_quietly(&mut self, target: SymbolQuery, path: &Path, range: Range) {
-        self.add_reference(target, path, range, false);
+    fn refer_quietly(&mut self, target: SymbolQuery, path: &Path, at: &YamlScalar) {
+        self.add_reference(target, path, at, false);
     }
 
     /// Records a reference the author picks from fewer names than its kind holds.
@@ -766,10 +767,10 @@ impl IndexBuilder<'_> {
         &mut self,
         target: SymbolQuery,
         path: &Path,
-        range: Range,
+        at: &YamlScalar,
         narrowing: Narrowing,
     ) {
-        self.add_reference(target, path, range, true);
+        self.add_reference(target, path, at, true);
         self.narrowed.push((self.references.len() - 1, narrowing));
     }
 
@@ -777,16 +778,17 @@ impl IndexBuilder<'_> {
         &mut self,
         target: SymbolQuery,
         path: &Path,
-        range: Range,
+        at: &YamlScalar,
         reports_unresolved: bool,
     ) {
         self.references.push(IndexedReference {
             target,
             location: IndexedLocation {
                 path: path.to_path_buf(),
-                range,
+                range: at.range,
             },
             reports_unresolved,
+            style: at.style,
             offers: None,
         });
     }
