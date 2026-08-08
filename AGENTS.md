@@ -155,7 +155,13 @@ Evidence-specific contracts, source neutrality, and verifier portability:
 products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
 products/evidence/scripts/check-verifier-portability.sh
+products/evidence/scripts/check-config-key-paths.sh
 ```
+
+The last check holds the configuration reference in exact parity with the
+frozen `bundle.schema.yaml` and `runtime.schema.yaml` grammars. After changing
+a contract, run it with `--write` to regenerate the key-path blocks in
+`CONFIG.md`, then document each new key in the prose above them.
 
 Evidence client bindings, from `crates/registry-evidence-client-node`:
 
