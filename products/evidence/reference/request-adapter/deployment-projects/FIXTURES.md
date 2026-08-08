@@ -259,7 +259,17 @@ evidence evaluate --fixture "<path>" --explain --explain-format json \
   | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
 ```
 
+`evidencectl fixtures run --project <candidate> --explain` asks the same of
+every fixture a project references and relays each trace verbatim: under the
+step line in the human report, and as that fixture's `trace` string under
+`--json`. The driver asks for the text form only, because the case count it
+totals is read from the summary line the structured form replaces. Run
+`evidence evaluate` against one fixture directly for the document itself.
+
 A fixture's own `diagnosticsExclude` canaries are checked against both
-rendered forms of the trace on every run, so a stage line that ever
-interpolated a protected value instead of its shape fails the fixture that
-declared that value.
+rendered forms of the trace on every run, including a run that stopped on an
+error, so a stage line that ever interpolated a protected value instead of its
+shape fails the fixture that declared that value before the trace is printed.
+Case identifiers are part of that surface: the trace puts one on a line of its
+own, so an identifier carrying a control character is refused rather than
+rendered.

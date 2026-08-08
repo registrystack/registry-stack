@@ -30,6 +30,7 @@ compilation, fixture evaluation, secret validation, and startup acceptance.
 | `evidencectl doctor --project <candidate>` | Completed candidate on its target host | Reports runtime, bundle, secret, and audit file posture | Change project files or replace `evidence check` |
 | `evidencectl doctor --project <candidate> --mint-config <mint.yaml>` | Completed candidate and separately authored Mint configuration | Adds read-only mechanical protocol compatibility checks | Register callers, copy Mint files, infer authority, or mint a token |
 | `evidencectl fixtures run --project <candidate>` | Completed candidate and referenced synthetic fixtures | Runs `evidence check` and every referenced fixture | Start HTTP, call a source, or write a production audit entry |
+| `evidencectl fixtures run --project <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--json` | Print a response, fact, derived, or selector value, or explain a served request |
 
 `build` is create-only. It rejects an existing output directory, local assurance inputs,
 unauthenticated or non-HTTPS production sources, missing governance metadata or fixtures, unresolved
