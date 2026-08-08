@@ -187,9 +187,14 @@ impl Description {
 /// The one description kept between index builds.
 ///
 /// A rebuild happens on every keystroke in any project document, and the description is the one
-/// document that changes for none of them: it is not a buffer the client sends, so it changes only
-/// when a save reaches disk. Re-reading its text every time is cheap and is what proves the entry
-/// is still current; re-parsing and re-flattening it every time is neither.
+/// document that changes for none of them. A client may well be sending its buffer: an editor whose
+/// selector is every YAML file sends this one like any other. The buffer is not what is read here.
+/// The description is read from the root's own path so that what an operation resolves against is
+/// the file the compiler will open, rather than a half-finished edit whose errors would be drawn
+/// across every question in the project at once, and so that a document the form allows to reach
+/// 16 MiB goes through a semantic parse when it is saved rather than between one keystroke and the
+/// next. Re-reading its text every time is cheap and is what proves the entry is still current;
+/// re-parsing and re-flattening it every time is neither.
 ///
 /// One entry, because an author edits one project at a time and a second root costs exactly what no
 /// memo at all would cost. The entry holds the text it was built from rather than a size and a

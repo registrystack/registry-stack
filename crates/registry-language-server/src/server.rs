@@ -33,6 +33,18 @@ use crate::{
 
 const SERVER_NAME: &str = "Registry Stack Language Server";
 
+/// What brought one revision of a document to the server.
+///
+/// The two carry the same text and differ in what else the notification says about the project. An
+/// edit changes a buffer, and a buffer over a file no root holds changes nothing a root answers
+/// from. A save changes the file, which is what the parts of a project read from disk are read
+/// from, so it reaches further than the document it names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Revision {
+    Edited,
+    Saved,
+}
+
 #[derive(Debug)]
 pub struct Backend {
     client: Client,
@@ -113,7 +125,7 @@ impl Backend {
         }
     }
 
-    async fn update_document(&self, path: PathBuf, text: String, version: i32) {
+    async fn update_document(&self, path: PathBuf, text: String, version: i32, revision: Revision) {
         let load_error = {
             let mut workspace = self.workspace.write().await;
             let path = workspace.intern(&path);
@@ -124,7 +136,10 @@ impl Backend {
                 }
                 Err(error) => Some(bounded_load_error(&error)),
             };
-            workspace.update(path, text, version);
+            match revision {
+                Revision::Edited => workspace.update(path, text, version),
+                Revision::Saved => workspace.save(path, text, version),
+            }
             load_error
         };
         self.report_load_error(load_error).await;
@@ -294,7 +309,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let document = params.text_document;
         if let Some(path) = document_path(&document.uri) {
-            self.update_document(path, document.text, document.version)
+            self.update_document(path, document.text, document.version, Revision::Edited)
                 .await;
         }
     }
@@ -313,11 +328,24 @@ impl LanguageServer for Backend {
             return;
         }
         if let Some(path) = document_path(&params.text_document.uri) {
-            self.update_document(path, change.text, params.text_document.version)
-                .await;
+            self.update_document(
+                path,
+                change.text,
+                params.text_document.version,
+                Revision::Edited,
+            )
+            .await;
         }
     }
 
+    /// A save the client reported, with the text it wrote.
+    ///
+    /// The text is required and the URI is never opened. A notification without it names a path the
+    /// client chose and says nothing about what is at it, and a server that answered one by reading
+    /// that path would read whatever the client pointed it at. What a save still tells the server
+    /// with no text of its own read is that the file behind it changed, which is why the revision
+    /// carries the reason it arrived: the parts of a project a build reads from disk are read again
+    /// from the root's own paths, never from this one.
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let Some(text) = params.text else {
             return;
@@ -334,7 +362,8 @@ impl LanguageServer for Backend {
                 .copied()
                 .unwrap_or(0)
         };
-        self.update_document(path, text, version).await;
+        self.update_document(path, text, version, Revision::Saved)
+            .await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {

@@ -105,6 +105,32 @@ impl DocumentRole {
             Self::OpenApi | Self::Schema | Self::Fixture | Self::Derivation => false,
         }
     }
+
+    /// Whether a build of the index opens this role's file itself.
+    ///
+    /// The OpenAPI description is the one part of the form that is read at every build and held in
+    /// no root: the four edges a compact-form question spells are resolved against the operations
+    /// it publishes. So an author who adds an operation to it changes what every question in the
+    /// project resolves to, while changing no document a root holds, and nothing they can type in a
+    /// question would answer the reports standing over it. A save of a file this answers for has to
+    /// be a build.
+    ///
+    /// A schema, a fixture, and a derivation are read by nothing here, so their files answer no.
+    /// What a document pointing at one of them needs is that a file sits there, which the watcher
+    /// and the pointer's own definition already settle.
+    pub(crate) fn is_read_by_a_build(self) -> bool {
+        match self {
+            Self::OpenApi => true,
+            Self::Marker
+            | Self::Question
+            | Self::Source
+            | Self::Selector
+            | Self::Schema
+            | Self::Fixture
+            | Self::AccessPolicy
+            | Self::Derivation => false,
+        }
+    }
 }
 
 /// The project directories that hold `<name>.yaml` documents, each with the role its documents
@@ -317,6 +343,27 @@ mod tests {
             (DocumentRole::Derivation, None),
         ] {
             assert_eq!(role.max_documents(), ceiling, "{role:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_description_is_read_by_a_build_without_being_indexed() {
+        for (role, read) in [
+            (DocumentRole::Marker, false),
+            (DocumentRole::OpenApi, true),
+            (DocumentRole::Question, false),
+            (DocumentRole::Source, false),
+            (DocumentRole::Selector, false),
+            (DocumentRole::Schema, false),
+            (DocumentRole::Fixture, false),
+            (DocumentRole::AccessPolicy, false),
+            (DocumentRole::Derivation, false),
+        ] {
+            assert_eq!(role.is_read_by_a_build(), read, "{role:?}");
+            assert!(
+                !(role.is_indexed() && read),
+                "{role:?} is indexed, so a root already answers for its text"
+            );
         }
     }
 

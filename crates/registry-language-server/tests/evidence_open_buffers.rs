@@ -16,7 +16,8 @@ use serde_json::json;
 use support::{
     adult_status_project,
     lsp::{uri, LspSession},
-    without_cursors, EvidenceProject, ACCESS_POLICY_PATH, QUESTION, QUESTION_PATH,
+    operation_question_project, replacing, without_cursors, EvidenceProject, ACCESS_POLICY_PATH,
+    OPENAPI_PATH, OPERATION_OPENAPI, QUESTION, QUESTION_PATH,
 };
 
 /// The text a client sends for one project file, which is what the file says on disk.
@@ -47,6 +48,16 @@ async fn watched(session: &mut LspSession, path: &Path, kind: i32) {
         .notify(
             "workspace/didChangeWatchedFiles",
             json!({"changes": [{"uri": uri(path), "type": kind}]}),
+        )
+        .await;
+}
+
+/// One save, as a client that was told to include the text reports it.
+async fn saved(session: &mut LspSession, path: &Path, text: &str) {
+    session
+        .notify(
+            "textDocument/didSave",
+            json!({"textDocument": {"uri": uri(path)}, "text": text}),
         )
         .await;
 }
@@ -159,5 +170,50 @@ async fn a_question_that_comes_back_unannounced_stops_being_reported_as_unknown(
         published_codes(&session, &policy),
         Vec::<String>::new(),
         "the question is back in the directory the compiler reads, so nothing is unknown"
+    );
+}
+
+/// Saving the OpenAPI description answers the questions that read it.
+///
+/// The description is the one project file the build reads from disk rather than from the text a
+/// root holds, and no question document changes when an author adds the operation to it. So the
+/// author has no keystroke anywhere that would answer the report, and until the save is heard the
+/// editor is calling an operation the description publishes unpublished, over a project
+/// `evidence check` accepts. The client here declares no dynamic file watching, which is what a
+/// real client that has none looks like: the save is the only thing the server is told.
+#[tokio::test]
+async fn a_saved_description_answers_the_question_that_names_its_operation() {
+    let described = without_cursors(OPERATION_OPENAPI);
+    let unpublished = described.replace("      operationId: readPerson\n", "");
+    assert_ne!(
+        described, unpublished,
+        "the fixture description publishes the operation this removes"
+    );
+    let project = EvidenceProject::new(&replacing(
+        &operation_question_project(),
+        OPENAPI_PATH,
+        &unpublished,
+    ));
+    let mut session = LspSession::start();
+    session.initialize(project.root()).await;
+    let question = project.path(QUESTION_PATH);
+    let description = project.path(OPENAPI_PATH);
+    session
+        .open(&question, &text_of(&project, QUESTION_PATH), 1)
+        .await;
+    session.open(&description, &unpublished, 1).await;
+    assert_eq!(
+        published_codes(&session, &question),
+        vec!["evidence/unknown-operation"],
+        "the description on disk publishes no operation the question could name"
+    );
+
+    fs::write(&description, &described).expect("the project file is writable");
+    saved(&mut session, &description, &described).await;
+
+    assert_eq!(
+        published_codes(&session, &question),
+        Vec::<String>::new(),
+        "the description now publishes the operation, so the question names one that is there"
     );
 }

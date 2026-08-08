@@ -59,6 +59,12 @@ pub(crate) fn is_project_document(root: &Path, path: &Path) -> bool {
     document_role(root, path).is_some_and(DocumentRole::is_indexed)
 }
 
+/// Whether a path is a file a build of this root's index opens for itself, rather than one the root
+/// holds the text of. See [`DocumentRole::is_read_by_a_build`].
+pub(crate) fn is_read_by_a_build(root: &Path, path: &Path) -> bool {
+    document_role(root, path).is_some_and(DocumentRole::is_read_by_a_build)
+}
+
 /// Whether a path is a file the server may open under this root.
 ///
 /// Containment alone is not the whole answer here, as it is for Relay. A project holds key

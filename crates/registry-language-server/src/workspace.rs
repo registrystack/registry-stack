@@ -116,6 +116,20 @@ impl ProjectFamily {
         }
     }
 
+    /// Whether building this family's index opens the file at `path` for itself.
+    ///
+    /// The two questions beside each other are the whole of what a save can change. A document the
+    /// family owns is answered from the text the client just sent, and one it does not own is
+    /// answered from disk at the next build or from nowhere at all. Evidence has one file in the
+    /// second class, and a family with none is unaffected: Relay's index is built from the
+    /// documents it holds and nothing else.
+    fn is_read_by_a_build(self, root: &Path, path: &Path) -> bool {
+        match self {
+            Self::Relay => false,
+            Self::Evidence => evidence::is_read_by_a_build(root, path),
+        }
+    }
+
     fn is_safe_authored_file(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => relay::is_safe_authored_file(root, path),
@@ -305,6 +319,23 @@ impl RootState {
             ));
         }
         self.rebuild();
+    }
+
+    /// Takes a revision the client saved to disk.
+    ///
+    /// A document this root holds is taken exactly as any other revision is: the text the client
+    /// sent is the text of the document, saved or not. What a save adds is the other case. The
+    /// bytes of a file this root does not hold have just changed, and if a build reads that file
+    /// then everything resolved against it is answered from a revision that is gone. The author is
+    /// looking at a document the save did not touch, so nothing they type there would reach it.
+    fn save(&mut self, path: PathBuf, text: String, version: i32) {
+        if self.family.owns_document(&self.root, &path) {
+            self.update(path, text, version);
+            return;
+        }
+        if self.family.is_read_by_a_build(&self.root, &path) {
+            self.rebuild();
+        }
     }
 
     fn close(&mut self, path: &Path) {
@@ -615,6 +646,12 @@ impl Workspace {
     pub(crate) fn update(&mut self, path: PathBuf, text: String, version: i32) {
         if let Some(state) = self.root_for_mut(&path) {
             state.update(path, text, version);
+        }
+    }
+
+    pub(crate) fn save(&mut self, path: PathBuf, text: String, version: i32) {
+        if let Some(state) = self.root_for_mut(&path) {
+            state.save(path, text, version);
         }
     }
 
