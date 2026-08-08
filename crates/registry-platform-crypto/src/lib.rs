@@ -3077,6 +3077,30 @@ mod tests {
         ));
     }
 
+    /// A P-256 scalar in a key that claims ES384 is refused at both boundaries a
+    /// caller can reach. The fields are public, so parsing the document is not
+    /// the only way in; `sign` validates again rather than trusting that the
+    /// value it holds is the one that was parsed.
+    #[test]
+    fn es384_refuses_a_scalar_that_is_not_a_p384_scalar() {
+        let p256_length_scalar = URL_SAFE_NO_PAD.encode([0x11u8; 32]);
+
+        let mut document: serde_json::Value =
+            serde_json::from_str(P384_JWK).expect("p384 jwk is json");
+        document["d"] = serde_json::Value::String(p256_length_scalar.clone());
+        assert!(matches!(
+            PrivateJwk::parse(&document.to_string()),
+            Err(JwkError::Invalid("d"))
+        ));
+
+        let mut key = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        key.d = Some(p256_length_scalar);
+        assert!(matches!(
+            sign(b"registry-platform-es384-short-scalar", &key),
+            Err(CryptoError::InvalidKey(JwkError::Invalid("d")))
+        ));
+    }
+
     #[test]
     fn ec_signing_algorithms_refuse_each_other_s_curve() {
         let p256_claiming_es384 = P256_JWK.replace(r#""alg":"ES256""#, r#""alg":"ES384""#);
@@ -3217,6 +3241,21 @@ mod tests {
 
         assert!(matches!(
             PrivateJwk::parse(&ec_claiming_rs384),
+            Err(JwkError::Invalid("RS384 keys must be RSA"))
+        ));
+
+        // A relying party parses the public half alone, so that path carries the
+        // same refusal rather than trusting the private one to have run.
+        let public_ec_claiming_rs384 = serde_json::to_string(
+            &PrivateJwk::parse(P384_JWK)
+                .expect("p384 private jwk parses")
+                .public(),
+        )
+        .expect("p384 public jwk serializes")
+        .replace(r#""alg":"ES384""#, r#""alg":"RS384""#);
+
+        assert!(matches!(
+            PublicJwk::parse(&public_ec_claiming_rs384),
             Err(JwkError::Invalid("RS384 keys must be RSA"))
         ));
     }
