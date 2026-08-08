@@ -44,6 +44,7 @@ source_roots=(
   "$repository_root/crates/registry-evidence-client-node/src"
   "$repository_root/crates/registry-evidence-client-py/src"
   "$repository_root/crates/registry-evidence-verifier/src"
+  "$repository_root/crates/registry-evidence-oid4vci/src"
   "$repository_root/crates/registry-evidencectl/src"
   "$repository_root/crates/registry-language-server/src"
 )
@@ -76,6 +77,7 @@ cargo_manifests=(
   "$repository_root/crates/registry-evidence-client-node/Cargo.toml"
   "$repository_root/crates/registry-evidence-client-py/Cargo.toml"
   "$repository_root/crates/registry-evidence-verifier/Cargo.toml"
+  "$repository_root/crates/registry-evidence-oid4vci/Cargo.toml"
   "$repository_root/crates/registry-evidencectl/Cargo.toml"
   "$repository_root/crates/registry-language-server/Cargo.toml"
   "$repository_root/Cargo.toml"

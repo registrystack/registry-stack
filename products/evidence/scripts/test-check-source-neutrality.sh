@@ -34,6 +34,7 @@ swept_crates=(
   registry-evidence-client
   registry-evidence-client-node
   registry-evidence-client-py
+  registry-evidence-oid4vci
   registry-evidence-verifier
   registry-evidencectl
   registry-language-server

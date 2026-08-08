@@ -24,6 +24,15 @@ Evidence crate depends on Mint at runtime. Mint's tests drive Evidence's
 authenticator, and Evidence test code may drive a real Mint instance to prove a
 client against a real authorization server.
 
+`registry-evidence-oid4vci` is a supporting service in the same sense, not a
+third pattern: it delivers Evidence credentials to a wallet over OID4VCI 1.0
+Final, the wallet-facing protocol Evidence deliberately refuses to speak. It
+never signs a credential, Evidence signs; it never holds a holder private key,
+it receives holder public keys inside wallet-signed proofs and passes them to
+Evidence unchanged; and it adds no Evidence semantics of its own. The
+dependency runs one way only in production: no Evidence crate depends on
+`registry-evidence-oid4vci` at runtime.
+
 ## Repository map
 
 | Area | Owns |
@@ -40,6 +49,7 @@ client against a real authorization server.
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registryctl` | Relay adopter tooling |
+| `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
 | `crates/registry-language-server` | Editor language server for Relay manifests and Evidence authoring documents, linked into both adopter tools |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
