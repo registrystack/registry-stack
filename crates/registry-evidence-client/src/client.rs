@@ -18,12 +18,17 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
+    batch::{SdJwtVcBatchResponse, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES},
     config::EvidenceClientConfig,
     definitions::{EvidenceDefinitionsDocument, EVIDENCE_DEFINITIONS_SCHEMA_V1},
     error::EvidenceClientError,
     outbound::{self, OutboundOptions},
-    prepare::{EvidenceRequestSpec, PreparedEvidenceRequest},
+    prepare::{
+        EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
+        PreparedHolderBoundRequest,
+    },
     problem::{essence, map_problem, sanitized_operation},
+    response_format::EvidenceResponseFormat,
     retained::RetainedEvidenceVerification,
 };
 
@@ -145,7 +150,24 @@ impl VerifiedEvidence {
 
 impl EvidenceClient {
     /// Build a client for one deployment.
+    ///
+    /// The configuration must pin a key set. A configuration built by
+    /// [`EvidenceClientConfig::without_verification`] is refused here, because
+    /// every verification method on this type reads that key set, and a client
+    /// that silently did not verify would be a far worse outcome than a refusal
+    /// at construction. Such a configuration builds a
+    /// [`NonVerifyingEvidenceClient`] instead.
     pub fn new(config: EvidenceClientConfig) -> Result<Self, EvidenceClientError> {
+        if !config.verifies() {
+            return Err(EvidenceClientError::configuration(
+                "this client verifies, so its configuration must pin a key set",
+            ));
+        }
+        Self::build(config)
+    }
+
+    /// Validate and connect, without deciding the verification stance.
+    fn build(config: EvidenceClientConfig) -> Result<Self, EvidenceClientError> {
         config.validate()?;
         let http = build_client(&config)?;
         Ok(Self { config, http })
@@ -165,6 +187,21 @@ impl EvidenceClient {
         spec: EvidenceRequestSpec,
     ) -> Result<PreparedEvidenceRequest, EvidenceClientError> {
         PreparedEvidenceRequest::new_with_revoked_key_ids(spec, self.config.revoked_key_ids.clone())
+    }
+
+    /// Close the expectations for one holder-bound request and generate its
+    /// nonce.
+    ///
+    /// No I/O happens here, and the returned request is good for exactly one
+    /// exchange, exactly as [`EvidenceClient::prepare`] is. What it does not
+    /// close is a verification policy: see [`PreparedHolderBoundRequest`] for
+    /// why a holder-bound credential is not verified by the party that requests
+    /// it.
+    pub fn prepare_holder_bound(
+        &self,
+        spec: HolderBoundRequestSpec,
+    ) -> Result<PreparedHolderBoundRequest, EvidenceClientError> {
+        PreparedHolderBoundRequest::new(spec)
     }
 
     /// Close a self-contained offline verification context before a response
@@ -239,9 +276,53 @@ impl EvidenceClient {
         prepared: &PreparedEvidenceRequest,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         prepared.claim_single_send()?;
+        self.post_evidence(prepared.response_format(), prepared.request_json()?)
+            .await
+    }
+
+    /// Send one holder-bound request and read the credential response.
+    ///
+    /// This is [`EvidenceClient::send`] for a holder-bound request, with the
+    /// same single-send rule and the same absence of retry, and it stops in the
+    /// same place: the bytes are read, never judged. There is no
+    /// `request_and_verify` counterpart, because the requester is not the party
+    /// that verifies a holder-bound credential.
+    pub async fn send_holder_bound(
+        &self,
+        prepared: &PreparedHolderBoundRequest,
+    ) -> Result<RawEvidenceResponse, EvidenceClientError> {
+        prepared.claim_single_send()?;
+        self.post_evidence(prepared.response_format(), prepared.request_json()?)
+            .await
+    }
+
+    /// Send one holder-bound batch request and read the issuance envelope.
+    ///
+    /// The batch rule is [`EvidenceClient::send_batch`]'s: a request that did
+    /// not ask for a batch is refused here rather than sent, because the
+    /// `Accept` header was decided when the request was prepared.
+    pub async fn send_holder_bound_batch(
+        &self,
+        prepared: &PreparedHolderBoundRequest,
+    ) -> Result<SdJwtVcBatchResponse, EvidenceClientError> {
+        if prepared.response_format() != EvidenceResponseFormat::SdJwtVcBatch {
+            return Err(EvidenceClientError::configuration(
+                "this prepared request did not ask for a batch response format",
+            ));
+        }
+        let response = self.send_holder_bound(prepared).await?;
+        SdJwtVcBatchResponse::parse(response.body())
+    }
+
+    /// POST one already-serialized request body and read the response under the
+    /// bound its format carries.
+    async fn post_evidence(
+        &self,
+        format: EvidenceResponseFormat,
+        body: Vec<u8>,
+    ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let url = self.endpoint(EVIDENCE_PATH)?;
-        let body = prepared.request_json()?;
-        let response_media_type = prepared.response_format().media_type();
+        let response_media_type = format.media_type();
         let request = self
             .http
             .request(Method::POST, url)
@@ -249,12 +330,50 @@ impl EvidenceClient {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .body(body);
         let response = self.exchange(request, Credential::Required).await?;
-        self.expect_success(
-            response,
-            response_media_type,
-            self.config.max_response_bytes,
-        )
-        .await
+        self.expect_success(response, response_media_type, self.response_bound(format))
+            .await
+    }
+
+    /// The byte bound one response in this format is read under.
+    ///
+    /// A batch answers with several credentials at once, so the contract bounds
+    /// it explicitly. The relying party's own configured bound still applies,
+    /// and whichever is smaller decides: neither party's limit is widened by
+    /// the other's.
+    fn response_bound(&self, format: EvidenceResponseFormat) -> u64 {
+        match format {
+            EvidenceResponseFormat::SignedJws | EvidenceResponseFormat::SdJwtVc => {
+                self.config.max_response_bytes
+            }
+            EvidenceResponseFormat::SdJwtVcBatch => self
+                .config
+                .max_response_bytes
+                .min(MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES as u64),
+        }
+    }
+
+    /// Send one prepared batch request and read the issuance envelope.
+    ///
+    /// This is [`EvidenceClient::send`] for a request whose author asked for
+    /// [`EvidenceResponseFormat::SdJwtVcBatch`], and it spends the same single
+    /// send. It infers nothing: a request that did not ask for a batch is
+    /// refused here rather than sent, because the `Accept` header was already
+    /// decided when the request was prepared and this method cannot change it.
+    ///
+    /// What comes back is read, not verified. Every credential in the returned
+    /// envelope is still unverified material; verify each one individually
+    /// before acting on anything it says.
+    pub async fn send_batch(
+        &self,
+        prepared: &PreparedEvidenceRequest,
+    ) -> Result<SdJwtVcBatchResponse, EvidenceClientError> {
+        if prepared.response_format() != EvidenceResponseFormat::SdJwtVcBatch {
+            return Err(EvidenceClientError::configuration(
+                "this prepared request did not ask for a batch response format",
+            ));
+        }
+        let response = self.send(prepared).await?;
+        SdJwtVcBatchResponse::parse(response.body())
     }
 
     /// Verify a signed response against the policy its request closed.
@@ -494,6 +613,96 @@ impl EvidenceClient {
     }
 }
 
+/// A relying party that requests holder-bound credentials and does not verify
+/// them.
+///
+/// The case this exists for is a credential delivery front end: it asks the
+/// deployment for a holder-bound credential and hands the bytes to a wallet.
+/// The wallet, or whoever the wallet later presents to, is the verifier. That
+/// verification needs a key-binding JWT the holder has not created at issuance,
+/// so the requester could not perform it even if it wanted to.
+///
+/// This type carries no verification method at all. Not a method that returns
+/// an error, and not a method guarded by a flag: the path is absent, so a
+/// non-verifying client cannot be mistaken for one that checked something. It
+/// also carries no audience-scoped request path, because an audience-scoped
+/// answer is addressed to the requester itself and there is no one else to
+/// verify it.
+///
+/// The audience-scoped path is untouched by this type's existence.
+/// [`EvidenceClient`] still requires a pinned key set, still verifies, and is
+/// unreachable from a configuration that declined to verify.
+#[derive(Debug)]
+pub struct NonVerifyingEvidenceClient {
+    inner: EvidenceClient,
+}
+
+impl NonVerifyingEvidenceClient {
+    /// Build a non-verifying client for one deployment.
+    ///
+    /// The configuration must be one built by
+    /// [`EvidenceClientConfig::without_verification`]. A configuration that
+    /// pinned a key set is refused, so declining to verify is always a stated
+    /// decision rather than a side effect of which constructor was reached for.
+    pub fn new(config: EvidenceClientConfig) -> Result<Self, EvidenceClientError> {
+        if config.verifies() {
+            return Err(EvidenceClientError::configuration(
+                "this client does not verify, so its configuration must decline verification",
+            ));
+        }
+        Ok(Self {
+            inner: EvidenceClient::build(config)?,
+        })
+    }
+
+    #[must_use]
+    pub fn config(&self) -> &EvidenceClientConfig {
+        self.inner.config()
+    }
+
+    /// Close the expectations for one holder-bound request and generate its
+    /// nonce. See [`EvidenceClient::prepare_holder_bound`].
+    pub fn prepare_holder_bound(
+        &self,
+        spec: HolderBoundRequestSpec,
+    ) -> Result<PreparedHolderBoundRequest, EvidenceClientError> {
+        self.inner.prepare_holder_bound(spec)
+    }
+
+    /// Send one holder-bound request and read the credential response. See
+    /// [`EvidenceClient::send_holder_bound`].
+    pub async fn send_holder_bound(
+        &self,
+        prepared: &PreparedHolderBoundRequest,
+    ) -> Result<RawEvidenceResponse, EvidenceClientError> {
+        self.inner.send_holder_bound(prepared).await
+    }
+
+    /// Send one holder-bound batch request and read the issuance envelope. See
+    /// [`EvidenceClient::send_holder_bound_batch`].
+    pub async fn send_holder_bound_batch(
+        &self,
+        prepared: &PreparedHolderBoundRequest,
+    ) -> Result<SdJwtVcBatchResponse, EvidenceClientError> {
+        self.inner.send_holder_bound_batch(prepared).await
+    }
+
+    /// Read the request shapes this requester is entitled to send. See
+    /// [`EvidenceClient::discover`].
+    pub async fn discover(&self) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
+        self.inner.discover().await
+    }
+
+    /// Read the deployment's published verification key set, for an out-of-band
+    /// pinning workflow. See [`EvidenceClient::fetch_jwks`].
+    ///
+    /// This is not verification, and it is not a way back to it: the document is
+    /// returned to the caller and this client never consults it.
+    pub async fn fetch_jwks(&self) -> Result<JwksDocument, EvidenceClientError> {
+        self.inner.fetch_jwks().await
+    }
+}
+
 /// Build the outbound client from the pinned deployment options.
 fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, EvidenceClientError> {
     outbound::build_client(OutboundOptions {
@@ -512,10 +721,12 @@ fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, Eviden
 mod tests {
     use super::*;
     use crate::{
+        batch::{EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1},
         error::TransportKind,
         fixtures::{
-            signed_evidence, SignedEvidenceFixture, AUDIENCE, CONCEPT, CONFIGURATION_REVISION,
-            EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS, PROVIDED_BY, PURPOSE, REQUIREMENT,
+            holder_key, signed_evidence, SignedEvidenceFixture, AUDIENCE, CONCEPT,
+            CONFIGURATION_REVISION, EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS,
+            PROVIDED_BY, PURPOSE, REQUIREMENT,
         },
         outbound::read_failure_kind,
         prepare::{EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
@@ -589,6 +800,7 @@ mod tests {
                     SelectorValue::from("synthetic-record-001"),
                 )]),
             }],
+            holder_keys: Vec::new(),
             expected_outputs: vec![ExpectedOutputDocument {
                 concept: CONCEPT.to_owned(),
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
@@ -661,7 +873,10 @@ mod tests {
             .verify_as_of(&prepared, &response, fixture.now)
             .expect("the response verifies");
         assert_eq!(verified.operation(), Some("01JZZZOPERATION"));
-        assert_eq!(verified.evidence().request_nonce, prepared.request_nonce());
+        assert_eq!(
+            verified.evidence().request_nonce,
+            Some(prepared.request_nonce().to_owned())
+        );
         assert_eq!(
             serde_json::to_value(verified.pinned_subject_expectations())
                 .expect("the expectations serialize"),
@@ -1012,6 +1227,111 @@ mod tests {
         client
             .verify_as_of(&prepared, &response, fixture.now)
             .expect("the SD-JWT VC response verifies");
+    }
+
+    /// The batch format is a request, not an inference: stating it is what sets
+    /// the `Accept` header the deployment selects a batch from, and the envelope
+    /// that comes back reaches the caller as credentials in the order its holder
+    /// keys were presented.
+    #[tokio::test]
+    async fn a_batch_request_asks_for_the_batch_media_type_and_reads_the_envelope() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let mut request_spec = spec(SubjectExpectations::AcceptFirstUse);
+        request_spec.response_format = EvidenceResponseFormat::SdJwtVcBatch;
+        request_spec.holder_keys = vec![holder_key(), holder_key()];
+        let prepared = client
+            .prepare(request_spec)
+            .expect("the batch request is prepared");
+        let envelope = serde_json::json!({
+            "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
+            "type": "SdJwtVcBatchEnvelope",
+            "credentials": ["first-credential~", "second-credential~"],
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .and(header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(envelope, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let batch = client
+            .send_batch(&prepared)
+            .await
+            .expect("the batch envelope is read");
+
+        assert_eq!(batch.count(), 2);
+        assert_eq!(
+            batch.credential_for_holder_key(0),
+            Some("first-credential~")
+        );
+        assert_eq!(
+            batch.credential_for_holder_key(1),
+            Some("second-credential~")
+        );
+    }
+
+    /// `send_batch` reads one format and one only. A request that asked for a
+    /// singular response already sent a singular `Accept`, and this method
+    /// cannot retroactively change what was asked for, so it refuses rather
+    /// than spending the single send on an answer it would not be able to read.
+    #[tokio::test]
+    async fn send_batch_refuses_a_request_that_did_not_ask_for_a_batch() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the singular request is prepared");
+
+        let failure = client
+            .send_batch(&prepared)
+            .await
+            .expect_err("a singular request is not a batch request");
+
+        assert!(
+            matches!(failure, EvidenceClientError::Configuration { .. }),
+            "{failure:?}"
+        );
+        // The refusal is local, so the single send is still unspent.
+        assert!(prepared.claim_single_send().is_ok());
+    }
+
+    /// Asking the client to verify a batch as one response is a category error,
+    /// and the caller is told exactly that rather than shown a parse failure
+    /// against an envelope nothing was ever going to verify.
+    #[tokio::test]
+    async fn verifying_a_batch_as_one_response_is_refused_legibly() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let mut request_spec = spec(SubjectExpectations::AcceptFirstUse);
+        request_spec.response_format = EvidenceResponseFormat::SdJwtVcBatch;
+        request_spec.holder_keys = vec![holder_key()];
+        let prepared = client
+            .prepare(request_spec)
+            .expect("the batch request is prepared");
+
+        let failure = client
+            .verify_as_of(&prepared, &raw(b"anything at all".to_vec()), fixture.now)
+            .expect_err("an envelope is not one verifiable response");
+
+        let EvidenceClientError::Configuration { reason } = &failure else {
+            panic!("{failure:?}");
+        };
+        assert!(reason.contains("issuance packaging"), "{reason}");
+        assert!(reason.contains("verify each credential"), "{reason}");
     }
 
     /// A body the problem contract does not cover leaves the client with nothing
@@ -1550,5 +1870,179 @@ mod tests {
         let rendered = format!("{response:?}");
         assert!(!rendered.contains("canary"), "{rendered}");
         assert!(rendered.contains("body_bytes"), "{rendered}");
+    }
+
+    fn holder_bound_spec(response_format: EvidenceResponseFormat) -> HolderBoundRequestSpec {
+        let spec = spec(SubjectExpectations::AcceptFirstUse);
+        HolderBoundRequestSpec {
+            response_format,
+            requirement: spec.requirement,
+            purpose: spec.purpose,
+            evidence_type: spec.evidence_type,
+            issued_by: spec.issued_by,
+            provided_by: spec.provided_by,
+            configuration_revision: spec.configuration_revision,
+            expected_assurance_profile: spec.expected_assurance_profile,
+            subjects: spec.subjects,
+            holder_keys: vec![holder_key()],
+            expected_outputs: spec.expected_outputs,
+            maximum_assertion_lifetime_seconds: spec.maximum_assertion_lifetime_seconds,
+            clock_skew_seconds: spec.clock_skew_seconds,
+            subject_expectations: spec.subject_expectations,
+        }
+    }
+
+    fn non_verifying_client(base_url: &str) -> NonVerifyingEvidenceClient {
+        NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
+            Url::parse(base_url).expect("the base URL parses"),
+            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+        ))
+        .expect("the non-verifying client is configured")
+    }
+
+    /// A holder-bound request negotiates the same media type a holder-bound
+    /// credential is returned in, and what comes back is read rather than
+    /// judged. There is no verification step to reach here, at this client or
+    /// any other.
+    #[tokio::test]
+    async fn a_holder_bound_request_reaches_the_deployment_and_the_answer_is_read_unjudged() {
+        let server = MockServer::start().await;
+        let client = non_verifying_client(&server.uri());
+        let prepared = client
+            .prepare_holder_bound(holder_bound_spec(EvidenceResponseFormat::SdJwtVc))
+            .expect("the holder-bound request is prepared");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence"))
+            .and(header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                b"a-holder-bound-credential~".to_vec(),
+                EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = client
+            .send_holder_bound(&prepared)
+            .await
+            .expect("the credential is read");
+        assert_eq!(response.body(), b"a-holder-bound-credential~");
+    }
+
+    /// The single-send rule is the audience-scoped rule, and it holds through
+    /// the client rather than only inside the prepared request.
+    #[tokio::test]
+    async fn a_prepared_holder_bound_request_reaches_the_deployment_at_most_once() {
+        let server = MockServer::start().await;
+        let client = non_verifying_client(&server.uri());
+        let prepared = client
+            .prepare_holder_bound(holder_bound_spec(EvidenceResponseFormat::SdJwtVc))
+            .expect("the holder-bound request is prepared");
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                b"a-holder-bound-credential~".to_vec(),
+                EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .send_holder_bound(&prepared)
+            .await
+            .expect("the first send reaches the deployment");
+        let failure = client
+            .send_holder_bound(&prepared)
+            .await
+            .expect_err("the second send is refused");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "a prepared request may be sent once; prepare again for a fresh nonce"
+                }
+            ),
+            "{failure:?}"
+        );
+    }
+
+    /// The batch rule reads one format and one only, on this path exactly as on
+    /// the audience-scoped one, so the single send is not spent on an answer
+    /// this method could not read.
+    #[tokio::test]
+    async fn send_holder_bound_batch_refuses_a_request_that_did_not_ask_for_a_batch() {
+        let server = MockServer::start().await;
+        let client = non_verifying_client(&server.uri());
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let prepared = client
+            .prepare_holder_bound(holder_bound_spec(EvidenceResponseFormat::SdJwtVc))
+            .expect("the singular request is prepared");
+
+        let failure = client
+            .send_holder_bound_batch(&prepared)
+            .await
+            .expect_err("a singular request is not a batch");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "this prepared request did not ask for a batch response format"
+                }
+            ),
+            "{failure:?}"
+        );
+    }
+
+    /// The two constructors decide the two stances, and neither accepts the
+    /// other's configuration. A client that verifies always has the key set its
+    /// verification methods read, and a client that does not verify never
+    /// reaches a method that would pretend to.
+    #[test]
+    fn a_client_that_verifies_and_one_that_does_not_are_not_interchangeable() {
+        let fixture = signed_evidence();
+        let failure = EvidenceClient::new(EvidenceClientConfig::without_verification(
+            Url::parse("https://evidence.example.org/").expect("the base URL parses"),
+            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+        ))
+        .expect_err("a verifying client refuses a declined configuration");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason: "this client verifies, so its configuration must pin a key set"
+                }
+            ),
+            "{failure:?}"
+        );
+
+        let failure =
+            NonVerifyingEvidenceClient::new(config_for("https://evidence.example.org/", &fixture))
+                .expect_err("a non-verifying client refuses a pinned configuration");
+        assert!(
+            matches!(
+                failure,
+                EvidenceClientError::Configuration {
+                    reason:
+                        "this client does not verify, so its configuration must decline verification"
+                }
+            ),
+            "{failure:?}"
+        );
+    }
+
+    /// The non-verifying client carries no key material at all, so there is
+    /// nothing for a verification path to have been built on even if one were
+    /// added by accident. The compiler enforces the absence of the path; this
+    /// records the absence of what it would need.
+    #[test]
+    fn a_non_verifying_client_holds_nothing_to_verify_with() {
+        let client = non_verifying_client("https://evidence.example.org/");
+        assert!(!client.config().verifies());
+        assert!(client.config().trusted_jwks().keys.is_empty());
+        assert!(client.config().revoked_key_ids().is_empty());
     }
 }

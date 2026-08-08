@@ -350,9 +350,10 @@ fn subject_bound_request() -> EvidenceRequest {
                 values: None,
             },
         }],
-        // A holder key belongs to the SD-JWT VC response format and never
-        // reaches authorization, which is the only thing under test here.
-        holder_key: None,
+        // Under the audience-scoped mode this requirement uses, a holder key
+        // belongs to the SD-JWT VC response format and never reaches
+        // authorization, which is the only thing under test here.
+        holder_keys: Vec::new(),
     }
 }
 

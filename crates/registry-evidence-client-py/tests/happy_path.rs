@@ -37,7 +37,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use evidence_client_sdk::{
     AssuranceProfile, Evidence, EvidenceObjectType, JwksDocument, PublicValue, SubjectBinding,
-    SupportedValue,
+    SubjectBindingMode, SupportedValue,
 };
 use p256::{
     ecdsa::{signature::Signer, Signature, SigningKey},
@@ -127,7 +127,8 @@ fn evidence_for(request_nonce: &str, subject_binding: &str) -> Evidence {
     Evidence {
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
-        request_nonce: request_nonce.to_owned(),
+        subject_binding: SubjectBindingMode::AudienceScoped,
+        request_nonce: Some(request_nonce.to_owned()),
         id: "urn:example:evidence:python-live".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,
         supports_requirement: "urn:example:requirement:v1".to_owned(),
@@ -138,7 +139,7 @@ fn evidence_for(request_nonce: &str, subject_binding: &str) -> Evidence {
         observed_at: issued_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         valid_until: valid_until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         purpose: "example-purpose".to_owned(),
-        audience: "urn:example:audience".to_owned(),
+        audience: Some("urn:example:audience".to_owned()),
         configuration_revision: format!("sha256:{}", "0".repeat(64)),
         subjects: vec![SubjectBinding {
             role: "subject".to_owned(),

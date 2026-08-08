@@ -29,8 +29,8 @@ use registry_evidence::{
         OutboundTlsConfig, SchemaFault, SelectorInput, StageRole,
     },
     kernel::{
-        EvidenceConstruction, KernelError, KernelOutcome, OfflineKernel, ValidatedValues,
-        ValueProjection,
+        EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel,
+        ValidatedValues, ValueProjection,
     },
     local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
@@ -58,8 +58,9 @@ use registry_evidence::{
     source_sqlite::{cause as sqlite_cause, check_statement_offline, materialize_seed_extract},
     trace::{json_type, name_list, object_keys, FixtureReport, FixtureTrace, Stage, StageStatus},
     verifier::{
-        verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
-        EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
+        verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_presentation_report,
+        verify_sd_jwt_vc_report, EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument,
+        HolderBoundPresentationPolicyDocument, VerificationError,
     },
 };
 use registry_platform_audit::{
@@ -158,6 +159,35 @@ enum Command {
         #[arg(long)]
         jwks: PathBuf,
         /// Relying-procedure verification policy document.
+        #[arg(long)]
+        policy: PathBuf,
+        /// Verification instant as strict RFC 3339 UTC; system time by default.
+        #[arg(long)]
+        at: Option<String>,
+    },
+    /// Re-verify one stored holder-bound presentation offline against a pinned
+    /// key set.
+    ///
+    /// The named file is one compact SD-JWT VC serialization carrying the
+    /// holder's key-binding JWT after its last tilde, so the proof is never a
+    /// separate input. Naming the input states its shape: a stored credential
+    /// that ends in a trailing tilde offers no proof of possession and is
+    /// refused here rather than verified without one.
+    ///
+    /// Success proves the presenter held the confirmation key's private key
+    /// when the key-binding JWT was signed. It does not prove that the
+    /// presentation is fresh, single-use, or unreplayed: the expected challenge
+    /// is compared, never consumed, and this command retains no state between
+    /// runs, so the same file verifies again under the same policy. Retiring a
+    /// challenge belongs to the relying party's own challenge lifecycle.
+    VerifyPresentation {
+        /// Stored compact SD-JWT VC presentation file.
+        #[arg(long = "sd-jwt-vc-presentation")]
+        sd_jwt_vc_presentation: PathBuf,
+        /// Pinned trusted JWKS document. This file is the complete trust set.
+        #[arg(long)]
+        jwks: PathBuf,
+        /// Holder-bound relying-procedure verification policy document.
         #[arg(long)]
         policy: PathBuf,
         /// Verification instant as strict RFC 3339 UTC; system time by default.
@@ -440,6 +470,17 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 at.as_deref(),
             )?)
         }
+        Command::VerifyPresentation {
+            sd_jwt_vc_presentation,
+            jwks,
+            policy,
+            at,
+        } => Ok(verify_stored_presentation(
+            &sd_jwt_vc_presentation,
+            &jwks,
+            &policy,
+            at.as_deref(),
+        )?),
         Command::VerifyAudit => run_verify_audit(&cli.runtime),
         Command::PrepareLocalRelyingProcedure { input } => {
             prepare_local_relying_procedure_command(&cli.runtime, &input).await
@@ -872,6 +913,84 @@ fn verify_stored_response(
     }
 }
 
+/// Exactly what a verified presentation proves, and what it does not.
+///
+/// It is printed rather than left to documentation because the two answers are
+/// easy to conflate: the expected challenge is compared, never consumed, so an
+/// operator who read `authentic: yes` as "these bytes had not been presented
+/// before" would be reading a guarantee this command cannot give.
+const POSSESSION_STATEMENT: &str =
+    "proven when the key-binding JWT was signed; not proof that the presentation is fresh, single-use, or unreplayed";
+
+/// Re-verify one stored holder-bound presentation offline.
+///
+/// This is the holder-bound counterpart of [`verify_stored_response`] and keeps
+/// the same posture: the pinned key set file is the complete trust set, no
+/// socket is opened, no metadata is resolved, no key is fetched, and every
+/// expectation comes from the operator's own policy document. Here that
+/// document also carries the challenge the relying party issued and retained.
+/// A failure reports only its closed class, so re-verification never becomes an
+/// oracle for which hidden comparison failed.
+///
+/// The printed lines are the verification instant, the authenticity answer,
+/// what possession the run proved, and, for an authentic presentation, current
+/// usability. Comparing the expected challenge does not retire it and this
+/// command holds no state between runs, so the same file verifies again under
+/// the same policy; deciding that a challenge is spent belongs to the relying
+/// party's own challenge lifecycle.
+fn verify_stored_presentation(
+    presentation_path: &Path,
+    jwks_path: &Path,
+    policy_path: &Path,
+    at: Option<&str>,
+) -> Result<ExitCode, CliError> {
+    let instant = verification_instant(at)?;
+    println!(
+        "verified-at: {}",
+        instant.to_rfc3339_opts(SecondsFormat::Secs, true)
+    );
+
+    let presentation = read_verification_input(presentation_path)?;
+    let trusted: JwksDocument = serde_json::from_value(
+        parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
+    // The holder-bound document is closed and declares its own mode, so a
+    // Version 1 policy never parses here and this policy never parses there.
+    let document: HolderBoundPresentationPolicyDocument =
+        serde_norway::from_slice(&read_verification_input(policy_path)?)
+            .map_err(|_| VERIFY_MALFORMED)?;
+    // As on the Version 1 path, a policy stating a bound the contract forbids
+    // is an unusable input document rather than a verification outcome.
+    let policy = document
+        .try_into_policy(instant)
+        .map_err(|_| VERIFY_MALFORMED)?;
+
+    match verify_sd_jwt_vc_presentation_report(&presentation, &trusted, &policy) {
+        Ok(report) => {
+            println!("authentic: yes");
+            println!("possession: {POSSESSION_STATEMENT}");
+            if !report.currently_valid {
+                println!("currently-valid: no");
+                return Ok(ExitCode::from(NOT_CURRENT_EXIT_CODE));
+            }
+            println!("currently-valid: yes");
+            // Inspection output for the operator who already holds the stored
+            // presentation. It appears only once the trusted key signed the
+            // exact payload, the holder proved possession, every expectation
+            // held, and the assertion is current.
+            let inspected = serde_json::to_string_pretty(&report.evidence)
+                .map_err(|_| verification_error_class(VerificationError::Payload))?;
+            println!("{inspected}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            println!("authentic: no");
+            Err(verification_error_class(error))
+        }
+    }
+}
+
 /// Resolve the verification instant from `--at`, or from system time.
 ///
 /// `--at` is strict RFC 3339 at zero offset, so an operator cannot silently
@@ -912,6 +1031,9 @@ fn verification_error_class(error: VerificationError) -> CliError {
         VerificationError::Time => CliError("stored response verification failed (time)"),
         VerificationError::Disclosure => {
             CliError("stored response verification failed (disclosure)")
+        }
+        VerificationError::KeyBinding => {
+            CliError("stored response verification failed (key-binding)")
         }
     }
 }
@@ -1384,7 +1506,10 @@ fn evaluate_fixture_acquisition(
     trace: &mut FixtureTrace,
 ) -> Result<Result<KernelOutcome, KernelError>, CliError> {
     let projection = || ValueProjection {
-        audience: OFFLINE_AUDIENCE,
+        scope: EvidenceScope::AudienceScoped {
+            audience: OFFLINE_AUDIENCE,
+            request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+        },
         binding_key: &OFFLINE_BINDING_KEY,
         binding_key_version: 1,
     };
@@ -2691,7 +2816,10 @@ async fn validate_reference_lookup(
             selectors,
             observed_at,
             ValueProjection {
-                audience: OFFLINE_AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: OFFLINE_AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: &OFFLINE_BINDING_KEY,
                 binding_key_version: 1,
             },
@@ -2812,7 +2940,7 @@ async fn sign_and_verify_fixture_evidence(
                         &OFFLINE_BINDING_KEY,
                         1,
                         &bundle.config.service.trust_domain,
-                        OFFLINE_AUDIENCE,
+                        registry_evidence::binding::SubjectBindingScope::Audience(OFFLINE_AUDIENCE),
                         &resolved.purpose,
                     )
                     .map_err(|_| CliError("fixture subject binding failed"))?,
@@ -2827,9 +2955,11 @@ async fn sign_and_verify_fixture_evidence(
             values,
             EvidenceConstruction {
                 evidence_id: &evidence_id,
-                request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                 purpose: &resolved.purpose,
-                audience: OFFLINE_AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: OFFLINE_AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 issued_at,
                 observed_at,
                 subjects,
@@ -3433,7 +3563,10 @@ fn validate_reference_derivation_mutation(
             &requirement.id,
             injected,
             ValueProjection {
-                audience: OFFLINE_AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: OFFLINE_AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: &OFFLINE_BINDING_KEY,
                 binding_key_version: 1,
             },
@@ -4136,7 +4269,10 @@ fn validate_injected_rejection(
             &requirement.id,
             derived,
             ValueProjection {
-                audience: OFFLINE_AUDIENCE,
+                scope: EvidenceScope::AudienceScoped {
+                    audience: OFFLINE_AUDIENCE,
+                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                },
                 binding_key: &OFFLINE_BINDING_KEY,
                 binding_key_version: 1,
             },
@@ -4251,7 +4387,7 @@ mod tests {
         audit_segment_paths, AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind, EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
     };
-    use registry_evidence::config::AssuranceProfile;
+    use registry_evidence::config::{AssuranceProfile, SubjectBindingMode};
     use registry_evidence::verifier::ExpectedValueForm;
     use std::fs;
 
@@ -5515,6 +5651,75 @@ mod tests {
                 .await
                 .is_ok(),
                 "combined acceptance fixture failed"
+            );
+        }
+
+        set_tree_mode(directory.path(), 0o755, 0o444);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_cli_evaluates_the_holder_bound_acceptance_bundle() {
+        // The holder-bound twin runs the same four coequal definitions over the
+        // same case fixtures, read-only and with no network. Acceptance
+        // evaluation is about what each definition derives from its source, and
+        // that is what the mode must leave alone: a definition that stopped
+        // deciding its cases once its subjects bound to a holder key would mean
+        // the mode had reached into evaluation.
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/holder-bound");
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source_plans = compile_source_plans_with_runtime(
+            &bundle.config,
+            &source_statements(&bundle, None).expect("statement sources bind"),
+            "/run/secrets/evidence",
+            &OutboundTlsConfig {
+                system_roots: true,
+                trust_profiles: Default::default(),
+            },
+            &Default::default(),
+        )
+        .expect("source plans compile");
+        assert_eq!(bundle.config.requirements.len(), 4);
+        for requirement in &bundle.config.requirements {
+            assert_eq!(
+                requirement.subject_binding,
+                Some(SubjectBindingMode::HolderBound),
+                "{} is not declared holder-bound",
+                requirement.id
+            );
+            let fixture = Path::new(
+                requirement
+                    .fixtures
+                    .as_ref()
+                    .expect("acceptance fixture is declared")
+                    .as_str(),
+            );
+            let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
+                .get("cases")
+                .and_then(serde_norway::Value::as_sequence)
+                .expect("cases")
+                .len();
+            assert_eq!(
+                evaluate_fixture(
+                    &bundle,
+                    &kernel,
+                    &source_plans,
+                    fixture,
+                    true,
+                    &mut FixtureTrace::default()
+                )
+                .await,
+                Ok(FixtureSummary {
+                    evaluated_cases: expected_cases,
+                }),
+                "{}",
+                requirement.id
             );
         }
 

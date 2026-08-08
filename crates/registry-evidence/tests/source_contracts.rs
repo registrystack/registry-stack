@@ -18,7 +18,9 @@ use registry_evidence::config::{
     AcquisitionPosture, FixedRequest, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy,
     PreparationLimits, SourceConfig, StageInputs, RESERVED_HEADER_CONTRACT_CASES,
 };
-use registry_evidence::kernel::{EvidenceConstruction, OfflineKernel, ValueProjection};
+use registry_evidence::kernel::{
+    EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
+};
 use registry_evidence::model::{LookupResult, PublicValue, SelectorValue, SubjectBinding};
 use registry_evidence::rhai_runtime::{
     CalendarDate, EvaluationContext, LegalLocalTime, QueryPair, RequestPartRequirement,
@@ -1671,7 +1673,10 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                 matched_facts.get(shape).expect("shape match facts exist"),
                 observed_at,
                 ValueProjection {
-                    audience: "https://relying.invalid/residence-procedure",
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: "https://relying.invalid/residence-procedure",
+                        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
                     binding_key: b"source-shape-binding-key-32-bytes-minimum",
                     binding_key_version: 1,
                 },
@@ -1693,9 +1698,11 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                 values,
                 EvidenceConstruction {
                     evidence_id: "urn:ulid:01J4BRXQ0ZZZZZZZZZZZZZZZZZ",
-                    request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                     purpose: "fixture-routing",
-                    audience: "https://relying.invalid/residence-procedure",
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: "https://relying.invalid/residence-procedure",
+                        request_nonce: registry_evidence::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
                     issued_at: observed_at,
                     observed_at,
                     subjects: vec![SubjectBinding {

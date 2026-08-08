@@ -63,6 +63,71 @@ acceptance_definitions:
       ambiguous: ambiguous
       source-failure: source-failure
       anti-reconstruction: relationship-graph
+  # The same four coequal definitions again, served from one bundle that
+  # declares them under the holder-bound subject binding mode. The mode is not
+  # one definition's feature, so it covers the same categories over the same
+  # cases: what changes is what the subject bindings are derived under, not
+  # what any definition decides.
+  - definition: holder-bound-adult-status
+    bundle: ../acceptance/holder-bound/evidence.yaml
+    cases: ../acceptance/holder-bound/fixtures/adult-status-cases.yaml
+    selector: compound no identifier
+    posture: field-projected
+    supported_values: [boolean]
+    coverage:
+      positive: positive
+      negative: [negative-false-is-success, negative-wrong-derived-type]
+      boundary: [boundary-before, boundary-on, boundary-after, boundary-leap-day]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: threshold-ladder
+  - definition: holder-bound-residence-region
+    bundle: ../acceptance/holder-bound/evidence.yaml
+    cases: ../acceptance/holder-bound/fixtures/residence-region-cases.yaml
+    selector: identifier only
+    posture: field-projected
+    supported_values: [controlled-code]
+    coverage:
+      positive: positive
+      negative: [negative-unknown-code, negative-overly-precise-output]
+      boundary: [boundary-second-source-code-same-coarse-region, boundary-other-coarse-region]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: geographic-overlap
+  - definition: holder-bound-professional-licence-status
+    bundle: ../acceptance/holder-bound/evidence.yaml
+    cases: ../acceptance/holder-bound/fixtures/professional-licence-cases.yaml
+    selector: compound sector selector
+    posture: record-transformed
+    supported_values: [boolean, controlled-category]
+    coverage:
+      positive: positive
+      negative: [negative-inactive-is-success, negative-exact-date-leak]
+      boundary: [boundary-valid-from, boundary-valid-until, boundary-after-valid-until]
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: coexisting-revisions
+  - definition: holder-bound-legal-parent-relationship
+    bundle: ../acceptance/holder-bound/evidence.yaml
+    cases: ../acceptance/holder-bound/fixtures/legal-parent-relationship-cases.yaml
+    selector: two independently role-bound profiles
+    posture: source-derived
+    supported_values: [boolean]
+    coverage:
+      positive: positive
+      negative: [negative-false-is-success, negative-swapped-roles, negative-caller-candidate-substitution, negative-child-unresolved, negative-candidate-unresolved-or-typo, negative-raw-record-search-zero-not-false, negative-role-resolution-ambiguous, negative-extra-family-fact, negative-status-on-none, negative-status-on-ambiguous, negative-unknown-pair-resolution, negative-unknown-relationship-status, negative-relationship-status-type, negative-extra-source-field]
+      boundary: boundary-correct-role-order
+      missing: [missing-record, missing-fact]
+      no-match: no-match
+      ambiguous: ambiguous
+      source-failure: source-failure
+      anti-reconstruction: relationship-graph
 selector_matrix:
   fixture: selector-matrix.yaml
   required:

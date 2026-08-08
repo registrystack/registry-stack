@@ -117,9 +117,52 @@ export declare class RawEvidenceResponse {
 }
 
 /**
+ * The issuance envelope answering one request that presented several holder
+ * keys, read but not yet judged.
+ *
+ * The envelope's order is the request's own: `credentials[i]` answers the
+ * key the request sent as `holderKeys[i]`, one credential per key, and a
+ * caller that needs that correspondence spelled out can ask for it by index
+ * with `credentialForHolderKey`. There is no partial envelope: either every
+ * presented key was answered or reading the envelope failed.
+ *
+ * Reading it judges nothing. Each credential is verified individually,
+ * exactly as a single credential is, and parsing this envelope is not a step
+ * in that.
+ */
+export declare class SdJwtVcBatchResponse {
+  /**
+   * Read an envelope from the response bytes a batch exchange returned,
+   * such as `RawEvidenceResponse.body`.
+   *
+   * This is a constructor rather than a static factory because napi-rs
+   * defines a generated static as non-writable and non-configurable on the
+   * class object, which leaves `client.js` no way to patch its throw path
+   * the way it patches every other member here. A constructor it can
+   * subclass, exactly as it already does for `EvidenceClient`.
+   */
+  constructor(body: Buffer)
+  /**
+   * Every credential the envelope carries, in the order the request
+   * presented its holder keys.
+   */
+  get credentials(): Array<string>
+  /**
+   * How many credentials the envelope carries, which is how many holder
+   * keys the request presented.
+   */
+  get count(): number
+  /**
+   * The credential bound to the holder key the request sent at `index`, or
+   * `null` when the envelope carries no credential at that position.
+   */
+  credentialForHolderKey(index: number): string | null
+}
+
+/**
  * A response that satisfied every expectation.
  *
- * Unlike the two classes above, this crosses as a plain object: it is a
+ * Unlike the opaque classes above, this crosses as a plain object: it is a
  * terminal result nothing hands back into a later call, so there is no
  * single-send flag or unconstructible real type to protect by staying
  * opaque.

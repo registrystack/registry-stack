@@ -12,9 +12,9 @@ use std::{fmt, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use registry_evidence_client::{
     AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError, EvidenceRequestSpec,
-    EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument,
-    PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken, SubjectExpectations,
-    SubjectRequest, TokenError, TokenProvider,
+    EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, HolderPublicKey,
+    JwksDocument, PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken,
+    SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use serde_json::{Map, Value};
@@ -272,6 +272,62 @@ fn response_format_from_json(value: &Value) -> Result<EvidenceResponseFormat, Co
     })
 }
 
+/// Every JWK member that carries a private key half, across the key types a
+/// caller could paste one from.
+///
+/// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
+/// fails to deserialize. What that refusal cannot do is say why it matters: an
+/// unknown member reads as a typo. A caller who pasted a whole key pair here
+/// has done something materially different from mistyping a field name, and
+/// gets told exactly that by the check below instead.
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
+/// Read one caller-supplied holder public key.
+///
+/// The value is forwarded to the deployment exactly as given. Nothing about a
+/// key is interpreted here: whether the key set is within the deployment's
+/// batch ceiling, and whether each key is acceptable P-256 material, is the
+/// wrapped client's own judgement in `prepare`, and what a key means to an
+/// assertion is the deployment's.
+///
+/// No refusal below quotes any part of the value. The private-half refusal
+/// names only the member it found, never its content, and the shape refusal
+/// discards serde's own message rather than risk repeating a member's value
+/// back to JS in a type error.
+fn holder_key_from_json(value: &Value) -> Result<HolderPublicKey, ConversionError> {
+    let object = as_object(value, "a holder key")?;
+    if let Some(member) = PRIVATE_JWK_MEMBERS
+        .iter()
+        .find(|member| object.contains_key(**member))
+    {
+        return Err(ConversionError::new(format!(
+            "a holder key must carry only public key material, and `{member}` is private key \
+             material; send the public half of the key and keep the private half where it is"
+        )));
+    }
+    serde_json::from_value(value.clone()).map_err(|_| {
+        ConversionError::new(
+            "a holder key must be a public JWK carrying `kty`, `crv`, `x`, and `y`, and at most \
+             `alg` and `kid` besides",
+        )
+    })
+}
+
+/// `holderKeys` is the caller's own key list, in the order it wants those keys
+/// answered. Absent (or `null`) is the request that presents none, which is
+/// the request this binding has always sent.
+fn holder_keys_from_json(
+    object: &Map<String, Value>,
+) -> Result<Vec<HolderPublicKey>, ConversionError> {
+    match object.get("holderKeys") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries.iter().map(holder_key_from_json).collect(),
+        Some(_) => Err(ConversionError::new(
+            "`holderKeys` must be an array of public JWKs",
+        )),
+    }
+}
+
 /// Build the specification [`registry_evidence_client::EvidenceClient::prepare`]
 /// validates. Only shape is checked here: an empty identifier, an out-of-range
 /// count, or any other business rule is the real client's own refusal, raised
@@ -319,6 +375,7 @@ pub fn spec_from_json(value: &Value) -> Result<EvidenceRequestSpec, ConversionEr
         configuration_revision: required_string(object, "configurationRevision")?,
         expected_assurance_profile,
         subjects,
+        holder_keys: holder_keys_from_json(object)?,
         expected_outputs,
         maximum_assertion_lifetime_seconds: required_u64(
             object,
@@ -625,8 +682,8 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::SigningKey;
     use registry_evidence_client::{
-        EvidenceObjectType, OAuthErrorCode, SubjectBinding, SupportedValue, TransportKind,
-        VerificationError,
+        EvidenceObjectType, OAuthErrorCode, SubjectBinding, SubjectBindingMode, SupportedValue,
+        TransportKind, VerificationError,
     };
 
     use super::*;
@@ -834,6 +891,147 @@ mod tests {
             let mut spec = valid_spec_json();
             spec["responseFormat"] = value;
             assert!(spec_from_json(&spec).is_err());
+        }
+    }
+
+    // --- holder keys ---
+
+    /// Two genuine, on-curve P-256 public points, so an accepted key here is
+    /// one the wrapped client's own acceptability check would also accept
+    /// rather than merely a well-shaped object.
+    fn holder_key_json(index: usize) -> Value {
+        let (x, y) = [
+            (
+                "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            ),
+            (
+                "fPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI_EdmmXg",
+                "B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E",
+            ),
+        ][index % 2];
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": x,
+            "y": y,
+            "alg": "ES256",
+            "kid": format!("holder-key-{index}"),
+        })
+    }
+
+    #[test]
+    fn holder_keys_reach_the_specification_in_the_order_the_caller_stated() {
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = serde_json::json!([holder_key_json(0), holder_key_json(1)]);
+        let converted = spec_from_json(&spec).expect("the specification is accepted");
+        assert_eq!(converted.holder_keys.len(), 2);
+        assert_eq!(
+            converted.holder_keys[0].kid.as_deref(),
+            Some("holder-key-0")
+        );
+        assert_eq!(
+            converted.holder_keys[1].kid.as_deref(),
+            Some("holder-key-1")
+        );
+        assert!(converted
+            .holder_keys
+            .iter()
+            .all(HolderPublicKey::is_acceptable));
+    }
+
+    #[test]
+    fn a_holder_key_may_omit_its_algorithm_and_identifier() {
+        let mut key = holder_key_json(0);
+        let object = key.as_object_mut().unwrap();
+        object.remove("alg");
+        object.remove("kid");
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = serde_json::json!([key]);
+        let converted = spec_from_json(&spec).expect("the specification is accepted");
+        assert_eq!(converted.holder_keys.len(), 1);
+        assert!(converted.holder_keys[0].alg.is_none());
+        assert!(converted.holder_keys[0].kid.is_none());
+    }
+
+    #[test]
+    fn a_specification_presenting_no_holder_key_carries_an_empty_set() {
+        assert!(spec_from_json(&valid_spec_json())
+            .expect("the specification is accepted")
+            .holder_keys
+            .is_empty());
+
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = Value::Null;
+        assert!(spec_from_json(&spec)
+            .expect("an explicit null presents no key")
+            .holder_keys
+            .is_empty());
+
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = serde_json::json!([]);
+        assert!(spec_from_json(&spec)
+            .expect("an empty array presents no key")
+            .holder_keys
+            .is_empty());
+    }
+
+    /// The refusal a caller who pasted a whole key pair has to be able to act
+    /// on. `deny_unknown_fields` alone would refuse `d` as an unrecognized
+    /// member, which reads as a typo; this asserts the stated reason names
+    /// private key material and the member carrying it, and that the private
+    /// value itself is not repeated back.
+    #[test]
+    fn a_holder_key_carrying_a_private_member_is_refused_as_private_key_material() {
+        const PRIVATE_VALUE: &str = "secret-private-scalar-value";
+
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut key = holder_key_json(0);
+            key[member] = Value::String(PRIVATE_VALUE.to_owned());
+            let mut spec = valid_spec_json();
+            spec["holderKeys"] = serde_json::json!([key]);
+
+            let error = spec_from_json(&spec).expect_err("the private member is refused");
+            assert!(
+                error.0.contains("private key material"),
+                "`{member}` was refused without stating why: {error}"
+            );
+            assert!(
+                error.0.contains(&format!("`{member}`")),
+                "the refusal does not name `{member}`: {error}"
+            );
+            assert!(
+                !error.0.contains(PRIVATE_VALUE),
+                "the private value leaked in: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_holder_key_outside_the_public_jwk_shape_is_refused() {
+        for key in [
+            // An unknown member, refused structurally by
+            // `deny_unknown_fields` rather than by the private-member check.
+            serde_json::json!({
+                "kty": "EC", "crv": "P-256", "x": "AA", "y": "BB", "use": "sig",
+            }),
+            serde_json::json!({ "kty": "EC", "crv": "P-256", "x": "AA" }),
+            serde_json::json!("not-an-object"),
+            Value::Null,
+        ] {
+            let mut spec = valid_spec_json();
+            spec["holderKeys"] = serde_json::json!([key.clone()]);
+            assert!(spec_from_json(&spec).is_err(), "{key} was accepted");
+        }
+
+        for keys in [
+            serde_json::json!({}),
+            Value::String("a-key".to_owned()),
+            serde_json::json!(1),
+        ] {
+            let mut spec = valid_spec_json();
+            spec["holderKeys"] = keys.clone();
+            assert!(spec_from_json(&spec).is_err(), "{keys} was accepted");
         }
     }
 
@@ -1065,7 +1263,8 @@ mod tests {
         Evidence {
             schema: "https://registrystack.example/evidence/v1".to_owned(),
             assurance_profile: AssuranceProfile::Local,
-            request_nonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned()),
             id: "urn:example:evidence:1".to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:client:requirement:status:v1".to_owned(),
@@ -1076,7 +1275,7 @@ mod tests {
             observed_at: "2026-01-01T00:00:00Z".to_owned(),
             valid_until: "2026-01-01T00:05:00Z".to_owned(),
             purpose: "example-decision".to_owned(),
-            audience: "urn:example:client:audience:relying-party".to_owned(),
+            audience: Some("urn:example:client:audience:relying-party".to_owned()),
             configuration_revision: "sha256:00".to_owned(),
             subjects: vec![SubjectBinding {
                 role: "subject".to_owned(),
@@ -1089,6 +1288,17 @@ mod tests {
         }
     }
 
+    /// A holder-bound counterpart to [`minimal_evidence`]: same shape, but no
+    /// audience and no request nonce, and the binding mode set accordingly.
+    fn minimal_holder_bound_evidence() -> Evidence {
+        Evidence {
+            subject_binding: SubjectBindingMode::HolderBound,
+            request_nonce: None,
+            audience: None,
+            ..minimal_evidence()
+        }
+    }
+
     #[test]
     fn evidence_converts_to_the_expected_json_shape() {
         let json = evidence_to_json(&minimal_evidence()).expect("evidence serializes");
@@ -1096,6 +1306,7 @@ mod tests {
         // variant serializes as the Rust identifier itself.
         assert_eq!(json["type"], "Evidence");
         assert_eq!(json["assuranceProfile"], "local");
+        assert_eq!(json["subjectBinding"], "audience-scoped");
         assert_eq!(
             json["supportsRequirement"],
             "urn:example:client:requirement:status:v1"
@@ -1107,6 +1318,19 @@ mod tests {
             "urn:example:client:concept:status-holds"
         );
         assert_eq!(json["supportedValues"][0]["value"], true);
+    }
+
+    /// A holder-bound payload names no relying party, so the JS object it
+    /// converts to must carry `subjectBinding: "holder-bound"` and omit
+    /// `audience` and `requestNonce` entirely rather than serializing them as
+    /// `null`.
+    #[test]
+    fn a_holder_bound_payload_converts_with_subject_binding_and_no_audience_or_nonce() {
+        let json = evidence_to_json(&minimal_holder_bound_evidence()).expect("evidence serializes");
+        assert_eq!(json["subjectBinding"], "holder-bound");
+        let object = json.as_object().expect("evidence serializes to an object");
+        assert!(!object.contains_key("audience"));
+        assert!(!object.contains_key("requestNonce"));
     }
 
     // --- map_client_error: one case per stable kind ---
@@ -1376,6 +1600,29 @@ mod tests {
         });
         spec.as_object_mut().unwrap().remove("purpose");
         let error = spec_from_json(&spec).expect_err("the missing `purpose` is refused");
+        let mapped = map_conversion_error(&error);
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
+
+        // A holder key whose private half is the canary: the refusal that
+        // names that member must not repeat the half it found.
+        let mut key = holder_key_json(0);
+        key["d"] = Value::String(CANARY.to_owned());
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = serde_json::json!([key]);
+        let error = spec_from_json(&spec).expect_err("the private member is refused");
+        assert!(error.0.contains("private key material"));
+        let mapped = map_conversion_error(&error);
+        let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
+        assert!(!rendered.contains(CANARY), "leaked in: {rendered}");
+
+        // The canary as an ordinary member's value in a malformed key, so the
+        // refusal comes from the shape check rather than the private-member
+        // check. That message discards serde's own text for exactly this
+        // reason: a serde failure can quote the value it rejected.
+        let mut spec = valid_spec_json();
+        spec["holderKeys"] = serde_json::json!([{ "kty": CANARY }]);
+        let error = spec_from_json(&spec).expect_err("the malformed key is refused");
         let mapped = map_conversion_error(&error);
         let rendered = serde_json::to_string(&mapped).expect("the envelope serializes");
         assert!(!rendered.contains(CANARY), "leaked in: {rendered}");

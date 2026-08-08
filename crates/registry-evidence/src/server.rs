@@ -43,7 +43,8 @@ use crate::{
     observability::{self, operation_id, Metrics},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
-    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+    EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const EVIDENCE_ROUTE: &str = "/v1/evidence";
@@ -513,9 +514,10 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
 
 /// Resolve the closed Version 1 `Accept` matrix. Missing, `*/*`, and the exact
 /// signed media type select signed JWS; only the exact unsigned vendor media
-/// type selects the unsigned envelope, and only the exact SD-JWT VC media type
-/// selects that serialization. Duplicate, combined, parameterized, weighted, or
-/// unknown negotiation is not acceptable.
+/// type selects the unsigned envelope, only the exact SD-JWT VC media type
+/// selects that serialization, and only the exact batch vendor media type
+/// selects the batch container. Duplicate, combined, parameterized, weighted,
+/// or unknown negotiation is not acceptable.
 fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
     let mut values = headers.get_all(ACCEPT).iter();
     let Some(value) = values.next() else {
@@ -531,6 +533,9 @@ fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, Proble
             Ok(ResponseFormat::UnsignedJson)
         }
         value if value == EVIDENCE_SD_JWT_VC_MEDIA_TYPE.as_bytes() => Ok(ResponseFormat::SdJwtVc),
+        value if value == EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE.as_bytes() => {
+            Ok(ResponseFormat::SdJwtVcBatch)
+        }
         _ => Err(ProblemCode::ResponseFormatNotAcceptable),
     }
 }

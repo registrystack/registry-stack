@@ -67,6 +67,7 @@ PLAIN_CLASS_NAMES = {
     "EvidenceClient",
     "PreparedEvidenceRequest",
     "RawEvidenceResponse",
+    "SdJwtVcBatchResponse",
     "VerifiedEvidence",
 }
 

@@ -344,3 +344,55 @@ entries:
       - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_bound_extract_refuses_a_path_replaced_before_it_was_opened}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}
+  - id: sec-holder-bound-binding-derivation
+    tests:
+      - {file: crates/registry-evidence/src/binding.rs, name: holder_bound_binding_is_stable_and_holder_key_scoped}
+      - {file: crates/registry-evidence/src/binding.rs, name: the_audience_and_holder_scopes_never_collide}
+      - {file: crates/registry-evidence/src/binding.rs, name: every_holder_bound_scope_component_is_cryptographically_bound}
+      - {file: crates/registry-evidence/src/binding.rs, name: a_holder_key_thumbprint_that_is_not_canonical_is_refused}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_holder_bound_requirement_binds_its_subjects_under_the_presented_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_holder_bound_binding_does_not_move_with_the_requesting_relying_party}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_holder_bound_release_declares_the_mode_it_was_derived_under}
+  - id: sec-holder-bound-format-and-grant
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: permission_to_serialize_sd_jwt_vc_is_not_permission_to_issue_holder_bound}
+      - {file: crates/registry-evidence/src/config.rs, name: only_the_sd_jwt_vc_serialization_may_carry_a_holder_bound_assertion}
+      - {file: crates/registry-evidence/src/config.rs, name: a_holder_bound_requirement_no_request_could_reach_is_refused_at_bundle_load}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_undeclared_requirement_serves_audience_scoped_whatever_the_caller_supplies}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_missing_holder_key_is_answered_after_authorization_not_before_it}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_holder_bound_acceptance_bundle_serves_no_unconfirmed_serialization}
+  - id: sec-holder-bound-batch-bounded
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_batch_release_issues_one_independent_credential_for_each_presented_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_batch_above_the_declared_ceiling_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_repeated_holder_key_thumbprint_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_singular_media_type_requires_exactly_one_holder_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_failure_on_a_later_batch_member_releases_nothing}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: the_holder_bound_acceptance_bundle_batches_every_definition_under_its_ceiling}
+      - {file: crates/registry-evidence/src/config.rs, name: a_holder_bound_batch_ceiling_outside_the_permitted_range_is_refused}
+  - id: sec-holder-bound-entity-reference-prohibited
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form}
+      - {file: crates/registry-evidence/src/kernel.rs, name: an_entity_reference_has_no_holder_bound_projection}
+  - id: sec-key-binding-required-at-presentation
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: every_key_binding_failure_reports_the_one_key_binding_class}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: an_authentic_credential_with_a_failed_proof_is_rejected_not_downgraded}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: a_holder_bound_credential_without_a_confirmation_cannot_be_presented}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_presentation_reports_only_the_key_binding_class_for_a_failed_proof}
+  - id: sec-holder-bound-policy-separation
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_two_policy_documents_and_the_two_entry_points_stay_separate}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_trailing_tilde_selects_which_serialization_was_named}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_refuses_a_holder_bound_presentation}
+      - {file: crates/registry-evidence/tests/cli.rs, name: verify_presentation_refuses_an_audience_scoped_credential}
+  - id: sec-holder-bound-purpose-is-issuance-provenance
+    tests:
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: the_expected_issuance_purpose_is_compared_as_signed_provenance}
+  - id: sec-holder-key-material-confined
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: holder_key_material_reaches_only_the_signed_confirmation}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sd_jwt_holder_key_with_private_member_rejected}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value}
+      - {file: crates/registry-evidence/src/selector.rs, name: a_resolved_holder_scope_debug_never_exposes_the_thumbprint}
+      - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}

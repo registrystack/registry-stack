@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::config::AssuranceProfile;
+use crate::config::{AssuranceProfile, MAXIMUM_HOLDER_BOUND_BATCH_SIZE};
 
 const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
 const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str = "registry.evidence.audit.authorization-refusal/v1";
@@ -209,6 +209,18 @@ pub struct EvidenceAuditEvent {
     pub disclosed_concepts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_id: Option<String>,
+    /// Every assertion one release carried, in release order, recorded only
+    /// where a single release covered more than one. A release of exactly one
+    /// assertion leaves this unset and names that assertion in
+    /// [`Self::evidence_id`], so the shape every existing release already had
+    /// stays byte-identical.
+    ///
+    /// A batch is named here rather than in one event per member because the
+    /// release gate accepts one terminal event per operation: N events would
+    /// either be N operations, losing the fact that one request released them,
+    /// or N terminal events for one operation, which the chain does not accept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signing_key_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,6 +266,7 @@ impl EvidenceAuditEvent {
             decision,
             disclosed_concepts: None,
             evidence_id: None,
+            evidence_ids: None,
             signing_key_id: None,
             safe_error_category: None,
             duration_milliseconds,
@@ -261,8 +274,15 @@ impl EvidenceAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
-        let any_release_field = self.disclosed_concepts.is_some() || self.evidence_id.is_some();
-        let all_release_fields = self.disclosed_concepts.is_some() && self.evidence_id.is_some();
+        let any_release_field = self.disclosed_concepts.is_some()
+            || self.evidence_id.is_some()
+            || self.evidence_ids.is_some();
+        // A release names what it released exactly once: the scalar for the one
+        // assertion, or the array for the set a batch carried. Both together
+        // would let a reader count one release twice, and neither would leave a
+        // release that names nothing.
+        let names_the_released_set = self.evidence_id.is_some() ^ self.evidence_ids.is_some();
+        let all_release_fields = self.disclosed_concepts.is_some() && names_the_released_set;
         if (self.phase == AuditPhase::DisclosureRelease && !all_release_fields)
             || (self.phase != AuditPhase::DisclosureRelease && any_release_field)
         {
@@ -308,6 +328,16 @@ impl EvidenceAuditEvent {
             }
             _ => false,
         };
+        // A released set exists exactly for a release that carried more than one
+        // assertion, and stays within the ceiling the bundle's holder-bound
+        // batch size is bounded by, so an audit reader never faces an unbounded
+        // list.
+        let evidence_ids_are_valid = self.evidence_ids.as_ref().is_none_or(|evidence_ids| {
+            self.phase == AuditPhase::DisclosureRelease
+                && (2..=usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)).contains(&evidence_ids.len())
+                && evidence_ids.iter().all(|value| valid_uri(value))
+                && evidence_ids.iter().collect::<BTreeSet<_>>().len() == evidence_ids.len()
+        });
         let concepts_are_valid = self.disclosed_concepts.as_ref().is_none_or(|concepts| {
             concepts.len() <= 16
                 && concepts.iter().all(|concept| valid_uri(concept))
@@ -351,6 +381,7 @@ impl EvidenceAuditEvent {
                 .is_some_and(|value| !valid_local_name(value, 128))
             || !stage_arrays_are_valid
             || !concepts_are_valid
+            || !evidence_ids_are_valid
             || self
                 .evidence_id
                 .as_ref()
@@ -644,6 +675,11 @@ struct LocalAuthorizedOperationEvent {
     disclosed_concepts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_id: Option<String>,
+    /// Carried through so a local reader sees the same released set the durable
+    /// record names, and never a batch release that appears to have released
+    /// nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -835,6 +871,7 @@ impl From<&EvidenceAuditEvent> for LocalAuditOperationEvent {
             response_protection: event.response_protection,
             disclosed_concepts: event.disclosed_concepts.clone(),
             evidence_id: event.evidence_id.clone(),
+            evidence_ids: event.evidence_ids.clone(),
         })
     }
 }
@@ -1074,6 +1111,7 @@ mod tests {
             decision: AuditDecision::Authorized,
             disclosed_concepts: None,
             evidence_id: None,
+            evidence_ids: None,
             signing_key_id: None,
             safe_error_category: None,
             duration_milliseconds: 2,
@@ -1480,6 +1518,178 @@ mod tests {
                     Err(EvidenceAuditError::InvalidEvent)
                 ),
                 "native phase rules accept invalid stage arrays {name}"
+            );
+        }
+    }
+
+    /// A release that carried more than one assertion, named as one terminal
+    /// event over the complete released set.
+    fn fixture_batch_release() -> EvidenceAuditEvent {
+        let mut release = fixture_multi_stage_release();
+        release.event_id = "urn:example:fixture:audit:release-004".to_owned();
+        release.occurred_at = "2026-08-02T00:00:05Z".to_owned();
+        release.evidence_id = None;
+        release.evidence_ids = Some(vec![
+            "urn:example:fixture:evidence:003".to_owned(),
+            "urn:example:fixture:evidence:004".to_owned(),
+        ]);
+        release
+    }
+
+    #[test]
+    fn a_release_names_the_set_it_released_exactly_once() {
+        fixture_batch_release()
+            .validate_phase_fields()
+            .expect("a batch release names the complete released set");
+
+        let mut widest = fixture_batch_release();
+        widest.evidence_ids = Some(
+            (0..usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE))
+                .map(|index| format!("urn:example:fixture:evidence:batch-{index}"))
+                .collect(),
+        );
+        widest
+            .validate_phase_fields()
+            .expect("the batch ceiling is a releasable size");
+
+        // Both names present would let a reader count one release twice, and
+        // neither leaves the terminal event without the set it released.
+        let mut both_names = fixture_batch_release();
+        both_names.evidence_id = Some("urn:example:fixture:evidence:003".to_owned());
+
+        let mut neither_name = fixture_batch_release();
+        neither_name.evidence_ids = None;
+
+        // The set names a batch, so one member is the scalar's shape, not this
+        // one, and a repeated identifier describes no release at all.
+        let mut single_member = fixture_batch_release();
+        single_member.evidence_ids = Some(vec!["urn:example:fixture:evidence:003".to_owned()]);
+
+        let mut repeated_member = fixture_batch_release();
+        repeated_member.evidence_ids = Some(vec![
+            "urn:example:fixture:evidence:003".to_owned(),
+            "urn:example:fixture:evidence:003".to_owned(),
+        ]);
+
+        let mut past_the_ceiling = fixture_batch_release();
+        past_the_ceiling.evidence_ids = Some(
+            (0..=usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE))
+                .map(|index| format!("urn:example:fixture:evidence:batch-{index}"))
+                .collect(),
+        );
+
+        let mut unnamed_member = fixture_batch_release();
+        unnamed_member.evidence_ids = Some(vec![
+            "urn:example:fixture:evidence:003".to_owned(),
+            "not an identifier".to_owned(),
+        ]);
+
+        let mut set_on_access = fixture_batch_release();
+        set_on_access.phase = AuditPhase::AccessAttempt;
+        set_on_access.decision = AuditDecision::Authorized;
+        set_on_access.disclosed_concepts = None;
+        set_on_access.signing_key_id = None;
+        set_on_access.source_ids = None;
+        set_on_access.adapter_ids = None;
+
+        for (name, candidate) in [
+            ("both-names", both_names),
+            ("neither-name", neither_name),
+            ("single-member", single_member),
+            ("repeated-member", repeated_member),
+            ("past-the-ceiling", past_the_ceiling),
+            ("unnamed-member", unnamed_member),
+            ("set-on-access", set_on_access),
+        ] {
+            assert!(
+                matches!(
+                    candidate.validate_phase_fields(),
+                    Err(EvidenceAuditError::InvalidEvent)
+                ),
+                "native phase rules accept invalid released set {name}"
+            );
+        }
+
+        // A release of one assertion stays byte-identical: the batch key is
+        // additive, so no existing frozen shape moves.
+        let one_assertion = fixture_multi_stage_release();
+        let serialized = serde_json::to_value(&one_assertion).expect("release serializes");
+        assert!(
+            !serialized
+                .as_object()
+                .expect("release is an object")
+                .contains_key("evidenceIds"),
+            "a release of one assertion emits the batch key"
+        );
+    }
+
+    #[test]
+    fn audit_contract_schema_agrees_on_the_released_set() {
+        let schema: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/audit-event.schema.yaml"
+        ))
+        .expect("audit event schema parses");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("audit event schema compiles as Draft 2020-12");
+
+        let batch =
+            serde_json::to_value(fixture_batch_release()).expect("batch release serializes");
+        assert!(
+            validator.is_valid(&batch),
+            "schema rejects a release naming the complete released set"
+        );
+
+        let mut both_names = batch.clone();
+        both_names["evidenceId"] = serde_json::json!("urn:example:fixture:evidence:003");
+
+        let mut neither_name = batch.clone();
+        neither_name
+            .as_object_mut()
+            .expect("batch release is an object")
+            .remove("evidenceIds");
+
+        let mut single_member = batch.clone();
+        single_member["evidenceIds"] = serde_json::json!(["urn:example:fixture:evidence:003"]);
+
+        let mut repeated_member = batch.clone();
+        repeated_member["evidenceIds"] = serde_json::json!([
+            "urn:example:fixture:evidence:003",
+            "urn:example:fixture:evidence:003"
+        ]);
+
+        let mut set_on_access = batch.clone();
+        let access_object = set_on_access
+            .as_object_mut()
+            .expect("batch release is an object");
+        access_object.insert("phase".to_owned(), serde_json::json!("access-attempt"));
+        access_object.insert("decision".to_owned(), serde_json::json!("authorized"));
+        access_object.remove("disclosedConcepts");
+        access_object.remove("signingKeyId");
+        access_object.remove("sourceIds");
+        access_object.remove("adapterIds");
+
+        let mut set_on_refusal = batch;
+        let refusal_object = set_on_refusal
+            .as_object_mut()
+            .expect("batch release is an object");
+        refusal_object.insert(
+            "schema".to_owned(),
+            serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA),
+        );
+
+        for (name, candidate) in [
+            ("both-names", both_names),
+            ("neither-name", neither_name),
+            ("single-member", single_member),
+            ("repeated-member", repeated_member),
+            ("set-on-access", set_on_access),
+            ("set-on-refusal", set_on_refusal),
+        ] {
+            assert!(
+                !validator.is_valid(&candidate),
+                "schema accepts invalid released set {name}"
             );
         }
     }

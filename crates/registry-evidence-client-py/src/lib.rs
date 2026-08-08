@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use evidence_client_sdk::EvidenceClient as RealEvidenceClient;
 use evidence_client_sdk::PreparedEvidenceRequest as RealPreparedEvidenceRequest;
 use evidence_client_sdk::RawEvidenceResponse as RealRawEvidenceResponse;
+use evidence_client_sdk::SdJwtVcBatchResponse as RealSdJwtVcBatchResponse;
 use evidence_client_sdk::VerifiedEvidence as RealVerifiedEvidence;
 
 mod convert;
@@ -249,9 +250,58 @@ impl RawEvidenceResponse {
     }
 }
 
+/// The issuance envelope answering one request that presented several holder
+/// keys, read but not yet judged.
+///
+/// The envelope's order is the request's own: `credentials[i]` answers the key
+/// the request sent as `holder_keys[i]`, one credential per key, and a caller
+/// that needs that correspondence spelled out can ask for it by index with
+/// `credential_for_holder_key`. There is no partial envelope: either every
+/// presented key was answered or reading the envelope failed.
+///
+/// Reading it judges nothing. Each credential is verified individually,
+/// exactly as a single credential is, and parsing this envelope is not a step
+/// in that.
+#[pyclass(name = "SdJwtVcBatchResponse", module = "registry_evidence_client")]
+struct SdJwtVcBatchResponse {
+    inner: RealSdJwtVcBatchResponse,
+}
+
+#[pymethods]
+impl SdJwtVcBatchResponse {
+    /// Read an envelope from the response bytes a batch exchange returned,
+    /// such as `RawEvidenceResponse.body`.
+    #[staticmethod]
+    fn parse(py: Python<'_>, body: &[u8]) -> PyResult<Self> {
+        RealSdJwtVcBatchResponse::parse(body)
+            .map(|inner| Self { inner })
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))
+    }
+
+    /// Every credential the envelope carries, in the order the request
+    /// presented its holder keys.
+    #[getter]
+    fn credentials(&self) -> Vec<String> {
+        self.inner.credentials().to_vec()
+    }
+
+    /// How many credentials the envelope carries, which is how many holder
+    /// keys the request presented.
+    #[getter]
+    fn count(&self) -> usize {
+        self.inner.count()
+    }
+
+    /// The credential bound to the holder key the request sent at `index`, or
+    /// `None` when the envelope carries no credential at that position.
+    fn credential_for_holder_key(&self, index: usize) -> Option<&str> {
+        self.inner.credential_for_holder_key(index)
+    }
+}
+
 /// A response that satisfied every expectation.
 ///
-/// Unlike the two classes above, this is a terminal result nothing hands back
+/// Unlike the classes above, this is a terminal result nothing hands back
 /// into a later call, so it carries plain, eagerly converted data rather than
 /// protecting any interior state.
 #[pyclass(name = "VerifiedEvidence", module = "registry_evidence_client")]
@@ -518,6 +568,7 @@ pub fn registry_evidence_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<EvidenceClient>()?;
     module.add_class::<PreparedEvidenceRequest>()?;
     module.add_class::<RawEvidenceResponse>()?;
+    module.add_class::<SdJwtVcBatchResponse>()?;
     module.add_class::<VerifiedEvidence>()?;
 
     let py = module.py();

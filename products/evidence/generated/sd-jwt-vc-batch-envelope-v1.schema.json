@@ -1,0 +1,30 @@
+{
+  "$comment": "Issuance container selected only by its exact vendor media type, carrying one combined SD-JWT VC issuance serialization per presented holder key in the order the keys were presented. It is issuance-only: nothing consumes it at verification, and each member is verified individually as an ordinary holder-bound credential. Members share an issuance timestamp, purpose, requirement, Evidence Type, configuration revision, and disclosed values, so the container reduces deterministic key-based linkability without making its members unlinkable. A failure on any member releases nothing; there is no partial batch.",
+  "$id": "https://registrystack.org/schemas/evidence/sd-jwt-vc-batch-envelope-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "credentials": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema": {
+      "const": "registry.sd-jwt-vc-batch-envelope/v1"
+    },
+    "type": {
+      "const": "SdJwtVcBatchEnvelope"
+    }
+  },
+  "required": [
+    "schema",
+    "type",
+    "credentials"
+  ],
+  "title": "Evidence SD-JWT VC batch issuance envelope Version 1",
+  "type": "object"
+}

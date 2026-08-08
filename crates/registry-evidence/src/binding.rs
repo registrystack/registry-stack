@@ -1,4 +1,8 @@
-//! Audience-scoped subject and source-entity reference projection.
+//! Subject and source-entity reference projection.
+//!
+//! A subject binding is scoped either to the relying party that asked for it or
+//! to the public key of the holder that will present it. The two scopes carry
+//! separate domain constants so they can never derive the same value.
 
 use std::fmt;
 
@@ -6,7 +10,11 @@ use registry_platform_crypto::hmac_sha256_base64url_no_pad;
 use thiserror::Error;
 
 const SUBJECT_DOMAIN: &[u8] = b"registry-evidence/subject-binding/v1";
+const HOLDER_DOMAIN: &[u8] = b"registry-evidence/subject-binding/holder/v1";
 const ENTITY_DOMAIN: &[u8] = b"registry-evidence/entity-reference/v1";
+/// A SHA-256 digest in base64url with no padding, which is what RFC 7638
+/// specifies for a JSON Web Key thumbprint.
+const THUMBPRINT_CHARS: usize = 43;
 const MIN_KEY_BYTES: usize = 32;
 const MAX_COMPONENT_BYTES: usize = 8 * 1024;
 const MAX_SELECTOR_FIELDS: usize = 16;
@@ -68,11 +76,40 @@ pub enum BindingError {
     Date,
     #[error("entity-reference seed is invalid")]
     EntitySeed,
+    #[error("holder key thumbprint is invalid")]
+    HolderKey,
+}
+
+/// What a subject binding is scoped to. Holding the two alternatives in one
+/// enum keeps a holder-bound binding that also carries an audience
+/// unrepresentable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubjectBindingScope<'a> {
+    /// The relying party the assertion is issued to.
+    Audience(&'a str),
+    /// The RFC 7638 thumbprint of the holder key the assertion is bound to.
+    /// The thumbprint rather than the key document, so serialization variance
+    /// cannot fork the binding.
+    HolderKeyThumbprint(&'a str),
+}
+
+impl<'a> SubjectBindingScope<'a> {
+    fn domain_and_value(self) -> Result<(&'static [u8], &'a str), BindingError> {
+        match self {
+            Self::Audience(audience) => Ok((SUBJECT_DOMAIN, audience)),
+            Self::HolderKeyThumbprint(thumbprint) => {
+                if !is_canonical_thumbprint(thumbprint) {
+                    return Err(BindingError::HolderKey);
+                }
+                Ok((HOLDER_DOMAIN, thumbprint))
+            }
+        }
+    }
 }
 
 pub struct SubjectBindingInput<'a> {
     pub trust_domain: &'a str,
-    pub audience: &'a str,
+    pub scope: SubjectBindingScope<'a>,
     pub purpose: &'a str,
     pub role: &'a str,
     pub profile: &'a str,
@@ -88,12 +125,13 @@ pub fn subject_binding(
     if input.fields.is_empty() || input.fields.len() > MAX_SELECTOR_FIELDS {
         return Err(BindingError::Fields);
     }
+    let (domain, scope_value) = input.scope.domain_and_value()?;
 
     let mut canonical = Vec::new();
-    push_bytes(&mut canonical, SUBJECT_DOMAIN)?;
+    push_bytes(&mut canonical, domain)?;
     push_u32(&mut canonical, key_version);
     push_str(&mut canonical, input.trust_domain)?;
-    push_str(&mut canonical, input.audience)?;
+    push_str(&mut canonical, scope_value)?;
     push_str(&mut canonical, input.purpose)?;
     push_str(&mut canonical, input.role)?;
     push_str(&mut canonical, input.profile)?;
@@ -188,6 +226,13 @@ fn push_u32(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
 }
 
+fn is_canonical_thumbprint(value: &str) -> bool {
+    value.len() == THUMBPRINT_CHARS
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 fn is_canonical_date(value: &str) -> bool {
     if value.len() != 10 {
         return false;
@@ -207,14 +252,26 @@ mod tests {
 
     const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
 
+    /// A syntactically valid RFC 7638 thumbprint: 43 base64url characters with
+    /// no padding, which is what a SHA-256 digest encodes to.
+    const THUMBPRINT: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
+    const OTHER_THUMBPRINT: &str = "HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn";
+
     fn input<'a>(fields: &'a [SelectorField<'a>]) -> SubjectBindingInput<'a> {
         SubjectBindingInput {
             trust_domain: "urn:example:trust",
-            audience: "urn:example:relying-party",
+            scope: SubjectBindingScope::Audience("urn:example:relying-party"),
             purpose: "enrolment",
             role: "subject",
             profile: "person-v1",
             fields,
+        }
+    }
+
+    fn holder_input<'a>(fields: &'a [SelectorField<'a>]) -> SubjectBindingInput<'a> {
+        SubjectBindingInput {
+            scope: SubjectBindingScope::HolderKeyThumbprint(THUMBPRINT),
+            ..input(fields)
         }
     }
 
@@ -237,10 +294,118 @@ mod tests {
         assert_eq!(first.len(), "urn:evidence:subject:v1_".len() + 43);
 
         let mut other_audience = input(&fields);
-        other_audience.audience = "urn:example:other-party";
+        other_audience.scope = SubjectBindingScope::Audience("urn:example:other-party");
         assert_ne!(
             first,
             subject_binding(KEY, 1, other_audience).expect("binding succeeds")
+        );
+    }
+
+    #[test]
+    fn holder_bound_binding_is_stable_and_holder_key_scoped() {
+        let fields = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("same-bytes"),
+        }];
+        let first = subject_binding(KEY, 1, holder_input(&fields)).expect("binding succeeds");
+        let second = subject_binding(KEY, 1, holder_input(&fields)).expect("binding succeeds");
+        assert_eq!(first, second);
+        assert!(first.starts_with("urn:evidence:subject:v1_"));
+        assert_eq!(first.len(), "urn:evidence:subject:v1_".len() + 43);
+
+        let mut other_holder = holder_input(&fields);
+        other_holder.scope = SubjectBindingScope::HolderKeyThumbprint(OTHER_THUMBPRINT);
+        assert_ne!(
+            first,
+            subject_binding(KEY, 1, other_holder).expect("binding succeeds")
+        );
+    }
+
+    /// The two scopes carry their own domain constant, so an audience that
+    /// happens to read like a thumbprint can never produce the binding a holder
+    /// key of the same text would.
+    #[test]
+    fn the_audience_and_holder_scopes_never_collide() {
+        let fields = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("same-bytes"),
+        }];
+        let mut audience_shaped = input(&fields);
+        audience_shaped.scope = SubjectBindingScope::Audience(THUMBPRINT);
+        assert_ne!(
+            subject_binding(KEY, 1, audience_shaped).expect("binding succeeds"),
+            subject_binding(KEY, 1, holder_input(&fields)).expect("binding succeeds")
+        );
+    }
+
+    #[test]
+    fn a_holder_key_thumbprint_that_is_not_canonical_is_refused() {
+        let fields = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("same-bytes"),
+        }];
+        for candidate in [
+            "",
+            "too-short",
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH",
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEF=",
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEF/",
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEF+",
+        ] {
+            let mut candidate_input = holder_input(&fields);
+            candidate_input.scope = SubjectBindingScope::HolderKeyThumbprint(candidate);
+            assert_eq!(
+                subject_binding(KEY, 1, candidate_input),
+                Err(BindingError::HolderKey),
+                "{candidate:?} is not a canonical thumbprint"
+            );
+        }
+    }
+
+    #[test]
+    fn every_holder_bound_scope_component_is_cryptographically_bound() {
+        let fields = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("same-bytes"),
+        }];
+        let baseline = subject_binding(KEY, 1, holder_input(&fields)).expect("baseline succeeds");
+
+        let mut changed = holder_input(&fields);
+        changed.trust_domain = "urn:example:other-trust";
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 1, changed).expect("changed trust binding succeeds")
+        );
+        let mut changed = holder_input(&fields);
+        changed.purpose = "other-purpose";
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 1, changed).expect("changed purpose binding succeeds")
+        );
+        let mut changed = holder_input(&fields);
+        changed.role = "other-role";
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 1, changed).expect("changed role binding succeeds")
+        );
+        let mut changed = holder_input(&fields);
+        changed.profile = "other-profile";
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 1, changed).expect("changed profile binding succeeds")
+        );
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 2, holder_input(&fields)).expect("changed key version succeeds")
+        );
+
+        let changed_value = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("other-bytes"),
+        }];
+        assert_ne!(
+            baseline,
+            subject_binding(KEY, 1, holder_input(&changed_value)).expect("changed value succeeds")
         );
     }
 
@@ -278,7 +443,7 @@ mod tests {
             subject_binding(KEY, 1, changed).expect("changed trust binding succeeds")
         );
         let mut changed = input(&fields);
-        changed.audience = "urn:example:other-audience";
+        changed.scope = SubjectBindingScope::Audience("urn:example:other-audience");
         assert_ne!(
             baseline,
             subject_binding(KEY, 1, changed).expect("changed audience binding succeeds")

@@ -6,7 +6,7 @@ additionalProperties: false
 required:
   - schema
   - assuranceProfile
-  - requestNonce
+  - subjectBinding
   - id
   - type
   - supportsRequirement
@@ -17,13 +17,19 @@ required:
   - observedAt
   - validUntil
   - purpose
-  - audience
   - configurationRevision
   - subjects
   - supportedValues
+# An audience-scoped assertion carries both members or neither. The implication
+# from subjectBinding to those members is enforced in code, because one closed
+# object cannot express it without a branch that carries its own properties map.
+dependentRequired:
+  audience: [requestNonce]
+  requestNonce: [audience]
 properties:
   schema: {const: registry.assertion-evidence/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
+  subjectBinding: {enum: [audience-scoped, holder-bound]}
   requestNonce: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
   id: {type: string, format: uri, maxLength: 512}
   type: {const: Evidence}
@@ -111,9 +117,12 @@ $comment: >-
   codelist, precision, cardinality, sizes, structured fields, and uniqueness.
   A value accepted by this transport schema but not by that declaration is
   rejected before evidence construction. Subject selector profiles and values
-  never appear in evidence. requestNonce is the exact echo of the caller's
-  request nonce and is covered by the JWS signature in the signed format. It
-  is not part of the audience-scoped subject binding, and its reuse is not
-  rejected; challenge-style transaction binding exists only when the relying
-  party independently retains the original request and requires the expected
-  nonce during verification.
+  never appear in evidence. subjectBinding declares what the assertion is scoped
+  to. An audience-scoped assertion carries both audience and requestNonce; a
+  holder-bound one carries neither, and names its holder key in the confirmation
+  claim of the presented serialization instead. requestNonce is the exact echo of
+  the caller's request nonce and is covered by the JWS signature in the signed
+  format. It is not part of the subject binding, and its reuse is not rejected;
+  challenge-style transaction binding exists only when the relying party
+  independently retains the original request and requires the expected nonce
+  during verification.

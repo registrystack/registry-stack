@@ -1730,6 +1730,183 @@ fn verify_requires_exactly_one_stored_response_format() {
     }
 }
 
+/// The audience the fixture relying party put in the challenge it issued.
+const KEY_BINDING_AUDIENCE: &str = "urn:example:relying-party";
+
+/// The challenge the fixture relying party issued and retained. Comparing it is
+/// not consuming it, so every run below may present it again.
+const KEY_BINDING_NONCE: &str = "QH-fpo3GJG9ksxAJeee7wQqpaRCkly8q-ltiG5QQmSk";
+
+/// The holder's own key: the second staged test pair, reused here because no
+/// deployment ever holds a holder private key and this is a test pair only.
+const HOLDER_PRIVATE_JWK: &str = MISMATCHED_PRIVATE_JWK;
+
+/// The public half of [`HOLDER_PRIVATE_JWK`], as a credential's confirmation
+/// key. No key identifier is confirmed, so the proof header nominates none.
+const HOLDER_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256"}"#;
+
+/// The instant every holder-bound run below verifies at. The fixture assertion
+/// is current at it, and a proof stamped with it is inside the accepted window.
+const PRESENTATION_INSTANT: &str = "2026-08-02T12:00:00Z";
+
+#[test]
+fn verify_presentation_accepts_an_authentic_and_current_presentation() {
+    let stored = StoredPresentation::stage(
+        &holder_bound_fixture_policy(),
+        valid_key_binding_claims,
+        HOLDER_PRIVATE_JWK,
+    );
+    let output = stored.verify_presentation(Some(PRESENTATION_INSTANT));
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "verify-presentation rejected a good presentation"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "verify-presentation wrote diagnostics"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.starts_with("verified-at: 2026-08-02T12:00:00Z\nauthentic: yes\npossession: "),
+        "unexpected verification output {stdout:?}"
+    );
+    assert!(
+        stdout.contains("currently-valid: yes\n"),
+        "verify-presentation did not report the presentation as current"
+    );
+    assert!(
+        stdout.contains("\"subjectBinding\": \"holder-bound\""),
+        "verify-presentation did not print the rebuilt Evidence for inspection"
+    );
+    // The command answers what possession was proven and refuses to imply
+    // more: the challenge was compared, and comparing it retired nothing.
+    assert!(
+        stdout.contains(
+            "possession: proven when the key-binding JWT was signed; \
+             not proof that the presentation is fresh, single-use, or unreplayed\n"
+        ),
+        "verify-presentation overstated what a verified proof establishes"
+    );
+}
+
+/// The documented behavior, asserted deliberately rather than left implied: the
+/// expected challenge is compared and never consumed, so the same stored bytes
+/// verify again under the same policy. Nothing here is a replay defence, and a
+/// relying party that needs one owns it in its own challenge lifecycle.
+#[test]
+fn verify_presentation_accepts_the_same_stored_bytes_every_time() {
+    let stored = StoredPresentation::stage(
+        &holder_bound_fixture_policy(),
+        valid_key_binding_claims,
+        HOLDER_PRIVATE_JWK,
+    );
+
+    for attempt in 1..=2 {
+        let output = stored.verify_presentation(Some(PRESENTATION_INSTANT));
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "attempt {attempt} over unchanged bytes was refused"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "attempt {attempt} wrote diagnostics"
+        );
+        let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+        assert!(
+            stdout.contains("authentic: yes\n") && stdout.contains("currently-valid: yes\n"),
+            "attempt {attempt} did not report the same answer"
+        );
+    }
+}
+
+#[test]
+fn verify_presentation_reports_only_the_key_binding_class_for_a_failed_proof() {
+    let policy = holder_bound_fixture_policy();
+    let cases = [
+        (
+            "a challenge answered to another relying party",
+            StoredPresentation::stage(
+                &policy,
+                |issued| {
+                    let mut claims = valid_key_binding_claims(issued);
+                    claims["aud"] = json!("urn:example:other-relying-party");
+                    claims
+                },
+                HOLDER_PRIVATE_JWK,
+            ),
+        ),
+        (
+            "a proof bound to bytes other than the presented ones",
+            StoredPresentation::stage(
+                &policy,
+                |issued| {
+                    let mut claims = valid_key_binding_claims(issued);
+                    claims["sd_hash"] = json!(disclosure_hash(&format!("{issued}~")));
+                    claims
+                },
+                HOLDER_PRIVATE_JWK,
+            ),
+        ),
+        (
+            "a signer other than the confirmed holder key",
+            // The service signing key: authentic for the credential, and not
+            // the key the issuer confirmed for the holder.
+            StoredPresentation::stage(&policy, valid_key_binding_claims, VERIFY_PRIVATE_JWK),
+        ),
+    ];
+
+    for (label, stored) in &cases {
+        let output = stored.verify_presentation(Some(PRESENTATION_INSTANT));
+        assert_verification_failure(
+            &output,
+            PRESENTATION_INSTANT,
+            "authentic: no\n",
+            "evidence: stored response verification failed (key-binding)\n",
+        );
+        assert_eq!(output.status.code(), Some(1), "{label} was accepted");
+    }
+}
+
+/// Neither command reads the other's serialization. A presentation carries no
+/// trailing tilde, so `verify` refuses it, and it is refused for its shape
+/// rather than its policy: the Version 1 policy staged for this run is one that
+/// command does accept.
+#[test]
+fn verify_refuses_a_holder_bound_presentation() {
+    let stored = StoredPresentation::stage(
+        &holder_bound_fixture_policy(),
+        valid_key_binding_claims,
+        HOLDER_PRIVATE_JWK,
+    );
+    let output = stored.verify_as_stored_response(Some(PRESENTATION_INSTANT));
+
+    assert_verification_failure(
+        &output,
+        PRESENTATION_INSTANT,
+        "authentic: no\n",
+        "evidence: stored response verification failed (malformed)\n",
+    );
+}
+
+/// The other direction: an audience-scoped credential ends in the trailing
+/// tilde that marks an absent proof, so it is refused for offering no
+/// possession rather than verified without one.
+#[test]
+fn verify_presentation_refuses_an_audience_scoped_credential() {
+    let stored = StoredCredential::stage(&holder_bound_fixture_policy(), |credential| credential);
+    let output = stored.verify_presentation(Some(PRESENTATION_INSTANT));
+
+    assert_verification_failure(
+        &output,
+        PRESENTATION_INSTANT,
+        "authentic: no\n",
+        "evidence: stored response verification failed (key-binding)\n",
+    );
+}
+
 /// Assert one closed verification failure: exit 1, the chosen instant, the
 /// expected remaining stdout, only the closed class on stderr, and no leaked
 /// document value on either stream.
@@ -1759,6 +1936,7 @@ fn fixture_evidence() -> serde_json::Value {
     serde_json::json!({
         "schema": "registry.assertion-evidence/v1",
         "assuranceProfile": "evidence-grade",
+        "subjectBinding": "audience-scoped",
         "requestNonce": FIXTURE_NONCE,
         "id": "urn:ulid:01K1EXAMPLE0000000000000000",
         "type": "Evidence",
@@ -1805,6 +1983,97 @@ revokedKeyIds: []
         revision = "0".repeat(64),
         binding = "A".repeat(43),
     )
+}
+
+/// The same fixture assertion under the holder-bound mode: no audience and no
+/// request nonce, because it names no relying party and correlates to no single
+/// request.
+fn holder_bound_fixture_evidence() -> serde_json::Value {
+    let mut evidence = fixture_evidence();
+    evidence["subjectBinding"] = json!("holder-bound");
+    let members = evidence.as_object_mut().expect("the fixture is an object");
+    members.remove("audience");
+    members.remove("requestNonce");
+    evidence
+}
+
+/// The holder-bound relying-procedure policy matching that payload.
+///
+/// A real relying party builds this from independently retained trusted state,
+/// including the challenge it issued itself. The test simulates that state from
+/// the fixture it controls.
+fn holder_bound_fixture_policy() -> String {
+    format!(
+        "subjectBinding: holder-bound
+expectedAssuranceProfile: evidence-grade
+issuedBy: urn:example:issuer
+providedBy: urn:example:provider
+requirement: urn:example:requirement:v1
+evidenceType: urn:example:type:v1
+expectedIssuancePurpose: casework
+configurationRevision: sha256:{revision}
+expectedSubjects:
+  - role: subject
+    binding: urn:evidence:subject:v1_{binding}
+expectedOutputs:
+  - concept: urn:example:concept
+    form: boolean
+maximumAssertionLifetimeSeconds: 172800
+revokedKeyIds: []
+keyBindingAudience: {KEY_BINDING_AUDIENCE}
+keyBindingNonce: {KEY_BINDING_NONCE}
+maximumKeyBindingAgeSeconds: 300
+clockSkewSeconds: 30
+",
+        revision = "0".repeat(64),
+        binding = "A".repeat(43),
+    )
+}
+
+/// The four members RFC 9901 section 4.3 permits, over one presentation prefix.
+///
+/// `sd_hash_input` is the presentation up to and including its last tilde,
+/// which for a complete issued credential is that serialization itself.
+fn valid_key_binding_claims(sd_hash_input: &str) -> Value {
+    json!({
+        "nonce": KEY_BINDING_NONCE,
+        "aud": KEY_BINDING_AUDIENCE,
+        "iat": presentation_instant(),
+        "sd_hash": disclosure_hash(sd_hash_input),
+    })
+}
+
+/// The verification instant the holder-bound runs share, as a Unix second.
+fn presentation_instant() -> i64 {
+    chrono::DateTime::parse_from_rfc3339(PRESENTATION_INSTANT)
+        .expect("the staged instant parses")
+        .timestamp()
+}
+
+/// The `sd_hash` a proof carries over one presentation prefix.
+fn disclosure_hash(sd_hash_input: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+    URL_SAFE_NO_PAD.encode(registry_platform_sdjwt::presentation_disclosure_hash(
+        sd_hash_input,
+    ))
+}
+
+/// Sign one compact JWT over the given header and claims with a staged test
+/// key.
+fn sign_compact_jwt(header: &Value, claims: &Value, private_jwk: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use registry_platform_crypto::{sign, PrivateJwk};
+
+    let key = PrivateJwk::parse(private_jwk).expect("the staged key parses");
+    let signing_input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(header).expect("header serializes")),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).expect("claims serialize")),
+    );
+    let signature =
+        URL_SAFE_NO_PAD.encode(sign(signing_input.as_bytes(), &key).expect("the staged key signs"));
+    format!("{signing_input}.{signature}")
 }
 
 /// The three files an operator holds for offline re-verification: one stored
@@ -1946,6 +2215,146 @@ impl StoredCredential {
         }
         command.output().expect("evidence binary starts")
     }
+
+    /// Offer the issued audience-scoped credential to the holder-bound command,
+    /// which must refuse bytes that carry no proof of possession.
+    fn verify_presentation(&self, at: Option<&str>) -> Output {
+        invoke_verify_presentation(
+            &self.path("response.sd-jwt"),
+            &self.path("trusted.jwks.json"),
+            &self.path("policy.yaml"),
+            at,
+        )
+    }
+}
+
+/// The three files an operator holds for offline re-verification of a
+/// holder-bound presentation: one stored presentation carrying the holder's
+/// key-binding JWT after its last tilde, one pinned trusted key set, and one
+/// holder-bound policy document.
+struct StoredPresentation {
+    root: tempfile::TempDir,
+}
+
+impl StoredPresentation {
+    /// Issue the holder-bound fixture confirming the test holder key, append a
+    /// key-binding JWT carrying `claims` and signed by `key_binding_jwk`, and
+    /// stage the result beside the pinned key set and the policy.
+    ///
+    /// `claims` receives the issued serialization, which is exactly the input
+    /// RFC 9901 section 4.3.1 hashes into `sd_hash`, so a case can bind a proof
+    /// to bytes other than the ones it travels with.
+    fn stage(policy: &str, claims: impl FnOnce(&str) -> Value, key_binding_jwk: &str) -> Self {
+        use registry_evidence::{
+            model::{Evidence, HolderPublicKey},
+            sdjwt_vc::issuance_input,
+            signing::{jwks_document, EvidenceSigner},
+        };
+        use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+        use std::sync::Arc;
+
+        let root = tempfile::tempdir().expect("temporary verification inputs");
+        let evidence: Evidence = serde_json::from_value(holder_bound_fixture_evidence())
+            .expect("the fixture is a holder-bound Evidence payload");
+        let holder: HolderPublicKey =
+            serde_json::from_str(HOLDER_PUBLIC_JWK).expect("the holder key parses");
+        let private = PrivateJwk::parse(VERIFY_PRIVATE_JWK).expect("fixture key parses");
+        let provider: Arc<dyn SigningProvider> =
+            Arc::new(LocalJwkSigner::new(private).expect("fixture signer builds"));
+
+        let (issued, trusted) = tokio::runtime::Runtime::new()
+            .expect("issuance runtime starts")
+            .block_on(async {
+                let signer = EvidenceSigner::initialize(provider, VERIFY_KEY_ID)
+                    .await
+                    .expect("signer initializes");
+                let input = issuance_input(&evidence, Some(&holder), &BTreeMap::new())
+                    .expect("the fixture maps");
+                let issued = signer
+                    .sign_sd_jwt_vc(input)
+                    .await
+                    .expect("credential serializes");
+                let trusted = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+                (issued, trusted)
+            });
+        let key_binding = sign_compact_jwt(
+            &json!({"alg": "ES256", "typ": "kb+jwt"}),
+            &claims(&issued),
+            key_binding_jwk,
+        );
+
+        fs::write(
+            root.path().join("presentation.sd-jwt"),
+            format!("{issued}{key_binding}"),
+        )
+        .expect("stage the stored presentation");
+        fs::write(
+            root.path().join("trusted.jwks.json"),
+            serde_json::to_vec(&trusted).expect("JWKS serializes"),
+        )
+        .expect("stage the pinned key set");
+        fs::write(root.path().join("policy.yaml"), policy).expect("stage the policy");
+        Self { root }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.path().join(name)
+    }
+
+    fn verify_presentation(&self, at: Option<&str>) -> Output {
+        invoke_verify_presentation(
+            &self.path("presentation.sd-jwt"),
+            &self.path("trusted.jwks.json"),
+            &self.path("policy.yaml"),
+            at,
+        )
+    }
+
+    /// Offer the same presentation bytes to the Version 1 `verify` command,
+    /// against a policy document that command does accept, so its refusal is
+    /// about the serialization rather than the policy it was handed.
+    fn verify_as_stored_response(&self, at: Option<&str>) -> Output {
+        let policy = self.path("audience-scoped-policy.yaml");
+        fs::write(&policy, fixture_policy()).expect("stage the Version 1 policy");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .arg("verify")
+            .arg("--sd-jwt-vc")
+            .arg(self.path("presentation.sd-jwt"))
+            .arg("--jwks")
+            .arg(self.path("trusted.jwks.json"))
+            .arg("--policy")
+            .arg(policy)
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+        if let Some(at) = at {
+            command.arg("--at").arg(at);
+        }
+        command.output().expect("evidence binary starts")
+    }
+}
+
+/// Run `verify-presentation` with no runtime file staged, so the command proves
+/// it needs no deployment and opens no socket.
+fn invoke_verify_presentation(
+    presentation: &Path,
+    jwks: &Path,
+    policy: &Path,
+    at: Option<&str>,
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+    command
+        .arg("verify-presentation")
+        .arg("--sd-jwt-vc-presentation")
+        .arg(presentation)
+        .arg("--jwks")
+        .arg(jwks)
+        .arg("--policy")
+        .arg(policy)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME");
+    if let Some(at) = at {
+        command.arg("--at").arg(at);
+    }
+    command.output().expect("evidence binary starts")
 }
 
 fn stop(service: &mut Child) {

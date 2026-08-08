@@ -151,6 +151,14 @@
   "$id": "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "dependentRequired": {
+    "audience": [
+      "requestNonce"
+    ],
+    "requestNonce": [
+      "audience"
+    ]
+  },
   "properties": {
     "assuranceProfile": {
       "enum": [
@@ -207,6 +215,12 @@
     "schema": {
       "const": "registry.assertion-evidence/v1"
     },
+    "subjectBinding": {
+      "enum": [
+        "audience-scoped",
+        "holder-bound"
+      ]
+    },
     "subjects": {
       "items": {
         "$ref": "#/$defs/subject-binding"
@@ -239,7 +253,7 @@
   "required": [
     "schema",
     "assuranceProfile",
-    "requestNonce",
+    "subjectBinding",
     "id",
     "type",
     "supportsRequirement",
@@ -250,7 +264,6 @@
     "observedAt",
     "validUntil",
     "purpose",
-    "audience",
     "configurationRevision",
     "subjects",
     "supportedValues"

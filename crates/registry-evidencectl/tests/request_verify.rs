@@ -890,6 +890,7 @@ impl Fixture {
         let payload = json!({
             "schema": "registry.assertion-evidence/v1",
             "assuranceProfile": "local",
+            "subjectBinding": "audience-scoped",
             "requestNonce": request["requestNonce"],
             "id": "urn:registrystack:evidence:local:assertion:00000000-0000-4000-8000-000000000001",
             "type": "Evidence",

@@ -25,7 +25,7 @@ use crate::config::{
 use crate::model::{
     BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
     EvidenceObjectType, LookupResult, PublicValue, ScalarOrEntityReference, StructuredValue,
-    StructuredValueForm, SubjectBinding, SupportedValue,
+    StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
 };
 use crate::rhai_runtime::{
     CalendarDate, CodelistHandle, CompiledDerivation, CompiledExtraction, CompiledPreparation,
@@ -157,9 +157,49 @@ impl std::fmt::Debug for ValidatedValues {
     }
 }
 
+/// What one assertion is scoped to, and the members that scope carries.
+///
+/// The two members an audience-scoped assertion carries live inside the
+/// variant that owns them, so a holder-bound construction cannot state an
+/// audience or a request nonce at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvidenceScope<'a> {
+    AudienceScoped {
+        audience: &'a str,
+        /// Exact caller nonce to echo. It is copied verbatim into the payload
+        /// and is not part of the subject binding, audit, or any diagnostic
+        /// surface.
+        request_nonce: &'a str,
+    },
+    HolderBound,
+}
+
+impl<'a> EvidenceScope<'a> {
+    pub fn audience(self) -> Option<&'a str> {
+        match self {
+            Self::AudienceScoped { audience, .. } => Some(audience),
+            Self::HolderBound => None,
+        }
+    }
+
+    pub fn request_nonce(self) -> Option<&'a str> {
+        match self {
+            Self::AudienceScoped { request_nonce, .. } => Some(request_nonce),
+            Self::HolderBound => None,
+        }
+    }
+
+    fn mode(self) -> SubjectBindingMode {
+        match self {
+            Self::AudienceScoped { .. } => SubjectBindingMode::AudienceScoped,
+            Self::HolderBound => SubjectBindingMode::HolderBound,
+        }
+    }
+}
+
 /// Runtime-owned inputs needed to project protected derivation values.
 pub struct ValueProjection<'a> {
-    pub audience: &'a str,
+    pub scope: EvidenceScope<'a>,
     pub binding_key: &'a [u8],
     pub binding_key_version: u32,
 }
@@ -167,11 +207,8 @@ pub struct ValueProjection<'a> {
 /// Core-owned envelope inputs supplied by the authenticated release pipeline.
 pub struct EvidenceConstruction<'a> {
     pub evidence_id: &'a str,
-    /// Exact caller nonce to echo. It is copied verbatim into the payload and
-    /// is not part of the subject binding, audit, or any diagnostic surface.
-    pub request_nonce: &'a str,
     pub purpose: &'a str,
-    pub audience: &'a str,
+    pub scope: EvidenceScope<'a>,
     pub issued_at: DateTime<Utc>,
     pub observed_at: DateTime<Utc>,
     pub subjects: Vec<SubjectBinding>,
@@ -688,7 +725,8 @@ impl OfflineKernel {
         Ok(Evidence {
             schema: crate::EVIDENCE_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle.config.assurance_profile,
-            request_nonce: input.request_nonce.to_owned(),
+            subject_binding: input.scope.mode(),
+            request_nonce: input.scope.request_nonce().map(ToOwned::to_owned),
             id: input.evidence_id.to_owned(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: requirement.id.clone(),
@@ -699,7 +737,7 @@ impl OfflineKernel {
             observed_at: format_utc(input.observed_at),
             valid_until,
             purpose: input.purpose.to_owned(),
-            audience: input.audience.to_owned(),
+            audience: input.scope.audience().map(ToOwned::to_owned),
             configuration_revision: self
                 .bundle
                 .configuration_revision(&requirement.id)
@@ -1149,11 +1187,15 @@ fn project_entity(
     seed: &crate::values::EntityReferenceSeed,
     projection: &ValueProjection<'_>,
 ) -> Result<String, KernelError> {
+    // An entity reference is audience-scoped by construction and by its public
+    // `form`. A holder-bound assertion names no audience, so there is nothing to
+    // scope one to and the projection refuses rather than inventing a scope.
+    let audience = projection.scope.audience().ok_or(KernelError::Output)?;
     let reference = entity_reference(
         projection.binding_key,
         projection.binding_key_version,
         &concept.id,
-        projection.audience,
+        audience,
         seed.expose_for_projection(),
     )
     .map_err(|_| KernelError::Output)?;
@@ -1176,10 +1218,7 @@ fn validate_evidence_inputs(
     if input.evidence_id.is_empty()
         || input.evidence_id.len() > MAXIMUM_EVIDENCE_IDENTIFIER_BYTES
         || url::Url::parse(input.evidence_id).is_err()
-        || !crate::model::request_nonce_is_canonical(input.request_nonce)
-        || input.audience.is_empty()
-        || input.audience.len() > MAXIMUM_EVIDENCE_IDENTIFIER_BYTES
-        || url::Url::parse(input.audience).is_err()
+        || !scope_is_valid(input.scope)
         || !requirement
             .purposes
             .iter()
@@ -1221,6 +1260,23 @@ fn validate_evidence_inputs(
         return Err(KernelError::Evidence);
     }
     Ok(())
+}
+
+/// A holder-bound scope carries nothing to validate. An audience-scoped one
+/// keeps the bounds it has always had on both of its members.
+fn scope_is_valid(scope: EvidenceScope<'_>) -> bool {
+    match scope {
+        EvidenceScope::AudienceScoped {
+            audience,
+            request_nonce,
+        } => {
+            crate::model::request_nonce_is_canonical(request_nonce)
+                && !audience.is_empty()
+                && audience.len() <= MAXIMUM_EVIDENCE_IDENTIFIER_BYTES
+                && url::Url::parse(audience).is_ok()
+        }
+        EvidenceScope::HolderBound => true,
+    }
 }
 
 fn format_utc(value: DateTime<Utc>) -> String {
@@ -1380,7 +1436,10 @@ mod tests {
 
     fn projection() -> ValueProjection<'static> {
         ValueProjection {
-            audience: AUDIENCE,
+            scope: EvidenceScope::AudienceScoped {
+                audience: AUDIENCE,
+                request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+            },
             binding_key: KEY,
             binding_key_version: 1,
         }
@@ -1994,9 +2053,11 @@ mod tests {
             .expect("values validate");
         let construction = || EvidenceConstruction {
             evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
-            request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
             purpose: &requirement.purposes[0],
-            audience: AUDIENCE,
+            scope: EvidenceScope::AudienceScoped {
+                audience: AUDIENCE,
+                request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+            },
             issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
             observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
             subjects: vec![
@@ -2021,6 +2082,81 @@ mod tests {
         assert_eq!(first.subjects[0].role, "child");
         assert_eq!(first.subjects[1].role, "candidate-parent");
         assert_eq!(first.valid_until, "2026-08-02T00:05:01Z");
+    }
+
+    /// A holder-bound construction has no member in which to state an audience
+    /// or a request nonce, so the constructed payload cannot carry either and
+    /// still agrees with the mode it declares.
+    #[test]
+    fn a_holder_bound_construction_states_no_audience_and_no_request_nonce() {
+        let copied = immutable_fixture("legal-parent-relationship");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let requirement = &bundle.config.requirements[0];
+        let values = kernel
+            .validate_values(
+                &requirement.id,
+                vec![DerivedConceptValue {
+                    concept_id: requirement.concepts[0].id.clone(),
+                    value: DerivedValue::Json(json!(false)),
+                }],
+                projection(),
+            )
+            .expect("values validate");
+        let evidence = kernel
+            .construct_evidence(
+                &requirement.id,
+                values,
+                EvidenceConstruction {
+                    evidence_id: "urn:ulid:01K1EXAMPLE0000000000000000",
+                    purpose: &requirement.purposes[0],
+                    scope: EvidenceScope::HolderBound,
+                    issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
+                    observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
+                    subjects: vec![
+                        SubjectBinding {
+                            role: "child".to_owned(),
+                            binding: format!("urn:evidence:subject:v1_{}", "A".repeat(43)),
+                        },
+                        SubjectBinding {
+                            role: "candidate-parent".to_owned(),
+                            binding: format!("urn:evidence:subject:v1_{}", "B".repeat(43)),
+                        },
+                    ],
+                },
+            )
+            .expect("constructs");
+        assert_eq!(evidence.subject_binding, SubjectBindingMode::HolderBound);
+        assert_eq!(evidence.audience, None);
+        assert_eq!(evidence.request_nonce, None);
+        registry_evidence_verifier::model::validate_subject_binding_shape(&evidence)
+            .expect("the constructed members agree with the declared mode");
+    }
+
+    /// An entity reference is scoped to an audience by its own public `form`.
+    /// A holder-bound projection names no audience, so the projection refuses
+    /// rather than inventing one.
+    #[test]
+    fn an_entity_reference_has_no_holder_bound_projection() {
+        let entity = concept(
+            "form: audience-scoped-entity-reference\nrequired: true\nconstraints: {maximumBytes: 160}",
+        );
+        let seed = crate::values::EntityReferenceSeed::new("protected-seed").expect("seed");
+        let holder_bound = ValueProjection {
+            scope: EvidenceScope::HolderBound,
+            binding_key: KEY,
+            binding_key_version: 1,
+        };
+        assert!(matches!(
+            validate_value(
+                &entity,
+                &DerivedValue::EntityReferenceSeed(seed),
+                &holder_bound,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            ),
+            Err(KernelError::Output)
+        ));
     }
 
     #[tokio::test]
@@ -2520,9 +2656,11 @@ mod tests {
                 values,
                 EvidenceConstruction {
                     evidence_id: "urn:ulid:01K1SUPPORTEDVALUES0000000000",
-                    request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
                     purpose: "conformance",
-                    audience: AUDIENCE,
+                    scope: EvidenceScope::AudienceScoped {
+                        audience: AUDIENCE,
+                        request_nonce: crate::model::OFFLINE_EVALUATION_REQUEST_NONCE,
+                    },
                     issued_at: "2026-08-02T00:00:01Z".parse().expect("time"),
                     observed_at: "2026-08-02T00:00:00Z".parse().expect("time"),
                     subjects: vec![SubjectBinding {
@@ -2545,7 +2683,10 @@ mod tests {
             &jwks,
             &EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
-                &evidence.request_nonce,
+                evidence
+                    .request_nonce
+                    .as_deref()
+                    .expect("the fixture is audience-scoped"),
                 48 * 60 * 60,
                 "2026-08-02T00:03:00Z".parse().expect("time"),
                 30,

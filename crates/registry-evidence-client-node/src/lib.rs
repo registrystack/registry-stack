@@ -43,7 +43,8 @@ use napi::{
 use napi_derive::napi;
 use registry_evidence_client::{
     EvidenceClient as RealEvidenceClient, PreparedEvidenceRequest as RealPreparedEvidenceRequest,
-    RawEvidenceResponse as RealRawEvidenceResponse, VerifiedEvidence as RealVerifiedEvidence,
+    RawEvidenceResponse as RealRawEvidenceResponse,
+    SdJwtVcBatchResponse as RealSdJwtVcBatchResponse, VerifiedEvidence as RealVerifiedEvidence,
 };
 
 use convert::{
@@ -187,9 +188,77 @@ impl RawEvidenceResponse {
     }
 }
 
+/// The issuance envelope answering one request that presented several holder
+/// keys, read but not yet judged.
+///
+/// The envelope's order is the request's own: `credentials[i]` answers the
+/// key the request sent as `holderKeys[i]`, one credential per key, and a
+/// caller that needs that correspondence spelled out can ask for it by index
+/// with `credentialForHolderKey`. There is no partial envelope: either every
+/// presented key was answered or reading the envelope failed.
+///
+/// Reading it judges nothing. Each credential is verified individually,
+/// exactly as a single credential is, and parsing this envelope is not a step
+/// in that.
+#[napi]
+pub struct SdJwtVcBatchResponse {
+    inner: RealSdJwtVcBatchResponse,
+}
+
+#[napi]
+impl SdJwtVcBatchResponse {
+    /// Read an envelope from the response bytes a batch exchange returned,
+    /// such as `RawEvidenceResponse.body`.
+    ///
+    /// This is a constructor rather than a static factory because napi-rs
+    /// defines a generated static as non-writable and non-configurable on the
+    /// class object, which leaves `client.js` no way to patch its throw path
+    /// the way it patches every other member here. A constructor it can
+    /// subclass, exactly as it already does for `EvidenceClient`.
+    #[napi(constructor)]
+    pub fn new(body: Buffer) -> Result<Self> {
+        catch_panic("reading a batch response", || {
+            let inner = RealSdJwtVcBatchResponse::parse(body.as_ref())
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            Ok(Self { inner })
+        })
+    }
+
+    /// Every credential the envelope carries, in the order the request
+    /// presented its holder keys.
+    #[napi(getter)]
+    pub fn credentials(&self) -> Result<Vec<String>> {
+        catch_panic("reading the batch credentials", || {
+            Ok(self.inner.credentials().to_vec())
+        })
+    }
+
+    /// How many credentials the envelope carries, which is how many holder
+    /// keys the request presented.
+    #[napi(getter)]
+    pub fn count(&self) -> Result<u32> {
+        catch_panic("reading the batch count", || {
+            Ok(u32::try_from(self.inner.count())
+                .expect("a parsed envelope carries at most the contract's holder-key ceiling"))
+        })
+    }
+
+    /// The credential bound to the holder key the request sent at `index`, or
+    /// `null` when the envelope carries no credential at that position.
+    #[napi]
+    pub fn credential_for_holder_key(&self, index: u32) -> Result<Option<String>> {
+        catch_panic("reading a batch credential by holder key", || {
+            Ok(self
+                .inner
+                .credential_for_holder_key(index as usize)
+                .map(str::to_owned))
+        })
+    }
+}
+
 /// A response that satisfied every expectation.
 ///
-/// Unlike the two classes above, this crosses as a plain object: it is a
+/// Unlike the opaque classes above, this crosses as a plain object: it is a
 /// terminal result nothing hands back into a later call, so there is no
 /// single-send flag or unconstructible real type to protect by staying
 /// opaque.

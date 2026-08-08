@@ -143,8 +143,8 @@ async fn first_use_acceptance_then_pinning_completes_two_verified_exchanges() {
     let evidence = accepted.evidence();
     assert_eq!(evidence.assurance_profile, AssuranceProfile::Local);
     assert_eq!(evidence.supports_requirement, REQUIREMENT);
-    assert_eq!(evidence.audience, RELYING_AUDIENCE);
-    assert_eq!(evidence.request_nonce, first_nonce);
+    assert_eq!(evidence.audience, Some(RELYING_AUDIENCE.to_owned()));
+    assert_eq!(evidence.request_nonce, Some(first_nonce.clone()));
     assert_eq!(evidence.subjects.len(), 1);
     assert_eq!(evidence.subjects[0].role, "subject");
     assert!(
@@ -168,7 +168,10 @@ async fn first_use_acceptance_then_pinning_completes_two_verified_exchanges() {
     assert_eq!(pinned.len(), 1);
     assert_eq!(pinned[0].role, "subject");
     assert_eq!(pinned[0].binding, evidence.subjects[0].binding);
-    assert_eq!(repinned.evidence().request_nonce, second_nonce);
+    assert_eq!(
+        repinned.evidence().request_nonce,
+        Some(second_nonce.clone())
+    );
     assert_eq!(
         repinned.evidence().subjects[0].binding,
         evidence.subjects[0].binding,
@@ -533,7 +536,7 @@ async fn an_acquired_credential_completes_a_verified_exchange() {
     // client, not one the request could choose: the deployment compares the two
     // and refuses a mismatch. Reaching a verified response therefore proves the
     // acquired credential carried the registered identity.
-    assert_eq!(evidence.audience, RELYING_AUDIENCE);
+    assert_eq!(evidence.audience, Some(RELYING_AUDIENCE.to_owned()));
     assert_eq!(evidence.subjects.len(), 1);
     assert!(evidence.subjects[0].binding.starts_with(BINDING_PREFIX));
 }
@@ -746,6 +749,7 @@ fn spec(
                 ),
             })
             .collect(),
+        holder_keys: Vec::new(),
         expected_outputs: definition
             .concepts
             .iter()

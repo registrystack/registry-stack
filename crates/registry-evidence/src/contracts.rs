@@ -21,9 +21,13 @@ use schemars::JsonSchema;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::model::{
-    Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
-    UnsignedEvidenceEnvelope,
+use crate::{
+    config::MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+    model::{
+        Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
+        SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
+    },
+    EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
 
 /// Evidence payload validation belongs to verification, which the portable
@@ -37,6 +41,7 @@ pub const EVIDENCE_SCHEMA_FILE: &str = "evidence-v1.schema.json";
 pub const DEFINITIONS_SCHEMA_FILE: &str = "evidence-definitions-v1.schema.json";
 pub const JWS_SCHEMA_FILE: &str = "flattened-jws-v1.schema.json";
 pub const UNSIGNED_ENVELOPE_SCHEMA_FILE: &str = "evidence-unsigned-envelope-v1.schema.json";
+pub const SD_JWT_VC_BATCH_SCHEMA_FILE: &str = "sd-jwt-vc-batch-envelope-v1.schema.json";
 pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
 
@@ -46,6 +51,8 @@ const DEFINITIONS_SCHEMA_ID: &str =
 const JWS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/flattened-jws-v1.json";
 const UNSIGNED_ENVELOPE_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/unsigned-envelope-v1.json";
+const SD_JWT_VC_BATCH_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/sd-jwt-vc-batch-envelope-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
 /// Shape of the server-minted operation identifier, shared by the response
@@ -107,6 +114,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     let definitions = definitions_schema();
     let jws = jws_schema();
     let unsigned = unsigned_envelope_schema();
+    let batch = sd_jwt_vc_batch_envelope_schema();
     let problem = problem_schema();
     let jwks = jwks_schema();
     assert_model_shape::<EvidenceRequest>("EvidenceRequest", &request, true)?;
@@ -114,6 +122,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     assert_model_shape::<EvidenceDefinitions>("EvidenceDefinitions", &definitions, true)?;
     assert_model_shape::<FlattenedJws>("FlattenedJws", &jws, false)?;
     assert_model_shape::<UnsignedEvidenceEnvelope>("UnsignedEvidenceEnvelope", &unsigned, false)?;
+    assert_model_shape::<SdJwtVcBatchEnvelope>("SdJwtVcBatchEnvelope", &batch, false)?;
     assert_model_shape::<ProblemBody>("ProblemBody", &problem, false)?;
     assert_model_shape::<JwksDocument>("JwksDocument", &jwks, false)?;
     let openapi = openapi_document(
@@ -122,6 +131,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
         &definitions,
         &jws,
         &unsigned,
+        &batch,
         &problem,
         &jwks,
     );
@@ -132,6 +142,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
         (DEFINITIONS_SCHEMA_FILE, definitions),
         (JWS_SCHEMA_FILE, jws),
         (UNSIGNED_ENVELOPE_SCHEMA_FILE, unsigned),
+        (SD_JWT_VC_BATCH_SCHEMA_FILE, batch),
         (PROBLEM_SCHEMA_FILE, problem),
         (JWKS_SCHEMA_FILE, jwks),
         (OPENAPI_FILE, openapi),
@@ -169,6 +180,7 @@ pub(crate) fn served_openapi_document() -> Option<&'static str> {
                 &definitions_schema(),
                 &jws_schema(),
                 &unsigned_envelope_schema(),
+                &sd_jwt_vc_batch_envelope_schema(),
                 &problem_schema(),
                 &jwks_schema(),
             ))
@@ -280,7 +292,12 @@ fn request_schema() -> Value {
                 "type": "array", "minItems": 1, "maxItems": 8,
                 "items": {"$ref": "#/$defs/subject"}
             },
-            "holderKey": {"$ref": "#/$defs/holder-key"}
+            "holderKeys": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+                "items": {"$ref": "#/$defs/holder-key"}
+            }
         },
         "$defs": {
             "subject": {
@@ -323,7 +340,7 @@ fn request_schema() -> Value {
                 }
             }
         },
-        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKey is meaningful only for the SD-JWT VC response format, where it is echoed into the cnf claim; it never reaches authorization, selectors, Rhai, source requests, or audit, and a key carrying any private member is rejected before credential acquisition or source access."
+        "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKeys is meaningful only to the credential response formats, where each key is echoed into the cnf claim of the credential issued for it; a single-credential request is an array of one. The keys never reach Rhai, source requests, or audit, and a key carrying any private member, a repeated RFC 7638 thumbprint, or a batch above the deployment's declared ceiling is rejected before credential acquisition or source access. Under a holder-bound requirement each key's thumbprint additionally scopes the subject binding of that key's own credential."
     })
 }
 
@@ -358,6 +375,10 @@ fn definitions_schema() -> Value {
                     "requirement": {"type": "string", "format": "uri", "maxLength": 512},
                     "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
                     "kind": {"enum": ["criterion", "information-requirement", "constraint"]},
+                    "subjectBindingMode": {
+                        "description": "What the subject bindings in this requirement's assertions are derived under. The vocabulary is closed and carries no default: absence means audience-scoped, stated here so a relying party reading a definition without the key knows the requirement issues audience-scoped assertions and is not reading an omission it has to resolve elsewhere. A definition that does carry the key states the mode explicitly.",
+                        "enum": ["audience-scoped", "holder-bound"]
+                    },
                     "evidenceType": {"type": "string", "format": "uri", "maxLength": 512},
                     "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
                     "referenceFrameworks": {
@@ -497,6 +518,28 @@ fn unsigned_envelope_schema() -> Value {
             "evidence": {"$ref": EVIDENCE_SCHEMA_ID}
         },
         "$comment": "Transport-authenticated convenience representation selected only by its exact vendor media type when the immutable bundle and the complete matched grant permit it. Once separated from its HTTPS exchange it provides no issuer-authenticity, integrity, non-repudiation, or later-verification property. The nested evidence is the same closed core object that would be JWS encoded. There is no protected, payload, or signature member, so the strict JWS verifier rejects this representation; tooling that parses it must return an explicitly unverified result."
+    })
+}
+
+fn sd_jwt_vc_batch_envelope_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": SD_JWT_VC_BATCH_SCHEMA_ID,
+        "title": "Evidence SD-JWT VC batch issuance envelope Version 1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "type", "credentials"],
+        "properties": {
+            "schema": {"const": SD_JWT_VC_BATCH_SCHEMA_V1},
+            "type": {"const": "SdJwtVcBatchEnvelope"},
+            "credentials": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+                "items": {"type": "string", "minLength": 1}
+            }
+        },
+        "$comment": "Issuance container selected only by its exact vendor media type, carrying one combined SD-JWT VC issuance serialization per presented holder key in the order the keys were presented. It is issuance-only: nothing consumes it at verification, and each member is verified individually as an ordinary holder-bound credential. Members share an issuance timestamp, purpose, requirement, Evidence Type, configuration revision, and disclosed values, so the container reduces deterministic key-based linkability without making its members unlinkable. A failure on any member releases nothing; there is no partial batch."
     })
 }
 
@@ -765,6 +808,7 @@ fn openapi_document(
     definitions: &Value,
     jws: &Value,
     unsigned: &Value,
+    batch: &Value,
     problem: &Value,
     jwks: &Value,
 ) -> Value {
@@ -820,6 +864,22 @@ fn openapi_document(
             Value::String("#/components/schemas/Evidence".to_string()),
         );
     }
+    if let Some(reference) = schemas
+        .get_mut("SdJwtVcBatchEnvelope")
+        .and_then(Value::as_object_mut)
+        .and_then(|schema| schema.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("credentials"))
+        .and_then(Value::as_object_mut)
+        .and_then(|credentials| credentials.get_mut("items"))
+        .and_then(Value::as_object_mut)
+    {
+        reference.clear();
+        reference.insert(
+            "$ref".to_string(),
+            Value::String("#/components/schemas/SdJwtVcCredential".to_string()),
+        );
+    }
     if let Some(properties) = schemas
         .get_mut("FlattenedJws")
         .and_then(Value::as_object_mut)
@@ -845,6 +905,7 @@ fn openapi_document(
             }
         }),
     );
+    insert_schema_family(&mut schemas, "SdJwtVcBatchEnvelope", batch, &[]);
     insert_schema_family(&mut schemas, "Problem", problem, &[]);
     insert_schema_family(
         &mut schemas,
@@ -901,7 +962,7 @@ fn openapi_document(
                 "post": {
                     "operationId": "createEvidence",
                     "summary": "Produce evidence for one authorized fixed requirement",
-                    "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, and only the exact application/dc+sd-jwt media type selects the SD-JWT VC serialization of the same assertion; each is released only when the immutable bundle and the complete matched authority grant permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
+                    "description": "Missing Accept, */*, and the exact application/jose+json media type select the default signed flattened JWS. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the unsigned envelope, only the exact application/dc+sd-jwt media type selects the SD-JWT VC serialization of the same assertion, and only the exact application/vnd.registrystack.evidence.batch+json media type selects the holder-bound batch issuance envelope carrying one credential per presented holder key; each is released only when the immutable bundle, the complete matched authority grant, and the requirement's subject binding mode all permit it. Duplicate, combined, parameterized, weighted, or unknown negotiation returns 406 before source access.",
                     "security": [{"bearerAuth": []}],
                     "requestBody": {
                         "required": true,
@@ -909,11 +970,12 @@ fn openapi_document(
                     },
                     "responses": {
                         "200": {
-                            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized SD-JWT VC serialization or self-identifying unsigned envelope",
+                            "description": "Signed Evidence as flattened JWS JSON Serialization by default, or the explicitly authorized SD-JWT VC serialization, holder-bound batch issuance envelope, or self-identifying unsigned envelope",
                             "headers": evidence_response_headers(None),
                             "content": {
                                 "application/jose+json": {"schema": {"$ref": "#/components/schemas/FlattenedJws"}},
                                 "application/dc+sd-jwt": {"schema": {"$ref": "#/components/schemas/SdJwtVcCredential"}},
+                                EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE: {"schema": {"$ref": "#/components/schemas/SdJwtVcBatchEnvelope"}},
                                 "application/vnd.registrystack.evidence-unsigned+json": {"schema": {"$ref": "#/components/schemas/UnsignedEvidenceEnvelope"}}
                             }
                         },
@@ -1124,6 +1186,7 @@ mod tests {
             &definitions_schema(),
             &jws_schema(),
             &unsigned_envelope_schema(),
+            &sd_jwt_vc_batch_envelope_schema(),
             &problem_schema(),
             &jwks_schema(),
         );
@@ -1148,6 +1211,7 @@ mod tests {
             &definitions_schema(),
             &jws_schema(),
             &unsigned_envelope_schema(),
+            &sd_jwt_vc_batch_envelope_schema(),
             &problem_schema(),
             &jwks_schema(),
         );
@@ -1301,6 +1365,7 @@ mod tests {
                 json!({
                     "schema": "registry.assertion-evidence/v1",
                     "assuranceProfile": "evidence-grade",
+                    "subjectBinding": "audience-scoped",
                     "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
                     "id": "urn:ulid:01K1EXAMPLE0000000000000000",
                     "type": "Evidence",

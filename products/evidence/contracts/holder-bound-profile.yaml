@@ -1,0 +1,334 @@
+contract: registry.evidence.holder-bound-profile/v1
+status: frozen
+status_rule: >-
+  This was draft until the runtime, the verifier, and every negative test named
+  below existed, because a frozen contract whose tests do not exist is an
+  aspiration rather than a guarantee. Each identifier under negative_tests now
+  resolves through security-test-traceability.yaml to executable tests, and the
+  traceability checker proves each of those names a real test item, so freezing
+  states what is enforced rather than what is intended. Frozen means the
+  statements here may be relied on and changed only by the review the security
+  invariant matrix requires; it does not mean the profile is finished, and the
+  non-goals below stay non-goals.
+summary: >-
+  Holder-bound subject binding for the SD-JWT VC serialization of the Version
+  one assertion. A requirement may declare this second binding mode, in which
+  case the subject binding derives from the holder public key the caller
+  supplies rather than from the audience, and the audience check moves from
+  issuance to presentation, where the relying party verifies a key-binding
+  JWT. Everything before serialization stays the unchanged Version one path:
+  one authorization decision, fixed source execution, bounded derivation,
+  output validation, and the same durable access and disclosure-release audit
+  ordering. This profile adds a declared binding mode and a presentation-side
+  verification entry point, never a credential lifecycle.
+standards_profile:
+  selective_disclosure_jwt: RFC 9901
+  sd_jwt_vc: draft-ietf-oauth-sd-jwt-vc-18
+  key_binding_jwt: RFC 9901 section 4.3
+  challenge_lifecycle: RFC 9901 section 7.3, which places the challenge lifecycle in the surrounding protocol rather than in the verifier
+  evolution_rule: A later draft or RFC is a reviewed profile revision, never an implicit library upgrade.
+binding_derivation:
+  mode: holder-bound
+  declaration: >-
+    The immutable bundle declares subjectBinding holder-bound on the
+    requirement. Absence means audience-scoped; silence enables nothing, and no
+    caller input selects the mode.
+  domain_constant: registry-evidence/subject-binding/holder/v1
+  construction: >-
+    HMAC under the deployment binding key, in the same canonical framing the
+    audience-scoped derivation uses. The domain constant differs, so the two
+    derivations cannot collide even under identical remaining inputs.
+  input_tuple:
+    - binding-key version
+    - trust domain
+    - holder key RFC 7638 thumbprint
+    - purpose
+    - role
+    - selector profile
+    - selector field count
+    - per selector field: name, type tag, and value
+  key_input_rule: >-
+    The holder input is the RFC 7638 SHA-256 thumbprint of the holder public
+    JWK, never the JWK bytes. Member order, an added kid, and a declared alg
+    change the JSON without changing the thumbprint, so serialization variance
+    cannot fork the binding for one key.
+  identifier_form: >-
+    urn:evidence:subject:v{n}_{43}, the single existing subject namespace. No
+    second URN namespace is minted; the domain constant already separates the
+    two derivations, and a second pattern would fork every consumer that
+    matches the existing one.
+  audience_independence: >-
+    audience is not an input. The same holder key, trust domain, purpose, role,
+    selector profile, and selector values yield the same binding whichever
+    caller requested it, so a delivery intermediary cannot poison the binding
+    with its own identity.
+  deployment_separation: >-
+    The same holder key under a different trust domain, or under a different
+    binding-key version, yields a different binding.
+  relying_party_rule: >-
+    The binding is an HMAC under a deployment secret, so a relying party cannot
+    derive or recompute it and never attempts to. It is pinned from independent
+    trusted state exactly as the audience-scoped binding is pinned today.
+  trust_chain:
+    rule: >-
+      Three separate links close the chain. No single one of them is
+      sufficient, and the issuer signature alone proves none of the possession
+      the mode exists to establish.
+    links:
+      - subject binding to confirmation key, established by the issuer signature, because sub and cnf are both inside the signed JWT and neither can be swapped for the other
+      - subject binding to what the relying party expects, established by expectedSubjects in the verification policy, pinned from independent trusted state and unchanged from the audience-scoped path
+      - presenter to confirmation key, established by the key-binding JWT signature verified against cnf.jwk
+    consequence: >-
+      Because possession is proven by the third link, a relying party need not
+      know the holder key in advance. An expected holder key thumbprint is an
+      optional additional expectation that authenticates a pre-established
+      holder; requiring it would force every relying party into an out-of-band
+      holder registration it may not have.
+  linkability:
+    service_position: >-
+      The service does not decide which verifiers may correlate a holder. It
+      delegates that decision to the holder, who chooses which credential to
+      present, to whom, and how often to reuse a key.
+    residual_correlator: >-
+      Holder key reuse. A holder presenting one key to several verifiers is
+      correlatable across them, and the service can neither prevent nor detect
+      it.
+    persistent_pseudonym: >-
+      Selector values are derivation inputs, so a binding is a persistent
+      pseudonym for one holder key, purpose, role, selector profile, and
+      selector value tuple. Repeating the same request with the same holder key
+      returns the same binding.
+    purpose_visibility: purpose is a low-cardinality attribute disclosed to every verifier the credential reaches.
+    audit_pseudonym: >-
+      The holder-bound audit pseudonym omits audience and is therefore stable
+      across issuances for the same subject. That is a deliberate
+      accountability property, stated rather than hidden.
+    refusal_pseudonym: The refusal pseudonym stays audience-scoped in both modes.
+    presentation_audience: >-
+      The audience a verifier checks is asserted by that verifier in its own
+      challenge and is never issuer-signed. That is a privacy gain and an
+      accountability loss: no issuance record names the verifier a credential
+      later reached.
+request_requirements:
+  holder_keys:
+    member: holderKeys
+    replaces: the optional singular holderKey member
+    rule: A holder-bound request must carry holderKeys with at least one key; a single-credential request is an array of one.
+    key_constraints:
+      key_type: EC P-256 public JWK
+      required_members: [kty, crv, x, y]
+      optional_members: [alg, kid]
+      optional_algorithm: ES256 only
+      wallet_kid: Wallet-owned and not required to be an RFC 7638 thumbprint.
+      private_members_prohibited: [d, p, q, dp, dq, qi, k]
+      rule: A key carrying any private member, a non-allowlisted algorithm, or an unparseable body fails before credential acquisition or source access.
+    uniqueness: >-
+      Keys are distinct by RFC 7638 thumbprint. The same coordinates carrying a
+      different kid or a different alg are distinct JSON and one key, so they
+      are refused before source access rather than silently collapsing a batch
+      to one holder.
+    bounds: >-
+      Bounded by a compile-time maximum, the request schema's maxItems, and the
+      bundle's holderBoundBatchMaxSize, in that order of increasing strictness.
+  ordering:
+    rule: >-
+      The holder-bound requires holderKeys check runs after entitlement
+      matching and after the format gate, and before selector resolution, so
+      the endpoint never becomes an unauthenticated requirement-existence
+      oracle.
+    code: malformed_request
+  processing_reach: >-
+    Under holder-bound the holder key is no longer inert. Its thumbprint
+    reaches subject-binding derivation. It still never reaches authorization,
+    selectors, Rhai, source requests, or audit, and no private member is
+    accepted anywhere.
+  audience_and_nonce: >-
+    A holder-bound assertion carries neither audience nor requestNonce. The
+    request still carries its request nonce under the unchanged transport
+    rules; there is no relying party to echo it to, so it is not projected into
+    the payload. The two payload members are present together or absent
+    together, never one alone.
+  undeclared_requirement: A requirement that does not declare holder-bound serves audience-scoped, whatever the caller supplies.
+format_restriction:
+  effective_set: >-
+    The formats a request may select are the intersection of the immutable
+    bundle's permission, the one complete matched grant's permission, and the
+    binding mode's allowlist. There is no per-requirement format list.
+  holder_bound_allowlist: [application/dc+sd-jwt, application/vnd.registrystack.evidence.batch+json]
+  signed_jws_rule: >-
+    Signed flattened JWS stays mandatory at bundle and grant scope. The
+    restriction is per requirement, not per bundle, so a bundle carrying a
+    holder-bound requirement still permits signed JWS for every other
+    requirement it serves.
+  grant_permission: >-
+    A grant permits holder-bound mode explicitly and separately from the
+    response formats it permits. Format permission must not imply mode
+    permission, or every grant that may request SD-JWT VC would silently gain
+    holder-bound issuance.
+  bundle_validation: >-
+    A holder-bound requirement must be reachable under a bundle and at least
+    one grant that permit SD-JWT VC. A bundle failing that refuses during
+    runtime binding, before the listener binds, with a value-free cause.
+  denial: >-
+    Four conditions are checked together after the exact entitlement match and
+    before selector resolution, credentials, or source access: the bundle
+    permits the requested serialization, the one complete matched grant permits
+    it, that grant permits the requested binding mode, and the mode permits the
+    serialization. Any of them failing produces one not_authorized problem. The
+    response body is built from the problem code alone, so it is identical to
+    the denial an unmatched grant produces; the internal category that
+    distinguishes the four is recorded in server-side response extensions for
+    operators and never reaches the wire. A caller therefore learns neither
+    which layer withheld the response nor whether the requirement exists.
+batch:
+  media_type: application/vnd.registrystack.evidence.batch+json
+  purpose: Offline use, by issuing several credentials at once under distinct holder keys.
+  mode_restriction: >-
+    The envelope belongs to this mode alone. It is not among the serializations
+    an audience-scoped requirement may be issued in, whatever the bundle and the
+    grant permit, so no audience-scoped request can select it and there is no
+    batch form of an audience-scoped assertion. The restriction runs both ways:
+    a holder-bound requirement is served only as the singular SD-JWT VC
+    serialization or as this envelope over it, and never as signed JWS or
+    unsigned output.
+  lifecycle_scope: >-
+    Issuance only, in both directions. The envelope exists to carry several
+    freshly issued credentials out of one request; nothing reissues, refreshes,
+    renews, revokes, or replaces a member through it, and nothing consumes it
+    at verification.
+  selection: Accept selects the format before the request body is read, exactly as every other format is selected.
+  cardinality_rule: >-
+    For a holder-bound requirement the singular SD-JWT VC media type requires
+    exactly one holder key, and the batch media type carries exactly one member
+    per holder key. This biconditional is scoped to holder-bound requirements;
+    audience-scoped keyless SD-JWT VC issuance is unchanged by it.
+  ceiling: The bundle's holderBoundBatchMaxSize. A request above it is refused before source access.
+  evaluation: >-
+    One authorization decision, one source acquisition, one derivation, then a
+    per-member construction, claim mapping, and signature.
+  member_independence: Each member carries its own subject binding, its own cnf, its own identifier and jti, and independent disclosure salts.
+  failure: A failure on any member releases nothing. There is no partial batch and no per-member fallback.
+  audit: >-
+    Exactly one terminal disclosure-release event, carrying the bounded
+    identifiers of every released member. Per-member release events are not
+    emitted, because a failed append after an earlier one would leave a durable
+    record describing a credential that was never released.
+  verification_scope: >-
+    The envelope is issuance-only. Nothing consumes a batch envelope at
+    verification, and each member is verified individually as an ordinary
+    holder-bound credential.
+  privacy:
+    reduces: >-
+      Batch reduces deterministic key-based linkability. A holder presenting a
+      different member to each verifier does not hand those verifiers a shared
+      subject binding.
+    does_not_provide: >-
+      It does not make credentials unlinkable. Members share an issuance
+      timestamp, which is itself a correlator, and share purpose, requirement,
+      Evidence Type, configuration revision, and the disclosed values.
+    issuer_knowledge: >-
+      The issuer knows that one requester submitted these keys together.
+      Without issuance-time proof of possession it does not know that the keys
+      belong to one holder, and this profile makes no such claim.
+key_binding_jwt:
+  standard: RFC 9901 section 4.3
+  issuer_rule: >-
+    Evidence never appends a key-binding JWT. An issued holder-bound credential
+    ends in the trailing tilde marking an absent key-binding JWT, exactly as
+    the audience-scoped serialization does.
+  presenter_rule: >-
+    The holder appends it. A presentation is the compact serialization with the
+    key-binding JWT after the last tilde and no trailing tilde, so an issued
+    credential and a presentation are mutually exclusive shapes and the
+    trailing-tilde rule is selected rather than relaxed.
+  protected_header:
+    exact_members: [alg, typ]
+    optional_members: [kid]
+    alg: {allowed: [ES256]}
+    typ: {const: kb+jwt}
+    prohibited: [jku, x5u, jwk, x5c, crit, b64]
+  payload:
+    exact_members: [nonce, aud, iat, sd_hash]
+    duplicate_members: strictly rejected before any member is read
+  confirmation_key:
+    required: true
+    rule: >-
+      cnf is required in a holder-bound credential and is the only key a
+      key-binding signature may be verified against. It stays at the SD-JWT
+      claim layer and is not an Evidence payload member.
+  verification_order:
+    - split the presentation and decode the protected header
+    - require the exact typ, the allowlisted algorithm, and no header member outside the closed allowlist
+    - verify the signature against the confirmation key before parsing the payload
+    - parse the closed payload with strict duplicate-member rejection
+    - compare the expected nonce in constant time, then the expected audience, then iat under checked time arithmetic against the configured maximum age and the configured skew
+    - recompute sd_hash over the presented issuer-signed JWT and disclosures and require an exact match
+  what_it_proves: >-
+    A verified key-binding JWT proves that the presenter held the private key
+    of cnf when the key-binding JWT was signed, over these exact presented
+    bytes, for the audience and nonce the relying party chose.
+  what_it_does_not_prove:
+    - Nonce equality is not nonce consumption. The same presentation bytes verify again, and again, against the same stateless policy, and this is the honest description of what the verifier does.
+    - RFC 9901 section 7.3 places the challenge lifecycle in the surrounding protocol. Issuing a challenge, retaining it, and retiring it belong to the relying party, not to this profile, not to the runtime, and not to the operator command.
+    - Nothing here is replay prevention. Adopter-facing material must not describe it as replay prevention.
+    - A valid issuer signature proves that the credential was issued against this confirmation key. It never proves that the party presenting it holds the corresponding private key.
+prohibited_value_forms:
+  forms: [audience-scoped-entity-reference, entity-reference-list]
+  rule: >-
+    Both forms project a protected seed through an HMAC that takes the audience
+    as an input. Under holder-bound there is no audience, so both degenerate. A
+    holder-bound requirement declaring either form refuses during runtime
+    binding, before the listener binds, with a value-free cause.
+  scope: The prohibition is per requirement. An audience-scoped requirement in the same bundle keeps both forms unchanged.
+  current_effect: >-
+    No Version one acceptance definition in this repository declares either
+    form, so the prohibition closes a shape rather than withdrawing a shipped
+    capability.
+profile_non_goals:
+  rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
+  items:
+    - OID4VCI in any part, including credential offers, pre-authorized codes, authorization or token endpoints, c_nonce, proof-of-possession challenges, credential endpoints, and deferred issuance
+    - status lists, revocation, suspension, or a credential-status endpoint
+    - server-side challenge, presentation, or replay state, persistent issuance state, an application database, or any store
+    - wallet onboarding, wallet attestation, or trust-list membership
+    - holder key generation, holding, escrow, or recovery by the service
+    - reissuance, refresh, or persistent credential identifiers
+    - a second subject-binding namespace, an unbound binding mode, or any binding mode outside the closed two-value vocabulary
+  consequence: >-
+    A holder-bound credential is usable by whoever holds both the credential
+    and the matching private key until validUntil passes. There is no status
+    list, no revocation, and no expiry beyond validUntil, so the service cannot
+    learn that a credential leaked and cannot withdraw one. Freshness is the
+    relying party's own challenge lifecycle. Full SD-JWT VC or OID4VCI
+    conformance is not claimed.
+verifier_rules:
+  - Apply the audience-scoped SD-JWT VC profile's issuer rules first and unchanged; this profile changes what the assertion is bound to, never how the issuer signature, protected header, or disclosure digests are checked.
+  - Require cnf. A holder-bound credential without a confirmation key is rejected, never accepted as an issuer-only assertion.
+  - Require the presentation shape. A stored credential ending in a trailing tilde is not a presentation and is refused as one, rather than verified without possession.
+  - Verify the key-binding JWT before applying any policy comparison, so a failed possession proof never runs a policy comparison and never becomes an oracle for one.
+  - Verify the key-binding signature against cnf alone; a signature by any other key fails even when that key is otherwise trusted.
+  - Reject a mode mismatch in both directions: an audience-scoped credential under a holder-bound policy, and a holder-bound credential under a Version one policy or the `evidence verify` command. Report it as the one generic policy class.
+  - Require the exact expected role-bound subject bindings as an unordered set from independent trusted state. The binding is an HMAC under a deployment secret; a relying party cannot recompute it and must never appear to.
+  - Expect neither audience nor requestNonce. A holder-bound assertion carries neither, and a document expecting them is an audience-scoped policy applied to the wrong credential.
+  - Compare the expected issuance purpose as signed issuance provenance. It records the purpose under which the credential was issued and authorizes, limits, or licenses no downstream use.
+  - Treat a verified key-binding JWT as proof of possession at signing time over these exact bytes, and never as proof that a presentation is fresh, single-use, or unreplayed.
+  - Own the challenge lifecycle: issue a nonce, retain it, retire it. Comparing a nonce is not consuming it, and the verifier holds no state between runs.
+  - Treat exp as an exclusive upper bound and apply only the configured clock skew, identically to the audience-scoped profile.
+  - Impose a maximum accepted assertion lifetime in addition to current validity, and a separate bounded maximum key-binding age.
+  - Report cryptographic authenticity, proven possession, and current validity as separate answers.
+  - Verify each batch member individually. The batch envelope is an issuance container and is never an input to verification.
+  - Do not infer holder identity, wallet attestation, source truth, legal-signature status, single-use semantics, or revocation status from a valid presentation.
+# Each identifier is a named security negative resolved through
+# security-test-traceability.yaml to executable tests, and each is the negative
+# of a row in security-invariant-matrix.yaml. The traceability checker requires
+# every one of them to be mapped while this profile is frozen, so a guarantee
+# above cannot outlive the test that enforces it.
+negative_tests:
+  - sec-holder-bound-binding-derivation
+  - sec-holder-bound-format-and-grant
+  - sec-holder-bound-batch-bounded
+  - sec-holder-bound-entity-reference-prohibited
+  - sec-key-binding-required-at-presentation
+  - sec-holder-bound-policy-separation
+  - sec-holder-bound-purpose-is-issuance-provenance
+  - sec-holder-key-material-confined

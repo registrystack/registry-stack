@@ -9,6 +9,7 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use registry_platform_crypto::{parse_json_strict, verify, PublicJwk, SigningAlgorithm};
+use registry_platform_sdjwt::{validate_key_binding_jwt, HolderConfirmation, KeyBindingPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -16,8 +17,11 @@ use thiserror::Error;
 
 use crate::{
     contracts::evidence_contract_accepts,
-    model::{Evidence, FlattenedJws, HolderPublicKey, JwksDocument},
-    sdjwt_vc::evidence_payload_from_claims,
+    model::{
+        validate_subject_binding_shape, Evidence, FlattenedJws, HolderPublicKey, JwksDocument,
+        SubjectBindingMode,
+    },
+    sdjwt_vc::{evidence_payload_from_claims, holder_jwk, holder_thumbprint},
     AssuranceProfile, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_TYP,
 };
@@ -57,6 +61,16 @@ pub const MAXIMUM_CLOCK_SKEW_SECONDS: u64 = 300;
 pub const MINIMUM_EXPECTED_LIST_ITEMS: usize = 1;
 /// Largest list cardinality a policy may state.
 pub const MAXIMUM_EXPECTED_LIST_ITEMS: usize = 64;
+/// Shortest accepted key-binding proof age a holder-bound policy may state,
+/// per the holder-bound verification policy contract.
+pub const MINIMUM_KEY_BINDING_AGE_SECONDS: u64 = 1;
+/// Longest accepted key-binding proof age a holder-bound policy may state, per
+/// the same contract.
+///
+/// It bounds how stale a proof of possession may be. It is not a replay
+/// window: no state records that a proof was already accepted, so a proof
+/// inside this interval is accepted as often as it is presented.
+pub const MAXIMUM_KEY_BINDING_AGE_SECONDS: u64 = 300;
 
 /// A policy stating a bound the verification policy contract forbids.
 ///
@@ -73,6 +87,10 @@ pub enum PolicyBoundsError {
     MinimumItems(usize),
     #[error("maximumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
     MaximumItems(usize),
+    #[error("a Version 1 policy document pins an audience, which a holder-bound assertion does not carry")]
+    HolderBound,
+    #[error("maximumKeyBindingAgeSeconds must be {MINIMUM_KEY_BINDING_AGE_SECONDS} to {MAXIMUM_KEY_BINDING_AGE_SECONDS}, not {0}")]
+    KeyBindingAge(u64),
 }
 
 fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsError> {
@@ -86,6 +104,13 @@ fn checked_assertion_lifetime(seconds: u64) -> Result<Duration, PolicyBoundsErro
 fn checked_clock_skew(seconds: u64) -> Result<Duration, PolicyBoundsError> {
     if seconds > MAXIMUM_CLOCK_SKEW_SECONDS {
         return Err(PolicyBoundsError::ClockSkew(seconds));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn checked_key_binding_age(seconds: u64) -> Result<Duration, PolicyBoundsError> {
+    if !(MINIMUM_KEY_BINDING_AGE_SECONDS..=MAXIMUM_KEY_BINDING_AGE_SECONDS).contains(&seconds) {
+        return Err(PolicyBoundsError::KeyBindingAge(seconds));
     }
     Ok(Duration::from_secs(seconds))
 }
@@ -189,6 +214,208 @@ where
     let seconds = u64::deserialize(deserializer)?;
     checked_clock_skew(seconds).map_err(serde::de::Error::custom)?;
     Ok(seconds)
+}
+
+/// The binding mode a holder-bound policy document declares.
+///
+/// The contract states it as a constant rather than an enumeration, so the
+/// document carries a one-value declaration and no other mode can be written
+/// into it. Reading it is what keeps the two documents apart from the first
+/// member onwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HolderBoundDeclaration {
+    HolderBound,
+}
+
+/// Complete relying-procedure expectations for verifying a holder-bound
+/// presentation.
+///
+/// It differs from the Version 1 policy in what a holder-bound assertion is:
+/// there is no audience and no request nonce to compare, because the assertion
+/// names no relying party, and there is instead a challenge the relying party
+/// itself issued and a bound on how stale the proof answering it may be.
+///
+/// The expected subject bindings are pinned trusted state exactly as in the
+/// Version 1 policy. A holder-bound binding is an HMAC under a deployment
+/// secret, so a relying party cannot derive one from the holder key and this
+/// type carries nothing that could be mistaken for a derivation input.
+///
+/// The three time bounds are private, so the only ways to a policy are the
+/// checked conversions on this type and on
+/// [`HolderBoundPresentationPolicyDocument`].
+#[derive(Debug, Clone)]
+pub struct HolderBoundPresentationPolicy {
+    pub assurance_profile: AssuranceProfile,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub requirement: String,
+    pub evidence_type: String,
+    /// The purpose the credential was issued under, compared as signed
+    /// issuance provenance and never as a limit on what the relying party may
+    /// now do with the assertion.
+    pub issuance_purpose: String,
+    pub configuration_revision: String,
+    /// Expected role-bound opaque subject bindings, pinned from independent
+    /// trusted state and never recomputed.
+    pub expected_subjects: Vec<ExpectedSubject>,
+    pub expected_outputs: Vec<ExpectedOutput>,
+    /// Service key thumbprints that fail closed even if present in a stale or
+    /// otherwise trusted JWKS document. It denies service signing keys and
+    /// never holder keys.
+    pub revoked_key_ids: Vec<String>,
+    /// The audience the relying party itself put in the challenge it issued.
+    pub key_binding_audience: String,
+    /// The exact challenge the relying party issued and retained. Comparing it
+    /// is an equality check: retiring a challenge belongs to the relying
+    /// party's own challenge lifecycle, not to this type.
+    pub key_binding_nonce: String,
+    /// RFC 7638 thumbprint of a pre-established holder key, when the relying
+    /// party already knows which holder it is talking to. Possession is proven
+    /// by the key-binding signature over the credential's own confirmation
+    /// key, so this is an additional expectation rather than a requirement.
+    pub expected_holder_key_thumbprint: Option<String>,
+    /// Read it with
+    /// [`HolderBoundPresentationPolicy::maximum_assertion_lifetime`].
+    maximum_assertion_lifetime: Duration,
+    /// Read it with [`HolderBoundPresentationPolicy::maximum_key_binding_age`].
+    maximum_key_binding_age: Duration,
+    pub now: DateTime<Utc>,
+    /// Read it with [`HolderBoundPresentationPolicy::clock_skew`].
+    clock_skew: Duration,
+}
+
+/// Closed wire document for holder-bound presentation expectations.
+///
+/// It is the serializable form the `evidence verify-presentation` operator
+/// boundary reads. Both documents are closed to unknown members and this one
+/// declares its mode, so neither is ever read under the other's rules.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HolderBoundPresentationPolicyDocument {
+    pub subject_binding: HolderBoundDeclaration,
+    pub expected_assurance_profile: AssuranceProfile,
+    pub issued_by: String,
+    pub provided_by: String,
+    pub requirement: String,
+    pub evidence_type: String,
+    pub expected_issuance_purpose: String,
+    pub configuration_revision: String,
+    pub expected_subjects: Vec<ExpectedSubjectDocument>,
+    pub expected_outputs: Vec<ExpectedOutputDocument>,
+    pub revoked_key_ids: Vec<String>,
+    #[serde(deserialize_with = "read_assertion_lifetime_seconds")]
+    pub maximum_assertion_lifetime_seconds: u64,
+    pub key_binding_audience: String,
+    pub key_binding_nonce: String,
+    #[serde(deserialize_with = "read_key_binding_age_seconds")]
+    pub maximum_key_binding_age_seconds: u64,
+    #[serde(default, deserialize_with = "read_clock_skew_seconds")]
+    pub clock_skew_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_holder_key_thumbprint: Option<String>,
+}
+
+fn read_key_binding_age_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let seconds = u64::deserialize(deserializer)?;
+    checked_key_binding_age(seconds).map_err(serde::de::Error::custom)?;
+    Ok(seconds)
+}
+
+impl HolderBoundPresentationPolicyDocument {
+    /// The runtime-facing policy for one verification instant, or a refusal
+    /// when the document states a bound the contract forbids.
+    pub fn try_into_policy(
+        self,
+        now: DateTime<Utc>,
+    ) -> Result<HolderBoundPresentationPolicy, PolicyBoundsError> {
+        let HolderBoundDeclaration::HolderBound = self.subject_binding;
+        let maximum_assertion_lifetime =
+            checked_assertion_lifetime(self.maximum_assertion_lifetime_seconds)?;
+        let maximum_key_binding_age =
+            checked_key_binding_age(self.maximum_key_binding_age_seconds)?;
+        let clock_skew = checked_clock_skew(self.clock_skew_seconds)?;
+        Ok(HolderBoundPresentationPolicy {
+            assurance_profile: self.expected_assurance_profile,
+            issued_by: self.issued_by,
+            provided_by: self.provided_by,
+            requirement: self.requirement,
+            evidence_type: self.evidence_type,
+            issuance_purpose: self.expected_issuance_purpose,
+            configuration_revision: self.configuration_revision,
+            expected_subjects: self
+                .expected_subjects
+                .into_iter()
+                .map(|subject| ExpectedSubject {
+                    role: subject.role,
+                    binding: subject.binding,
+                })
+                .collect(),
+            expected_outputs: self
+                .expected_outputs
+                .into_iter()
+                .map(|output| {
+                    Ok(ExpectedOutput {
+                        concept: output.concept,
+                        form: expected_value_form_document(output.form)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, PolicyBoundsError>>()?,
+            revoked_key_ids: self.revoked_key_ids,
+            key_binding_audience: self.key_binding_audience,
+            key_binding_nonce: self.key_binding_nonce,
+            expected_holder_key_thumbprint: self.expected_holder_key_thumbprint,
+            maximum_assertion_lifetime,
+            maximum_key_binding_age,
+            now,
+            clock_skew,
+        })
+    }
+}
+
+impl HolderBoundPresentationPolicy {
+    /// Longest acceptable `validUntil - issuedAt` interval.
+    #[must_use]
+    pub fn maximum_assertion_lifetime(&self) -> Duration {
+        self.maximum_assertion_lifetime
+    }
+
+    /// Longest accepted interval between the key-binding JWT's `iat` and the
+    /// verification instant.
+    #[must_use]
+    pub fn maximum_key_binding_age(&self) -> Duration {
+        self.maximum_key_binding_age
+    }
+
+    /// Accepted clock skew tolerance, applied to assertion validity and to how
+    /// far ahead of the verification instant a key-binding `iat` may sit.
+    #[must_use]
+    pub fn clock_skew(&self) -> Duration {
+        self.clock_skew
+    }
+
+    fn expectations(&self) -> EvidenceExpectations<'_> {
+        EvidenceExpectations {
+            subject_binding: SubjectBindingMode::HolderBound,
+            assurance_profile: self.assurance_profile,
+            issued_by: &self.issued_by,
+            provided_by: &self.provided_by,
+            requirement: &self.requirement,
+            evidence_type: &self.evidence_type,
+            purpose: &self.issuance_purpose,
+            audience: None,
+            request_nonce: None,
+            configuration_revision: &self.configuration_revision,
+            expected_subjects: &self.expected_subjects,
+            expected_outputs: &self.expected_outputs,
+            maximum_assertion_lifetime: self.maximum_assertion_lifetime,
+            now: self.now,
+            clock_skew: self.clock_skew,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -365,6 +592,26 @@ impl EvidenceVerificationPolicy {
         self.clock_skew
     }
 
+    fn expectations(&self) -> EvidenceExpectations<'_> {
+        EvidenceExpectations {
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            assurance_profile: self.assurance_profile,
+            issued_by: &self.issued_by,
+            provided_by: &self.provided_by,
+            requirement: &self.requirement,
+            evidence_type: &self.evidence_type,
+            purpose: &self.purpose,
+            audience: Some(&self.audience),
+            request_nonce: Some(&self.request_nonce),
+            configuration_revision: &self.configuration_revision,
+            expected_subjects: &self.expected_subjects,
+            expected_outputs: &self.expected_outputs,
+            maximum_assertion_lifetime: self.maximum_assertion_lifetime,
+            now: self.now,
+            clock_skew: self.clock_skew,
+        }
+    }
+
     /// Build expectations from evidence accepted in an original trusted
     /// transaction, for later re-verification of the stored response.
     ///
@@ -395,7 +642,13 @@ impl EvidenceVerificationPolicy {
             requirement: evidence.supports_requirement.clone(),
             evidence_type: evidence.is_conformant_to.clone(),
             purpose: evidence.purpose.clone(),
-            audience: evidence.audience.clone(),
+            // The Version 1 policy document pins one audience. A holder-bound
+            // assertion names none, so no such document describes it, and this
+            // refuses rather than inventing one.
+            audience: evidence
+                .audience
+                .clone()
+                .ok_or(PolicyBoundsError::HolderBound)?,
             configuration_revision: evidence.configuration_revision.clone(),
             request_nonce: retained_request_nonce.to_owned(),
             expected_subjects: evidence
@@ -513,6 +766,16 @@ pub enum VerificationError {
     Time,
     #[error("SD-JWT VC disclosures do not match the signed digests")]
     Disclosure,
+    /// The presentation did not establish that the presenter held the private
+    /// key the credential confirms.
+    ///
+    /// It covers an absent key-binding JWT, a signer other than the
+    /// confirmation key, a rejected header member or algorithm, a mismatched
+    /// audience, challenge, or `sd_hash`, and an `iat` outside the accepted
+    /// window. It says nothing about whether the presentation was presented
+    /// before: no state records that.
+    #[error("SD-JWT VC key binding does not prove the presenter held the confirmed key")]
+    KeyBinding,
 }
 
 impl VerificationError {
@@ -536,6 +799,7 @@ impl VerificationError {
             Self::Policy => "policy",
             Self::Time => "time",
             Self::Disclosure => "disclosure",
+            Self::KeyBinding => "key_binding",
         }
     }
 }
@@ -645,7 +909,7 @@ pub fn verify_flattened_jws_report(
     }
     let evidence: Evidence =
         serde_json::from_value(payload_strict).map_err(|_| VerificationError::Payload)?;
-    let currently_valid = validate_policy(&evidence, policy)?;
+    let currently_valid = validate_policy(&evidence, &policy.expectations())?;
     Ok(VerificationReport {
         evidence,
         currently_valid,
@@ -682,14 +946,157 @@ pub fn verify_sd_jwt_vc_report(
     trusted_jwks: &JwksDocument,
     policy: &EvidenceVerificationPolicy,
 ) -> Result<VerificationReport, VerificationError> {
-    if serialized.is_empty() || serialized.len() > MAX_JWS_BYTES {
-        return Err(VerificationError::MalformedJws);
+    let serialized = bounded_utf8(serialized)?;
+    let parsed = split_sd_jwt(serialized, false)?;
+    let credential =
+        verify_issuer_signed_credential(&parsed, trusted_jwks, &policy.revoked_key_ids)?;
+    // An issued credential may confirm a holder key it was never presented
+    // with. The confirmation is checked for shape and then carries no weight
+    // here: this entry point proves nothing about possession.
+    if let Some(confirmation) = &credential.confirmation {
+        confirmed_holder_key(confirmation)?;
     }
-    let serialized =
-        std::str::from_utf8(serialized).map_err(|_| VerificationError::MalformedJws)?;
-    let body = serialized
-        .strip_suffix('~')
-        .ok_or(VerificationError::MalformedJws)?;
+    let currently_valid = validate_policy(&credential.evidence, &policy.expectations())?;
+    Ok(VerificationReport {
+        evidence: credential.evidence,
+        currently_valid,
+    })
+}
+
+/// Strict one-call verification of an SD-JWT VC presentation: everything
+/// [`verify_sd_jwt_vc_presentation_report`] proves, and current validity as
+/// well.
+pub fn verify_sd_jwt_vc_presentation(
+    serialized: &[u8],
+    trusted_jwks: &JwksDocument,
+    policy: &HolderBoundPresentationPolicy,
+) -> Result<Evidence, VerificationError> {
+    let report = verify_sd_jwt_vc_presentation_report(serialized, trusted_jwks, policy)?;
+    if !report.currently_valid {
+        return Err(VerificationError::Time);
+    }
+    Ok(report.evidence)
+}
+
+/// Verify a holder-bound SD-JWT VC presentation against a pinned trusted key
+/// set and the complete independent policy, reporting cryptographic
+/// authenticity separately from current validity.
+///
+/// The checks run in a fixed order and the order is part of the contract: the
+/// issuer signature, complete disclosure resolution, the rebuilt payload
+/// against the published contract, the confirmation the issuer signed, the
+/// key-binding JWT, and only then the relying party's own expectations. A
+/// failed possession proof therefore never runs a policy comparison, so it
+/// cannot reveal whether the policy would have matched.
+///
+/// A presentation carries its key-binding JWT after the last tilde, so a
+/// stored credential ending in a trailing tilde is refused here rather than
+/// verified without possession, and an authentic credential whose proof fails
+/// is rejected rather than reported as an issuer-only success.
+///
+/// Success proves the presenter held the confirmation key's private key when
+/// the key-binding JWT was signed. It proves nothing about whether the same
+/// presentation was verified before: the challenge is compared, not consumed,
+/// and this function retains no state between calls. Retiring a challenge
+/// belongs to the relying party's own challenge lifecycle.
+pub fn verify_sd_jwt_vc_presentation_report(
+    serialized: &[u8],
+    trusted_jwks: &JwksDocument,
+    policy: &HolderBoundPresentationPolicy,
+) -> Result<VerificationReport, VerificationError> {
+    let serialized = bounded_utf8(serialized)?;
+    let parsed = split_sd_jwt(serialized, true)?;
+    let key_binding = parsed.key_binding.ok_or(VerificationError::KeyBinding)?;
+    let credential =
+        verify_issuer_signed_credential(&parsed, trusted_jwks, &policy.revoked_key_ids)?;
+
+    // Required here, unlike on the issued-credential path: without a signed
+    // confirmation there is no key possession could be proven against.
+    let confirmation = credential
+        .confirmation
+        .as_ref()
+        .ok_or(VerificationError::KeyBinding)?;
+    let holder_key = confirmed_holder_key(confirmation)?;
+    let confirmation = HolderConfirmation {
+        jwk: holder_jwk(&holder_key).map_err(|_| VerificationError::Payload)?,
+        // The issuer writes the key identifier inside the confirmed JWK, so
+        // the confirmation names exactly one method and nominates no separate
+        // `kid` for the proof header to repeat.
+        kid: None,
+    };
+    validate_key_binding_jwt(
+        key_binding,
+        &confirmation,
+        parsed.sd_hash_input,
+        &KeyBindingPolicy {
+            audience: policy.key_binding_audience.clone(),
+            nonce: policy.key_binding_nonce.clone(),
+            max_age: policy.maximum_key_binding_age,
+            max_future_skew: policy.clock_skew,
+        },
+        policy.now.timestamp(),
+    )
+    .map_err(|_| VerificationError::KeyBinding)?;
+
+    // A pinned holder key authenticates a holder the relying party already
+    // knows. Possession is proven above without it, so a mismatch here is one
+    // more unmet expectation and reports the one policy class.
+    if let Some(expected) = policy.expected_holder_key_thumbprint.as_deref() {
+        let actual = holder_thumbprint(&holder_key).map_err(|_| VerificationError::Payload)?;
+        if actual != expected {
+            return Err(VerificationError::Policy);
+        }
+    }
+
+    let currently_valid = validate_policy(&credential.evidence, &policy.expectations())?;
+    Ok(VerificationReport {
+        evidence: credential.evidence,
+        currently_valid,
+    })
+}
+
+/// One compact SD-JWT VC serialization, split into the parts verification
+/// reads.
+struct ParsedSdJwt<'a> {
+    jwt: &'a str,
+    encoded_disclosures: Vec<&'a str>,
+    /// The serialization up to and including the last tilde, which RFC 9901
+    /// section 4.3.1 hashes into `sd_hash`. It is hashed, never parsed.
+    sd_hash_input: &'a str,
+    /// The key-binding JWT, present exactly when one was expected.
+    key_binding: Option<&'a str>,
+}
+
+/// Split one compact serialization under the rule the named input selects.
+///
+/// `expect_key_binding` is false for an issued credential, which must end with
+/// the trailing tilde that marks the absence of a key-binding JWT, and true
+/// for a presentation, which must not end with one and whose bytes after the
+/// last tilde are the key-binding JWT. The two rules cannot both hold for the
+/// same bytes, so naming the input decides which serialization is read and no
+/// serialization is ever read under the other's rules. The trailing-tilde rule
+/// is selected here, never relaxed.
+fn split_sd_jwt(
+    serialized: &str,
+    expect_key_binding: bool,
+) -> Result<ParsedSdJwt<'_>, VerificationError> {
+    let (body, sd_hash_input, key_binding) = if expect_key_binding {
+        // Everything after the last tilde is the proof. Bytes that end at a
+        // tilde, or carry no tilde at all, offer none, and that is a failure to
+        // prove possession rather than a malformed credential.
+        let last_tilde = serialized.rfind('~').ok_or(VerificationError::KeyBinding)?;
+        let (prefix, proof) = serialized.split_at(last_tilde + 1);
+        if proof.is_empty() {
+            return Err(VerificationError::KeyBinding);
+        }
+        (&serialized[..last_tilde], prefix, Some(proof))
+    } else {
+        let body = serialized
+            .strip_suffix('~')
+            .ok_or(VerificationError::MalformedJws)?;
+        (body, serialized, None)
+    };
+
     let mut segments = body.split('~');
     let jwt = segments.next().ok_or(VerificationError::MalformedJws)?;
     let encoded_disclosures: Vec<&str> = segments.collect();
@@ -698,8 +1105,42 @@ pub fn verify_sd_jwt_vc_report(
     {
         return Err(VerificationError::MalformedJws);
     }
+    Ok(ParsedSdJwt {
+        jwt,
+        encoded_disclosures,
+        sd_hash_input,
+        key_binding,
+    })
+}
 
-    let mut parts = jwt.split('.');
+fn bounded_utf8(serialized: &[u8]) -> Result<&str, VerificationError> {
+    if serialized.is_empty() || serialized.len() > MAX_JWS_BYTES {
+        return Err(VerificationError::MalformedJws);
+    }
+    std::str::from_utf8(serialized).map_err(|_| VerificationError::MalformedJws)
+}
+
+/// The issuer-signed part of one SD-JWT VC, verified and rebuilt.
+struct IssuerVerifiedCredential {
+    evidence: Evidence,
+    /// The `cnf` member exactly as the issuer signed it, when there is one.
+    /// Whether one is required is the caller's decision, because it depends on
+    /// which serialization was named.
+    confirmation: Option<Value>,
+}
+
+/// Verify the issuer signature over one split serialization, resolve every
+/// disclosure, and rebuild the Evidence payload the signature covers.
+///
+/// This stops at the published payload contract. It compares no relying-party
+/// expectation and takes no position on possession, so both entry points share
+/// exactly the part of verification that is the issuer's statement.
+fn verify_issuer_signed_credential(
+    parsed: &ParsedSdJwt<'_>,
+    trusted_jwks: &JwksDocument,
+    revoked_key_ids: &[String],
+) -> Result<IssuerVerifiedCredential, VerificationError> {
+    let mut parts = parsed.jwt.split('.');
     let (Some(encoded_header), Some(encoded_payload), Some(encoded_signature), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
@@ -721,8 +1162,8 @@ pub fn verify_sd_jwt_vc_report(
     {
         return Err(VerificationError::ProtectedHeader);
     }
-    validate_revocations(&policy.revoked_key_ids)?;
-    if policy.revoked_key_ids.iter().any(|kid| kid == &header.kid) {
+    validate_revocations(revoked_key_ids)?;
+    if revoked_key_ids.iter().any(|kid| kid == &header.kid) {
         return Err(VerificationError::Key);
     }
 
@@ -752,10 +1193,11 @@ pub fn verify_sd_jwt_vc_report(
     };
 
     let digests = signed_digests(&mut claims)?;
-    let disclosed = resolve_disclosures(&encoded_disclosures, &digests, &mut claims)?;
-    if let Some(confirmation) = claims.remove("cnf") {
-        validate_confirmation(&confirmation)?;
-    }
+    let disclosed = resolve_disclosures(&parsed.encoded_disclosures, &digests, &mut claims)?;
+    // Taken out of the rebuilt claim set, not judged here: the confirmation is
+    // an issuer-owned member, and what it has to satisfy depends on which
+    // serialization the caller named.
+    let confirmation = claims.remove("cnf");
 
     let payload = evidence_payload_from_claims(&claims, &disclosed)
         .map_err(|_| VerificationError::Payload)?;
@@ -764,10 +1206,9 @@ pub fn verify_sd_jwt_vc_report(
     }
     let evidence: Evidence =
         serde_json::from_value(payload).map_err(|_| VerificationError::Payload)?;
-    let currently_valid = validate_policy(&evidence, policy)?;
-    Ok(VerificationReport {
+    Ok(IssuerVerifiedCredential {
         evidence,
-        currently_valid,
+        confirmation,
     })
 }
 
@@ -929,9 +1370,12 @@ fn resolve_disclosures(
     Ok(resolved)
 }
 
-/// The confirmation, when present, carries exactly one P-256 public key and
-/// no private material.
-fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> {
+/// The one P-256 public key a confirmation carries.
+///
+/// The confirmation names exactly one confirmation method and carries no
+/// private material, so a body with any other member, or with a key this crate
+/// would not accept, is refused rather than read past.
+fn confirmed_holder_key(confirmation: &Value) -> Result<HolderPublicKey, VerificationError> {
     let Some(members) = confirmation.as_object() else {
         return Err(VerificationError::Payload);
     };
@@ -944,7 +1388,7 @@ fn validate_confirmation(confirmation: &Value) -> Result<(), VerificationError> 
     if !key.is_acceptable() {
         return Err(VerificationError::Payload);
     }
-    Ok(())
+    Ok(key)
 }
 
 fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, VerificationError> {
@@ -1006,41 +1450,80 @@ fn key_identifier_is_thumbprint(kid: &str) -> bool {
             .is_ok_and(|decoded| decoded.len() == 32 && URL_SAFE_NO_PAD.encode(&decoded) == kid)
 }
 
+/// One borrowed view of the expectations policy comparison reads, whichever
+/// policy document stated them.
+///
+/// It is a plain view struct rather than a trait or a generic parameter on
+/// purpose: this crate's shape and dependency edges are checked by
+/// `check-verifier-portability.sh`, and one concrete comparison over one
+/// concrete view keeps the verifier free of dispatch machinery a portable
+/// relying party would have to link.
+///
+/// The two audience-scoped members are optional because a holder-bound
+/// assertion carries neither, so the same comparison reads `None` against a
+/// payload that must also carry `None`.
+struct EvidenceExpectations<'a> {
+    subject_binding: SubjectBindingMode,
+    assurance_profile: AssuranceProfile,
+    issued_by: &'a str,
+    provided_by: &'a str,
+    requirement: &'a str,
+    evidence_type: &'a str,
+    purpose: &'a str,
+    audience: Option<&'a str>,
+    request_nonce: Option<&'a str>,
+    configuration_revision: &'a str,
+    expected_subjects: &'a [ExpectedSubject],
+    expected_outputs: &'a [ExpectedOutput],
+    maximum_assertion_lifetime: Duration,
+    now: DateTime<Utc>,
+    clock_skew: Duration,
+}
+
 /// Compare every policy expectation after signature and schema verification.
 ///
-/// Every mismatch, including the expected nonce, expected role-bound subject
-/// set, and expected output contract, returns the one generic policy error so
-/// verification does not reveal which hidden comparison failed. The returned
-/// boolean is current validity, which is reported separately from
-/// authenticity and policy conformance.
+/// Every mismatch, including the declared binding mode, the expected nonce,
+/// the expected role-bound subject set, and the expected output contract,
+/// returns the one generic policy error so verification does not reveal which
+/// hidden comparison failed. The returned boolean is current validity, which
+/// is reported separately from authenticity and policy conformance.
 fn validate_policy(
     evidence: &Evidence,
-    policy: &EvidenceVerificationPolicy,
+    expectations: &EvidenceExpectations<'_>,
 ) -> Result<bool, VerificationError> {
+    // Every response format reaches policy comparison through here, so this is
+    // the one place the declared binding mode is correlated with the members
+    // the assertion carries. The payload contract is a closed single object and
+    // cannot express that implication.
+    validate_subject_binding_shape(evidence).map_err(|_| VerificationError::Payload)?;
+    // The mode is compared in both directions from one expectation: a
+    // holder-bound assertion never satisfies audience-scoped expectations and
+    // an audience-scoped assertion never satisfies holder-bound ones.
     if evidence.schema != EVIDENCE_SCHEMA_V1
-        || evidence.assurance_profile != policy.assurance_profile
-        || evidence.issued_by != policy.issued_by
-        || evidence.provided_by != policy.provided_by
-        || evidence.supports_requirement != policy.requirement
-        || evidence.is_conformant_to != policy.evidence_type
-        || evidence.purpose != policy.purpose
-        || evidence.audience != policy.audience
-        || evidence.configuration_revision != policy.configuration_revision
+        || evidence.subject_binding != expectations.subject_binding
+        || evidence.assurance_profile != expectations.assurance_profile
+        || evidence.issued_by != expectations.issued_by
+        || evidence.provided_by != expectations.provided_by
+        || evidence.supports_requirement != expectations.requirement
+        || evidence.is_conformant_to != expectations.evidence_type
+        || evidence.purpose != expectations.purpose
+        || evidence.audience.as_deref() != expectations.audience
+        || evidence.configuration_revision != expectations.configuration_revision
         || evidence.subjects.is_empty()
         || evidence.supported_values.is_empty()
-        || evidence.request_nonce != policy.request_nonce
+        || evidence.request_nonce.as_deref() != expectations.request_nonce
     {
         return Err(VerificationError::Policy);
     }
-    validate_expected_subjects(evidence, policy)?;
-    validate_expected_outputs(evidence, policy)?;
+    validate_expected_subjects(evidence, expectations.expected_subjects)?;
+    validate_expected_outputs(evidence, expectations.expected_outputs)?;
 
     let issued = parse_time(&evidence.issued_at)?;
     let observed = parse_time(&evidence.observed_at)?;
     let valid_until = parse_time(&evidence.valid_until)?;
     let skew =
-        chrono::Duration::from_std(policy.clock_skew).map_err(|_| VerificationError::Time)?;
-    let maximum_lifetime = chrono::Duration::from_std(policy.maximum_assertion_lifetime)
+        chrono::Duration::from_std(expectations.clock_skew).map_err(|_| VerificationError::Time)?;
+    let maximum_lifetime = chrono::Duration::from_std(expectations.maximum_assertion_lifetime)
         .map_err(|_| VerificationError::Time)?;
     let expiration_with_skew = valid_until
         .checked_add_signed(skew)
@@ -1054,22 +1537,22 @@ fn validate_policy(
     {
         return Err(VerificationError::Time);
     }
-    let latest_acceptable_issue = policy
+    let latest_acceptable_issue = expectations
         .now
         .checked_add_signed(skew)
         .ok_or(VerificationError::Time)?;
     let currently_valid = issued <= latest_acceptable_issue
         && observed <= latest_acceptable_issue
-        && policy.now < expiration_with_skew;
+        && expectations.now < expiration_with_skew;
     Ok(currently_valid)
 }
 
 /// Compare the unordered set of unique expected `(role, binding)` pairs.
 fn validate_expected_subjects(
     evidence: &Evidence,
-    policy: &EvidenceVerificationPolicy,
+    expected: &[ExpectedSubject],
 ) -> Result<(), VerificationError> {
-    let mut expected = policy.expected_subjects.clone();
+    let mut expected = expected.to_vec();
     expected.sort();
     if expected.is_empty() || expected.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(VerificationError::Policy);
@@ -1092,9 +1575,8 @@ fn validate_expected_subjects(
 /// Compare the expected concept identifiers, value forms, and cardinalities.
 fn validate_expected_outputs(
     evidence: &Evidence,
-    policy: &EvidenceVerificationPolicy,
+    expected: &[ExpectedOutput],
 ) -> Result<(), VerificationError> {
-    let expected = &policy.expected_outputs;
     if expected.is_empty() || evidence.supported_values.len() != expected.len() {
         return Err(VerificationError::Policy);
     }
@@ -1169,11 +1651,13 @@ mod tests {
 
     use p256::elliptic_curve::rand_core::OsRng;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+    use registry_platform_sdjwt::presentation_disclosure_hash;
     use serde::Deserialize;
     use serde_json::{json, Value};
 
     use super::*;
     use crate::fixtures::{jwks_document, EvidenceSigner};
+    use crate::model::SubjectBindingMode;
     use crate::model::{
         EvidenceObjectType, PublicValue, StructuredValue, StructuredValueForm, SubjectBinding,
         SupportedValue,
@@ -1436,7 +1920,8 @@ mod tests {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
-            request_nonce: FIXTURE_NONCE.to_string(),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some(FIXTURE_NONCE.to_string()),
             id: "urn:ulid:01K1EXAMPLE0000000000000000".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:requirement:v1".to_string(),
@@ -1447,7 +1932,7 @@ mod tests {
             observed_at: "2026-08-02T00:00:00Z".to_string(),
             valid_until: "2026-08-03T00:00:00Z".to_string(),
             purpose: "casework".to_string(),
-            audience: "urn:example:audience".to_string(),
+            audience: Some("urn:example:audience".to_string()),
             configuration_revision: format!("sha256:{}", "0".repeat(64)),
             subjects: vec![SubjectBinding {
                 role: "subject".to_string(),
@@ -1483,7 +1968,7 @@ mod tests {
     fn policy_for(evidence: &Evidence, now: DateTime<Utc>) -> EvidenceVerificationPolicy {
         EvidenceVerificationPolicy::from_accepted_transaction(
             evidence,
-            &evidence.request_nonce,
+            evidence.request_nonce.as_deref().expect("audience-scoped"),
             48 * 60 * 60,
             now,
             30,
@@ -1955,7 +2440,7 @@ mod tests {
         // Changing the signed nonce fails: re-signing a mutated payload with
         // the same trusted key still mismatches the retained expectation.
         let mut mutated = fixture_evidence();
-        mutated.request_nonce = "B".repeat(43);
+        mutated.request_nonce = Some("B".repeat(43));
         let header = json!({
             "alg": "ES256",
             "kid": KEY_ID,
@@ -2328,7 +2813,7 @@ mod tests {
         let policy_for_bounds = |lifetime, skew| {
             EvidenceVerificationPolicy::from_accepted_transaction(
                 &evidence,
-                &evidence.request_nonce,
+                evidence.request_nonce.as_deref().expect("audience-scoped"),
                 lifetime,
                 now,
                 skew,
@@ -2590,7 +3075,7 @@ mod tests {
     }
 
     /// Split an issued serialization into its JWT and its disclosures.
-    fn split_sd_jwt(serialized: &str) -> (String, Vec<String>) {
+    fn split_issued_sd_jwt(serialized: &str) -> (String, Vec<String>) {
         let body = serialized.strip_suffix('~').expect("trailing tilde");
         let mut segments = body.split('~');
         let jwt = segments.next().expect("JWT segment").to_owned();
@@ -2676,7 +3161,7 @@ mod tests {
             .sign_sd_jwt_vc(input)
             .await
             .expect("SD-JWT VC serializes");
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
         let claims = sd_jwt_claims(&jwt);
         assert_eq!(
             claims["birthCertificate"]
@@ -2722,7 +3207,7 @@ mod tests {
             "2026-08-02T12:00:00Z".parse().expect("time parses"),
         );
 
-        let (jwt, _) = split_sd_jwt(&serialized);
+        let (jwt, _) = split_issued_sd_jwt(&serialized);
         let claims = sd_jwt_claims(&jwt);
         assert_eq!(claims["cnf"]["jwk"]["x"], json!(holder.x));
         assert!(claims["cnf"]["jwk"].get("d").is_none());
@@ -2735,7 +3220,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_disclosure_modification_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
         let original = URL_SAFE_NO_PAD
             .decode(&disclosures[0])
             .expect("disclosure decodes");
@@ -2765,7 +3250,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_added_disclosure_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
 
         let mut extra = disclosures.clone();
         extra.push(encode_disclosure(
@@ -2790,7 +3275,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_removed_digest_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, _) = split_sd_jwt(&serialized);
+        let (jwt, _) = split_issued_sd_jwt(&serialized);
 
         // Version 1 issues complete credentials, so an unresolved signed digest
         // is a mutation rather than a selective presentation.
@@ -2809,7 +3294,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_payload_modification_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
         let mut claims = sd_jwt_claims(&jwt);
         claims.insert(
             "audience".to_owned(),
@@ -2832,7 +3317,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_protected_header_modification_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
 
         for header in [
             json!({"alg": "none", "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP}),
@@ -2856,7 +3341,7 @@ mod tests {
     #[tokio::test]
     async fn sd_jwt_unknown_kid_rejected() {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&serialized);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
         let header = json!({
             "alg": "ES256",
             "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -3026,12 +3511,18 @@ mod tests {
 
         // The SD-JWT VC encoding of the same response holds the same line.
         let (sd_jwt, sd_jwks, sd_policy) = issued_sd_jwt_vc().await;
-        let (jwt, disclosures) = split_sd_jwt(&sd_jwt);
+        let parsed = split_sd_jwt(&sd_jwt, false).expect("an issued credential splits");
+        let jwt = parsed.jwt;
+        let disclosures: Vec<String> = parsed
+            .encoded_disclosures
+            .iter()
+            .map(|disclosure| (*disclosure).to_owned())
+            .collect();
         for alg in ["ES384", "RS384"] {
             let header = json!({"alg": alg, "kid": KEY_ID, "typ": EVIDENCE_SD_JWT_VC_TYP});
             let replacement =
                 URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes"));
-            let mutated = replace_segment(&jwt, 0, &replacement);
+            let mutated = replace_segment(jwt, 0, &replacement);
             assert_eq!(
                 verify_sd_jwt_vc(
                     join_sd_jwt(&mutated, &disclosures).as_bytes(),
@@ -3057,11 +3548,722 @@ mod tests {
             (VerificationError::Policy, "policy"),
             (VerificationError::Time, "time"),
             (VerificationError::Disclosure, "disclosure"),
+            (VerificationError::KeyBinding, "key_binding"),
         ];
         for (error, kind) in &cases {
             assert_eq!(error.kind(), *kind, "{error}");
         }
         let kinds: BTreeSet<&str> = cases.iter().map(|(error, _)| error.kind()).collect();
         assert_eq!(kinds.len(), cases.len(), "two variants share a kind");
+    }
+
+    /// The audience the fixture relying party put in the challenge it issued.
+    const KEY_BINDING_AUDIENCE: &str = "urn:example:relying-party";
+    /// The challenge the fixture relying party issued and retained. Comparing
+    /// it is not consuming it, so every test below may present it again.
+    const KEY_BINDING_NONCE: &str = "QH-fpo3GJG9ksxAJeee7wQqpaRCkly8q-ltiG5QQmSk";
+    /// A second key pair standing in for a holder's own key. No deployment ever
+    /// holds a holder private key; this is a test keypair and nothing else.
+    const HOLDER_PRIVATE_JWK: &str = RETIRED_PRIVATE_JWK;
+
+    /// The public half of [`HOLDER_PRIVATE_JWK`], as a credential's `cnf` key.
+    fn holder_public_key() -> HolderPublicKey {
+        HolderPublicKey {
+            kty: "EC".to_owned(),
+            crv: "P-256".to_owned(),
+            x: "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY".to_owned(),
+            y: "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU".to_owned(),
+            alg: Some("ES256".to_owned()),
+            kid: None,
+        }
+    }
+
+    /// The same fixture assertion under the holder-bound mode: no audience and
+    /// no request nonce, because it names no relying party.
+    fn holder_bound_evidence() -> Evidence {
+        let mut evidence = fixture_evidence();
+        evidence.subject_binding = SubjectBindingMode::HolderBound;
+        evidence.audience = None;
+        evidence.request_nonce = None;
+        evidence
+    }
+
+    /// The same key as [`holder_public_key`] with the algorithm member the
+    /// request contract lets a caller omit.
+    fn holder_public_key_without_stated_algorithm() -> HolderPublicKey {
+        HolderPublicKey {
+            alg: None,
+            ..holder_public_key()
+        }
+    }
+
+    /// Issue the holder-bound fixture as an SD-JWT VC confirming the test
+    /// holder key. The result is the issued credential, which ends with the
+    /// trailing tilde that marks the absence of a key-binding JWT.
+    async fn issued_holder_bound_credential() -> (String, JwksDocument) {
+        issued_holder_bound_credential_confirming(&holder_public_key()).await
+    }
+
+    /// The same issuance over a caller-supplied confirmation key, so a test can
+    /// state the key the credential confirms.
+    async fn issued_holder_bound_credential_confirming(
+        holder_key: &HolderPublicKey,
+    ) -> (String, JwksDocument) {
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(
+            &holder_bound_evidence(),
+            Some(holder_key),
+            &BTreeMap::new(),
+        )
+        .expect("evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        (serialized, jwks)
+    }
+
+    const VERIFICATION_INSTANT: &str = "2026-08-02T12:00:00Z";
+
+    fn verification_instant() -> DateTime<Utc> {
+        VERIFICATION_INSTANT.parse().expect("time parses")
+    }
+
+    fn holder_bound_policy_document() -> HolderBoundPresentationPolicyDocument {
+        let evidence = holder_bound_evidence();
+        HolderBoundPresentationPolicyDocument {
+            subject_binding: HolderBoundDeclaration::HolderBound,
+            expected_assurance_profile: evidence.assurance_profile,
+            issued_by: evidence.issued_by.clone(),
+            provided_by: evidence.provided_by.clone(),
+            requirement: evidence.supports_requirement.clone(),
+            evidence_type: evidence.is_conformant_to.clone(),
+            expected_issuance_purpose: evidence.purpose.clone(),
+            configuration_revision: evidence.configuration_revision.clone(),
+            expected_subjects: evidence
+                .subjects
+                .iter()
+                .map(|subject| ExpectedSubjectDocument {
+                    role: subject.role.clone(),
+                    binding: subject.binding.clone(),
+                })
+                .collect(),
+            expected_outputs: vec![ExpectedOutputDocument {
+                concept: "urn:example:concept".to_owned(),
+                form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
+            }],
+            revoked_key_ids: Vec::new(),
+            maximum_assertion_lifetime_seconds: 48 * 60 * 60,
+            key_binding_audience: KEY_BINDING_AUDIENCE.to_owned(),
+            key_binding_nonce: KEY_BINDING_NONCE.to_owned(),
+            maximum_key_binding_age_seconds: 300,
+            clock_skew_seconds: 30,
+            expected_holder_key_thumbprint: None,
+        }
+    }
+
+    fn holder_bound_policy() -> HolderBoundPresentationPolicy {
+        holder_bound_policy_document()
+            .try_into_policy(verification_instant())
+            .expect("the fixture policy states bounds the contract allows")
+    }
+
+    /// Sign one compact JWT over caller-supplied header and payload bytes. The
+    /// payload arrives as bytes so a test can present a body no serializer
+    /// would produce, such as one carrying a repeated member.
+    async fn sign_compact_jwt(header: &Value, payload: &[u8], private_jwk: &str) -> String {
+        let private = PrivateJwk::parse(private_jwk).expect("key parses");
+        let signer = LocalJwkSigner::new(private).expect("signer builds");
+        let signing_input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(header).expect("header serializes")),
+            URL_SAFE_NO_PAD.encode(payload)
+        );
+        let signature = signer
+            .sign(signing_input.as_bytes())
+            .await
+            .expect("the test key signs");
+        format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+    }
+
+    fn key_binding_header() -> Value {
+        json!({"alg": "ES256", "typ": "kb+jwt"})
+    }
+
+    /// The four members RFC 9901 section 4.3 permits, over one presentation
+    /// prefix. `sd_hash_input` is the presentation up to and including its last
+    /// tilde, which for a complete Version 1 credential is the issued
+    /// serialization itself.
+    fn key_binding_claims(sd_hash_input: &str, iat: i64) -> Value {
+        json!({
+            "nonce": KEY_BINDING_NONCE,
+            "aud": KEY_BINDING_AUDIENCE,
+            "iat": iat,
+            "sd_hash": URL_SAFE_NO_PAD.encode(presentation_disclosure_hash(sd_hash_input)),
+        })
+    }
+
+    /// Append a key-binding JWT built from the given header and payload bytes,
+    /// producing the compact presentation the verifier reads.
+    async fn present(issued: &str, header: &Value, payload: &[u8], private_jwk: &str) -> String {
+        format!(
+            "{issued}{}",
+            sign_compact_jwt(header, payload, private_jwk).await
+        )
+    }
+
+    /// The presentation a well-behaved holder produces.
+    async fn valid_presentation(issued: &str) -> String {
+        let claims = key_binding_claims(issued, verification_instant().timestamp());
+        present(
+            issued,
+            &key_binding_header(),
+            &serde_json::to_vec(&claims).expect("claims serialize"),
+            HOLDER_PRIVATE_JWK,
+        )
+        .await
+    }
+
+    /// The bounds this crate enforces for a holder-bound presentation are the
+    /// holder-bound contract's, not a second opinion about them.
+    #[test]
+    fn the_enforced_holder_bound_bounds_are_the_contract_bounds() {
+        let contract: serde_norway::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/holder-bound-verification-policy.schema.yaml"
+        ))
+        .expect("the holder-bound verification policy contract is YAML");
+        let bound = |field: &str, bound: &str| -> u64 {
+            serde_norway::from_value(contract["properties"][field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "minimum"),
+            MINIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(
+            bound("maximumAssertionLifetimeSeconds", "maximum"),
+            MAXIMUM_ASSERTION_LIFETIME_SECONDS
+        );
+        assert_eq!(bound("clockSkewSeconds", "minimum"), 0);
+        assert_eq!(
+            bound("clockSkewSeconds", "maximum"),
+            MAXIMUM_CLOCK_SKEW_SECONDS
+        );
+        assert_eq!(
+            bound("maximumKeyBindingAgeSeconds", "minimum"),
+            MINIMUM_KEY_BINDING_AGE_SECONDS
+        );
+        assert_eq!(
+            bound("maximumKeyBindingAgeSeconds", "maximum"),
+            MAXIMUM_KEY_BINDING_AGE_SECONDS
+        );
+
+        let list =
+            &contract["$defs"]["expected-form"]["oneOf"][1]["properties"]["list"]["properties"];
+        let list_bound = |field: &str, bound: &str| -> usize {
+            serde_norway::from_value(list[field][bound].clone())
+                .unwrap_or_else(|error| panic!("the contract states {field} {bound}: {error}"))
+        };
+        for field in ["minimumItems", "maximumItems"] {
+            assert_eq!(list_bound(field, "minimum"), MINIMUM_EXPECTED_LIST_ITEMS);
+            assert_eq!(list_bound(field, "maximum"), MAXIMUM_EXPECTED_LIST_ITEMS);
+        }
+
+        // The document states its mode rather than having it inferred, and the
+        // Rust type mirrors that as a one-variant declaration.
+        assert_eq!(
+            contract["properties"]["subjectBinding"]["const"]
+                .as_str()
+                .expect("the contract states the binding mode"),
+            "holder-bound"
+        );
+    }
+
+    /// A ninth failure class is a change to the operator-facing vocabulary, so
+    /// both policy documents publish the same list and it is the list this
+    /// crate can produce.
+    #[test]
+    fn both_policy_contracts_publish_the_same_failure_classes() {
+        let classes = |bytes: &[u8]| -> Vec<String> {
+            let contract: serde_norway::Value =
+                serde_norway::from_slice(bytes).expect("the contract is YAML");
+            serde_norway::from_value(contract["output"]["classes"].clone())
+                .expect("the contract states its failure classes")
+        };
+        let audience_scoped = classes(include_bytes!(
+            "../../../products/evidence/contracts/verification-policy.schema.yaml"
+        ));
+        let holder_bound = classes(include_bytes!(
+            "../../../products/evidence/contracts/holder-bound-verification-policy.schema.yaml"
+        ));
+        assert_eq!(audience_scoped, holder_bound);
+        assert!(holder_bound.iter().any(|class| class == "key-binding"));
+        assert_eq!(holder_bound.len(), 9);
+    }
+
+    /// A policy document stating a key-binding age the contract forbids is an
+    /// unusable input rather than an unsatisfied expectation, so reading it
+    /// refuses it.
+    #[test]
+    fn a_holder_bound_document_stating_a_forbidden_key_binding_age_is_refused_when_read() {
+        for forbidden in [
+            MINIMUM_KEY_BINDING_AGE_SECONDS - 1,
+            MAXIMUM_KEY_BINDING_AGE_SECONDS + 1,
+        ] {
+            let mut document = holder_bound_policy_document();
+            document.maximum_key_binding_age_seconds = forbidden;
+            let bytes = serde_json::to_vec(&document).expect("the document serializes");
+            serde_json::from_slice::<HolderBoundPresentationPolicyDocument>(&bytes)
+                .expect_err("a document outside the contract bounds is refused");
+            assert_eq!(
+                document
+                    .try_into_policy(verification_instant())
+                    .unwrap_err(),
+                PolicyBoundsError::KeyBindingAge(forbidden)
+            );
+        }
+    }
+
+    /// Naming an input states its shape. A credential ends with the trailing
+    /// tilde and a presentation does not, so the two rules are mutually
+    /// exclusive and neither entry point can read the other's bytes.
+    #[tokio::test]
+    async fn the_trailing_tilde_selects_which_serialization_was_named() {
+        let (issued, _) = issued_holder_bound_credential().await;
+        let presentation = valid_presentation(&issued).await;
+
+        let credential = split_sd_jwt(&issued, false).expect("an issued credential splits");
+        assert!(credential.key_binding.is_none());
+        assert_eq!(credential.sd_hash_input, issued);
+        assert!(!credential.encoded_disclosures.is_empty());
+
+        let presented = split_sd_jwt(&presentation, true).expect("a presentation splits");
+        assert_eq!(presented.jwt, credential.jwt);
+        assert_eq!(
+            presented.encoded_disclosures,
+            credential.encoded_disclosures
+        );
+        // Section 4.3.1 hashes the presentation up to and including the last
+        // tilde, which for a complete credential is the issued serialization.
+        assert_eq!(presented.sd_hash_input, issued);
+        assert!(presented.key_binding.is_some());
+
+        // Neither shape satisfies the other's rule.
+        assert_eq!(
+            split_sd_jwt(&issued, true).map(|_| ()),
+            Err(VerificationError::KeyBinding)
+        );
+        assert_eq!(
+            split_sd_jwt(&presentation, false).map(|_| ()),
+            Err(VerificationError::MalformedJws)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_holder_bound_presentation_verifies_under_its_own_policy() {
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let presentation = valid_presentation(&issued).await;
+
+        let evidence =
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &holder_bound_policy())
+                .expect("the presentation verifies");
+        assert_eq!(evidence, holder_bound_evidence());
+
+        // Comparing the challenge is not consuming it: the same stored
+        // presentation verifies again against the same stateless policy.
+        assert!(verify_sd_jwt_vc_presentation(
+            presentation.as_bytes(),
+            &jwks,
+            &holder_bound_policy()
+        )
+        .is_ok());
+    }
+
+    /// The request contract makes the holder key's algorithm optional and the
+    /// profile accepts exactly one, so omitting it names the same key under the
+    /// same algorithm. A credential confirming such a key is presentable, and
+    /// its subject binding is the one a stated algorithm produces.
+    #[tokio::test]
+    async fn a_confirmed_holder_key_without_a_stated_algorithm_is_presentable() {
+        let holder_key = holder_public_key_without_stated_algorithm();
+        let (issued, jwks) = issued_holder_bound_credential_confirming(&holder_key).await;
+        let presentation = valid_presentation(&issued).await;
+
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &holder_bound_policy()),
+            Ok(holder_bound_evidence()),
+            "a proof over an accepted holder key was not verifiable"
+        );
+
+        // RFC 7638 excludes the algorithm, so the pinned thumbprint a relying
+        // party holds is the same value either way.
+        assert_eq!(
+            crate::sdjwt_vc::holder_thumbprint(&holder_key).expect("the thumbprint computes"),
+            crate::sdjwt_vc::holder_thumbprint(&holder_public_key())
+                .expect("the thumbprint computes")
+        );
+    }
+
+    /// An optional pre-established holder key is authenticated when the
+    /// relying party pinned one, and a mismatch is a policy expectation rather
+    /// than a possession failure.
+    #[tokio::test]
+    async fn a_pinned_holder_key_thumbprint_is_authenticated_when_supplied() {
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let presentation = valid_presentation(&issued).await;
+
+        let mut document = holder_bound_policy_document();
+        document.expected_holder_key_thumbprint = Some(
+            crate::sdjwt_vc::holder_thumbprint(&holder_public_key())
+                .expect("the holder thumbprint computes"),
+        );
+        let matching = document
+            .clone()
+            .try_into_policy(verification_instant())
+            .expect("the fixture policy is usable");
+        assert!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &matching).is_ok(),
+            "a matching pinned holder key is accepted"
+        );
+
+        document.expected_holder_key_thumbprint = Some(KEY_ID.to_owned());
+        let mismatched = document
+            .try_into_policy(verification_instant())
+            .expect("the fixture policy is usable");
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &mismatched),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    /// Every way a possession proof can fail reports the one key-binding
+    /// class, so re-verification never reveals which check failed.
+    #[tokio::test]
+    async fn every_key_binding_failure_reports_the_one_key_binding_class() {
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let now = verification_instant().timestamp();
+        let policy = holder_bound_policy();
+        let valid = key_binding_claims(&issued, now);
+
+        let body = |claims: &Value| serde_json::to_vec(claims).expect("claims serialize");
+        let with = |member: &str, value: Value| {
+            let mut claims = valid.clone();
+            claims[member] = value;
+            claims
+        };
+
+        let mut cases: Vec<(&str, String)> = Vec::new();
+
+        // The issued credential itself, presented with no key-binding JWT at
+        // all. Stripping the proof must never fall back to issuer-only
+        // acceptance.
+        cases.push(("an absent key-binding JWT", issued.clone()));
+
+        // A proof addressed to some other verifier.
+        cases.push((
+            "a mismatched audience",
+            present(
+                &issued,
+                &key_binding_header(),
+                &body(&with("aud", json!("urn:example:other-relying-party"))),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        // A proof answering some other challenge.
+        cases.push((
+            "a mismatched nonce",
+            present(
+                &issued,
+                &key_binding_header(),
+                &body(&with(
+                    "nonce",
+                    json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+                )),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        // A proof covering a different presentation prefix, which is how a
+        // proof lifted from another presentation would arrive.
+        cases.push((
+            "a mismatched sd_hash",
+            present(
+                &issued,
+                &key_binding_header(),
+                &body(&with(
+                    "sd_hash",
+                    json!(URL_SAFE_NO_PAD.encode(presentation_disclosure_hash("other~"))),
+                )),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        // A proof older than the accepted window.
+        cases.push((
+            "a stale iat",
+            present(
+                &issued,
+                &key_binding_header(),
+                &body(&with("iat", json!(now - 3_600))),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        // A proof signed by a key the credential never confirmed.
+        cases.push((
+            "a signer other than the confirmation key",
+            present(&issued, &key_binding_header(), &body(&valid), PRIVATE_JWK).await,
+        ));
+
+        // An unsigned proof.
+        cases.push((
+            "an unsigned proof",
+            format!(
+                "{issued}{}.{}.",
+                URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&json!({"alg": "none", "typ": "kb+jwt"}))
+                        .expect("header serializes")
+                ),
+                URL_SAFE_NO_PAD.encode(body(&valid))
+            ),
+        ));
+
+        // A header parameter outside the closed allowlist.
+        cases.push((
+            "a header parameter outside the allowlist",
+            present(
+                &issued,
+                &json!({"alg": "ES256", "typ": "kb+jwt", "jwk": {"kty": "EC"}}),
+                &body(&valid),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        // A duplicate JSON member, which is refused rather than resolved to
+        // one of the two values.
+        let duplicated = format!(
+            r#"{{"nonce":"{KEY_BINDING_NONCE}","aud":"{KEY_BINDING_AUDIENCE}","iat":{now},"sd_hash":"{}","iat":{now}}}"#,
+            URL_SAFE_NO_PAD.encode(presentation_disclosure_hash(&issued))
+        );
+        cases.push((
+            "a duplicate payload member",
+            present(
+                &issued,
+                &key_binding_header(),
+                duplicated.as_bytes(),
+                HOLDER_PRIVATE_JWK,
+            )
+            .await,
+        ));
+
+        for (label, presentation) in &cases {
+            assert_eq!(
+                verify_sd_jwt_vc_presentation_report(presentation.as_bytes(), &jwks, &policy)
+                    .err()
+                    .map(|error| error.kind()),
+                Some("key_binding"),
+                "{label} must report the key-binding class"
+            );
+        }
+    }
+
+    /// The issuer signature over a presentation whose key binding fails is
+    /// still valid. That must not be reported as an issuer-only success, and
+    /// the failure must arrive before any policy comparison runs.
+    #[tokio::test]
+    async fn an_authentic_credential_with_a_failed_proof_is_rejected_not_downgraded() {
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let now = verification_instant().timestamp();
+        let claims = key_binding_claims(&issued, now);
+        let unproven = present(
+            &issued,
+            &key_binding_header(),
+            &serde_json::to_vec(&claims).expect("claims serialize"),
+            PRIVATE_JWK,
+        )
+        .await;
+
+        // The same bytes minus the proof carry an issuer signature this
+        // verifier accepts, so the rejection below is about possession alone.
+        let parsed = split_sd_jwt(&issued, false).expect("the credential splits");
+        assert!(verify_issuer_signed_credential(&parsed, &jwks, &[]).is_ok());
+
+        assert_eq!(
+            verify_sd_jwt_vc_presentation_report(
+                unproven.as_bytes(),
+                &jwks,
+                &holder_bound_policy()
+            )
+            .err(),
+            Some(VerificationError::KeyBinding)
+        );
+
+        // A policy that could not match under any circumstances still reports
+        // the key-binding class, so a failed proof reveals nothing about
+        // whether the policy would have held.
+        let mut document = holder_bound_policy_document();
+        document.requirement = "urn:example:some-other-requirement".to_owned();
+        let unmatchable = document
+            .try_into_policy(verification_instant())
+            .expect("the fixture policy is usable");
+        assert_eq!(
+            verify_sd_jwt_vc_presentation_report(unproven.as_bytes(), &jwks, &unmatchable).err(),
+            Some(VerificationError::KeyBinding)
+        );
+    }
+
+    /// A credential whose `cnf` the issuer never wrote cannot prove
+    /// possession, so it is refused rather than verified without one.
+    #[tokio::test]
+    async fn a_holder_bound_credential_without_a_confirmation_cannot_be_presented() {
+        let signer = fixture_signer().await;
+        let input =
+            crate::sdjwt_vc::issuance_input(&holder_bound_evidence(), None, &BTreeMap::new())
+                .expect("evidence maps");
+        let issued = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let presentation = valid_presentation(&issued).await;
+
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &holder_bound_policy()),
+            Err(VerificationError::KeyBinding)
+        );
+    }
+
+    /// Neither command accepts the other's document, and neither entry point
+    /// accepts the other's serialization.
+    #[tokio::test]
+    async fn the_two_policy_documents_and_the_two_entry_points_stay_separate() {
+        let audience_scoped_body =
+            serde_json::to_vec(&policy_document_with_time_bounds(3_600, 0)).expect("serializes");
+        serde_json::from_slice::<HolderBoundPresentationPolicyDocument>(&audience_scoped_body)
+            .expect_err("the holder-bound document refuses a Version 1 body");
+
+        let holder_bound_body =
+            serde_json::to_vec(&holder_bound_policy_document()).expect("serializes");
+        serde_json::from_slice::<EvidenceVerificationPolicyDocument>(&holder_bound_body)
+            .expect_err("the Version 1 document refuses a holder-bound body");
+
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let presentation = valid_presentation(&issued).await;
+        let (audience_scoped, audience_scoped_jwks, audience_scoped_policy) =
+            issued_sd_jwt_vc().await;
+
+        // `verify` refuses a presentation: it carries no trailing tilde.
+        assert_eq!(
+            verify_sd_jwt_vc(
+                presentation.as_bytes(),
+                &jwks,
+                &policy_for(&fixture_evidence(), verification_instant())
+            ),
+            Err(VerificationError::MalformedJws)
+        );
+
+        // `verify-presentation` refuses an audience-scoped credential: it
+        // carries the trailing tilde that marks an absent proof.
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(
+                audience_scoped.as_bytes(),
+                &audience_scoped_jwks,
+                &holder_bound_policy()
+            ),
+            Err(VerificationError::KeyBinding)
+        );
+
+        // The mode cross-check collapses to the one policy class in both
+        // directions. An audience-scoped credential presented with a proof its
+        // holder could not have made still reaches the mode comparison only
+        // after possession fails, so the reverse direction is exercised on the
+        // issued credential the Version 1 entry point does read.
+        assert_eq!(
+            verify_sd_jwt_vc(issued.as_bytes(), &jwks, &audience_scoped_policy),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    /// The expected purpose is compared, and what it compares is provenance.
+    ///
+    /// The purpose is a signed statement of why the issuer released the
+    /// assertion. Two mistakes are possible. The verifier could accept the
+    /// pinned value without comparing it, which would let a credential issued
+    /// for one reason satisfy a procedure that pinned another. Or the policy
+    /// could grow a member a reader would take as permission to use a verified
+    /// assertion for something, which would turn a provenance check into an
+    /// authorization this product does not issue. Both are asserted here.
+    #[tokio::test]
+    async fn the_expected_issuance_purpose_is_compared_as_signed_provenance() {
+        let (issued, jwks) = issued_holder_bound_credential().await;
+        let presentation = valid_presentation(&issued).await;
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &holder_bound_policy()),
+            Ok(holder_bound_evidence()),
+            "the fixture presentation does not verify under its own policy"
+        );
+
+        let mut document = holder_bound_policy_document();
+        document
+            .expected_issuance_purpose
+            .push_str("-under-another-authority");
+        let repurposed = document
+            .try_into_policy(verification_instant())
+            .expect("the fixture policy states bounds the contract allows");
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(presentation.as_bytes(), &jwks, &repurposed),
+            Err(VerificationError::Policy),
+            "the pinned issuance purpose was accepted without being compared"
+        );
+
+        // The document is closed, so this is the whole vocabulary a relying
+        // party can state. Every member either pins something the issuer
+        // signed or bounds the proof of possession. None of them grants,
+        // licenses, or limits what the relying party may then do, and a member
+        // that would read that way is refused rather than ignored.
+        let body =
+            serde_json::to_value(holder_bound_policy_document()).expect("the document serializes");
+        assert_eq!(
+            body.as_object()
+                .expect("the document is an object")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "subjectBinding",
+                "expectedAssuranceProfile",
+                "issuedBy",
+                "providedBy",
+                "requirement",
+                "evidenceType",
+                "expectedIssuancePurpose",
+                "configurationRevision",
+                "expectedSubjects",
+                "expectedOutputs",
+                "revokedKeyIds",
+                "maximumAssertionLifetimeSeconds",
+                "keyBindingAudience",
+                "keyBindingNonce",
+                "maximumKeyBindingAgeSeconds",
+                "clockSkewSeconds",
+            ]),
+            "the presentation policy vocabulary changed"
+        );
+        for authorization in ["permittedUse", "grantedPurpose", "retentionDays"] {
+            let mut widened = body.clone();
+            widened
+                .as_object_mut()
+                .expect("the document is an object")
+                .insert(authorization.to_owned(), json!("case-assessment"));
+            serde_json::from_value::<HolderBoundPresentationPolicyDocument>(widened)
+                .expect_err("the closed policy document accepted a downstream-use authorization");
+        }
     }
 }

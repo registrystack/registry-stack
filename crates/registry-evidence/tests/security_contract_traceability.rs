@@ -48,15 +48,19 @@ struct TestReference {
     name: String,
 }
 
-/// The SD-JWT VC profile. Only the members this checker binds to code and to
-/// the traceability index are modelled; the rest of the frozen profile is
-/// narrative owned by review.
+/// A profile document: any published contract that names its own negative
+/// tests. Only the members this checker binds to code and to the traceability
+/// index are modelled; the rest of a frozen profile is narrative owned by
+/// review. The response and header members belong to the serialization
+/// profiles alone, so they are optional here.
 #[derive(Deserialize)]
-struct SdJwtVcProfile {
+struct Profile {
     contract: String,
     status: String,
-    response: ProfileResponse,
-    protected_header: ProfileProtectedHeader,
+    #[serde(default)]
+    response: Option<ProfileResponse>,
+    #[serde(default)]
+    protected_header: Option<ProfileProtectedHeader>,
     negative_tests: Vec<String>,
 }
 
@@ -193,33 +197,29 @@ fn every_named_security_negative_is_bound_to_an_executable_test() {
     assert_eq!(mapped, required, "security negative-test mapping drifted");
 }
 
-/// The SD-JWT VC profile is a frozen response-format contract, so every
-/// negative it names must resolve in the same security traceability index the
-/// checker above proves executable. The profile therefore cannot claim a
-/// guarantee no test enforces, and the response format cannot drift away from
-/// the media type and JWT type the runtime actually emits.
+/// Every published profile is checked, not one named file.
+///
+/// A profile that reaches `frozen` states guarantees adopters rely on, so the
+/// negatives it names must resolve in the same security traceability index the
+/// checker above proves executable. Binding that to a hardcoded path meant a
+/// new profile could name any negative it liked and every gate stayed green,
+/// so this walks the published contract directory instead.
+///
+/// The security index owns the `sec-` identifiers, and those are what a frozen
+/// profile must have mapped. A profile may also name conformance case
+/// identifiers, which live in the fixture corpus and are not this index's to
+/// resolve. A `draft` profile is exempt, because declaring guarantees before
+/// the tests exist is exactly what draft records; the floor below is what stops
+/// a status downgrade being used to dodge the gate.
+///
+/// The serialization profiles additionally cannot drift away from the media
+/// type and JWT type the runtime actually emits.
 #[test]
-fn every_sd_jwt_vc_profile_negative_is_bound_to_a_mapped_security_negative() {
+fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let profile: SdJwtVcProfile = serde_norway::from_slice(
-        &fs::read(root.join("products/evidence/contracts/sd-jwt-vc-profile.yaml"))
-            .expect("sd-jwt-vc profile reads"),
-    )
-    .expect("sd-jwt-vc profile parses");
-    assert_eq!(profile.contract, "registry.evidence.sd-jwt-vc-profile/v1");
-    assert_eq!(profile.status, "frozen");
-    assert_eq!(
-        profile.response.media_type,
-        registry_evidence::EVIDENCE_SD_JWT_VC_MEDIA_TYPE
-    );
-    assert_eq!(
-        profile.protected_header.typ.constant,
-        registry_evidence::EVIDENCE_SD_JWT_VC_TYP
-    );
-
+    let contracts = root.join("products/evidence/contracts");
     let traceability: Traceability = serde_norway::from_slice(
-        &fs::read(root.join("products/evidence/contracts/security-test-traceability.yaml"))
-            .expect("traceability reads"),
+        &fs::read(contracts.join("security-test-traceability.yaml")).expect("traceability reads"),
     )
     .expect("traceability parses");
     let mapped = traceability
@@ -228,16 +228,105 @@ fn every_sd_jwt_vc_profile_negative_is_bound_to_a_mapped_security_negative() {
         .map(|entry| entry.id.clone())
         .collect::<BTreeSet<_>>();
 
-    assert!(
-        !profile.negative_tests.is_empty(),
-        "the profile names no negative test"
-    );
-    let mut named = BTreeSet::new();
-    for id in &profile.negative_tests {
-        assert!(named.insert(id.clone()), "the profile repeats {id}");
+    // The serialization each profile documents, against the constants the
+    // runtime emits from.
+    let serializations = BTreeMap::from([
+        (
+            "registry.evidence.jws-profile/v1",
+            (
+                registry_evidence::EVIDENCE_JWS_MEDIA_TYPE,
+                registry_evidence::EVIDENCE_JWS_TYP,
+            ),
+        ),
+        (
+            "registry.evidence.sd-jwt-vc-profile/v1",
+            (
+                registry_evidence::EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+                registry_evidence::EVIDENCE_SD_JWT_VC_TYP,
+            ),
+        ),
+    ]);
+
+    let mut documents = fs::read_dir(&contracts)
+        .expect("published contract directory reads")
+        .map(|entry| entry.expect("contract directory entry reads").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml")
+        })
+        .collect::<Vec<_>>();
+    documents.sort();
+    assert!(!documents.is_empty(), "no published contract was read");
+
+    let mut checked = BTreeSet::new();
+    for path in documents {
+        let bytes = fs::read(&path).unwrap_or_else(|_| panic!("{} reads", path.display()));
+        let document: serde_norway::Value = serde_norway::from_slice(&bytes)
+            .unwrap_or_else(|_| panic!("{} parses", path.display()));
+        if document
+            .get(serde_norway::Value::String("negative_tests".to_owned()))
+            .is_none()
+        {
+            continue;
+        }
+        let profile: Profile = serde_norway::from_slice(&bytes)
+            .unwrap_or_else(|_| panic!("{} is not a profile document", path.display()));
         assert!(
-            mapped.contains(id),
-            "profile negative {id} is not mapped to an executable test"
+            matches!(profile.status.as_str(), "draft" | "frozen"),
+            "{} carries an unreviewed status {}",
+            path.display(),
+            profile.status
+        );
+        assert!(
+            !profile.negative_tests.is_empty(),
+            "{} names no negative test",
+            path.display()
+        );
+
+        if let Some((media_type, typ)) = serializations.get(profile.contract.as_str()) {
+            let response = profile
+                .response
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} documents no response", profile.contract));
+            let header = profile
+                .protected_header
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} documents no protected header", profile.contract));
+            assert_eq!(&response.media_type, media_type, "{}", profile.contract);
+            assert_eq!(&header.typ.constant, typ, "{}", profile.contract);
+        }
+
+        let mut named = BTreeSet::new();
+        for id in &profile.negative_tests {
+            assert!(
+                named.insert(id.clone()),
+                "{} repeats {id}",
+                profile.contract
+            );
+            if profile.status == "frozen" && id.starts_with("sec-") {
+                assert!(
+                    mapped.contains(id),
+                    "{} negative {id} is not mapped to an executable test",
+                    profile.contract
+                );
+            }
+        }
+        if profile.status == "frozen" {
+            checked.insert(profile.contract);
+        }
+    }
+
+    // The floor. These profiles are frozen today, so a rename, a move, or a
+    // quiet downgrade to draft fails here rather than silently dropping the
+    // guarantees they already publish.
+    for required in [
+        "registry.evidence.jws-profile/v1",
+        "registry.evidence.sd-jwt-vc-profile/v1",
+        "registry.evidence.holder-bound-profile/v1",
+    ] {
+        assert!(
+            checked.contains(required),
+            "{required} stopped being checked as a frozen profile"
         );
     }
 }
@@ -298,7 +387,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         "registry.evidence.acceptance-test-traceability/v1"
     );
 
-    let expected = (1..=66)
+    let expected = (1..=72)
         .map(|row| format!("acceptance-row-{row:02}"))
         .collect::<Vec<_>>();
     let mapped = traceability
@@ -308,7 +397,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         .collect::<Vec<_>>();
     assert_eq!(
         mapped, expected,
-        "acceptance row mapping is not the 66 required rows in order"
+        "acceptance row mapping is not the 72 required rows in order"
     );
 
     for entry in &traceability.entries {

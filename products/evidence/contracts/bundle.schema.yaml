@@ -243,6 +243,15 @@ properties:
         gate; a requirement using a kind absent here is rejected at startup.
       enum:
         - search-then-fetch-set
+  holderBoundBatchMaxSize:
+    description: >-
+      Ceiling on how many assertions one holder-bound release may carry. Omission means one,
+      so a bundle written before batch release cannot serve a batch; declaring a ceiling this
+      deployment never reaches enables nothing on its own, because each requirement still
+      needs its own holder-bound declaration and a grant that permits the mode.
+    type: integer
+    minimum: 1
+    maximum: 16
   requirements:
     description: >-
       Requirement identifiers and Evidence Type URIs must each be unique across every entry;
@@ -307,7 +316,9 @@ allOf:
             - evidence-grade
         responseFormats:
           contains:
-            const: sd-jwt-vc
+            enum:
+              - sd-jwt-vc
+              - sd-jwt-vc-batch
       required:
         - assuranceProfile
         - responseFormats
@@ -355,7 +366,7 @@ $defs:
     # Omission means signed only.
     type: array
     minItems: 1
-    maxItems: 3
+    maxItems: 4
     uniqueItems: true
     contains:
       const: signed-jws
@@ -368,6 +379,15 @@ $defs:
         - signed-jws
         - unsigned-json
         - sd-jwt-vc
+        - sd-jwt-vc-batch
+  subject-binding-mode:
+    # What the subject bindings in an assertion are derived under. Closed, with
+    # no default: absence at every point that references this is what means
+    # audience-scoped, so an existing document's meaning is unchanged and its
+    # projected configuration does not move.
+    enum:
+      - audience-scoped
+      - holder-bound
   secret-ref:
     type: string
     pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$
@@ -1888,6 +1908,22 @@ $defs:
                 Unsigned and SD-JWT VC output each require both the bundle-level `responseFormats`
                 and the one matched grant to permit them.
               $ref: '#/$defs/response-formats'
+            subjectBindingModes:
+              description: >-
+                Subject-binding modes this path permits, defaulting to audience-scoped alone when
+                omitted or empty. Permitting a serialization is not permitting a binding mode:
+                a path widened to `sd-jwt-vc` gains no right to issue holder-bound assertions
+                until that mode is named here. A path may name `holder-bound` alone, which
+                permits nothing else.
+              type: array
+              maxItems: 2
+              uniqueItems: true
+              items:
+                description: >-
+                  One binding mode this path permits, which is the operator half of a two-sided
+                  gate; a requirement declaring a mode no grant for it permits is unreachable
+                  and is rejected at startup.
+                $ref: '#/$defs/subject-binding-mode'
             subjects:
               description: >-
                 Authorization for the referenced requirement's complete subject-role set;
@@ -2095,6 +2131,16 @@ $defs:
           - criterion
           - information-requirement
           - constraint
+      subjectBinding:
+        description: >-
+          What this requirement's subject bindings are derived under; omission means
+          `audience-scoped`, which is what every requirement written before this key existed
+          did. A `holder-bound` requirement is rejected at startup unless the bundle and at
+          least one grant for it both permit a serialization the mode allows, which is
+          `sd-jwt-vc` or `sd-jwt-vc-batch`, and unless none of its concepts uses an
+          entity-reference value form, whose pointer only the audience it was scoped to
+          could resolve.
+        $ref: '#/$defs/subject-binding-mode'
       acquisition:
         description: >-
           Fixes this requirement's complete source-request shape to one call over a single

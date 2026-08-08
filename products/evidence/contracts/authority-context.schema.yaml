@@ -128,6 +128,7 @@ authorization_decision:
   matching_rule: One entitlement must cover the complete request; permissions are never unioned across entitlements.
   principal_rule: Principal derives only from the one configured validated claim; a missing claim denies with no client_id, azp, header, or request fallback.
   grant_rule: A grant identifier is context, never authority by possession; it must already be authenticated and bound to the matched entitlement.
+  subject_binding_rule: Permission to serialize a response is not permission to issue under a binding mode. The one matched grant must name a holder-bound path explicitly before a holder-bound assertion may be issued on it; a grant widened to permit the SD-JWT VC serialization gains no binding-mode permission from that. Both halves are checked against the same one grant, because permissions are never unioned across grants, and the single denial that follows a failure of either does not say which one failed.
   selector_claim_rule: Context-derived and grant-derived selector values resolve only through the complete configured valueClaims map over the already verified token; request-derived subjects prohibit valueClaims.
   authenticated_grant_rule: Values from the configured grantIdClaim and grantAuthorityClaim must both exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must cover the complete request; neither value may come from the caller request.
   denial_order: Deny before source credential resolution or source access.

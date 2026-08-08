@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
-use registry_platform_crypto::PublicJwk;
+use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
 use registry_platform_sdjwt::{
     Disclosure, HolderConfirmation, ObjectDisclosure, SdJwtIssuanceInput,
 };
@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
-    model::{Evidence, HolderPublicKey},
+    model::{validate_subject_binding_shape, Evidence, HolderPublicKey, SubjectBindingMode},
     EVIDENCE_SCHEMA_V1,
 };
 
@@ -30,9 +30,13 @@ const ISSUER_OWNED_CLAIMS: [&str; 10] = [
     "iss", "sub", "iat", "exp", "vct", "id", "jti", "_sd", "_sd_alg", "cnf",
 ];
 
-/// The profile's always-disclosed claims that carry Evidence members, in the
-/// sorted order the issuance input uses.
-const ALWAYS_DISCLOSED_CLAIMS: [&str; 10] = [
+/// Every always-disclosed claim the profile can carry, across both subject
+/// binding modes, in the sorted order the issuance input uses.
+///
+/// This is an allowlist, not a required set: it says which claims may appear.
+/// Which of them must appear, and which must not, depends on the binding mode
+/// and is decided by [`mode_claims_are_consistent`].
+const ALWAYS_DISCLOSED_CLAIMS: [&str; 11] = [
     "assuranceProfile",
     "audience",
     "configurationRevision",
@@ -41,9 +45,15 @@ const ALWAYS_DISCLOSED_CLAIMS: [&str; 10] = [
     "providedBy",
     "purpose",
     "requestNonce",
+    "subjectBinding",
     "subjects",
     "supportsRequirement",
 ];
+
+/// The claims an audience-scoped assertion carries and a holder-bound one must
+/// not. Both are refused by the same check so neither mode can borrow the
+/// other's shape.
+const AUDIENCE_SCOPED_CLAIMS: [&str; 2] = ["audience", "requestNonce"];
 
 const STRUCTURED_VALUES_CLAIM: &str = "structuredValues";
 
@@ -63,6 +73,8 @@ pub enum SdJwtVcMappingError {
     HolderKey,
     #[error("the SD-JWT VC structured projection is inconsistent with the evidence value")]
     StructuredProjection,
+    #[error("the evidence binding mode disagrees with the members it carries")]
+    SubjectBindingShape,
 }
 
 /// Map a constructed payload and an optional holder key onto the issuance
@@ -74,6 +86,10 @@ pub fn issuance_input(
     holder_key: Option<&HolderPublicKey>,
     structured_projections: &BTreeMap<String, String>,
 ) -> Result<SdJwtIssuanceInput, SdJwtVcMappingError> {
+    // Re-checked here rather than trusted from the constructor, so no payload
+    // whose mode disagrees with its members can reach a signature.
+    validate_subject_binding_shape(evidence)
+        .map_err(|_| SdJwtVcMappingError::SubjectBindingShape)?;
     // Deterministic because the kernel canonicalizes subjects to requirement
     // declaration order. The complete set travels as a public claim; `sub` is
     // a convenience projection of the first role.
@@ -93,7 +109,13 @@ pub fn issuance_input(
         string_claim(&evidence.supports_requirement),
     );
     public_claims.insert("purpose".to_string(), string_claim(&evidence.purpose));
-    public_claims.insert("audience".to_string(), string_claim(&evidence.audience));
+    public_claims.insert(
+        "subjectBinding".to_string(),
+        claim_value(&evidence.subject_binding)?,
+    );
+    if let Some(audience) = evidence.audience.as_deref() {
+        public_claims.insert("audience".to_string(), string_claim(audience));
+    }
     public_claims.insert(
         "assuranceProfile".to_string(),
         claim_value(&evidence.assurance_profile)?,
@@ -106,10 +128,9 @@ pub fn issuance_input(
         "configurationRevision".to_string(),
         string_claim(&evidence.configuration_revision),
     );
-    public_claims.insert(
-        "requestNonce".to_string(),
-        string_claim(&evidence.request_nonce),
-    );
+    if let Some(request_nonce) = evidence.request_nonce.as_deref() {
+        public_claims.insert("requestNonce".to_string(), string_claim(request_nonce));
+    }
     public_claims.insert("subjects".to_string(), claim_value(&evidence.subjects)?);
 
     let mut disclosures = Vec::with_capacity(evidence.supported_values.len());
@@ -178,23 +199,48 @@ pub fn issuance_input(
     })
 }
 
-/// Build the `cnf` member. The key identifier stays inside the JWK so the
-/// confirmation carries exactly one confirmation method.
-fn confirmation(key: &HolderPublicKey) -> Result<HolderConfirmation, SdJwtVcMappingError> {
+/// The accepted holder key as a public JSON Web Key.
+///
+/// Every consumer of a holder key goes through this one function, so the
+/// acceptability check can never be skipped and the JWK the confirmation
+/// carries is byte-identical to the one the thumbprint is taken over.
+///
+/// The algorithm is stated rather than carried over. An accepted key either
+/// omits it or names the one algorithm the profile allows, so stating it
+/// widens nothing and leaves the RFC 7638 thumbprint untouched, while a proof
+/// over the confirmed key is verifiable under a named algorithm.
+pub fn holder_jwk(key: &HolderPublicKey) -> Result<PublicJwk, SdJwtVcMappingError> {
     if !key.is_acceptable() {
         return Err(SdJwtVcMappingError::HolderKey);
     }
+    Ok(PublicJwk {
+        kty: key.kty.clone(),
+        kid: key.kid.clone(),
+        alg: Some(SigningAlgorithm::Es256.jwa_name().to_string()),
+        crv: Some(key.crv.clone()),
+        x: Some(key.x.clone()),
+        y: Some(key.y.clone()),
+        n: None,
+        e: None,
+    })
+}
+
+/// The RFC 7638 thumbprint of the accepted holder key.
+///
+/// Issuance and verification both derive a holder-bound subject binding from
+/// this one value, so no serialization difference between the two sides can
+/// fork the binding.
+pub fn holder_thumbprint(key: &HolderPublicKey) -> Result<String, SdJwtVcMappingError> {
+    holder_jwk(key)?
+        .jkt()
+        .map_err(|_| SdJwtVcMappingError::HolderKey)
+}
+
+/// Build the `cnf` member. The key identifier stays inside the JWK so the
+/// confirmation carries exactly one confirmation method.
+fn confirmation(key: &HolderPublicKey) -> Result<HolderConfirmation, SdJwtVcMappingError> {
     Ok(HolderConfirmation {
-        jwk: PublicJwk {
-            kty: key.kty.clone(),
-            kid: key.kid.clone(),
-            alg: key.alg.clone(),
-            crv: Some(key.crv.clone()),
-            x: Some(key.x.clone()),
-            y: Some(key.y.clone()),
-            n: None,
-            e: None,
-        },
+        jwk: holder_jwk(key)?,
         kid: None,
     })
 }
@@ -248,6 +294,8 @@ pub fn evidence_payload_from_claims(
             return Err(SdJwtVcClaimError::UnexpectedClaim);
         }
     }
+    let subject_binding = binding_mode_of(claims)?;
+    mode_claims_are_consistent(subject_binding, claims)?;
 
     let id = string_of(claims, "id")?;
     if string_of(claims, "jti")? != id {
@@ -318,10 +366,10 @@ pub fn evidence_payload_from_claims(
         supported_values.insert(position, value);
     }
 
-    Ok(serde_json::json!({
+    let mut payload = serde_json::json!({
         "schema": EVIDENCE_SCHEMA_V1,
         "assuranceProfile": claims.get("assuranceProfile").ok_or(SdJwtVcClaimError::MissingClaim)?,
-        "requestNonce": claims.get("requestNonce").ok_or(SdJwtVcClaimError::MissingClaim)?,
+        "subjectBinding": claims.get("subjectBinding").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "id": id,
         "type": "Evidence",
         "supportsRequirement": claims.get("supportsRequirement").ok_or(SdJwtVcClaimError::MissingClaim)?,
@@ -332,11 +380,51 @@ pub fn evidence_payload_from_claims(
         "observedAt": claims.get("observedAt").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "validUntil": rfc3339_of(claims, "exp")?,
         "purpose": claims.get("purpose").ok_or(SdJwtVcClaimError::MissingClaim)?,
-        "audience": claims.get("audience").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "configurationRevision": claims.get("configurationRevision").ok_or(SdJwtVcClaimError::MissingClaim)?,
         "subjects": subjects,
         "supportedValues": supported_values,
-    }))
+    });
+    // Present exactly for the audience-scoped mode, which
+    // `mode_claims_are_consistent` has already established.
+    let members = payload
+        .as_object_mut()
+        .ok_or(SdJwtVcClaimError::ClaimShape)?;
+    for name in AUDIENCE_SCOPED_CLAIMS {
+        if let Some(value) = claims.get(name) {
+            members.insert(name.to_string(), value.clone());
+        }
+    }
+    Ok(payload)
+}
+
+/// Read the declared binding mode. It is a required claim, so an assertion
+/// never has its mode inferred from which other claims are absent.
+fn binding_mode_of(claims: &Map<String, Value>) -> Result<SubjectBindingMode, SdJwtVcClaimError> {
+    let value = claims
+        .get("subjectBinding")
+        .ok_or(SdJwtVcClaimError::MissingClaim)?;
+    serde_json::from_value(value.clone()).map_err(|_| SdJwtVcClaimError::ClaimShape)
+}
+
+/// Enforce which always-disclosed claims the declared mode requires and which
+/// it prohibits. The allowlist above only says a claim is permitted somewhere
+/// in the profile, never that it belongs in this assertion.
+fn mode_claims_are_consistent(
+    mode: SubjectBindingMode,
+    claims: &Map<String, Value>,
+) -> Result<(), SdJwtVcClaimError> {
+    for name in AUDIENCE_SCOPED_CLAIMS {
+        match (mode, claims.contains_key(name)) {
+            (SubjectBindingMode::AudienceScoped, false) => {
+                return Err(SdJwtVcClaimError::MissingClaim)
+            }
+            (SubjectBindingMode::HolderBound, true) => {
+                return Err(SdJwtVcClaimError::UnexpectedClaim)
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 struct StructuredValueMetadata {
@@ -440,7 +528,8 @@ mod tests {
         Evidence {
             schema: EVIDENCE_SCHEMA_V1.to_string(),
             assurance_profile: crate::AssuranceProfile::EvidenceGrade,
-            request_nonce: OFFLINE_EVALUATION_REQUEST_NONCE.to_string(),
+            subject_binding: SubjectBindingMode::AudienceScoped,
+            request_nonce: Some(OFFLINE_EVALUATION_REQUEST_NONCE.to_string()),
             id: "urn:evidence:assertion:v1_2f0a".to_string(),
             evidence_type_name: EvidenceObjectType::Evidence,
             supports_requirement: "urn:example:requirement:adult-status".to_string(),
@@ -451,7 +540,7 @@ mod tests {
             observed_at: "2026-08-02T09:14:59Z".to_string(),
             valid_until: "2026-08-02T09:20:00Z".to_string(),
             purpose: "age-gated-service".to_string(),
-            audience: "urn:example:relying-party:library".to_string(),
+            audience: Some("urn:example:relying-party:library".to_string()),
             configuration_revision: "rev-7".to_string(),
             subjects: vec![
                 SubjectBinding {
@@ -504,22 +593,6 @@ mod tests {
         assert!(input.status.is_none());
         assert!(input.cnf.is_none());
 
-        let names: Vec<&str> = input.public_claims.keys().map(String::as_str).collect();
-        assert_eq!(
-            names,
-            [
-                "assuranceProfile",
-                "audience",
-                "configurationRevision",
-                "issuedBy",
-                "observedAt",
-                "providedBy",
-                "purpose",
-                "requestNonce",
-                "subjects",
-                "supportsRequirement",
-            ]
-        );
         assert_eq!(
             input.public_claims["issuedBy"],
             Value::String("urn:example:issuer:civil-registry".to_string())
@@ -534,6 +607,82 @@ mod tests {
                 {"role": "applicant", "binding": "urn:evidence:subject:v1_aaaa"},
                 {"role": "guardian", "binding": "urn:evidence:subject:v1_bbbb"},
             ])
+        );
+    }
+
+    /// `ALWAYS_DISCLOSED_CLAIMS` is the union across both modes, so the exact
+    /// public claim set is stated once per mode instead.
+    #[test]
+    fn an_audience_scoped_projection_carries_exactly_its_own_public_claims() {
+        let input = issuance_input(&evidence(), None, &BTreeMap::new()).expect("evidence maps");
+        let names: Vec<&str> = input.public_claims.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "assuranceProfile",
+                "audience",
+                "configurationRevision",
+                "issuedBy",
+                "observedAt",
+                "providedBy",
+                "purpose",
+                "requestNonce",
+                "subjectBinding",
+                "subjects",
+                "supportsRequirement",
+            ]
+        );
+        assert_eq!(
+            input.public_claims["subjectBinding"],
+            Value::String("audience-scoped".to_string())
+        );
+    }
+
+    #[test]
+    fn a_holder_bound_projection_carries_no_audience_and_no_request_nonce() {
+        let mut evidence = evidence();
+        evidence.subject_binding = SubjectBindingMode::HolderBound;
+        evidence.audience = None;
+        evidence.request_nonce = None;
+        let input = issuance_input(&evidence, Some(&holder_key()), &BTreeMap::new()).expect("maps");
+        let names: Vec<&str> = input.public_claims.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "assuranceProfile",
+                "configurationRevision",
+                "issuedBy",
+                "observedAt",
+                "providedBy",
+                "purpose",
+                "subjectBinding",
+                "subjects",
+                "supportsRequirement",
+            ]
+        );
+        assert_eq!(
+            input.public_claims["subjectBinding"],
+            Value::String("holder-bound".to_string())
+        );
+        assert!(input.cnf.is_some());
+    }
+
+    /// The mode and the members it implies are correlated in code, so a payload
+    /// that disagrees with itself never reaches a signature.
+    #[test]
+    fn a_projection_whose_mode_disagrees_with_its_members_is_refused() {
+        let mut leftover_audience = evidence();
+        leftover_audience.subject_binding = SubjectBindingMode::HolderBound;
+        assert_eq!(
+            issuance_input(&leftover_audience, None, &BTreeMap::new()).unwrap_err(),
+            SdJwtVcMappingError::SubjectBindingShape
+        );
+
+        let mut missing_audience = evidence();
+        missing_audience.audience = None;
+        assert_eq!(
+            issuance_input(&missing_audience, None, &BTreeMap::new()).unwrap_err(),
+            SdJwtVcMappingError::SubjectBindingShape
         );
     }
 
@@ -599,6 +748,21 @@ mod tests {
         assert!(confirmation.kid.is_none());
     }
 
+    /// The request may leave the holder key's algorithm unstated, and the
+    /// profile accepts exactly one. The confirmation names it either way, so
+    /// the confirmed key is one a key-binding proof can be verified against.
+    #[test]
+    fn the_confirmation_states_the_one_permitted_holder_algorithm() {
+        let key = holder_key();
+        assert!(key.alg.is_none(), "the request states no algorithm");
+
+        let confirmation = issuance_input(&evidence(), Some(&key), &BTreeMap::new())
+            .expect("evidence maps")
+            .cnf
+            .expect("confirmation is present");
+        assert_eq!(confirmation.jwk.alg.as_deref(), Some("ES256"));
+    }
+
     #[test]
     fn rejects_unacceptable_holder_keys() {
         let evidence = evidence();
@@ -625,6 +789,47 @@ mod tests {
                 SdJwtVcMappingError::HolderKey
             );
         }
+    }
+
+    /// Issuance and verification derive a holder-bound binding from one
+    /// thumbprint function, so it must ignore the members RFC 7638 excludes and
+    /// refuse a key the profile does not accept.
+    #[test]
+    fn the_holder_thumbprint_covers_only_the_required_key_members() {
+        let key = holder_key();
+        let baseline = holder_thumbprint(&key).expect("thumbprint succeeds");
+        assert_eq!(baseline.len(), 43);
+        assert_eq!(
+            baseline,
+            confirmation(&key)
+                .expect("confirmation succeeds")
+                .jwk
+                .jkt()
+                .expect("thumbprint succeeds")
+        );
+
+        let mut labelled = holder_key();
+        labelled.kid = Some("wallet-key-1".to_string());
+        labelled.alg = Some("ES256".to_string());
+        assert_eq!(
+            baseline,
+            holder_thumbprint(&labelled).expect("thumbprint succeeds")
+        );
+
+        let mut other = holder_key();
+        other.x = "jlM7b6C_e0YluzBmfAH7YH75-LioD-9bMAYocDGHsqM".to_string();
+        other.y = "c-sdveAzGDZtBp-DpvWQAFPHNjPLBBshxV4ahsH0ALQ".to_string();
+        assert_ne!(
+            baseline,
+            holder_thumbprint(&other).expect("thumbprint succeeds")
+        );
+
+        let mut unacceptable = holder_key();
+        unacceptable.crv = "P-384".to_string();
+        assert_eq!(
+            holder_thumbprint(&unacceptable).unwrap_err(),
+            SdJwtVcMappingError::HolderKey
+        );
     }
 
     #[test]
@@ -725,6 +930,69 @@ mod tests {
         assert_eq!(
             evidence_payload_from_claims(&claims, &disclosed).unwrap_err(),
             SdJwtVcClaimError::MissingClaim
+        );
+    }
+
+    fn holder_bound_evidence() -> Evidence {
+        let mut evidence = evidence();
+        evidence.subject_binding = SubjectBindingMode::HolderBound;
+        evidence.audience = None;
+        evidence.request_nonce = None;
+        evidence
+    }
+
+    #[test]
+    fn rebuilds_a_holder_bound_payload_without_the_audience_scoped_members() {
+        let evidence = holder_bound_evidence();
+        let (claims, disclosed) = verified_claims(&evidence);
+
+        let payload = evidence_payload_from_claims(&claims, &disclosed).expect("claims rebuild");
+        let members = payload.as_object().expect("object");
+        assert_eq!(
+            members.get("subjectBinding"),
+            Some(&Value::String("holder-bound".to_string()))
+        );
+        assert!(!members.contains_key("audience"));
+        assert!(!members.contains_key("requestNonce"));
+    }
+
+    /// The always-disclosed list is the union across both modes, so it permits
+    /// a claim without saying it belongs in this assertion. The per-mode check
+    /// is what refuses a borrowed shape.
+    #[test]
+    fn rejects_a_claim_set_whose_mode_disagrees_with_its_claims() {
+        let (mut holder_bound, disclosed) = verified_claims(&holder_bound_evidence());
+        holder_bound.insert(
+            "audience".to_string(),
+            Value::String("urn:example:relying-party:library".to_string()),
+        );
+        assert_eq!(
+            evidence_payload_from_claims(&holder_bound, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::UnexpectedClaim
+        );
+
+        let (mut audience_scoped, disclosed) = verified_claims(&evidence());
+        audience_scoped.remove("audience");
+        assert_eq!(
+            evidence_payload_from_claims(&audience_scoped, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::MissingClaim
+        );
+
+        let (mut no_mode, disclosed) = verified_claims(&evidence());
+        no_mode.remove("subjectBinding");
+        assert_eq!(
+            evidence_payload_from_claims(&no_mode, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::MissingClaim
+        );
+
+        let (mut bad_mode, disclosed) = verified_claims(&evidence());
+        bad_mode.insert(
+            "subjectBinding".to_string(),
+            Value::String("holder_bound".to_string()),
+        );
+        assert_eq!(
+            evidence_payload_from_claims(&bad_mode, &disclosed).unwrap_err(),
+            SdJwtVcClaimError::ClaimShape
         );
     }
 }

@@ -21,7 +21,8 @@ use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence_client::{
     AssuranceProfile, Evidence, EvidenceObjectType, EvidenceVerificationPolicyDocument,
     ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
-    ExpectedSubjectDocument, JwksDocument, PublicValue, SubjectBinding, SupportedValue,
+    ExpectedSubjectDocument, JwksDocument, PublicValue, SubjectBinding, SubjectBindingMode,
+    SupportedValue,
 };
 use registry_evidence_verifier::{
     model::FlattenedJws, verifier::verify_flattened_jws, EVIDENCE_JWS_CTY, EVIDENCE_JWS_TYP,
@@ -92,7 +93,7 @@ fn public_jwks(signer: &LocalJwkSigner) -> JwksDocument {
 }
 
 fn assert_fixture_shape(evidence: &Evidence) {
-    assert_eq!(evidence.request_nonce, FIXTURE_NONCE);
+    assert_eq!(evidence.request_nonce, Some(FIXTURE_NONCE.to_owned()));
     assert_eq!(evidence.subjects.len(), 1);
     assert_eq!(evidence.subjects[0].role, "subject");
     assert_eq!(evidence.supported_values.len(), 1);
@@ -106,7 +107,8 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
     Evidence {
         schema: EVIDENCE_SCHEMA_V1.to_owned(),
         assurance_profile: AssuranceProfile::Local,
-        request_nonce: FIXTURE_NONCE.to_owned(),
+        subject_binding: SubjectBindingMode::AudienceScoped,
+        request_nonce: Some(FIXTURE_NONCE.to_owned()),
         id: "urn:example:evidence:node-fixture".to_owned(),
         evidence_type_name: EvidenceObjectType::Evidence,
         supports_requirement: "urn:example:requirement:v1".to_owned(),
@@ -117,7 +119,7 @@ fn fixture_evidence(issued_at: DateTime<Utc>, valid_until: DateTime<Utc>) -> Evi
         observed_at: issued_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         valid_until: valid_until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         purpose: "example-purpose".to_owned(),
-        audience: "urn:example:audience".to_owned(),
+        audience: Some("urn:example:audience".to_owned()),
         configuration_revision: format!("sha256:{}", "0".repeat(64)),
         subjects: vec![SubjectBinding {
             role: "subject".to_owned(),
@@ -138,9 +140,15 @@ fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDoc
         requirement: evidence.supports_requirement.clone(),
         evidence_type: evidence.is_conformant_to.clone(),
         purpose: evidence.purpose.clone(),
-        audience: evidence.audience.clone(),
+        audience: evidence
+            .audience
+            .clone()
+            .expect("the fixture is audience-scoped"),
         configuration_revision: evidence.configuration_revision.clone(),
-        request_nonce: evidence.request_nonce.clone(),
+        request_nonce: evidence
+            .request_nonce
+            .clone()
+            .expect("the fixture is audience-scoped"),
         expected_subjects: evidence
             .subjects
             .iter()

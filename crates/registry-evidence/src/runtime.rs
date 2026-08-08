@@ -26,18 +26,20 @@ use crate::{
     auth::Authenticator,
     bundle::{Bundle, DeploymentInputs},
     config::{
-        AcquisitionConfig, AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind,
-        ResponseFormat, RuntimeConfig, RuntimeSignerConfig, SelectorField, SelectorInput,
-        StageRole, SubjectCardinality, ValueOrigin,
+        subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
+        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
+        RuntimeSignerConfig, SelectorField, SelectorInput, StageRole, SubjectBindingMode,
+        SubjectCardinality, ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     },
     contracts::definitions_contract_accepts,
-    kernel::{EvidenceConstruction, KernelError, OfflineKernel, ValueProjection},
+    kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
     model::{
         request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
         EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
         EvidenceRequest, EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult,
-        RequestedSelector, RequestedSubject, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
-        UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
+        RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType,
+        SelectorValue, SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
+        UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
     },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
@@ -46,12 +48,13 @@ use crate::{
     selector::{
         match_entitlement, resolve_selectors, validate_entitlement_context,
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
-        ResolvedAuthorization, ResolvedSelectorValue,
+        ResolvedAuthorization, ResolvedSelectorValue, ResolvedSubjectScope,
     },
     signing::EvidenceSigner,
     source::{statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor},
-    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
-    EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1, EVIDENCE_UNSIGNED_MEDIA_TYPE,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
+    EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
+    EVIDENCE_UNSIGNED_MEDIA_TYPE, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
 use zeroize::Zeroizing;
 
@@ -618,7 +621,7 @@ impl EvidenceRuntime {
                         },
                     })
                     .collect(),
-                holder_key: None,
+                holder_keys: Vec::new(),
             };
             let Ok(matched) = match_entitlement(self.bundle(), &request, &context) else {
                 continue;
@@ -705,10 +708,18 @@ impl EvidenceRuntime {
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-requirement"))?
             .to_owned();
 
+        // The vocabulary carries no default: absence means audience-scoped, so
+        // only the holder-bound mode is ever stated here.
+        let subject_binding_mode = match requirement.subject_binding_mode() {
+            SubjectBindingMode::AudienceScoped => None,
+            SubjectBindingMode::HolderBound => Some(SubjectBindingMode::HolderBound),
+        };
+
         Ok(EvidenceDefinition {
             requirement: requirement.id.clone(),
             configuration_revision,
             kind: requirement_kind_name(requirement.kind).to_owned(),
+            subject_binding_mode,
             evidence_type: requirement.evidence_type.clone(),
             purpose: request.purpose.clone(),
             reference_frameworks: requirement.reference_frameworks.clone(),
@@ -835,15 +846,29 @@ impl EvidenceRuntime {
         if !request_nonce_is_canonical(&request.request_nonce) {
             return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
         }
-        // An unacceptable holder key fails before any credential acquisition or
-        // source access. The key never reaches authorization, selectors, Rhai,
-        // sources, or audit.
-        if request
-            .holder_key
-            .as_ref()
-            .is_some_and(|key| !key.is_acceptable())
-        {
-            return Err(failure(ProblemCode::MalformedRequest, "holder-key"));
+        // An unacceptable or repeated holder key fails before any credential
+        // acquisition or source access. Keys are distinct by RFC 7638
+        // thumbprint, so the same coordinates under a second key identifier or
+        // a declared algorithm are one key wearing two names, and admitting
+        // them would silently collapse a batch to fewer holders than the
+        // caller asked for. Under a holder-bound requirement a thumbprint
+        // scopes the subject binding of its own credential, which is what
+        // carries it into authorization and selector resolution. Neither the
+        // keys nor their thumbprints reach Rhai, sources, or audit.
+        if request.holder_keys.len() > usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE) {
+            return Err(failure(ProblemCode::MalformedRequest, "holder-keys"));
+        }
+        let mut presented_thumbprints = Vec::with_capacity(request.holder_keys.len());
+        for key in &request.holder_keys {
+            if !key.is_acceptable() {
+                return Err(failure(ProblemCode::MalformedRequest, "holder-keys"));
+            }
+            let thumbprint = sdjwt_vc::holder_thumbprint(key)
+                .map_err(|_| failure(ProblemCode::MalformedRequest, "holder-keys"))?;
+            if presented_thumbprints.contains(&thumbprint) {
+                return Err(failure(ProblemCode::MalformedRequest, "holder-keys"));
+            }
+            presented_thumbprints.push(thumbprint);
         }
         let started = Instant::now();
         // One evaluation reads one clock, once, here. Every later question that
@@ -869,16 +894,42 @@ impl EvidenceRuntime {
             .audit
             .pseudonym("request-rate", &rate_scope, context.principal().as_bytes())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        // A batch release costs what the single-credential requests it replaces
+        // would have cost, so one request for many keys buys no rate advantage
+        // over many requests for one key each.
+        let request_cost = u32::try_from(request.holder_keys.len().max(1))
+            .map_err(|_| failure(ProblemCode::MalformedRequest, "holder-keys"))?;
         self.rate_limiter
-            .check_request(&request_limit_key)
+            .check_request_cost(&request_limit_key, request_cost)
             .await
             .map_err(map_request_limit)?;
 
-        let scope = audit_scope(
-            &self.bundle().config.service.trust_domain,
-            &request.purpose,
-            context.evidence_audience(),
-        );
+        // The configured binding mode of the named requirement, read from the
+        // immutable bundle. An unknown requirement resolves to the mode every
+        // requirement already had, and authorization below is what answers it.
+        let binding_mode = self
+            .bundle()
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == request.requirement)
+            .map_or(SubjectBindingMode::AudienceScoped, |requirement| {
+                requirement.subject_binding_mode()
+            });
+        // A holder-bound operation is scoped to no relying party, so its audit
+        // pseudonyms cannot be derived under one. Its scope names the trust
+        // domain and the purpose only, and never the holder key.
+        let scope = match binding_mode {
+            SubjectBindingMode::AudienceScoped => audit_scope(
+                &self.bundle().config.service.trust_domain,
+                &request.purpose,
+                context.evidence_audience(),
+            ),
+            SubjectBindingMode::HolderBound => audit_scope_holder_bound(
+                &self.bundle().config.service.trust_domain,
+                &request.purpose,
+            ),
+        };
         let requester_pseudonym = self
             .audit
             .pseudonym("requester", &scope, context.principal().as_bytes())
@@ -904,10 +955,14 @@ impl EvidenceRuntime {
             Err(error) => return Err(map_authority(error)),
         };
         // The immutable bundle and the one complete matched grant must both
-        // permit the requested format. API selection creates no permission,
-        // and the denial does not reveal which layer withheld it.
+        // permit the requested format, that same grant must permit the
+        // requirement's binding mode, and the mode must permit the format. API
+        // selection creates no permission, and the one denial does not reveal
+        // which of the four layers withheld it.
         if !self.bundle().config.response_formats.contains(&format)
             || !matched.permits_response_format(format)
+            || !matched.permits_subject_binding(binding_mode)
+            || !subject_binding_permits_response_format(binding_mode, format)
         {
             self.append_authorization_refusal(
                 operation,
@@ -917,6 +972,33 @@ impl EvidenceRuntime {
             )
             .await?;
             return Err(failure(ProblemCode::NotAuthorized, "response-format"));
+        }
+        // Only the batch container carries more than one credential, so every
+        // other media type answers at most one presented key, in either binding
+        // mode. Audience-scoped issuance still takes its key as optional, and
+        // that key only reaches the confirmation claim, but a request naming
+        // several keys asks for several credentials: serving the first and
+        // dropping the rest would answer for one holder a question asked for
+        // many, without saying so.
+        //
+        // A holder-bound requirement additionally derives every subject binding
+        // under a presented key, so a request carrying none cannot be served,
+        // and the batch it does serve stays under the ceiling the immutable
+        // bundle declares.
+        //
+        // The checks sit after authorization and after the format gate on
+        // purpose: answered earlier they would turn the endpoint into an
+        // unauthenticated oracle for which requirements exist, which binding
+        // mode each one carries, and how large a batch the deployment serves.
+        let presented = request.holder_keys.len();
+        if format != ResponseFormat::SdJwtVcBatch && presented > 1 {
+            return Err(failure(ProblemCode::MalformedRequest, "holder-keys"));
+        }
+        if binding_mode == SubjectBindingMode::HolderBound
+            && (presented == 0
+                || presented > usize::from(self.bundle().config.holder_bound_batch_ceiling()))
+        {
+            return Err(failure(ProblemCode::MalformedRequest, "holder-keys"));
         }
         let selector_limit_input = canonical_pair(
             context.principal().as_bytes(),
@@ -1259,7 +1341,7 @@ impl EvidenceRuntime {
             &derivation_selectors,
             observed_at,
             ValueProjection {
-                audience: context.evidence_audience(),
+                scope: evidence_scope(&resolved.subject_scope, &request.request_nonce),
                 binding_key: self.subject_binding_secret.expose_secret(),
                 binding_key_version: self.bundle().config.subject_binding.key_version,
             },
@@ -1289,61 +1371,104 @@ impl EvidenceRuntime {
             }
         };
 
-        let subjects = match self.subject_bindings(&resolved) {
-            Ok(subjects) => subjects,
-            Err(error) => {
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::EvaluationFailure,
-                    "subject-binding",
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(error);
-            }
+        // One authorization decision, one acquisition, and one derivation feed
+        // every released member. A holder-bound release constructs one member
+        // per presented key, each scoped to that key alone, so no member can
+        // carry another member's subject binding. Every other release is a
+        // single member under the resolution's own scope.
+        let member_scopes = match binding_mode {
+            SubjectBindingMode::HolderBound => presented_thumbprints
+                .into_iter()
+                .map(ResolvedSubjectScope::HolderKeyThumbprint)
+                .collect::<Vec<_>>(),
+            SubjectBindingMode::AudienceScoped => vec![resolved.subject_scope.clone()],
         };
-        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
         // `issued_at` is read after the source round-trip, so a backward wall-clock
         // adjustment between it and `observed_at` could otherwise make `issued_at`
         // precede `observed_at` and fail evidence construction. Clamp the wall-clock
         // read so issuance never predates observation; an injected evaluation time
         // keeps both stamps equal.
         let issued_at = evaluation_time.unwrap_or_else(|| Utc::now().max(observed_at));
-        let evidence = match self.kernel.construct_evidence(
-            &request.requirement,
-            values,
-            EvidenceConstruction {
-                evidence_id: &evidence_id,
-                request_nonce: &request.request_nonce,
-                purpose: &request.purpose,
-                audience: context.evidence_audience(),
-                issued_at,
-                observed_at,
-                subjects,
-            },
-        ) {
-            Ok(evidence) => evidence,
-            Err(_) => {
-                self.append_failure(
-                    &material,
-                    operation,
-                    AuditDecision::EvaluationFailure,
-                    "evidence-construction",
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(failure(
-                    ProblemCode::ServiceUnavailable,
-                    "evidence-construction",
-                ));
-            }
-        };
-        let disclosed_concepts = evidence
+        let mut evidence_ids = Vec::with_capacity(member_scopes.len());
+        let mut members = Vec::with_capacity(member_scopes.len());
+        for member_scope in &member_scopes {
+            let subjects = match self.subject_bindings(&resolved, member_scope) {
+                Ok(subjects) => subjects,
+                Err(error) => {
+                    self.append_failure(
+                        &material,
+                        operation,
+                        AuditDecision::EvaluationFailure,
+                        "subject-binding",
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
+            let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+            let evidence = match self.kernel.construct_evidence(
+                &request.requirement,
+                values.clone(),
+                EvidenceConstruction {
+                    evidence_id: &evidence_id,
+                    purpose: &request.purpose,
+                    scope: evidence_scope(member_scope, &request.request_nonce),
+                    issued_at,
+                    observed_at,
+                    subjects,
+                },
+            ) {
+                Ok(evidence) => evidence,
+                Err(_) => {
+                    self.append_failure(
+                        &material,
+                        operation,
+                        AuditDecision::EvaluationFailure,
+                        "evidence-construction",
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(
+                        ProblemCode::ServiceUnavailable,
+                        "evidence-construction",
+                    ));
+                }
+            };
+            evidence_ids.push(evidence_id);
+            members.push(evidence);
+        }
+        // Only the batch container transports more than one member. Reaching
+        // here with any other count means the cardinality gate above did not
+        // hold, so release nothing rather than serve a member the caller's
+        // chosen serialization cannot describe.
+        if members.is_empty()
+            || (format != ResponseFormat::SdJwtVcBatch && members.len() != 1)
+            || members.len() > usize::from(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
+        {
+            self.append_failure(
+                &material,
+                operation,
+                AuditDecision::EvaluationFailure,
+                "release-cardinality",
+                &source_id,
+                &adapter_id,
+                started,
+            )
+            .await?;
+            return Err(failure(
+                ProblemCode::ServiceUnavailable,
+                "release-cardinality",
+            ));
+        }
+        // Every member of one release carries the same derivation, so the
+        // disclosed concept list is a property of the release and not of a
+        // member.
+        let disclosed_concepts = members[0]
             .supported_values
             .iter()
             .map(|value| value.provides_value_for.clone())
@@ -1354,7 +1479,7 @@ impl EvidenceRuntime {
         // signed-path failure never downgrades to unsigned output.
         let (bytes, media_type, signing_key_id) = match format {
             ResponseFormat::SignedJws => {
-                let signed = match self.signer.sign_json(&evidence).await {
+                let signed = match self.signer.sign_json(&members[0]).await {
                     Ok(signed) => signed,
                     Err(_) => {
                         self.append_failure(
@@ -1401,22 +1526,10 @@ impl EvidenceRuntime {
             ResponseFormat::SdJwtVc => {
                 // The projection re-encodes the constructed payload and
                 // re-derives nothing.
-                let structured_projections = self
-                    .kernel
-                    .requirement(&request.requirement)
-                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "sd-jwt-vc-mapping"))?
-                    .concepts
-                    .iter()
-                    .filter_map(|concept| {
-                        concept
-                            .sd_jwt_vc
-                            .as_ref()
-                            .map(|projection| (concept.id.clone(), projection.claim.clone()))
-                    })
-                    .collect::<BTreeMap<_, _>>();
+                let structured_projections = self.structured_projections(&request.requirement)?;
                 let input = match sdjwt_vc::issuance_input(
-                    &evidence,
-                    request.holder_key.as_ref(),
+                    &members[0],
+                    request.holder_keys.first(),
                     &structured_projections,
                 ) {
                     Ok(input) => input,
@@ -1461,6 +1574,88 @@ impl EvidenceRuntime {
                     Some(self.signer.key_id().to_owned()),
                 )
             }
+            ResponseFormat::SdJwtVcBatch => {
+                let structured_projections = self.structured_projections(&request.requirement)?;
+                // Each member maps and signs on its own, so each carries its own
+                // confirmation, its own identifier, and independent disclosure
+                // salts. A failure on any member releases nothing: the container
+                // is assembled in full before the durable release, and there is
+                // no partial batch and no per-member fallback.
+                let mut credentials = Vec::with_capacity(members.len());
+                for (member, holder_key) in members.iter().zip(request.holder_keys.iter()) {
+                    let input = match sdjwt_vc::issuance_input(
+                        member,
+                        Some(holder_key),
+                        &structured_projections,
+                    ) {
+                        Ok(input) => input,
+                        Err(_) => {
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::EvaluationFailure,
+                                "sd-jwt-vc-mapping",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(failure(
+                                ProblemCode::ServiceUnavailable,
+                                "sd-jwt-vc-mapping",
+                            ));
+                        }
+                    };
+                    match self.signer.sign_sd_jwt_vc(input).await {
+                        Ok(serialized) => credentials.push(serialized),
+                        Err(_) => {
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::SigningFailure,
+                                "signing",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(failure(ProblemCode::ServiceUnavailable, "signing"));
+                        }
+                    }
+                }
+                let envelope = SdJwtVcBatchEnvelope {
+                    schema: SD_JWT_VC_BATCH_SCHEMA_V1.to_owned(),
+                    envelope_type: SdJwtVcBatchEnvelopeType::SdJwtVcBatchEnvelope,
+                    credentials,
+                };
+                // A batch multiplies one assertion by its member count, so the
+                // response carries its own size bound. An oversized release is
+                // refused rather than truncated.
+                let bytes = serde_json::to_vec(&envelope)
+                    .ok()
+                    .filter(|bytes| bytes.len() <= MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES);
+                let Some(bytes) = bytes else {
+                    self.append_failure(
+                        &material,
+                        operation,
+                        AuditDecision::EvaluationFailure,
+                        "release-serialization",
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(
+                        ProblemCode::ServiceUnavailable,
+                        "release-serialization",
+                    ));
+                };
+                (
+                    bytes,
+                    EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
+                    Some(self.signer.key_id().to_owned()),
+                )
+            }
             ResponseFormat::UnsignedJson => {
                 // Unsigned output is never a recovery or fallback path for a
                 // failed signer. Signed requests still attempt the provider,
@@ -1483,7 +1678,7 @@ impl EvidenceRuntime {
                     envelope_type: UnsignedEnvelopeType::UnsignedEvidenceEnvelope,
                     integrity_protection: UnsignedIntegrityProtection::None,
                     warning: UnsignedEnvelopeWarning::NotCryptographicallyVerifiable,
-                    evidence,
+                    evidence: members.swap_remove(0),
                 };
                 let bytes = serde_json::to_vec(&envelope)
                     .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-serialization"));
@@ -1520,7 +1715,17 @@ impl EvidenceRuntime {
             release.adapter_ids = Some(adapter_ids);
         }
         release.disclosed_concepts = Some(disclosed_concepts);
-        release.evidence_id = Some(evidence_id);
+        // Exactly one terminal release event names the complete released set.
+        // A release of one assertion keeps the singular member every release
+        // already carried, so a reader never counts one release twice. Per
+        // member events are not emitted: a failed append after an earlier one
+        // would leave a durable record describing a credential that was never
+        // released.
+        if evidence_ids.len() == 1 {
+            release.evidence_id = evidence_ids.pop();
+        } else {
+            release.evidence_ids = Some(evidence_ids);
+        }
         release.signing_key_id = signing_key_id;
         self.audit
             .append(release)
@@ -1727,7 +1932,7 @@ impl EvidenceRuntime {
             .iter()
             .map(|subject| {
                 let protected = subject
-                    .audit_pseudonym_input(&resolved.audience, &resolved.purpose)
+                    .audit_pseudonym_input(&resolved.subject_scope, &resolved.purpose)
                     .map_err(|_| failure(ProblemCode::ServiceUnavailable, "subject-pseudonym"))?;
                 let pseudonym = self
                     .audit
@@ -1783,9 +1988,35 @@ impl EvidenceRuntime {
             })
     }
 
+    /// The claim each concept of one requirement projects into an SD-JWT VC.
+    ///
+    /// The projection re-encodes the constructed payload and re-derives
+    /// nothing, so every member of one release shares it.
+    fn structured_projections(
+        &self,
+        requirement_id: &str,
+    ) -> Result<BTreeMap<String, String>, RuntimeFailure> {
+        Ok(self
+            .kernel
+            .requirement(requirement_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "sd-jwt-vc-mapping"))?
+            .concepts
+            .iter()
+            .filter_map(|concept| {
+                concept
+                    .sd_jwt_vc
+                    .as_ref()
+                    .map(|projection| (concept.id.clone(), projection.claim.clone()))
+            })
+            .collect())
+    }
+
+    /// The subject bindings one released member carries, under the one scope
+    /// that member is issued to.
     fn subject_bindings(
         &self,
         resolved: &ResolvedAuthorization,
+        subject_scope: &ResolvedSubjectScope,
     ) -> Result<Vec<SubjectBinding>, RuntimeFailure> {
         resolved
             .subjects
@@ -1796,7 +2027,7 @@ impl EvidenceRuntime {
                         self.subject_binding_secret.expose_secret(),
                         self.bundle().config.subject_binding.key_version,
                         &self.bundle().config.service.trust_domain,
-                        &resolved.audience,
+                        subject_scope.as_binding_scope(),
                         &resolved.purpose,
                     )
                     .map(|binding| SubjectBinding {
@@ -1899,11 +2130,32 @@ fn stage_time_budget(deadline: Instant, now: Instant) -> Option<Duration> {
     (!remaining.is_zero()).then_some(remaining)
 }
 
+/// The assertion scope a resolved authorization issues under.
+///
+/// A holder-bound resolution names no relying party, so its assertion carries
+/// neither an audience nor a request nonce: there is no verifier to echo the
+/// nonce to, and freshness at presentation is the relying party's own
+/// key-binding challenge. Deriving this from the resolved subject scope rather
+/// than from the authenticated context is what keeps the declared binding mode
+/// in agreement with the bindings the subjects actually carry.
+fn evidence_scope<'a>(
+    subject_scope: &'a ResolvedSubjectScope,
+    request_nonce: &'a str,
+) -> EvidenceScope<'a> {
+    match subject_scope.audience() {
+        Some(audience) => EvidenceScope::AudienceScoped {
+            audience,
+            request_nonce,
+        },
+        None => EvidenceScope::HolderBound,
+    }
+}
+
 fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
     match format {
         ResponseFormat::SignedJws => ResponseProtection::Signed,
         ResponseFormat::UnsignedJson => ResponseProtection::Unsigned,
-        ResponseFormat::SdJwtVc => ResponseProtection::SdJwtVc,
+        ResponseFormat::SdJwtVc | ResponseFormat::SdJwtVcBatch => ResponseProtection::SdJwtVc,
     }
 }
 
@@ -2220,6 +2472,21 @@ fn audit_scope(trust_domain: &str, purpose: &str, audience: &str) -> String {
     )
 }
 
+/// Audit scope for a holder-bound operation, which has no audience to bind.
+///
+/// The distinct `v1-holder:` prefix keeps the derivation domain-separated from
+/// the audience-scoped one, so no pseudonym can collide across the two modes
+/// even where trust domain and purpose agree. The holder key thumbprint is
+/// deliberately absent: a scope naming it would make the audit chain itself a
+/// place where one wallet key's activity can be picked out.
+fn audit_scope_holder_bound(trust_domain: &str, purpose: &str) -> String {
+    format!(
+        "v1-holder:{}:{trust_domain}:{}:{purpose}",
+        trust_domain.len(),
+        purpose.len()
+    )
+}
+
 /// Rate-limit pseudonyms deliberately omit request-controlled dimensions so a
 /// principal cannot multiply its budget by varying purpose, audience, or
 /// requirement. The pseudonym class and protected input distinguish request
@@ -2327,6 +2594,39 @@ mod tests {
         assert_ne!(
             audit_scope("urn:a", "bc", "https://d.invalid"),
             audit_scope("urn:ab", "c", "https://d.invalid")
+        );
+    }
+
+    #[test]
+    fn holder_bound_audit_scope_binds_no_relying_party_and_no_holder_key() {
+        let trust_domain = "urn:example:evidence";
+        let purpose = "service-enrolment";
+        let thumbprint = "hFTvL0-xJhWk2mn9Zq3rXcQd7YbAe1UgPsN4iOtRvKw";
+
+        // Two modes over the same trust domain and purpose derive different
+        // scopes, so no pseudonym can be read as belonging to the other mode.
+        assert_ne!(
+            audit_scope_holder_bound(trust_domain, purpose),
+            audit_scope(trust_domain, purpose, "https://relying-party.invalid")
+        );
+        assert_ne!(
+            audit_scope_holder_bound(trust_domain, purpose),
+            rate_limit_scope(trust_domain)
+        );
+
+        // The scope is the same whichever holder asks, which is the whole
+        // point: the audit chain must not become a place where one wallet
+        // key's activity can be picked out.
+        let scope = audit_scope_holder_bound(trust_domain, purpose);
+        assert!(!scope.contains(thumbprint));
+        assert!(!scope.contains("relying-party"));
+        assert_eq!(scope, audit_scope_holder_bound(trust_domain, purpose));
+
+        // Component boundaries stay unambiguous without the audience field
+        // that separated them in the audience-scoped form.
+        assert_ne!(
+            audit_scope_holder_bound("urn:a", "bc"),
+            audit_scope_holder_bound("urn:ab", "c")
         );
     }
 

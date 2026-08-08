@@ -39,3 +39,16 @@ pub use registry_evidence_verifier::{
 mod runtime_tests;
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
+
+/// The batch issuance container is served by this runtime and consumed by no
+/// verifier, so it is named here rather than in the portable verifier crate.
+pub const EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE: &str =
+    "application/vnd.registrystack.evidence.batch+json";
+pub const SD_JWT_VC_BATCH_SCHEMA_V1: &str = "registry.sd-jwt-vc-batch-envelope/v1";
+
+/// Ceiling on the serialized batch response, in bytes.
+///
+/// A batch multiplies one assertion by its member count, so the bound the
+/// singular formats never needed becomes load-bearing here: a release that
+/// cannot be answered within it is refused rather than served.
+pub const MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES: usize = 1_048_576;

@@ -133,6 +133,10 @@ impl RetainedEvidenceVerification {
             EvidenceResponseFormat::SdJwtVc => {
                 verify_sd_jwt_vc(response, &self.trusted_jwks, &policy)
             }
+            // Unreachable: `validate` refuses the batch format above, so the
+            // caller is told what it did rather than shown a parse failure for
+            // an envelope nothing was ever going to verify.
+            EvidenceResponseFormat::SdJwtVcBatch => return Err(batch_is_not_one_response()),
         }
         .map_err(EvidenceClientError::Verification)?;
         Ok(VerifiedEvidence {
@@ -142,6 +146,12 @@ impl RetainedEvidenceVerification {
     }
 
     fn validate(&self) -> Result<(), EvidenceClientError> {
+        // A batch is packaging, not a response with a verdict. Refusing here
+        // covers every verification entry point, including this crate's client,
+        // so the category error is named once and named early.
+        if !self.response_format.is_verifiable_alone() {
+            return Err(batch_is_not_one_response());
+        }
         if self.schema != RETAINED_EVIDENCE_VERIFICATION_SCHEMA_V1 {
             return Err(EvidenceClientError::configuration(
                 "the retained verification context schema is not supported",
@@ -173,6 +183,19 @@ impl RetainedEvidenceVerification {
     }
 }
 
+/// A caller asked to verify a batch envelope as though it were one response.
+///
+/// The envelope carries no signature and makes no assertion, so there is no
+/// verdict to reach about it. The failure says what to do instead, because a
+/// caller here is one step away from being right: split the envelope, then
+/// verify each credential under the singular format it is.
+fn batch_is_not_one_response() -> EvidenceClientError {
+    EvidenceClientError::configuration(
+        "a batch envelope is issuance packaging, not one verifiable response: read it with \
+         SdJwtVcBatchResponse and verify each credential individually",
+    )
+}
+
 fn covers_roles(roles: &[String], claimed: &[ExpectedSubjectDocument]) -> bool {
     claimed.len() == roles.len()
         && roles.iter().all(|role| {
@@ -197,6 +220,10 @@ fn untrusted_subject_bindings(
     let subjects = match format {
         EvidenceResponseFormat::SignedJws => untrusted_jws_subjects(response),
         EvidenceResponseFormat::SdJwtVc => untrusted_sd_jwt_vc_subjects(response),
+        // Unreachable: verification refuses the batch format before reaching
+        // here. Claiming no binding is the safe answer regardless, because an
+        // empty claim can only narrow first-use acceptance, never widen it.
+        EvidenceResponseFormat::SdJwtVcBatch => None,
     };
     subjects
         .unwrap_or_default()
@@ -247,8 +274,9 @@ mod tests {
     use super::*;
     use crate::{
         fixtures::{
-            signed_evidence, SignedEvidenceFixture, AUDIENCE, CONCEPT, CONFIGURATION_REVISION,
-            EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS, PROVIDED_BY, PURPOSE, REQUIREMENT,
+            holder_key, signed_evidence, SignedEvidenceFixture, AUDIENCE, CONCEPT,
+            CONFIGURATION_REVISION, EVIDENCE_TYPE, ISSUED_BY, MAXIMUM_LIFETIME_SECONDS,
+            PROVIDED_BY, PURPOSE, REQUIREMENT,
         },
         prepare::{EvidenceRequestSpec, SubjectRequest},
         request::SelectorValue,
@@ -285,6 +313,7 @@ mod tests {
                     SelectorValue::from("synthetic-record-001"),
                 )]),
             }],
+            holder_keys: Vec::new(),
             expected_outputs: vec![ExpectedOutputDocument {
                 concept: CONCEPT.to_owned(),
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
@@ -358,7 +387,10 @@ mod tests {
             .verify_as_of(&fixture.sign(prepared.request_nonce()), fixture.now)
             .expect("the retained response verifies");
 
-        assert_eq!(verified.evidence().request_nonce, prepared.request_nonce());
+        assert_eq!(
+            verified.evidence().request_nonce,
+            Some(prepared.request_nonce().to_owned())
+        );
         assert_eq!(verified.operation(), None);
         assert_eq!(verified.pinned_subject_expectations().len(), 1);
     }
@@ -399,6 +431,63 @@ mod tests {
                 .expect_err("SD-JWT VC bytes cannot cross into JWS verification"),
             EvidenceClientError::Verification(VerificationError::MalformedJws)
         );
+    }
+
+    /// A retained batch context is still a document a caller may hold and
+    /// serialize, but every path that would verify it as one response refuses,
+    /// and says why. The refusal does not depend on the bytes offered: a real
+    /// envelope is refused exactly as anything else is, because the objection
+    /// is to the question, not to the answer.
+    #[tokio::test]
+    async fn a_retained_batch_context_refuses_to_verify_as_one_response() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let mut batch_spec = spec(SubjectExpectations::AcceptFirstUse);
+        batch_spec.response_format = EvidenceResponseFormat::SdJwtVcBatch;
+        batch_spec.holder_keys = vec![holder_key()];
+        let prepared = client
+            .prepare(batch_spec)
+            .expect("the batch request is prepared");
+        let retained: RetainedEvidenceVerification = serde_json::from_slice(
+            &serde_json::to_vec(&client.retain_verification(&prepared))
+                .expect("the context serializes"),
+        )
+        .expect("the context parses");
+        let envelope = serde_json::json!({
+            "schema": "registry.sd-jwt-vc-batch-envelope/v1",
+            "type": "SdJwtVcBatchEnvelope",
+            "credentials": [fixture.sign_sd_jwt_vc(prepared.request_nonce()).await],
+        })
+        .to_string();
+
+        for (description, body) in [
+            ("a real envelope", envelope.into_bytes()),
+            ("arbitrary bytes", b"anything at all".to_vec()),
+            ("no bytes", Vec::new()),
+        ] {
+            let failure = retained
+                .verify_as_of(&body, fixture.now)
+                .expect_err(description);
+            let EvidenceClientError::Configuration { reason } = &failure else {
+                panic!("{description}: {failure:?}");
+            };
+            assert!(reason.contains("issuance packaging"), "{description}");
+            assert!(reason.contains("SdJwtVcBatchResponse"), "{description}");
+        }
+    }
+
+    /// Every format either names a verifier or is refused by name. A variant
+    /// added without deciding which would otherwise reach verification and be
+    /// judged as something it is not.
+    #[test]
+    fn only_a_singular_format_is_verifiable_as_one_response() {
+        for format in [
+            EvidenceResponseFormat::SignedJws,
+            EvidenceResponseFormat::SdJwtVc,
+        ] {
+            assert!(format.is_verifiable_alone(), "{format:?}");
+        }
+        assert!(!EvidenceResponseFormat::SdJwtVcBatch.is_verifiable_alone());
     }
 
     #[test]

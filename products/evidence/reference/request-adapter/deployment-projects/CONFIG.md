@@ -93,11 +93,12 @@ The governed file is `bundle/evidence.yaml`.
 | `issuer` | yes | Issuer identity placed in evidence. |
 | `authentication` | yes | Closed inbound OIDC access-token verification policy. |
 | `audit` | yes | Audit format, pseudonymization key reference/version, and fail-closed policy. Storage location is runtime-owned. |
-| `subjectBinding` | yes | Audience-scoped subject-binding key reference/version. |
+| `subjectBinding` | yes | Subject-binding key reference/version. The key is the same whichever binding mode a requirement selects; the modes are domain-separated inside the derivation. |
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
 | `acquisitionCapabilities` | no | Gated acquisition kinds this bundle opts in to, at most one entry. Omission and `[]` both enable nothing. |
+| `holderBoundBatchMaxSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
@@ -142,7 +143,7 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | Section | Required fields and rule |
 |---|---|
 | `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
-| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives audience-and-purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. |
+| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
 | `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
@@ -179,6 +180,17 @@ include `signed-jws`, defaulting to `[signed-jws]` when omitted. Unsigned output
 and the SD-JWT VC serialization each require both the bundle and the one
 complete matched grant to permit them, so a production grant that says nothing
 permits only signed JWS.
+
+A grant's optional `subjectBindingModes` is a separate permission from
+`responseFormats`: it is a unique list of at most 2 entries drawn from
+`audience-scoped` and `holder-bound`, and omission and `[]` both mean
+`audience-scoped` only. Permission to serialize a response is never permission
+to issue under a binding mode, so widening a grant to `sd-jwt-vc` grants it no
+holder-bound issuance; the grant must name `holder-bound` itself. Both halves
+are read from the same one matched grant, because permissions are never unioned
+across grants, and a request that fails either half receives the same single
+denial without learning which half failed.
+
 Every grant subject fixes `role`, `selectorProfile`, and one `valueOrigin`:
 
 - `request` requires values in the closed public request and prohibits
@@ -215,6 +227,7 @@ Each requirement declares these fields:
 | Key | Required | Meaning |
 |---|---|---|
 | `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
+| `subjectBinding` | no | `audience-scoped` or `holder-bound`. Omission means `audience-scoped`, and an omitted key stays out of the projected configuration, so declaring the mode on one requirement moves no other requirement's `configurationRevision`. See the holder-bound rules below. |
 | `acquisition` | yes | One of the three closed shapes below. None permits response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
 | `subjectRoles` | yes | Complete role set, `cardinality: one`, and permitted selector profile ids. Public subject array order is not semantic; roles are resolved uniquely and canonicalized to declaration order. |
@@ -260,6 +273,28 @@ bundle camelCase, including `codelistVersion`, `maximumBytes`, `categoryScheme`,
 `maximumSerializedBytes`, and `unique`, with the exact set determined by the
 selected form. Codelist declarations and reviewed structured schemas are
 bundle-relative, closed, versioned artifacts validated at startup.
+
+A requirement whose `subjectBinding` is `holder-bound` derives its subject
+bindings under the holder key the request presents rather than under the
+authenticated audience, so its assertions are scoped to no relying party. Three
+rules follow, and each is checked at bundle load, before the listener binds,
+with a cause that names no configured value:
+
+- the mode permits only the SD-JWT VC serialization, so the requirement must be
+  reachable under a bundle `responseFormats` list and at least one grant whose
+  own `responseFormats` include `sd-jwt-vc`. The restriction is per
+  requirement: `signed-jws` stays mandatory at bundle and grant scope, and the
+  rest of the deployment is unaffected;
+- at least one grant covering the requirement must name `holder-bound` in
+  `subjectBindingModes`, since format permission alone grants nothing; and
+- the requirement's concepts may not use the `audience-scoped-entity-reference`
+  or `entity-reference-list` forms. Both are references an audience resolves,
+  and there is no audience here to resolve them.
+
+At request time a holder-bound requirement additionally needs the request to
+carry a holder key. That is answered only after authorization and the format
+gate have both passed, so an unauthorized requester learns nothing about which
+requirements exist or which binding mode each one carries.
 
 `observed_at` is a runtime-supplied instant normalized to UTC. Rust resolves
 the legal local date and time from `observationTimezone`; without the optional
@@ -1264,6 +1299,8 @@ authorityProfiles.*.grants[].purpose
 authorityProfiles.*.grants[].requirement
 authorityProfiles.*.grants[].responseFormats
 authorityProfiles.*.grants[].responseFormats[]
+authorityProfiles.*.grants[].subjectBindingModes
+authorityProfiles.*.grants[].subjectBindingModes[]
 authorityProfiles.*.grants[].subjects
 authorityProfiles.*.grants[].subjects[]
 authorityProfiles.*.grants[].subjects[].role
@@ -1274,6 +1311,7 @@ authorityProfiles.*.grants[].subjects[].valueOrigin
 authorityProfiles.*.kind
 authorityProfiles.*.requesterTags
 authorityProfiles.*.requesterTags[]
+holderBoundBatchMaxSize
 issuer
 issuer.id
 rateLimits
@@ -1350,6 +1388,7 @@ requirements[].purposes
 requirements[].purposes[]
 requirements[].referenceFrameworks
 requirements[].referenceFrameworks[]
+requirements[].subjectBinding
 requirements[].subjectRoles
 requirements[].subjectRoles[]
 requirements[].subjectRoles[].cardinality

@@ -25,12 +25,18 @@ properties:
       exactly once. Runtime resolves roles by name and emits the requirement's
       declaration order internally.
     items: {$ref: '#/$defs/subject'}
-  holderKey:
-    $ref: '#/$defs/holder-key'
+  holderKeys:
+    type: array
+    minItems: 1
+    maxItems: 16
+    items: {$ref: '#/$defs/holder-key'}
     description: >-
-      Optional holder public key echoed into the SD-JWT VC cnf claim. It is
-      meaningful only for the SD-JWT VC response format and never reaches
-      authorization, selectors, Rhai, source requests, or audit.
+      Holder public keys, each echoed into the cnf claim of the credential
+      issued for it. A single-credential request is an array of one. The keys
+      are meaningful only to the credential response formats and never reach
+      authorization, selectors, Rhai, source requests, or audit. Under a
+      holder-bound requirement each key's RFC 7638 thumbprint additionally
+      scopes the subject binding of that key's own credential.
 $defs:
   subject:
     type: object
@@ -94,6 +100,11 @@ $comment: >-
   never uniqueness-checked, and never reaches authorization, rate limits,
   Rhai, source requests, logs, metrics, traces, or native audit. Callers must
   not encode identifiers, selectors, secrets, or document digests into it.
-  holderKey is an EC P-256 public JWK. A key carrying any private member, a
-  non-allowlisted algorithm, or an unparseable body fails before credential
-  acquisition or source access.
+  Each holderKeys member is an EC P-256 public JWK. A key carrying any private
+  member, a non-allowlisted algorithm, or an unparseable body fails before
+  credential acquisition or source access. Keys are distinct by RFC 7638
+  thumbprint, so the same coordinates carrying a different kid or a different
+  alg are one key wearing two names and are refused before source access. The
+  array is bounded by a compile-time maximum, this schema's maxItems, and the
+  deployment's declared holderBoundBatchMaxSize, in that order of increasing
+  strictness.

@@ -104,6 +104,7 @@ function evidenceFor(spec, nonce) {
   return {
     schema: EVIDENCE_SCHEMA_V1,
     assuranceProfile: spec.expectedAssuranceProfile,
+    subjectBinding: 'audience-scoped',
     requestNonce: nonce,
     id: 'urn:example:node-test:evidence:1',
     type: 'Evidence',

@@ -23,9 +23,7 @@ impl RequestNonce {
     /// Every prepared request gets its own value. Reusing one across two
     /// requests would break the correlation the verifier depends on.
     pub fn generate() -> Result<Self, NonceError> {
-        let mut bytes = [0_u8; DECODED_BYTES];
-        getrandom::fill(&mut bytes).map_err(|_| NonceError::Entropy)?;
-        Ok(Self(URL_SAFE_NO_PAD.encode(bytes)))
+        Ok(Self(draw()?))
     }
 
     /// Check that a retained nonce string is still the canonical encoding, such
@@ -46,6 +44,38 @@ impl RequestNonce {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Draw one canonical nonce from the operating system random source: 32 bytes,
+/// unpadded base64url. Both nonces this module produces are the same
+/// construction, so there is one place it is written.
+fn draw() -> Result<String, NonceError> {
+    let mut bytes = [0_u8; DECODED_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| NonceError::Entropy)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Draw a challenge for a holder's key-binding proof.
+///
+/// This is not a request nonce, and the two must not be substituted for one
+/// another. A request nonce correlates one request with the assertion answering
+/// it; this crate draws it itself for every prepared request and there is no
+/// seam for supplying one. A presentation nonce is chosen by whoever is asking
+/// a holder to prove possession of its key, and it belongs to an exchange that
+/// happens after issuance, between a holder and that party. This crate neither
+/// sends it, receives it, nor reads the proof it appears in: it is offered here
+/// because the construction is the one the contract already fixes, and a
+/// challenge a caller improvises is the thing worth not improvising.
+///
+/// The construction is [`RequestNonce::generate`]'s: 32 bytes from the
+/// operating system random source, encoded as unpadded base64url. Like a
+/// request nonce it is uninterpreted, and it must never carry an identifier, a
+/// selector value, a secret, or a document digest.
+///
+/// A fresh value is drawn per presentation. Reusing one lets a proof made for
+/// an earlier exchange satisfy a later one.
+pub fn presentation_nonce() -> Result<String, NonceError> {
+    draw()
 }
 
 /// Whether a value is the canonical 43-character unpadded base64url encoding
@@ -120,6 +150,33 @@ mod tests {
         let first = RequestNonce::generate().expect("the system random source works");
         let second = RequestNonce::generate().expect("the system random source works");
         assert_ne!(first, second);
+    }
+
+    /// A presentation challenge carries the same unguessability a request nonce
+    /// does, because it is the same construction.
+    #[test]
+    fn a_presentation_nonce_is_canonical_and_never_repeats() {
+        let nonce = presentation_nonce().expect("the system random source works");
+        assert!(is_canonical(&nonce), "{nonce}");
+        assert_eq!(
+            nonce.len(),
+            ENCODED_CHARACTERS,
+            "a challenge is the same length as a request nonce"
+        );
+        assert_ne!(
+            nonce,
+            presentation_nonce().expect("the system random source works")
+        );
+    }
+
+    /// The two nonces are the same construction and separate values. A
+    /// presentation challenge that arrived from `generate` would tie a
+    /// presentation to the request that produced the credential.
+    #[test]
+    fn a_presentation_nonce_is_not_the_request_nonce() {
+        let request = RequestNonce::generate().expect("the system random source works");
+        let presentation = presentation_nonce().expect("the system random source works");
+        assert_ne!(request.as_str(), presentation);
     }
 
     #[test]

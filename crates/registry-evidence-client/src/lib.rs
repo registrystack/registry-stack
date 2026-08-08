@@ -51,6 +51,77 @@
 //! There is no third option, and this crate does not offer a way around the
 //! verifier's subject comparison.
 //!
+//! # Holder keys, and what this crate does with them
+//!
+//! A request may present holder public keys the caller already holds, in
+//! [`EvidenceRequestSpec::holder_keys`]. They are forwarded to the deployment
+//! unchanged and in order, and that is the entire extent of this crate's part
+//! in them: it derives nothing from a key, infers no binding mode from one, and
+//! adds no expectation to the closed policy because one is present. What a key
+//! means to an assertion is decided by the deployment's own configuration and
+//! checked by the portable verifier.
+//!
+//! The private half stays with whoever holds it. This crate never generates,
+//! stores, requests, or transmits a holder private key, and
+//! [`HolderPublicKey`] declares no member one could be written into.
+//!
+//! A request presenting several keys can be answered with one credential per
+//! key, packaged in an issuance envelope, and that answer is holder-bound
+//! only. An audience-scoped assertion binds the authenticated audience rather
+//! than a key, so its envelope members would have nothing to differ by, and a
+//! deployment refuses the batch format for one. A caller asks for a batch by
+//! stating [`EvidenceResponseFormat::SdJwtVcBatch`] in a
+//! [`HolderBoundRequestSpec`], exactly as it states the singular holder-bound
+//! format, and sends it with [`EvidenceClient::send_holder_bound_batch`].
+//! Nothing here infers a batch: a request carrying several holder keys still
+//! gets whatever format its author asked for.
+//!
+//! Reading the returned [`SdJwtVcBatchResponse`] is not a verification step.
+//! The envelope carries no signature and asserts nothing, so verifying one as a
+//! single response is refused rather than attempted; split it, then verify each
+//! credential individually, exactly as a single credential is verified.
+//!
+//! # Holder-bound requests, and why they are not verified here
+//!
+//! Everything above describes an audience-scoped exchange: the assertion names
+//! the relying party as its audience, and that relying party verifies it.
+//! A holder-bound credential is the other case. It is bound to a holder key
+//! rather than to an audience, it carries no audience at all, and it is verified
+//! at presentation, by whoever it is later presented to, against a key-binding
+//! JWT the holder has not created at issuance time.
+//!
+//! That is a different request, so it has its own types:
+//! [`HolderBoundRequestSpec`] and [`PreparedHolderBoundRequest`], sent with
+//! [`EvidenceClient::prepare_holder_bound`] and
+//! [`EvidenceClient::send_holder_bound`]. The spec declares no audience, because
+//! the answer will not contain one and a caller should not be asked to state
+//! something that will not be there. It requires at least one holder key,
+//! because a holder-bound request presenting none is refused by the deployment;
+//! this crate refuses it first, before any I/O.
+//!
+//! The prepared request closes no verification policy. That is deliberate, not
+//! an omission: a Version 1 policy states an audience, so a policy closed for a
+//! holder-bound request could never accept any answer to it. Rather than close a
+//! policy that cannot verify, this crate closes none, and
+//! [`PreparedHolderBoundRequest`] therefore offers no `verify` at all.
+//!
+//! Neither of these types changes the audience-scoped path.
+//! [`EvidenceRequestSpec`] still requires an audience, still closes a policy,
+//! and still verifies.
+//!
+//! # A relying party that does not verify
+//!
+//! A client that only ever requests holder-bound credentials and hands them to
+//! a wallet never verifies anything. It has no use for a pinned key set, and
+//! requiring one would make it carry a file whose only function is satisfying a
+//! constructor. [`EvidenceClientConfig::without_verification`] lets it say so,
+//! and builds a [`NonVerifyingEvidenceClient`].
+//!
+//! That type has no verification method: not one that returns an error, and not
+//! one behind a flag. The path is absent. In the other direction,
+//! [`EvidenceClient::new`] refuses a configuration that declined verification,
+//! so a client with verification methods always has the key set they read.
+//!
 //! # One request, no retries
 //!
 //! A nonce identifies exactly one request and a policy accepts exactly the
@@ -77,6 +148,7 @@
 //! with tokio's asynchronous lock so a caller waiting for a token in flight does
 //! not block the reactor thread.
 
+pub mod batch;
 pub mod client;
 pub mod config;
 pub mod definitions;
@@ -101,7 +173,13 @@ mod problem;
 #[cfg(test)]
 mod fixtures;
 
-pub use client::{EvidenceClient, RawEvidenceResponse, VerifiedEvidence};
+pub use batch::{
+    SdJwtVcBatchResponse, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES,
+    SD_JWT_VC_BATCH_SCHEMA_V1,
+};
+pub use client::{
+    EvidenceClient, NonVerifyingEvidenceClient, RawEvidenceResponse, VerifiedEvidence,
+};
 pub use config::{
     EvidenceClientConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_RESPONSE_BYTES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -112,10 +190,11 @@ pub use definitions::{
     SelectorValueOrigin, EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 pub use error::{EvidenceClientError, TransportKind};
-pub use nonce::{NonceError, RequestNonce};
+pub use nonce::{presentation_nonce, NonceError, RequestNonce};
 pub use prepare::{
-    EvidenceRequestSpec, PreparedEvidenceRequest, SubjectExpectations, SubjectRequest,
-    MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_IDENTIFIER_BYTES, MAXIMUM_SELECTOR_INTEGER,
+    EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
+    PreparedHolderBoundRequest, SubjectExpectations, SubjectRequest, MAXIMUM_EXPECTED_OUTPUTS,
+    MAXIMUM_HOLDER_KEYS, MAXIMUM_IDENTIFIER_BYTES, MAXIMUM_SELECTOR_INTEGER,
     MAXIMUM_SELECTOR_STRING_BYTES, MAXIMUM_SELECTOR_VALUES, MAXIMUM_SUBJECTS,
     MINIMUM_SELECTOR_INTEGER,
 };
@@ -134,8 +213,8 @@ pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvi
 pub use registry_evidence_verifier::{
     model::{
         BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
-        EvidenceObjectType, JwksDocument, PublicValue, ScalarOrEntityReference, StructuredValue,
-        StructuredValueForm, SubjectBinding, SupportedValue,
+        EvidenceObjectType, HolderPublicKey, JwksDocument, PublicValue, ScalarOrEntityReference,
+        StructuredValue, StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
     },
     verifier::{
         EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedListDocument,

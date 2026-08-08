@@ -79,6 +79,13 @@
           "maxLength": 512,
           "type": "string"
         },
+        "subjectBindingMode": {
+          "description": "What the subject bindings in this requirement's assertions are derived under. The vocabulary is closed and carries no default: absence means audience-scoped, stated here so a relying party reading a definition without the key knows the requirement issues audience-scoped assertions and is not reading an omission it has to resolve elsewhere. A definition that does carry the key states the mode explicitly.",
+          "enum": [
+            "audience-scoped",
+            "holder-bound"
+          ]
+        },
         "subjects": {
           "items": {
             "$ref": "#/$defs/subject"
