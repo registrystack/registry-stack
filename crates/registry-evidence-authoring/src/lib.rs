@@ -24,6 +24,7 @@ pub mod derivation;
 pub mod finding;
 pub mod layout;
 pub mod model;
+pub mod openapi;
 pub mod validate;
 
 pub use derivation::validate_authored_answer;

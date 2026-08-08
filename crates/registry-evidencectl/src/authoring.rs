@@ -1629,8 +1629,8 @@ fn compile_facts(
     for fact in &source.facts {
         validate_selected_schema_path(&resolved.schema.0, &fact.path)?;
     }
-    let (candidate_leaves, _) = crate::suggest::flatten::candidate_leaves(&resolved.schema);
-    let offered = candidate_leaves
+    let selectable = registry_evidence_authoring::openapi::selectable_leaves(spec, &operation_key)?;
+    let offered = selectable
         .iter()
         .map(|leaf| leaf.pointer.as_str())
         .collect::<BTreeSet<_>>();

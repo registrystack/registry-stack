@@ -5606,10 +5606,13 @@ dependencies = [
 name = "registry-evidence-authoring"
 version = "0.17.0"
 dependencies = [
+ "anyhow",
  "rhai",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "serde_norway",
+ "url",
 ]
 
 [[package]]

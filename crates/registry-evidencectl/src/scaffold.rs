@@ -53,7 +53,7 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
     validate_new_destination(&args.directory)?;
     let parent = destination_parent(&args.directory)?;
     let source = suggest::fetch::spec_source(openapi)?;
-    let (_, document) = suggest::openapi::Spec::open_retained(&source)?;
+    let (_, document) = suggest::load::open_retained(&source)?;
 
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-new-")

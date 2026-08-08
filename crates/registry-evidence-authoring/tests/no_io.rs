@@ -40,10 +40,21 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("compile_file", "reads a program from a file"),
 ];
 
-/// Every crate this library may link. Each one is a parser or a data
-/// structure; none of them can reach a file, a socket, or a process on this
-/// crate's behalf.
-const PERMITTED_DEPENDENCIES: &[&str] = &["rhai", "schemars", "serde"];
+/// Every crate this library may link. Each one is a parser, an error type, or
+/// a data structure; none of them can reach a file, a socket, or a process on
+/// this crate's behalf.
+///
+/// `url` is on the list because parsing and printing a URL is string work: the
+/// authoring form names where a document came from, and never goes there.
+const PERMITTED_DEPENDENCIES: &[&str] = &[
+    "anyhow",
+    "rhai",
+    "schemars",
+    "serde",
+    "serde_json",
+    "serde_norway",
+    "url",
+];
 
 #[test]
 fn no_source_file_performs_input_or_output() {

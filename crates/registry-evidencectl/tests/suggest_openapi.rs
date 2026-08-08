@@ -1,31 +1,29 @@
 //! Tests for the OpenAPI loading (`openapi.rs`) and schema flattening
-//! (`flatten.rs`) stages of `evidencectl source suggest`.
+//! (`flatten.rs`) stages of `evidencectl source suggest`, driven through the
+//! loader that reaches the document.
 //!
-//! `registry-evidencectl` ships only a binary target, so this integration
-//! test pulls the modules it needs in directly by path rather than through a
-//! library crate. `types` and `openapi`/`flatten` are declared as siblings
-//! here, mirroring their nesting under `src/suggest/`, so the `super::types`
-//! imports inside `openapi.rs` and `flatten.rs` resolve unchanged.
+//! The two stages themselves live in `registry-evidence-authoring` and are
+//! used here as an ordinary dependency. `load.rs` is what puts a file in front
+//! of them, and `registry-evidencectl` ships only a binary target, so that one
+//! module is pulled in directly by path. It reaches `fetch` through `super::`,
+//! which is this crate root, so `fetch` is declared here beside it exactly as
+//! the two sit under `src/suggest/`.
 
-// `openapi.rs` dispatches a file path or a URL through `fetch`; this binary
-// only ever opens files, so the fetching half of that module is unused here.
+// `fetch.rs` names the pipeline's type vocabulary through `super::types`, the
+// way it does under `src/suggest/`; this binding is what `super::` finds here.
+use registry_evidence_authoring::openapi::types;
+
+// `load.rs` dispatches a file path or a URL through `fetch`; this binary only
+// ever opens files, so the fetching half of that module is unused here.
 #[allow(dead_code)]
 #[path = "../src/suggest/fetch.rs"]
 mod fetch;
-#[path = "../src/suggest/flatten.rs"]
-mod flatten;
-#[path = "../src/suggest/openapi.rs"]
-mod openapi;
-// `types.rs` is shared across every pipeline stage; this test binary only
-// exercises the openapi/flatten slice of it, so the rest looks unused to
-// this crate's own dead-code analysis even though the real `evidencectl`
-// binary uses all of it once every stage is wired together.
-#[allow(dead_code)]
-#[path = "../src/suggest/types.rs"]
-mod types;
+#[path = "../src/suggest/load.rs"]
+mod load;
 
 use std::path::{Path, PathBuf};
 
+use registry_evidence_authoring::openapi::{flatten, openapi};
 use types::{OperationKey, ResolvedSchema, SpecSource};
 
 fn fixture(name: &str) -> PathBuf {
@@ -36,8 +34,8 @@ fn fixture(name: &str) -> PathBuf {
 
 /// Opens a fixture through the same entry point the CLI uses, naming it as a
 /// local file. Fetching over HTTP is covered in `suggest_fetch.rs`.
-fn load(path: &Path) -> anyhow::Result<openapi::Spec> {
-    openapi::Spec::open(&SpecSource::File(path.to_path_buf()))
+fn open_fixture(path: &Path) -> anyhow::Result<openapi::Spec> {
+    load::open(&SpecSource::File(path.to_path_buf()))
 }
 
 fn operation(method: &str, path: &str) -> OperationKey {
@@ -47,23 +45,23 @@ fn operation(method: &str, path: &str) -> OperationKey {
     }
 }
 
-// --- Spec::open -----------------------------------------------------------
+// --- load::open -----------------------------------------------------------
 
 #[test]
-fn load_accepts_openapi_3_0_yaml() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+fn open_accepts_openapi_3_0_yaml() {
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     assert!(!spec.operations().is_empty());
 }
 
 #[test]
-fn load_accepts_openapi_3_1_json() {
-    let spec = load(&fixture("records-3.1.json")).expect("loads");
+fn open_accepts_openapi_3_1_json() {
+    let spec = open_fixture(&fixture("records-3.1.json")).expect("loads");
     assert!(!spec.operations().is_empty());
 }
 
 #[test]
-fn load_rejects_unsupported_openapi_version() {
-    let error = load(&fixture("unsupported-version.yaml")).unwrap_err();
+fn open_rejects_unsupported_openapi_version() {
+    let error = open_fixture(&fixture("unsupported-version.yaml")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("3.0") || message.contains("3.1"),
@@ -72,8 +70,8 @@ fn load_rejects_unsupported_openapi_version() {
 }
 
 #[test]
-fn load_rejects_missing_file() {
-    let error = load(&fixture("does-not-exist.yaml")).unwrap_err();
+fn open_rejects_missing_file() {
+    let error = open_fixture(&fixture("does-not-exist.yaml")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("does-not-exist.yaml"),
@@ -88,7 +86,7 @@ fn load_rejects_missing_file() {
 /// /records` carries a JSON response and is still absent from the listing.
 #[test]
 fn operations_lists_only_the_methods_the_runtime_admits() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let mut keys: Vec<OperationKey> = spec
         .operations()
         .into_iter()
@@ -103,7 +101,7 @@ fn operations_lists_only_the_methods_the_runtime_admits() {
 
 #[test]
 fn operations_reports_summary_and_json_responses() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let get_records = spec
         .operations()
         .into_iter()
@@ -118,7 +116,7 @@ fn operations_reports_summary_and_json_responses() {
 
 #[test]
 fn operations_collects_every_json_response_status() {
-    let spec = load(&fixture("records-3.1.json")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.1.json")).expect("loads");
     let get_record = spec
         .operations()
         .into_iter()
@@ -139,7 +137,7 @@ fn operations_collects_every_json_response_status() {
 
 #[test]
 fn response_schema_inlines_local_refs_and_normalizes_nullable() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -174,7 +172,7 @@ fn response_schema_inlines_local_refs_and_normalizes_nullable() {
 
 #[test]
 fn response_schema_passes_through_3_1_type_arrays_unchanged() {
-    let spec = load(&fixture("records-3.1.json")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.1.json")).expect("loads");
     let resolved = spec
         .response_schema(
             &operation("GET", "/records/{id}"),
@@ -190,7 +188,7 @@ fn response_schema_passes_through_3_1_type_arrays_unchanged() {
 
 #[test]
 fn response_schema_rejects_external_ref() {
-    let spec = load(&fixture("external-ref.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("external-ref.yaml")).expect("loads");
     let error = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .unwrap_err();
@@ -206,7 +204,7 @@ fn response_schema_rejects_external_ref() {
 /// named, and everything beside it stays selectable.
 #[test]
 fn response_schema_cuts_a_ref_cycle_and_notes_it() {
-    let spec = load(&fixture("ref-cycle.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("ref-cycle.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -231,7 +229,7 @@ fn response_schema_cuts_a_ref_cycle_and_notes_it() {
 
 #[test]
 fn a_recursive_schema_still_offers_its_non_recursive_leaves() {
-    let spec = load(&fixture("recursive-tree.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("recursive-tree.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/nodes"), "200", "application/json")
         .expect("resolves");
@@ -252,7 +250,7 @@ fn a_recursive_schema_still_offers_its_non_recursive_leaves() {
 /// unsupported union.
 #[test]
 fn a_two_member_union_against_null_becomes_the_nullable_type_pair() {
-    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("nullable-unions.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -293,7 +291,7 @@ fn a_two_member_union_against_null_becomes_the_nullable_type_pair() {
 /// refused over the spelling.
 #[test]
 fn a_null_first_type_pair_is_reordered() {
-    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("nullable-unions.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -305,7 +303,7 @@ fn a_null_first_type_pair_is_reordered() {
 
 #[test]
 fn a_union_of_two_real_types_is_left_for_the_flattener_to_skip() {
-    let spec = load(&fixture("nullable-unions.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("nullable-unions.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -332,7 +330,7 @@ fn a_union_of_two_real_types_is_left_for_the_flattener_to_skip() {
 /// actually publish; the reading is announced rather than made silently.
 #[test]
 fn a_structural_keyword_without_a_type_is_read_as_that_type_and_noted() {
-    let spec = load(&fixture("implicit-types.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("implicit-types.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -371,7 +369,7 @@ fn a_structural_keyword_without_a_type_is_read_as_that_type_and_noted() {
 
 #[test]
 fn a_node_with_neither_a_type_nor_a_structural_keyword_stays_untyped() {
-    let spec = load(&fixture("implicit-types.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("implicit-types.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/opaque"), "200", "application/json")
         .expect("resolves");
@@ -390,7 +388,7 @@ fn a_node_with_neither_a_type_nor_a_structural_keyword_stays_untyped() {
 
 #[test]
 fn response_schema_rejects_unknown_status() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let error = spec
         .response_schema(&operation("GET", "/records"), "500", "application/json")
         .unwrap_err();
@@ -402,7 +400,7 @@ fn response_schema_rejects_unknown_status() {
 
 #[test]
 fn servers_lists_declared_base_urls_in_order() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     assert_eq!(
         spec.servers(),
         vec!["https://records.example.test/api".to_string()]
@@ -411,13 +409,13 @@ fn servers_lists_declared_base_urls_in_order() {
 
 #[test]
 fn servers_is_empty_when_undeclared() {
-    let spec = load(&fixture("records-3.1.json")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.1.json")).expect("loads");
     assert!(spec.servers().is_empty());
 }
 
 #[test]
 fn page_size_maximums_reads_matching_query_parameters() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records"))
         .expect("no ref errors");
@@ -426,7 +424,7 @@ fn page_size_maximums_reads_matching_query_parameters() {
 
 #[test]
 fn page_size_maximums_is_empty_without_matching_parameters() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("POST", "/records"))
         .expect("no ref errors");
@@ -435,7 +433,7 @@ fn page_size_maximums_is_empty_without_matching_parameters() {
 
 #[test]
 fn page_size_maximums_matches_limit_named_parameters() {
-    let spec = load(&fixture("records-3.1.json")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.1.json")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records/{id}"))
         .expect("no ref errors");
@@ -444,7 +442,7 @@ fn page_size_maximums_matches_limit_named_parameters() {
 
 #[test]
 fn page_size_maximums_ignores_a_page_index_beside_a_page_size() {
-    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("paging-parameters.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/records"))
         .expect("no ref errors");
@@ -455,7 +453,7 @@ fn page_size_maximums_ignores_a_page_index_beside_a_page_size() {
 
 #[test]
 fn page_size_maximums_reads_every_genuine_size_parameter() {
-    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("paging-parameters.yaml")).expect("loads");
     let mut maximums = spec
         .page_size_maximums(&operation("GET", "/events"))
         .expect("no ref errors");
@@ -465,7 +463,7 @@ fn page_size_maximums_reads_every_genuine_size_parameter() {
 
 #[test]
 fn page_size_maximums_ignores_names_that_only_contain_a_matching_word() {
-    let spec = load(&fixture("paging-parameters.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("paging-parameters.yaml")).expect("loads");
     let maximums = spec
         .page_size_maximums(&operation("GET", "/reports"))
         .expect("no ref errors");
@@ -479,7 +477,7 @@ fn page_size_maximums_ignores_names_that_only_contain_a_matching_word() {
 
 #[test]
 fn candidate_leaves_flattens_arrays_and_nullable_records() {
-    let spec = load(&fixture("records-3.0.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("records-3.0.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -522,7 +520,7 @@ fn candidate_leaves_flattens_arrays_and_nullable_records() {
 
 #[test]
 fn candidate_leaves_escapes_member_names_per_rfc_6901() {
-    let spec = load(&fixture("escaping.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("escaping.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -536,7 +534,7 @@ fn candidate_leaves_escapes_member_names_per_rfc_6901() {
 
 #[test]
 fn candidate_leaves_skips_and_warns_on_unsupported_constructs() {
-    let spec = load(&fixture("unsupported-constructs.yaml")).expect("loads");
+    let spec = open_fixture(&fixture("unsupported-constructs.yaml")).expect("loads");
     let resolved = spec
         .response_schema(&operation("GET", "/records"), "200", "application/json")
         .expect("resolves");
@@ -618,7 +616,7 @@ fn an_oversized_document_is_refused_before_it_is_read() {
     file.set_len(17 * 1024 * 1024).expect("set_len");
     drop(file);
 
-    let error = load(&path).unwrap_err();
+    let error = open_fixture(&path).unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("exceeding the"), "message was: {message}");
 }
