@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use support::{
     adult_status_project,
     lsp::{uri, LspSession},
-    replacing, without, EvidenceProject, ACCESS_POLICY_PATH, QUESTION, QUESTION_PATH, SOURCE,
-    SOURCE_PATH,
+    replacing, without, EvidenceProject, ACCESS_POLICY_PATH, DERIVATION, DERIVATION_PATH, QUESTION,
+    QUESTION_PATH, SOURCE, SOURCE_PATH,
 };
 
 /// The text a client sends for one project file, which is what the file says on disk.
@@ -301,5 +301,53 @@ async fn a_question_deleted_under_an_open_tab_has_its_errors_taken_back() {
         session.published_diagnostics(&path),
         Some(Vec::<Value>::new()),
         "the tab is still open, and the project the compiler reads no longer holds the file"
+    );
+}
+
+/// A derivation file that arrives after the project has already loaded, the way a branch switch,
+/// `evidencectl new`, or any other tool outside the editor creates one.
+///
+/// This is the governing invariant from `src/evidence/index.rs`: the editor may stay quiet where the
+/// compiler refuses, but it must never draw a diagnostic over a project `evidence check` now accepts.
+/// A question naming a derivation with no file yet is one the compiler refuses, so the editor is
+/// right to draw the unresolved reference; once the file is there, the compiler accepts the project,
+/// and the editor has to take the diagnostic back the moment a client tells it the file arrived.
+#[tokio::test]
+async fn a_derivation_created_after_the_project_loads_clears_its_unresolved_reference() {
+    let project = EvidenceProject::new(&without(&adult_status_project(), DERIVATION_PATH));
+    let mut session = LspSession::start();
+    session.initialize(project.root()).await;
+    let question = project.path(QUESTION_PATH);
+    session
+        .open(&question, &text_of(&project, QUESTION_PATH), 1)
+        .await;
+
+    let published = session
+        .published_diagnostics(&question)
+        .expect("the server published for the opened document");
+    assert_eq!(published.len(), 1, "{published:?}");
+    assert_eq!(
+        published[0]["code"],
+        json!("evidence/unknown-derivation-file"),
+        "{published:?}"
+    );
+
+    let derivation = project.path(DERIVATION_PATH);
+    fs::create_dir_all(derivation.parent().expect("a derivation path has a parent"))
+        .expect("the derivations directory is creatable");
+    fs::write(&derivation, DERIVATION).expect("the derivation file is writable");
+    session
+        .notify(
+            "workspace/didChangeWatchedFiles",
+            // Change type 1 is Created, which is what a client sends for a file that a tool outside
+            // the editor placed under a directory the client watches.
+            json!({"changes": [{"uri": uri(&derivation), "type": 1}]}),
+        )
+        .await;
+
+    assert_eq!(
+        session.published_diagnostics(&question),
+        Some(Vec::<Value>::new()),
+        "the derivation now sits where the question named it"
     );
 }

@@ -118,6 +118,13 @@ pub(crate) const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
     (FIXTURES_DIRECTORY, DocumentRole::Fixture),
 ];
 
+/// The extensions an authored document may carry: `yaml` for the marker, the OpenAPI description,
+/// every directory in [`YAML_DIRECTORIES`], and access policies, and `rhai` for a derivation. This is
+/// the list the watcher asks a client about, so a role the index can be read from cannot exist
+/// without the session being told when such a file changes, which is what keeps a diagnostic from
+/// standing over a project the compiler accepts.
+pub(crate) const AUTHORED_FILE_EXTENSIONS: &[&str] = &["yaml", "rhai"];
+
 /// Where a project keeps its access policies, which sit one directory deeper than the rest.
 pub(crate) fn access_policies_directory(root: &Path) -> PathBuf {
     root.join(ACCESS_DIRECTORY).join(ACCESS_POLICIES_DIRECTORY)
@@ -184,23 +191,45 @@ fn has_extension(file: &str, extension: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// One representative path per [`DocumentRole`], shared by every test that needs to visit each
+    /// role once: a role added here without a path is a role no test below can see.
+    const ONE_PATH_PER_ROLE: &[(&str, DocumentRole)] = &[
+        ("evidence-project.yaml", DocumentRole::Marker),
+        ("source.openapi.yaml", DocumentRole::OpenApi),
+        ("questions/adult-status.yaml", DocumentRole::Question),
+        ("sources/people.yaml", DocumentRole::Source),
+        ("selectors/person.yaml", DocumentRole::Selector),
+        ("schemas/person.schema.yaml", DocumentRole::Schema),
+        ("fixtures/adult.yaml", DocumentRole::Fixture),
+        (
+            "access/policies/adult-status.yaml",
+            DocumentRole::AccessPolicy,
+        ),
+        ("derivations/adult-status.rhai", DocumentRole::Derivation),
+    ];
+
     #[test]
     fn reads_every_part_of_the_authoring_form_from_its_path() {
-        for (path, role) in [
-            ("evidence-project.yaml", DocumentRole::Marker),
-            ("source.openapi.yaml", DocumentRole::OpenApi),
-            ("questions/adult-status.yaml", DocumentRole::Question),
-            ("sources/people.yaml", DocumentRole::Source),
-            ("selectors/person.yaml", DocumentRole::Selector),
-            ("schemas/person.schema.yaml", DocumentRole::Schema),
-            ("fixtures/adult.yaml", DocumentRole::Fixture),
-            (
-                "access/policies/adult-status.yaml",
-                DocumentRole::AccessPolicy,
-            ),
-            ("derivations/adult-status.rhai", DocumentRole::Derivation),
-        ] {
+        for (path, role) in ONE_PATH_PER_ROLE.iter().copied() {
             assert_eq!(document_role(Path::new(path)), Some(role), "{path}");
+        }
+    }
+
+    /// The tie against drift: a role read from an extension [`AUTHORED_FILE_EXTENSIONS`] does not
+    /// list is a role whose watcher silently stopped covering it, which is exactly the gap that let
+    /// a derivation file created outside the editor stand behind an unresolved reference. Reusing
+    /// [`ONE_PATH_PER_ROLE`] means a role added above without extending the watcher list fails here
+    /// instead of only losing its watcher.
+    #[test]
+    fn every_role_s_path_carries_an_extension_the_watcher_covers() {
+        for (path, role) in ONE_PATH_PER_ROLE.iter().copied() {
+            assert!(
+                AUTHORED_FILE_EXTENSIONS
+                    .iter()
+                    .any(|extension| has_extension(path, extension)),
+                "{role:?} is read from {path}, whose extension the watcher does not cover: \
+                 {AUTHORED_FILE_EXTENSIONS:?}"
+            );
         }
     }
 

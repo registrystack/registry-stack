@@ -26,6 +26,7 @@ use tower_lsp_server::{
 };
 
 use crate::{
+    evidence::layout::AUTHORED_FILE_EXTENSIONS,
     refs::{CompletionCandidate, IndexedLocation, IndexedSymbol},
     workspace::Workspace,
 };
@@ -230,17 +231,24 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _params: InitializedParams) {
         if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
-            let register_options = serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                watchers: vec![FileSystemWatcher {
-                    glob_pattern: GlobPattern::String("**/*.yaml".to_owned()),
+            // One glob per extension an authored document may carry, so a Relay project document
+            // (always `.yaml`) and an Evidence derivation (`.rhai`) both fire a watched-file event.
+            // Relay reads only `.yaml` project documents, and `"yaml"` is one of the extensions
+            // here, so this list still covers Relay's own watcher.
+            let watchers = AUTHORED_FILE_EXTENSIONS
+                .iter()
+                .map(|extension| FileSystemWatcher {
+                    glob_pattern: GlobPattern::String(format!("**/*.{extension}")),
                     kind: None,
-                }],
-            })
-            .expect("watched-file registration options serialize");
+                })
+                .collect();
+            let register_options =
+                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions { watchers })
+                    .expect("watched-file registration options serialize");
             if let Err(error) = self
                 .client
                 .register_capability(vec![Registration {
-                    id: "registry-stack-yaml-files".to_owned(),
+                    id: "registry-stack-authored-files".to_owned(),
                     method: "workspace/didChangeWatchedFiles".to_owned(),
                     register_options: Some(register_options),
                 }])
@@ -249,7 +257,7 @@ impl LanguageServer for Backend {
                 self.client
                     .log_message(
                         MessageType::WARNING,
-                        format!("Could not watch Registry Stack YAML files: {error}"),
+                        format!("Could not watch Registry Stack authored files: {error}"),
                     )
                     .await;
             }

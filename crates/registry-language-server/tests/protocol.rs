@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    collections::BTreeSet,
     fs,
     io::{BufRead, BufReader, Read, Write},
     process::{ChildStdin, ChildStdout, Command, Stdio},
@@ -222,11 +223,25 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             .and_then(Value::as_str),
         Some("workspace/didChangeWatchedFiles")
     );
+    // Every authored extension gets its own glob, so a watched-file event fires for a Relay
+    // project document and for an Evidence derivation alike; a glob lost here is a family of file
+    // the server would stop hearing about.
+    let watched_globs = registration
+        .pointer("/params/registrations/0/registerOptions/watchers")
+        .and_then(Value::as_array)
+        .expect("the registration carries a watcher list")
+        .iter()
+        .map(|watcher| {
+            watcher
+                .pointer("/globPattern")
+                .and_then(Value::as_str)
+                .expect("a watcher names its glob pattern")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        registration
-            .pointer("/params/registrations/0/registerOptions/watchers/0/globPattern")
-            .and_then(Value::as_str),
-        Some("**/*.yaml")
+        watched_globs,
+        BTreeSet::from(["**/*.yaml".to_owned(), "**/*.rhai".to_owned()])
     );
     send(
         &mut stdin,
