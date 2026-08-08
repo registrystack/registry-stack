@@ -1,0 +1,50 @@
+[package]
+name = "registry-evidence-oid4vci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Wallet-facing delivery front end that hands Evidence credentials to a holder over OID4VCI."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "evidence-oid4vci"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+jsonwebtoken.workspace = true
+registry-evidence-client.workspace = true
+registry-evidence-verifier.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-sdjwt.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+axum-test.workspace = true
+ed25519-dalek.workspace = true
+p256.workspace = true
+registry-mint.workspace = true
+tempfile.workspace = true

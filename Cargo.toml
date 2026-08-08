@@ -6,6 +6,7 @@ members = [
     "crates/registry-evidence-client",
     "crates/registry-evidence-client-node",
     "crates/registry-evidence-client-py",
+    "crates/registry-evidence-oid4vci",
     "crates/registry-evidence-verifier",
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",

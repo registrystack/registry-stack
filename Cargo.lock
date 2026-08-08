@@ -5715,6 +5715,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidence-oid4vci"
+version = "0.17.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-test",
+ "base64",
+ "chrono",
+ "clap",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "jsonwebtoken",
+ "p256",
+ "registry-evidence-client",
+ "registry-evidence-verifier",
+ "registry-mint",
+ "registry-platform-buildinfo",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-sdjwt",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-evidence-verifier"
 version = "0.17.0"
 dependencies = [
