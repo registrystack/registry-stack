@@ -36,7 +36,7 @@ and the ceiling each is read under.
 |---|---|---|
 | `evidence-project.yaml` | The project marker | 4 KiB |
 | `source.openapi.yaml` | The single OpenAPI description operations are drawn from | 16 MiB |
-| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 128 per project |
+| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 1 to 128 per project |
 | `sources/` | Source definitions a question may name instead of an inline operation | 1 MiB |
 | `selectors/` | Selector definitions | 1 MiB |
 | `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
@@ -44,6 +44,11 @@ and the ceiling each is read under.
 | `fixtures/` | Recorded request and response pairs a project is replayed against | 1 MiB |
 | `secrets/` | Key material a project needs to run locally | n/a |
 | `access/policies/` | Access policy documents | 64 KiB |
+
+Every project retains `source.openapi.yaml`, and it is read before any question
+is, so a project whose questions all name a `source.ref` and no operation still
+carries one. It declares `openapi: 3.0.x` or `3.1.x`; any other version is
+rejected.
 
 Only the marker and a question have a Rust type behind them, so only those two
 carry a generated schema. `crates/registry-evidence-authoring/src/schema.rs`
@@ -152,7 +157,9 @@ projects out of the response.
 | `source.facts` | with `operation` | 1 to 16 values projected out of the response. |
 | `source.collectionBounds` | with a collection | Up to 16 pointers, each bounding one array the facts walk into. |
 
-Declaring both forms, or neither, is rejected.
+Declaring both forms, or neither, is rejected. An `operationId` must resolve to
+exactly one operation, and that operation must be a GET; a match on any other
+method is refused with the same finality as a match on none.
 
 ### Facts
 
@@ -177,6 +184,11 @@ project will read from the array at that pointer. Each `*` in a fact path
 contributes the pointer that stands before it, so `/events/*/status` needs a
 bound at `/events`. A pointer is bounded the same way a fact path is, and its
 value is an integer in 1 to 256.
+
+One fact is bounded by the product of every bound its own path walks through,
+and that product may not exceed 256 either. Two nested bounds of 17 are each
+inside the range and together are not, so a path that visits more than one
+collection has to be read as a multiplication.
 
 ```yaml
 source:
@@ -208,7 +220,7 @@ both are named. A question whose facts visit no collection therefore writes
 | `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-integer`, or `reviewed-structured-value`. |
 | `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters. |
 | `answers[].minimum`, `answers[].maximum` | for `bounded-integer` | Both required together, both within plus or minus 9007199254740991, and `minimum` no greater than `maximum`. |
-| `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. |
+| `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI. |
 | `answers[].maximumSerializedBytes` | for `reviewed-structured-value` | The serialized ceiling for the value, in 1 to 65536. |
 | `answers[].sdJwtVc` | no | How this answer appears in the SD-JWT VC serialization. |
 
@@ -291,7 +303,7 @@ becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
 | `governance.kind` | with `governance` | `criterion`, `information-requirement`, or `constraint`. Without `governance`, a question with one boolean concept compiles as `criterion` and anything else as `information-requirement`. |
 | `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. |
 | `governance.evidenceType` | with `governance` | The exact Evidence Type URI. |
-| `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. |
+| `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. The form itself accepts any whole number; the bundle grammar bounds it to 1 through 31536000, and a deployment caps it again at its own `signing.maximumAssertionValiditySeconds`. |
 | `governance.observationTimezone` | with `governance` | The IANA timezone the derivation's legal local date and time are computed in. |
 | `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. |
 | `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. |
