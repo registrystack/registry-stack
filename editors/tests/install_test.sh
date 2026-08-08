@@ -82,6 +82,11 @@ case "${command_name}" in
       printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.16.3}"
     fi
     ;;
+  evidencectl)
+    if [[ "${1:-}" == "--version" ]]; then
+      printf 'evidencectl %s\n' "${FAKE_EVIDENCECTL_VERSION:-0.16.3}"
+    fi
+    ;;
   node)
     if [[ "${1:-}" == "--version" ]]; then
       printf '%s\n' "${FAKE_NODE_VERSION:-v22.12.0}"
@@ -89,9 +94,9 @@ case "${command_name}" in
     ;;
   npm)
     if [[ " $* " == *' package:dev '* ]]; then
-      metadata="${FAKE_REPO_ROOT}/editors/vscode/dist/registryctl-path"
+      metadata="${FAKE_REPO_ROOT}/editors/vscode/dist/registry-stack-cli-path"
       [[ -f "${metadata}" ]]
-      [[ "$(< "${metadata}")" == "${REGISTRY_STACK_EXPECT_REGISTRYCTL_PATH:-}" ]]
+      [[ "$(< "${metadata}")" == "${REGISTRY_STACK_EXPECT_CLI_PATH:-}" ]]
       : > "${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix"
       if [[ "${FAKE_NPM_FAIL_PACKAGE:-false}" == "true" ]]; then
         exit 41
@@ -111,6 +116,24 @@ for command_name in registryctl node npm code rustup cargo zed; do
   ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/${command_name}"
 done
 
+# install.sh shells out to a few real external tools that the fake command
+# dispatcher above does not stub (awk, mkdir, unzip), and its "#!/usr/bin/env
+# bash" shebang needs to keep resolving the same bash this test is already
+# running under. Capture their real directories now, before PATH gains
+# FAKE_BIN, so a scenario that needs a command to be genuinely absent can run
+# the installer with an isolated PATH instead of one where FAKE_BIN merely
+# shadows a real installation elsewhere on this machine.
+# bash goes first so its directory wins a collision with another tool's
+# directory (e.g. macOS ships an old bash in /bin alongside a real mkdir);
+# an alphabetical sort here would silently reorder that precedence away.
+real_tool_dirs=("$(dirname -- "$(command -v bash)")")
+for real_tool in awk mkdir unzip; do
+  real_tool_dirs+=("$(dirname -- "$(command -v "${real_tool}")")")
+done
+REAL_TOOLS_PATH="$(printf '%s\n' "${real_tool_dirs[@]}" | awk '!seen[$0]++' | tr '\n' ':')"
+REAL_TOOLS_PATH="${REAL_TOOLS_PATH%:}"
+readonly REAL_TOOLS_PATH
+
 export FAKE_COMMAND_LOG="${COMMAND_LOG}"
 export FAKE_REPO_ROOT
 export PATH="${FAKE_BIN}:${PATH}"
@@ -129,14 +152,30 @@ assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <run> <packag
 assert_contains "code <--profile> <Registry Stack Test> <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"
 assert_not_contains '<--new-window>' "${COMMAND_LOG}"
 assert_contains 'Workspace trust remains your decision' "${vscode_output}"
-assert_contains 'Project setup remains a separate registryctl operation' "${vscode_output}"
+assert_contains 'Project setup remains a separate registryctl or evidencectl operation' "${vscode_output}"
+
+# registryctl is absent from PATH and evidencectl is the only Registry Stack
+# CLI available, so the installer must fall back to it and report it by name.
+# PATH is narrowed to FAKE_BIN plus REAL_TOOLS_PATH so this is a genuine
+# absence rather than a registryctl already installed on this machine
+# shadowing the removed fake symlink.
+reset_log
+rm -f "${FAKE_BIN}/registryctl"
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
+evidencectl_output="${TEST_ROOT}/evidencectl-output"
+PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${evidencectl_output}"
+assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
+assert_contains 'Using evidencectl 0.16.3' "${evidencectl_output}"
+rm -f "${FAKE_BIN}/evidencectl"
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/registryctl"
 
 reset_log
 "${INSTALLER}" vscode > /dev/null
 assert_contains "code <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"
 assert_not_contains '<--profile>' "${COMMAND_LOG}"
-if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registryctl-path" ]]; then
-  fail 'temporary registryctl metadata remained after successful packaging'
+if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registry-stack-cli-path" ]]; then
+  fail 'temporary CLI metadata remained after successful packaging'
 fi
 
 reset_log
@@ -146,8 +185,8 @@ if FAKE_NPM_FAIL_PACKAGE=true "${INSTALLER}" vscode \
   fail 'VS Code package failure should fail the installer'
 fi
 assert_contains 'VS Code extension packaging failed' "${package_failure_output}"
-if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registryctl-path" ]]; then
-  fail 'temporary registryctl metadata remained after failed packaging'
+if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registry-stack-cli-path" ]]; then
+  fail 'temporary CLI metadata remained after failed packaging'
 fi
 
 reset_log
