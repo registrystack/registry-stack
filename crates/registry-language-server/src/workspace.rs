@@ -263,6 +263,11 @@ impl RootState {
         if !self.family.owns_document(&self.root, &path) {
             return;
         }
+        if !self.project_holds(&path) {
+            self.forget_absent_buffer(&path);
+            self.rebuild();
+            return;
+        }
         self.open_versions.insert(path.clone(), version);
         self.disk_diagnostics
             .retain(|diagnostic| diagnostic.path != path);
@@ -286,6 +291,55 @@ impl RootState {
         }
         self.open_versions.remove(path);
         self.reload_from_disk(path);
+    }
+
+    /// Whether the project still holds `path` as a document this root reads.
+    ///
+    /// This is the question the loader answers before it opens any file, asked again because the
+    /// answer changes under a running session: the author switches a branch, renames a file in the
+    /// explorer, or deletes one while a buffer is open over it. It is the same gate every read in
+    /// this crate goes through, so a path that has left the project answers no here for exactly the
+    /// reasons a first scan of the same tree would pass it by.
+    fn project_holds(&self, path: &Path) -> bool {
+        self.family.is_safe_authored_file(&self.root, path)
+    }
+
+    /// Whether this root answers for `path` from a buffer the client has open rather than from the
+    /// file on disk. A buffer wins for as long as the project holds the file under it.
+    fn answers_from_a_buffer(&self, path: &Path) -> bool {
+        self.open_versions.contains_key(path) && self.project_holds(path)
+    }
+
+    /// Drops everything this root holds for a path the project no longer has.
+    ///
+    /// A buffer open over a path the project no longer holds does not contribute reference
+    /// diagnostics against the project. The compiler reads the project's directories, so a file
+    /// that has left them is not in the tree it builds, and every sentence drawn from that buffer
+    /// is drawn over a project it accepts. A client keeps such a buffer open for as long as the
+    /// author keeps the tab open, which is well past the deletion that emptied it.
+    ///
+    /// Nothing is reported in its place. Every diagnostic this channel carries is something the
+    /// compiler refuses, and a file the project no longer holds is not: there is no edit to the
+    /// buffer that would answer it, and the client already shows the author that the document is
+    /// gone.
+    ///
+    /// The version goes with the text. It records the revision this root answers for a document
+    /// with, and this root has stopped answering for one. When the file comes back the root takes
+    /// it from disk again, and the client's next edit makes it a buffer again.
+    fn forget_absent_buffer(&mut self, path: &Path) {
+        self.open_versions.remove(path);
+        self.documents.remove(path);
+        self.disk_diagnostics
+            .retain(|diagnostic| diagnostic.path != path);
+    }
+
+    /// The buffers this root holds in one directory over paths the project no longer has.
+    fn absent_buffers_in(&self, directory: &Path) -> Vec<PathBuf> {
+        self.open_versions
+            .keys()
+            .filter(|path| path.parent() == Some(directory) && !self.project_holds(path))
+            .cloned()
+            .collect()
     }
 
     /// Applies one batch of watched changes together, as the client delivered it.
@@ -323,8 +377,10 @@ impl RootState {
     ///
     /// A document the client has open is left alone, text and diagnostics both. The author is
     /// looking at that buffer, and its text is the unsaved revision rather than whatever is on disk.
-    /// The read happens before anything is dropped, so a directory the server cannot enumerate
-    /// leaves the root exactly as it was and says why.
+    /// A buffer over a path the directory no longer holds is not such a document, and is forgotten
+    /// first: a batch is how a deletion reaches this root, and the file under that buffer is what
+    /// the batch deleted. The read happens before anything is dropped, so a directory the server
+    /// cannot enumerate leaves the root exactly as it was and says why.
     fn settle_bounded_directory(&mut self, path: &Path) -> Result<()> {
         let Some(scan) = self.family.scan_bounded_directory(&self.root, path)? else {
             return Ok(());
@@ -332,6 +388,9 @@ impl RootState {
         let Some(directory) = path.parent() else {
             return Ok(());
         };
+        for absent in self.absent_buffers_in(directory) {
+            self.forget_absent_buffer(&absent);
+        }
         let open_versions = &self.open_versions;
         let settled =
             |path: &Path| path.parent() == Some(directory) && !open_versions.contains_key(path);
@@ -351,8 +410,15 @@ impl RootState {
     }
 
     /// Takes one document from disk, without rebuilding the index around it.
+    ///
+    /// A path an unbounded directory holds reaches this root one at a time rather than through a
+    /// settled directory, so the buffer a deletion left behind is forgotten here as well.
     fn apply_from_disk(&mut self, path: &Path) {
-        if !self.family.owns_document(&self.root, path) || self.open_versions.contains_key(path) {
+        if !self.family.owns_document(&self.root, path) || self.answers_from_a_buffer(path) {
+            return;
+        }
+        if self.open_versions.contains_key(path) {
+            self.forget_absent_buffer(path);
             return;
         }
         self.disk_diagnostics
@@ -1312,6 +1378,27 @@ mod tests {
             .collect()
     }
 
+    /// Every sentence this root reports against one path.
+    fn reported_at<'a>(state: &'a RootState, path: &Path) -> Vec<&'a str> {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.path == path)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect()
+    }
+
+    /// A question pointing at a derivation and a fixture no directory of the project holds.
+    ///
+    /// Both pointers are unresolved, so a root reading this text says two things about it, and a
+    /// root that no longer holds the file says nothing at all.
+    fn question_naming_absent_files(name: &str) -> String {
+        format!(
+            "version: 1\nid: {name}\nderivation: derivations/{name}.rhai\ngovernance:\n  fixtures: fixtures/{name}.yaml\n"
+        )
+    }
+
     /// A rename inside a full bounded directory, delivered the way a client delivers one: a single
     /// batch holding the arrival and the departure, in whatever order the client chose.
     ///
@@ -1430,6 +1517,150 @@ mod tests {
             .workspace_symbols("profile-999")
             .iter()
             .any(|symbol| symbol.name == "profile-999"));
+    }
+
+    /// A buffer left open over a file the project no longer holds says nothing about the project.
+    ///
+    /// A client keeps a tab open on a document that has been deleted, and the author goes on seeing
+    /// it after a branch switch or a rename in the explorer. What the editor may not do is go on
+    /// building the project around it: `evidence check` reads the directory and never sees the
+    /// file, so every sentence the buffer contributes is drawn over a project the compiler accepts.
+    /// A plain deletion is the shortest way to that disagreement, with no rename and no ceiling in
+    /// it.
+    #[test]
+    fn a_buffer_over_a_deleted_file_reports_nothing_against_the_project() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        let departed = questions.join("filler-000.yaml");
+        state.update(
+            departed.clone(),
+            question_naming_absent_files("filler-000"),
+            2,
+        );
+        assert!(
+            reported_at(&state, &departed)
+                .contains(&"Unknown derivation file reference 'derivations/filler-000.rhai'"),
+            "the project holds this question, so the editor reads its pointers: {:?}",
+            reported_at(&state, &departed)
+        );
+
+        fs::remove_file(&departed).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&departed))
+            .unwrap();
+
+        assert_eq!(
+            reported_at(&state, &departed),
+            Vec::<&str>::new(),
+            "the compiler reads 127 questions here and refuses none of them"
+        );
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS - 1);
+    }
+
+    /// The same buffer, under a rename delivered as one batch.
+    ///
+    /// This is the case a client really delivers: the arrival and the departure together, with the
+    /// old path still open because the client closes the tab afterwards. The directory holds the
+    /// documents the authoring form allows before and after, so `evidencectl` builds the project
+    /// either way, and the editor has to reach the silence a session opened on the settled tree
+    /// reaches.
+    #[test]
+    fn a_rename_delivered_under_an_open_buffer_reports_nothing_on_the_departed_path() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "aaa-renamed");
+        let arrived = questions.join("aaa-renamed.yaml");
+        let departed = questions.join("filler-126.yaml");
+        state.update(
+            departed.clone(),
+            question_naming_absent_files("filler-126"),
+            2,
+        );
+
+        fs::remove_file(&departed).unwrap();
+        write_question(&questions, "aaa-renamed");
+        state
+            .reload_watched_batch(&[arrived.clone(), departed.clone()])
+            .unwrap();
+
+        assert_eq!(reported_at(&state, &departed), Vec::<&str>::new());
+        assert!(state.documents.contains_key(&arrived));
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
+        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
+        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
+    }
+
+    /// A file that comes back under an open buffer is read again.
+    ///
+    /// Dropping a departed path is only right while it is gone. A branch switched back, or an
+    /// undone delete, puts the document in the project again, and from that moment the compiler
+    /// reads it; a root that stayed quiet would be answering from a tree neither the author nor the
+    /// compiler has.
+    #[test]
+    fn a_buffer_over_a_path_that_comes_back_is_read_again() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        let question = questions.join("filler-000.yaml");
+        state.update(
+            question.clone(),
+            question_naming_absent_files("filler-000"),
+            2,
+        );
+        fs::remove_file(&question).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&question))
+            .unwrap();
+        assert_eq!(reported_at(&state, &question), Vec::<&str>::new());
+
+        fs::write(&question, question_naming_absent_files("filler-000")).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&question))
+            .unwrap();
+
+        assert!(state.documents.contains_key(&question));
+        assert!(state
+            .index
+            .workspace_symbols("filler-000")
+            .iter()
+            .any(|symbol| symbol.name == "filler-000"));
+        assert!(
+            reported_at(&state, &question)
+                .contains(&"Unknown fixture file reference 'fixtures/filler-000.yaml'"),
+            "the project holds the question again, and its pointers with it: {:?}",
+            reported_at(&state, &question)
+        );
+    }
+
+    /// A settle keeps the unsaved text of a buffer whose file is still there.
+    ///
+    /// A buffer over a departed path stops being one this root answers from. A buffer over a
+    /// document the project still holds does not: its unsaved revision is what the author is
+    /// looking at and what every request about that document is answered from, and a batch settling
+    /// the directory around it changes nothing about that.
+    #[test]
+    fn a_settle_keeps_the_unsaved_text_of_a_buffer_whose_file_is_still_there() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        let open = questions.join("filler-000.yaml");
+        state.update(
+            open.clone(),
+            "version: 1\nid: filler-000\nanswers: [{ concept: unsaved-concept }]\n".to_owned(),
+            2,
+        );
+
+        let departed = questions.join("filler-001.yaml");
+        fs::remove_file(&departed).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&departed))
+            .unwrap();
+
+        assert!(
+            state
+                .index
+                .workspace_symbols("unsaved-concept")
+                .iter()
+                .any(|symbol| symbol.name == "unsaved-concept"),
+            "the file is still on disk, so the buffer is still what the root answers from"
+        );
     }
 
     #[test]
