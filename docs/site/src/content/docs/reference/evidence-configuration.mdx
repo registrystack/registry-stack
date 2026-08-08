@@ -25,7 +25,7 @@ inside its accepted values.
 ## Contract status
 
 - Status: current, pre-1.0
-- Reference format: `1.2`
+- Reference format: `1.3`
 - Generator: `npm run generate` in `docs/site`
 - Source: `products/evidence/contracts/bundle.schema.yaml` and
   `products/evidence/contracts/runtime.schema.yaml`
@@ -63,6 +63,12 @@ alternative the grammar leaves unbounded, and it is printed rather than dropped 
 beside it are not read as holding in every case. The groups are the bound sets the grammar offers,
 not an enumeration of every combination; consult the configuration guide for how one key's shape
 constrains another's.
+
+Bounds under *where a rule elsewhere applies* are a second, independent reading. They do not
+replace the alternatives above them: a rule elsewhere in the contract tightens whichever
+alternative you took, once its condition holds. So `sources.*.baseUrl` always matches one of its
+two origin patterns, and a source authenticating with `none` must further match the narrower
+loopback pattern printed below them.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
     products/evidence/contracts/*.schema.yaml. Run npm run generate from docs/site. */}
