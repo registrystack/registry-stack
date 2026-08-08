@@ -65,7 +65,9 @@ The operator supplies one atomic bundle containing the approved YAML,
 preparation scripts, extraction scripts, derivation scripts, schemas, codelists,
 mappings, and fixtures. A separate closed `runtime.yaml` binds the bundle to
 one listener, bundle directory, secret root, audit destination, signer
-transport and pinned version, and local TLS trust files. The runtime file
+transport and pinned version, and local TLS trust files. It also records which
+gated acquisition kinds this deployment enables, which is a decision the
+deployment withholds by default rather than one it grants. The runtime file
 cannot override service identity, trust domain,
 authentication, authority, sources, request policy, scripts, disclosure, rate
 limits, signing policy, or audit fail-closed behavior. The two content hashes
@@ -459,8 +461,8 @@ request may retrieve at most two minimally projected results solely to detect
 ambiguity.
 
 Every source declares its acquisition posture. A single requirement inherits
-its source posture. A search-then-fetch requirement takes the weaker posture
-of its search and fetch sources:
+its source posture. A requirement that acquires from more than one source
+takes the weakest posture among them:
 
 | Posture | Operator claim |
 |---|---|
@@ -483,11 +485,27 @@ only for a fixed fetch, a scalar property in the validated search FactSet.
 Scripts render only query pairs and one JSON body and cannot select the binding
 origin.
 
-Each requirement declares exactly `single` or `search-then-fetch`. The latter
-fixes both source identifiers at startup, performs the fetch only after a
-unique schema-valid search match, and has a hard two-call ceiling. It is not a
-workflow surface: neither a response nor Rhai may choose a source, origin,
-method, credentials, retry, or further call.
+Each requirement declares exactly one acquisition kind. `single` and
+`search-then-fetch` are the frozen Version 1 forms; `search-then-fetch` fixes
+both source identifiers at startup, performs the fetch only after a unique
+schema-valid search match, and has a hard two-call ceiling.
+
+`search-then-fetch-set` is a gated kind added after that surface froze. It
+widens the fixed fetch into two to four declared members, executed in the order
+the bundle declares them, each receiving only the `factInputs` allowlist it
+declares out of the validated search FactSet. Its ceiling is one plus the
+member count, fixed by the bundle before any request is made, and it requires a
+`maximumAcquisitionMilliseconds` between one and thirty seconds. Two gates open
+it, and both are required: the bundle names the kind under
+`acquisitionCapabilities`, and this file names it under
+`acquisitionCapabilities` as well. Absent means enabled nothing, so a
+deployment that never made this decision keeps serving exactly what it served
+before. A bundle using the kind without the deployment's entry is refused
+before the listener binds; `evidencectl doctor` names this file and the entry
+to add.
+
+No acquisition kind is a workflow surface: neither a response nor Rhai may
+choose a source, origin, method, credentials, retry, or further call.
 
 A source may name a logical TLS trust profile. `runtime.yaml` binds it to one
 bounded PEM CA file. Hostname and fixed-origin verification remain mandatory;

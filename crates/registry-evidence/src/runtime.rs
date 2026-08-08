@@ -28,7 +28,7 @@ use crate::{
     config::{
         AcquisitionConfig, AssuranceProfile, AuthorityKind, ConceptForm, RequirementKind,
         ResponseFormat, RuntimeConfig, RuntimeSignerConfig, SelectorField, SelectorInput,
-        SubjectCardinality, ValueOrigin,
+        StageRole, SubjectCardinality, ValueOrigin,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, KernelError, OfflineKernel, ValueProjection},
@@ -927,6 +927,11 @@ impl EvidenceRuntime {
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
         let acquisition = requirement.acquisition.clone();
         let empty_facts = BTreeMap::new();
+        // The stages an acquisition executed, for the release event of the
+        // forms that make more calls than the two scalars below can name. The
+        // one and two stage forms leave it unset, because their scalars already
+        // name every source they reached.
+        let mut executed_stages: Option<(Vec<String>, Vec<String>)> = None;
         let (facts, source_id, adapter_id) = match acquisition {
             AcquisitionConfig::Single { source } => {
                 let stage = self
@@ -936,6 +941,7 @@ impl EvidenceRuntime {
                         &source,
                         &resolved,
                         &empty_facts,
+                        None,
                         started,
                     )
                     .await?;
@@ -977,6 +983,7 @@ impl EvidenceRuntime {
                         &search,
                         &resolved,
                         &empty_facts,
+                        None,
                         started,
                     )
                     .await?;
@@ -1016,6 +1023,7 @@ impl EvidenceRuntime {
                         &fetch,
                         &resolved,
                         &search_facts,
+                        None,
                         started,
                     )
                     .await?;
@@ -1040,6 +1048,163 @@ impl EvidenceRuntime {
                         return Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"));
                     }
                 }
+            }
+            AcquisitionConfig::SearchThenFetchSet { .. } => {
+                // The order this executes and the order adopter tooling prints
+                // are read from one derivation, so neither can describe an
+                // acquisition the other would not perform.
+                let plan = requirement.acquisition.plan();
+                // The declared budget covers the whole acquisition, so it is
+                // fixed once, here, rather than per call. Every source keeps
+                // its own request timeout as well: whichever ceiling is
+                // reached first refuses, under its own category.
+                let deadline = plan
+                    .budget_milliseconds
+                    .map(|budget| Instant::now() + Duration::from_millis(budget));
+                let mut search_facts = BTreeMap::new();
+                let mut merged: BTreeMap<String, Value> = BTreeMap::new();
+                let mut source_ids: Vec<String> = Vec::new();
+                let mut adapter_ids: Vec<String> = Vec::new();
+                let mut last_stage: Option<(String, String)> = None;
+                for stage in &plan.stages {
+                    if let Some((source_id, adapter_id)) = last_stage.as_ref() {
+                        if acquisition_budget_exhausted(deadline, Instant::now()) {
+                            // A budget exhausted between stages names the last
+                            // source this process actually reached. Naming the
+                            // stage that was about to run would assert an
+                            // access attempt against a source nothing ever
+                            // contacted, which is an audit-integrity defect
+                            // rather than a more precise diagnostic.
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::DependencyFailure,
+                                "acquisition-budget",
+                                source_id,
+                                adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(failure(
+                                ProblemCode::DependencyUnavailable,
+                                "acquisition-budget",
+                            ));
+                        }
+                    }
+                    // Each member reads only the search facts it declared, so
+                    // a resolved reference reaches exactly the requests that
+                    // named it and no others.
+                    let stage_facts = stage.inputs.project(&search_facts);
+                    let SourceStageOutcome {
+                        lookup,
+                        source_id,
+                        adapter_id,
+                    } = self
+                        .execute_source_stage(
+                            &material,
+                            operation,
+                            &stage.source,
+                            &resolved,
+                            &stage_facts,
+                            deadline,
+                            started,
+                        )
+                        .await?;
+                    source_ids.push(source_id.clone());
+                    adapter_ids.push(adapter_id.clone());
+                    last_stage = Some((source_id.clone(), adapter_id.clone()));
+                    match (stage.role, lookup) {
+                        (StageRole::Search, LookupResult::Match(facts)) => {
+                            search_facts.clone_from(&facts);
+                            merged = facts;
+                        }
+                        (StageRole::Member, LookupResult::Match(facts)) => {
+                            // The bundle proved every stage of this set
+                            // declares disjoint fact names, so extending the
+                            // union cannot overwrite an earlier stage's fact.
+                            merged.extend(facts);
+                        }
+                        (StageRole::Search, LookupResult::NoMatch) => {
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::NoMatch,
+                                "no-match",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(evidence_unavailable_failure());
+                        }
+                        (StageRole::Search, LookupResult::Ambiguous) => {
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::Ambiguous,
+                                "ambiguous",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(evidence_unavailable_failure());
+                        }
+                        (StageRole::Member, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            // A unique search match a declared member cannot
+                            // resolve is a dependency inconsistency, not
+                            // evidence that the subject is unresolved. The
+                            // acquisition stops here, so no later member's
+                            // source is contacted at all.
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::DependencyFailure,
+                                "fetch-result",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(failure(
+                                ProblemCode::DependencyUnavailable,
+                                "fetch-result",
+                            ));
+                        }
+                    }
+                }
+                let (source_id, adapter_id) = last_stage
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+                // Each stage's extraction was bounded on its own, and the count
+                // of declared facts is bounded when the bundle loads, but the
+                // serialized size of the union is bounded by neither. The
+                // derivation applies that bound to its own input, so reading it
+                // here keeps the outcome a named acquisition refusal instead of
+                // an unnamed script failure. Serializing the map is exactly
+                // what the derivation serializes: both are sorted JSON objects
+                // over the same entries.
+                let merged_bytes = match serde_json::to_vec(&merged) {
+                    Ok(bytes) => bytes.len(),
+                    Err(_) => usize::MAX,
+                };
+                if merged_bytes > crate::rhai_runtime::MAXIMUM_RESULT_BYTES {
+                    self.append_failure(
+                        &material,
+                        operation,
+                        AuditDecision::EvaluationFailure,
+                        "acquisition-fact-size",
+                        &source_id,
+                        &adapter_id,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(
+                        ProblemCode::ServiceUnavailable,
+                        "acquisition-fact-size",
+                    ));
+                }
+                executed_stages = Some((source_ids, adapter_ids));
+                (merged, source_id, adapter_id)
             }
         };
         let observed_at = evaluation_time.unwrap_or_else(Utc::now);
@@ -1307,6 +1472,10 @@ impl EvidenceRuntime {
         );
         release.source_id = Some(source_id);
         release.adapter_id = Some(adapter_id);
+        if let Some((source_ids, adapter_ids)) = executed_stages {
+            release.source_ids = Some(source_ids);
+            release.adapter_ids = Some(adapter_ids);
+        }
         release.disclosed_concepts = Some(disclosed_concepts);
         release.evidence_id = Some(evidence_id);
         release.signing_key_id = signing_key_id;
@@ -1329,6 +1498,7 @@ impl EvidenceRuntime {
         source_id: &str,
         resolved: &ResolvedAuthorization,
         prior_facts: &BTreeMap<String, Value>,
+        deadline: Option<Instant>,
         started: Instant,
     ) -> Result<SourceStageOutcome, RuntimeFailure> {
         let (source_id, adapter_id) = self.source_identity(source_id)?;
@@ -1381,10 +1551,51 @@ impl EvidenceRuntime {
                     return Err(failure(kernel_failure_problem(error), category));
                 }
             };
-        let source_response = match executor
-            .execute_with_prior_facts(&selectors, prior_facts, &request_parts)
-            .await
-        {
+        // Only the source round-trip is bounded by the acquisition deadline.
+        // `SourceExecutor::execute_with_prior_facts` mutates nothing before the
+        // awaited send, so abandoning it abandons an in-flight request and
+        // nothing else.
+        //
+        // No audit append is ever wrapped. The segmented JSONL sink poisons
+        // itself on a durable-write error, not on cancellation: cancelling a
+        // task inside its flush, after the buffered lines were taken, silently
+        // drops already-hashed lines with no poison at all, leaving a chain
+        // that no longer matches its tail hash while the service keeps serving.
+        // That silent audit-integrity break is worse than a refusal, and it is
+        // why the timeout never crosses an append.
+        let execution = executor.execute_with_prior_facts(&selectors, prior_facts, &request_parts);
+        let executed = match deadline {
+            Some(deadline) => {
+                // A ceiling already spent by the durable append above, or by
+                // preparation, is answered before the source future is polled
+                // at all; see `stage_time_budget`.
+                let bounded = match stage_time_budget(deadline, Instant::now()) {
+                    Some(remaining) => tokio::time::timeout(remaining, execution).await.ok(),
+                    None => None,
+                };
+                match bounded {
+                    Some(executed) => executed,
+                    None => {
+                        self.append_failure(
+                            material,
+                            operation,
+                            AuditDecision::DependencyFailure,
+                            "acquisition-budget",
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(
+                            ProblemCode::DependencyUnavailable,
+                            "acquisition-budget",
+                        ));
+                    }
+                }
+            }
+            None => execution.await,
+        };
+        let source_response = match executed {
             Ok(response) => response,
             Err(error) => {
                 let category = source_failure_category(&error);
@@ -1626,6 +1837,23 @@ impl AuditMaterial {
     }
 }
 
+/// How long one source round-trip may still run, or `None` once the
+/// acquisition ceiling is spent.
+///
+/// `tokio::time::timeout` polls the future it wraps before it consults its
+/// timer, so handing it a zero remainder is not a refusal: the wrapped
+/// execution is polled once, which is enough to acquire a credential and put an
+/// evidence-data request on the wire, and only then is it abandoned. The
+/// ceiling bounds when a request may leave the process, so a spent one has to
+/// be answered before the future is polled at all. The stage's durable
+/// access-attempt append and its preparation script both run after the
+/// deadline was computed, so a remainder of zero is reachable on any stage,
+/// including the first, where no between-stage guard precedes it.
+fn stage_time_budget(deadline: Instant, now: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(now);
+    (!remaining.is_zero()).then_some(remaining)
+}
+
 fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
     match format {
         ResponseFormat::SignedJws => ResponseProtection::Signed,
@@ -1800,6 +2028,18 @@ fn map_selector_limit(error: RateLimitError) -> RuntimeFailure {
     }
 }
 
+/// Whether a declared acquisition budget is spent before the next stage is
+/// entered.
+///
+/// Read between stages rather than only inside one, because a stage entered
+/// with nothing left would still poll its request once before abandoning it,
+/// and one poll is enough to contact a source the budget no longer covers. The
+/// forms that declare no budget bound each call on its own, so no instant
+/// exhausts an acquisition they never bounded.
+pub(crate) fn acquisition_budget_exhausted(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| now >= deadline)
+}
+
 fn source_failure_category(error: &SourceError) -> &'static str {
     match error {
         SourceError::Credential => "source-credential",
@@ -1950,6 +2190,22 @@ mod tests {
         let first = canonical_pair(b"a", b"bc").expect("pair");
         let second = canonical_pair(b"ab", b"c").expect("pair");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_spent_acquisition_ceiling_leaves_no_time_for_one_more_source_call() {
+        let now = Instant::now();
+
+        // `tokio::time::timeout` polls the future it wraps before it consults
+        // its timer, so a zero remainder handed to it would still let one
+        // request leave the process after the ceiling. A spent deadline has to
+        // be answered before the source future exists, not by the timer.
+        assert_eq!(stage_time_budget(now, now), None);
+        assert_eq!(stage_time_budget(now - Duration::from_millis(1), now), None);
+        assert_eq!(
+            stage_time_budget(now + Duration::from_millis(5), now),
+            Some(Duration::from_millis(5))
+        );
     }
 
     #[test]

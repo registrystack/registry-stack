@@ -1,0 +1,11 @@
+type: object
+additionalProperties: false
+# Only the resolution flag is guaranteed, for the same reason as the union
+# register: an unresolved reference carries nothing else.
+required: [record_found]
+properties:
+  record_found: {type: boolean}
+  death_subject_reference: {type: string, minLength: 1, maxLength: 96}
+  death_recorded: {type: boolean}
+  death_record_contract: {type: string, minLength: 1, maxLength: 128}
+  death_record_complete: {type: boolean}

@@ -1,0 +1,9 @@
+type: object
+additionalProperties: false
+required: [registerScope, relationRole, resultLimit, resultOffset, maximumRelatedTotal]
+properties:
+  registerScope: {const: REGISTER-FIXTURE}
+  relationRole: {const: holder}
+  resultLimit: {const: 1}
+  resultOffset: {const: 0}
+  maximumRelatedTotal: {const: 64}

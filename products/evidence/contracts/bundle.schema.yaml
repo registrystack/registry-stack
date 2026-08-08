@@ -63,6 +63,20 @@ properties:
     maxProperties: 128
     propertyNames: {$ref: '#/$defs/local-id'}
     additionalProperties: {$ref: '#/$defs/authority-profile'}
+  acquisitionCapabilities:
+    # Acquisition kinds this bundle opts in to beyond the frozen Version 1
+    # forms. A gated kind absent from this list cannot be served, so a bundle
+    # written before a form existed keeps serving exactly what it served
+    # before. The Version 1 forms are absent from the enumeration on purpose:
+    # every bundle already had them, so declaring one would say nothing and
+    # omitting one would have to mean something.
+    # An explicit empty list is accepted and says exactly what absence says.
+    # The loader treats the two as one document, so refusing it here would
+    # refuse a bundle startup loads.
+    type: array
+    maxItems: 1
+    uniqueItems: true
+    items: {enum: [search-then-fetch-set]}
   requirements:
     type: array
     minItems: 1
@@ -107,6 +121,26 @@ allOf:
             providerId:
               type: string
               pattern: '^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$'
+  # A gated acquisition kind is served only where the bundle opted in, so a
+  # document that uses one without declaring it is a document startup refuses.
+  # The loader refuses it too, and states which requirement is at fault; the
+  # contract states only that the pair is required, because that is the whole
+  # of what a schema can see. Naming the capability rather than counting the
+  # list keeps this true when a second gated kind joins the enumeration.
+  - if:
+      properties:
+        requirements:
+          contains:
+            required: [acquisition]
+            properties:
+              acquisition:
+                required: [kind]
+                properties: {kind: {const: search-then-fetch-set}}
+      required: [requirements]
+    then:
+      required: [acquisitionCapabilities]
+      properties:
+        acquisitionCapabilities: {contains: {const: search-then-fetch-set}}
 $defs:
   local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   uri: {type: string, format: uri, maxLength: 512}
@@ -511,6 +545,32 @@ $defs:
           kind: {const: search-then-fetch}
           search: {$ref: '#/$defs/local-id'}
           fetch: {$ref: '#/$defs/local-id'}
+      # One search followed by the declared fetch members, executed in the
+      # order they appear. Each member reads only the search facts it lists,
+      # and the budget covers the whole acquisition.
+      - type: object
+        additionalProperties: false
+        required: [kind, search, fetch, maximumAcquisitionMilliseconds]
+        properties:
+          kind: {const: search-then-fetch-set}
+          search: {$ref: '#/$defs/local-id'}
+          fetch:
+            type: array
+            minItems: 2
+            maxItems: 4
+            items:
+              type: object
+              additionalProperties: false
+              required: [source, factInputs]
+              properties:
+                source: {$ref: '#/$defs/local-id'}
+                factInputs:
+                  type: array
+                  minItems: 1
+                  maxItems: 16
+                  uniqueItems: true
+                  items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          maximumAcquisitionMilliseconds: {type: integer, minimum: 1, maximum: 30000}
   requirement:
     type: object
     additionalProperties: false

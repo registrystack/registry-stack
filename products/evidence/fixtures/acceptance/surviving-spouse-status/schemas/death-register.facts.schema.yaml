@@ -1,0 +1,17 @@
+type: object
+additionalProperties: false
+required: [death_subject_reference, death_recorded, death_record_contract, death_record_complete]
+properties:
+  # The reference the death register says it answered for. The derivation
+  # compares it to the search FactSet's civil_record_reference, which is the
+  # only reason both FactSets have to reach one derivation.
+  death_subject_reference: {type: string, minLength: 1, maxLength: 96}
+  # A complete register with nothing to report still answers, and this is that
+  # answer. It is a boolean for the same reason union_set_complete is: an
+  # attested flag has no value a source can malform into a decision, whereas a
+  # date carrying "no death" in-band would have to reserve a marker string and
+  # would read every other unrecognized string as a recorded death. The exact
+  # date is not disclosed and is not needed, so the register never sends it.
+  death_recorded: {type: boolean}
+  death_record_contract: {const: urn:example:fixture:death-register:v1}
+  death_record_complete: {type: boolean}

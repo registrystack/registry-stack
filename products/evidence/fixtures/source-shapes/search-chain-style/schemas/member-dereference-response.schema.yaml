@@ -1,0 +1,21 @@
+# Shape of the projected record-dereference response, checked before extraction
+# runs. status.setCompleteness is optional because projection drops a leaf the
+# record did not carry, and record is required because a non-terminal projection
+# node the response omits is a projection violation instead.
+type: object
+additionalProperties: false
+required: [matched, record]
+properties:
+  matched:
+    type: integer
+    minimum: 0
+    maximum: 2
+  record:
+    type: object
+    additionalProperties: false
+    required: []
+    properties:
+      "status.setCompleteness":
+        type: string
+        minLength: 1
+        maxLength: 32

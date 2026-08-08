@@ -285,3 +285,21 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
+  - id: sec-fetch-set-bounded
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_is_one_search_then_one_fixed_call_per_declared_member_in_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_receives_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_body_carries_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_after_an_unresolved_search}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_at_the_first_unresolved_member_and_calls_no_further_source}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_abandons_acquisition_when_the_declared_budget_is_exhausted}
+      - {file: crates/registry-evidence/src/config.rs, name: fetch_set_acquisition_requires_two_to_four_distinct_configured_members}
+      - {file: crates/registry-evidence/src/config.rs, name: a_fetch_set_member_receives_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/bundle.rs, name: fetch_set_stages_declare_disjoint_fact_names}
+  - id: sec-acquisition-capability-opt-in
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: the_optional_operator_acquisition_capabilities_enable_nothing_by_default}
+      - {file: crates/registry-evidence/src/config.rs, name: fetch_set_acquisition_must_be_declared_in_bundle_acquisition_capabilities}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_gated_acquisition_kind_the_operator_enabled}

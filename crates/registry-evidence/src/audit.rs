@@ -193,6 +193,17 @@ pub struct EvidenceAuditEvent {
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
+    /// Every source executed by a multi-stage acquisition, in execution order,
+    /// recorded only on the disclosure release that closed it. Absent for the
+    /// frozen one and two stage kinds, whose release shape stays byte-identical:
+    /// there the scalar names the last executed stage, and an earlier stage is
+    /// read from its own access-attempt event, as it always has been.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_ids: Option<Vec<String>>,
+    /// The adapter of each executed stage, positionally aligned with
+    /// [`Self::source_ids`]. Two stages may name one adapter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_ids: Option<Vec<String>>,
     pub decision: AuditDecision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disclosed_concepts: Option<Vec<String>>,
@@ -238,6 +249,8 @@ impl EvidenceAuditEvent {
             response_protection,
             source_id: None,
             adapter_id: None,
+            source_ids: None,
+            adapter_ids: None,
             decision,
             disclosed_concepts: None,
             evidence_id: None,
@@ -277,6 +290,24 @@ impl EvidenceAuditEvent {
                         | AuditDecision::SigningFailure
                 )
         );
+        // Stage arrays exist exactly for a disclosure release that closed a
+        // multi-stage acquisition: one search and two to four members. They
+        // are ordered, positionally aligned, and end at the stage the scalars
+        // already name, so a reader of the scalars alone is never misled.
+        let stage_arrays_are_valid = match (self.source_ids.as_ref(), self.adapter_ids.as_ref()) {
+            (None, None) => true,
+            (Some(source_ids), Some(adapter_ids)) => {
+                self.phase == AuditPhase::DisclosureRelease
+                    && (3..=5).contains(&source_ids.len())
+                    && adapter_ids.len() == source_ids.len()
+                    && source_ids.iter().all(|value| valid_local_name(value, 128))
+                    && adapter_ids.iter().all(|value| valid_local_name(value, 128))
+                    && source_ids.iter().collect::<BTreeSet<_>>().len() == source_ids.len()
+                    && self.source_id.as_deref() == source_ids.last().map(String::as_str)
+                    && self.adapter_id.as_deref() == adapter_ids.last().map(String::as_str)
+            }
+            _ => false,
+        };
         let concepts_are_valid = self.disclosed_concepts.as_ref().is_none_or(|concepts| {
             concepts.len() <= 16
                 && concepts.iter().all(|concept| valid_uri(concept))
@@ -318,6 +349,7 @@ impl EvidenceAuditEvent {
                 .adapter_id
                 .as_ref()
                 .is_some_and(|value| !valid_local_name(value, 128))
+            || !stage_arrays_are_valid
             || !concepts_are_valid
             || self
                 .evidence_id
@@ -945,6 +977,55 @@ mod tests {
         )
     }
 
+    /// Frozen shape of a release that closed a multi-stage acquisition: three
+    /// executed stages in execution order, two of which share one adapter, and
+    /// scalars naming the last stage.
+    fn fixture_multi_stage_release() -> EvidenceAuditEvent {
+        let mut release = EvidenceAuditEvent::new(
+            AssuranceProfile::EvidenceGrade,
+            "fixture-operation-00000003".to_owned(),
+            AuditPhase::DisclosureRelease,
+            "urn:example:fixture:requirement:property:v1".to_owned(),
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            "fixture-procedure".to_owned(),
+            "hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111"
+                .to_owned(),
+            AuditAuthority {
+                kind: AuthorityKind::Statutory,
+                grant_pseudonym: None,
+            },
+            vec![AuditSubject {
+                role: "subject".to_owned(),
+                selector_profile: "opaque-record-v1".to_owned(),
+                selector_bundle_pseudonym: Some(
+                    "hmac-sha256:v1:2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_owned(),
+                ),
+            }],
+            ResponseProtection::Signed,
+            AuditDecision::Released,
+            21,
+        );
+        release.event_id = "urn:example:fixture:audit:release-003".to_owned();
+        release.occurred_at = "2026-08-02T00:00:04Z".to_owned();
+        release.source_id = Some("source-c".to_owned());
+        release.adapter_id = Some("adapter-b".to_owned());
+        release.source_ids = Some(vec![
+            "source-a".to_owned(),
+            "source-b".to_owned(),
+            "source-c".to_owned(),
+        ]);
+        release.adapter_ids = Some(vec![
+            "adapter-a".to_owned(),
+            "adapter-b".to_owned(),
+            "adapter-b".to_owned(),
+        ]);
+        release.disclosed_concepts = Some(vec!["urn:example:fixture:concept:boolean-a".to_owned()]);
+        release.evidence_id = Some("urn:example:fixture:evidence:002".to_owned());
+        release.signing_key_id = Some("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo".to_owned());
+        release
+    }
+
     #[test]
     fn frozen_audit_fixture_matches_native_event_shape_and_phase_rules() {
         let fixture: serde_json::Value = serde_norway::from_slice(include_bytes!(
@@ -988,6 +1069,8 @@ mod tests {
             response_protection: ResponseProtection::Signed,
             source_id: Some("source-a".to_owned()),
             adapter_id: Some("adapter-a".to_owned()),
+            source_ids: None,
+            adapter_ids: None,
             decision: AuditDecision::Authorized,
             disclosed_concepts: None,
             evidence_id: None,
@@ -1038,6 +1121,26 @@ mod tests {
             unsigned_release.validate_phase_fields(),
             Err(EvidenceAuditError::InvalidEvent)
         ));
+
+        let fetch_set_release = fixture_multi_stage_release();
+        fetch_set_release
+            .validate_phase_fields()
+            .expect("fixture multi-stage release event satisfies native phase rules");
+        assert_eq!(
+            serde_json::to_value(&fetch_set_release).expect("multi-stage release event serializes"),
+            fixture["disclosure_release_fetch_set"]
+        );
+
+        // The stage arrays are additive: a single-stage acquisition emits no
+        // key for them at all, so every frozen shape stays byte-identical.
+        for (name, event) in [("access", &access), ("release", &release)] {
+            let serialized = serde_json::to_value(event).expect("event serializes");
+            let object = serialized.as_object().expect("event is an object");
+            assert!(
+                !object.contains_key("sourceIds") && !object.contains_key("adapterIds"),
+                "single-stage {name} event emits a stage array key"
+            );
+        }
 
         let mut authorized_with_refusal_schema = access.clone();
         authorized_with_refusal_schema.schema = AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned();
@@ -1127,7 +1230,9 @@ mod tests {
                 "missing-authorization-refusal-category",
                 "full-schema-on-authorization-refusal",
                 "refusal-schema-on-authorized-event",
-                "request-nonce-in-any-event"
+                "request-nonce-in-any-event",
+                "stage-arrays-on-non-release-event",
+                "mismatched-stage-arrays-on-release-event"
             ])
         );
     }
@@ -1151,6 +1256,7 @@ mod tests {
             "access_attempt",
             "disclosure_release",
             "unsigned_disclosure_release",
+            "disclosure_release_fetch_set",
             "authorization_refusal",
         ] {
             assert!(
@@ -1189,6 +1295,60 @@ mod tests {
             serde_json::json!("request-derived-canary"),
         );
 
+        let mut stage_arrays_on_access = fixture["access_attempt"].clone();
+        let access_object = stage_arrays_on_access
+            .as_object_mut()
+            .expect("access fixture is an object");
+        access_object.insert(
+            "sourceIds".to_owned(),
+            fixture["disclosure_release_fetch_set"]["sourceIds"].clone(),
+        );
+        access_object.insert(
+            "adapterIds".to_owned(),
+            fixture["disclosure_release_fetch_set"]["adapterIds"].clone(),
+        );
+
+        let mut release_without_adapter_ids = fixture["disclosure_release_fetch_set"].clone();
+        release_without_adapter_ids
+            .as_object_mut()
+            .expect("multi-stage release fixture is an object")
+            .remove("adapterIds");
+
+        let mut release_without_source_ids = fixture["disclosure_release_fetch_set"].clone();
+        release_without_source_ids
+            .as_object_mut()
+            .expect("multi-stage release fixture is an object")
+            .remove("sourceIds");
+
+        let mut release_without_scalar_source = fixture["disclosure_release_fetch_set"].clone();
+        release_without_scalar_source
+            .as_object_mut()
+            .expect("multi-stage release fixture is an object")
+            .remove("sourceId");
+
+        let mut release_with_one_stage_array = fixture["disclosure_release_fetch_set"].clone();
+        release_with_one_stage_array["sourceIds"] = serde_json::json!(["source-a"]);
+
+        let mut release_with_repeated_source = fixture["disclosure_release_fetch_set"].clone();
+        release_with_repeated_source["sourceIds"] =
+            serde_json::json!(["source-a", "source-a", "source-c"]);
+
+        // The arrays are positionally aligned, so one more adapter than source
+        // describes no acquisition. An external reader validating against the
+        // published schema alone must reject it, exactly as this runtime does.
+        let mut release_with_unequal_arrays = fixture["disclosure_release_fetch_set"].clone();
+        release_with_unequal_arrays["adapterIds"] =
+            serde_json::json!(["adapter-a", "adapter-b", "adapter-c", "adapter-d"]);
+
+        let mut refusal_with_stage_arrays = fixture["authorization_refusal"].clone();
+        refusal_with_stage_arrays
+            .as_object_mut()
+            .expect("refusal fixture is an object")
+            .insert(
+                "sourceIds".to_owned(),
+                fixture["disclosure_release_fetch_set"]["sourceIds"].clone(),
+            );
+
         for (name, candidate) in [
             ("refusal-with-full-schema", refusal_with_full_schema),
             (
@@ -1196,10 +1356,130 @@ mod tests {
                 authorized_with_refusal_schema,
             ),
             ("polluted-refusal", polluted_refusal),
+            ("stage-arrays-on-access", stage_arrays_on_access),
+            ("release-without-adapter-ids", release_without_adapter_ids),
+            ("release-without-source-ids", release_without_source_ids),
+            (
+                "release-without-scalar-source",
+                release_without_scalar_source,
+            ),
+            ("release-with-one-stage-array", release_with_one_stage_array),
+            ("release-with-repeated-source", release_with_repeated_source),
+            ("release-with-unequal-arrays", release_with_unequal_arrays),
+            ("refusal-with-stage-arrays", refusal_with_stage_arrays),
         ] {
             assert!(
                 !validator.is_valid(&candidate),
                 "schema accepts mixed audit shape {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_stage_release_names_every_executed_stage_in_execution_order() {
+        let release = fixture_multi_stage_release();
+        release
+            .validate_phase_fields()
+            .expect("a multi-stage release names every executed stage");
+
+        // Two members may legitimately read one register through one adapter,
+        // so only the source identities are required to be distinct.
+        let mut shared_adapter = release.clone();
+        shared_adapter.adapter_ids = Some(vec!["adapter-a".to_owned(); 3]);
+        shared_adapter.adapter_id = Some("adapter-a".to_owned());
+        shared_adapter
+            .validate_phase_fields()
+            .expect("members may share one adapter");
+
+        let mut widest = release.clone();
+        widest.source_ids = Some(vec![
+            "source-a".to_owned(),
+            "source-b".to_owned(),
+            "source-c".to_owned(),
+            "source-d".to_owned(),
+            "source-e".to_owned(),
+        ]);
+        widest.adapter_ids = Some(vec!["adapter-a".to_owned(); 5]);
+        widest.adapter_id = Some("adapter-a".to_owned());
+        widest.source_id = Some("source-e".to_owned());
+        widest
+            .validate_phase_fields()
+            .expect("a search and four members is the widest acquisition");
+
+        let mut arrays_on_access = release.clone();
+        arrays_on_access.phase = AuditPhase::AccessAttempt;
+        arrays_on_access.decision = AuditDecision::Authorized;
+        arrays_on_access.disclosed_concepts = None;
+        arrays_on_access.evidence_id = None;
+        arrays_on_access.signing_key_id = None;
+
+        let mut source_ids_alone = release.clone();
+        source_ids_alone.adapter_ids = None;
+
+        let mut adapter_ids_alone = release.clone();
+        adapter_ids_alone.source_ids = None;
+
+        let mut unequal_lengths = release.clone();
+        unequal_lengths.adapter_ids = Some(vec!["adapter-a".to_owned(), "adapter-b".to_owned()]);
+
+        let mut too_narrow = release.clone();
+        too_narrow.source_ids = Some(vec!["source-a".to_owned(), "source-c".to_owned()]);
+        too_narrow.adapter_ids = Some(vec!["adapter-a".to_owned(), "adapter-b".to_owned()]);
+
+        let mut too_wide = release.clone();
+        too_wide.source_ids = Some(vec![
+            "source-a".to_owned(),
+            "source-b".to_owned(),
+            "source-d".to_owned(),
+            "source-e".to_owned(),
+            "source-f".to_owned(),
+            "source-c".to_owned(),
+        ]);
+        too_wide.adapter_ids = Some(vec!["adapter-b".to_owned(); 6]);
+
+        let mut stale_scalar_source = release.clone();
+        stale_scalar_source.source_id = Some("source-a".to_owned());
+
+        let mut stale_scalar_adapter = release.clone();
+        stale_scalar_adapter.adapter_id = Some("adapter-a".to_owned());
+
+        let mut missing_scalars = release.clone();
+        missing_scalars.source_id = None;
+        missing_scalars.adapter_id = None;
+
+        let mut repeated_source = release.clone();
+        repeated_source.source_ids = Some(vec![
+            "source-a".to_owned(),
+            "source-a".to_owned(),
+            "source-c".to_owned(),
+        ]);
+
+        let mut unnamed_stage = release.clone();
+        unnamed_stage.source_ids = Some(vec![
+            "source-a".to_owned(),
+            "Source-B".to_owned(),
+            "source-c".to_owned(),
+        ]);
+
+        for (name, candidate) in [
+            ("arrays-on-access", arrays_on_access),
+            ("source-ids-alone", source_ids_alone),
+            ("adapter-ids-alone", adapter_ids_alone),
+            ("unequal-lengths", unequal_lengths),
+            ("too-narrow", too_narrow),
+            ("too-wide", too_wide),
+            ("stale-scalar-source", stale_scalar_source),
+            ("stale-scalar-adapter", stale_scalar_adapter),
+            ("missing-scalars", missing_scalars),
+            ("repeated-source", repeated_source),
+            ("unnamed-stage", unnamed_stage),
+        ] {
+            assert!(
+                matches!(
+                    candidate.validate_phase_fields(),
+                    Err(EvidenceAuditError::InvalidEvent)
+                ),
+                "native phase rules accept invalid stage arrays {name}"
             );
         }
     }

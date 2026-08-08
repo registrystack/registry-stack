@@ -1,0 +1,19 @@
+{
+  "total": 2,
+  "results": [
+    {
+      "id": "00000000-0000-4000-8000-000000000102",
+      "declaration": {
+        "subject.reference": "REF-CANARY-0002",
+        "subject.origin": {"code": "ORIGIN-CANARY-DO-NOT-FORWARD", "label": "Synthetic origin"}
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000103",
+      "declaration": {
+        "subject.reference": "REF-CANARY-0003",
+        "subject.origin": {"code": "ORIGIN-CANARY-DO-NOT-FORWARD", "label": "Synthetic origin"}
+      }
+    }
+  ]
+}

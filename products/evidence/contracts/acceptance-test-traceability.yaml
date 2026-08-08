@@ -432,3 +432,20 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_rejects_an_unbound_prior_fact_at_startup}
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
+  - id: acceptance-row-65
+    summary: A search-then-fetch-set requirement executes one fixed audited search and, only after a unique schema-valid match, one fixed audited call per declared member in declared order; each member receives only its declared fact-input allowlist through every channel including a body preparation builds, derivation receives the union of the disjoint stage FactSets, an unresolved stage contacts no later member, and the release names every executed source in order.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_is_one_search_then_one_fixed_call_per_declared_member_in_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_receives_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_member_body_carries_only_its_declared_fact_inputs}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_derivation_receives_the_union_of_every_stage_fact_set}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_stops_at_the_first_unresolved_member_and_calls_no_further_source}
+      - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_fetch_set_acceptance_fixture}
+  - id: acceptance-row-66
+    summary: A gated acquisition kind serves only where the bundle declares it and the operator enabled it in the runtime configuration, refused before the listener binds and reported by check and doctor; the declared acquisition ceiling bounds the whole sequence as a dependency failure under its own category without cancelling a durable audit append.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: fetch_set_abandons_acquisition_when_the_declared_budget_is_exhausted}
+      - {file: crates/registry-evidence/src/config.rs, name: the_optional_operator_acquisition_capabilities_enable_nothing_by_default}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class}
+      - {file: crates/registry-evidence/tests/cli.rs, name: check_accepts_a_gated_acquisition_kind_the_operator_enabled}

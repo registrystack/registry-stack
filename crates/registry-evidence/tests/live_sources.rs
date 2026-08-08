@@ -45,6 +45,17 @@ async fn opencrvs() {
     run_live("opencrvs", run_opencrvs).await;
 }
 
+/// Multi-stage companion to `opencrvs`. It checks only that the demo still
+/// accepts one search followed by declared member requests in the declared
+/// order, and that a member's request carries nothing beyond its own allowlisted
+/// projection. It deliberately proves no assertion: this demo data set has no
+/// union register, so a member returning zero results is a passing outcome.
+#[tokio::test]
+#[ignore = "opt-in read-only public-demo check; requires EVIDENCE_OPENCRVS_LIVE_ENV_FILE"]
+async fn opencrvs_chain() {
+    run_live("opencrvs-chain", run_opencrvs_chain).await;
+}
+
 async fn run_live<F, Fut>(profile: &'static str, operation: F)
 where
     F: FnOnce() -> Fut,
@@ -146,15 +157,41 @@ async fn run_opencrvs() -> Result<(), LiveError> {
     )?;
     let (token_url, search_url) = opencrvs_urls(required(&config, "OPENCRVS_URL")?)?;
     let client = live_client()?;
+    let token = opencrvs_access_token(&client, token_url, &config).await?;
 
+    let tracking_id = required(&config, "OPENCRVS_TEST_TRACKING_ID")?;
+    let search_body = opencrvs_tracking_id_search(tracking_id);
+    let response = client
+        .post(search_url)
+        .bearer_auth(token.as_str())
+        .json(&search_body)
+        .send()
+        .await
+        .map_err(|_| LiveError::Unavailable)?;
+    require_success(response.status(), false)?;
+    require_json_media(&response, LiveError::SchemaDrift)?;
+    let body = bounded_body(response, MAX_SOURCE_RESPONSE_BYTES).await?;
+    let body = parse_json_strict(&body).map_err(|_| LiveError::SchemaDrift)?;
+    validate_opencrvs_search(&body, tracking_id)
+}
+
+/// The strict client-credentials bootstrap the OpenCRVS live checks share. One
+/// copy keeps a second check from drifting looser than the product's own token
+/// parser, which would report a passing profile for a source Evidence cannot
+/// actually reach.
+async fn opencrvs_access_token(
+    client: &Client,
+    token_url: Url,
+    config: &BTreeMap<String, Zeroizing<String>>,
+) -> Result<Zeroizing<String>, LiveError> {
     // Form-body placement mirrors the reviewed reference bundle and keeps the
     // client credentials out of the token URL, where a proxy or ingress log
     // would capture them.
     let response = client
         .post(token_url)
         .form(&[
-            ("client_id", required(&config, "OPENCRVS_CLIENT_ID")?),
-            ("client_secret", required(&config, "OPENCRVS_SECRET")?),
+            ("client_id", required(config, "OPENCRVS_CLIENT_ID")?),
+            ("client_secret", required(config, "OPENCRVS_SECRET")?),
             ("grant_type", "client_credentials"),
         ])
         .send()
@@ -209,21 +246,187 @@ async fn run_opencrvs() -> Result<(), LiveError> {
     {
         return Err(LiveError::Authentication);
     }
+    Ok(token)
+}
 
+/// The declared stage order. An execution is always a prefix of it: a stage that
+/// does not resolve stops the acquisition, so the recorded order can be shorter
+/// but never reordered.
+const OPENCRVS_CHAIN_STAGES: [&str; 3] = ["search", "member-reference", "member-count"];
+
+async fn run_opencrvs_chain() -> Result<(), LiveError> {
+    let path = credential_path("EVIDENCE_OPENCRVS_LIVE_ENV_FILE", None)?;
+    let config = read_exact_credentials(
+        &path,
+        &[
+            "OPENCRVS_CLIENT_ID",
+            "OPENCRVS_SECRET",
+            "OPENCRVS_URL",
+            "OPENCRVS_TEST_TRACKING_ID",
+        ],
+    )?;
+    let (token_url, search_url) = opencrvs_urls(required(&config, "OPENCRVS_URL")?)?;
+    let client = live_client()?;
+    let token = opencrvs_access_token(&client, token_url, &config).await?;
+    let mut executed: Vec<&'static str> = Vec::new();
+
+    // Stage one is the fixed search that resolves the subject in this register.
     let tracking_id = required(&config, "OPENCRVS_TEST_TRACKING_ID")?;
-    let search_body = opencrvs_tracking_id_search(tracking_id);
+    let search = opencrvs_chain_body(tracking_id, "REGISTERED", 2);
+    let body = opencrvs_chain_request(&client, search_url.clone(), &token, &search).await?;
+    executed.push(OPENCRVS_CHAIN_STAGES[0]);
+    let (total, results) = opencrvs_chain_page(&body, 2)?;
+    if total != 1 || results.len() != 1 {
+        // Without a real match the chain has nothing to project, and reading a
+        // later count as a counted zero would be unlicensed.
+        return Err(LiveError::Unavailable);
+    }
+    let record_reference = results[0]
+        .get("trackingId")
+        .and_then(Value::as_str)
+        .map(|value| Zeroizing::new(value.to_owned()))
+        .ok_or(LiveError::SchemaDrift)?;
+    if record_reference.as_str() != tracking_id {
+        return Err(LiveError::SchemaDrift);
+    }
+    // A country-configured declaration field no member declares. It is read only
+    // so this check can prove it never reaches a member request.
+    let withheld = results[0]
+        .get("declaration")
+        .and_then(Value::as_object)
+        .and_then(|declaration| {
+            ["mother.personReference", "father.personReference"]
+                .into_iter()
+                .find_map(|field| declaration.get(field).and_then(Value::as_str))
+        })
+        .filter(|value| !value.is_empty())
+        .map(|value| Zeroizing::new(value.to_owned()));
+
+    // Each member receives only the search projection, so each carries the
+    // record reference and nothing else. Both take that input through the JSON
+    // body their preparation builds, and neither opens a query channel.
+    for (stage, status) in [
+        (OPENCRVS_CHAIN_STAGES[1], "REGISTERED"),
+        (OPENCRVS_CHAIN_STAGES[2], "CERTIFIED"),
+    ] {
+        let member = opencrvs_chain_body(record_reference.as_str(), status, 1);
+        require_member_body_is_minimal(
+            &member,
+            record_reference.as_str(),
+            withheld.as_ref().map(|value| value.as_str()),
+        )?;
+        let body = opencrvs_chain_request(&client, search_url.clone(), &token, &member).await?;
+        executed.push(stage);
+        // The member consumes the provider count as a value. Zero is this
+        // register's own answer, not an absence the check may fail on.
+        opencrvs_chain_page(&body, 1)?;
+    }
+
+    if executed != OPENCRVS_CHAIN_STAGES {
+        return Err(LiveError::SchemaDrift);
+    }
+    Ok(())
+}
+
+fn opencrvs_chain_body(reference: &str, status: &str, limit: u64) -> Value {
+    json!({
+        "query": {
+            "type": "and",
+            "clauses": [{
+                "eventType": "birth",
+                "status": {"type": "exact", "term": status},
+                "trackingId": {"type": "exact", "term": reference}
+            }]
+        },
+        "limit": limit,
+        "offset": 0
+    })
+}
+
+/// A member may carry only its allowlisted projection. This asserts the whole
+/// body channel rather than only the presence of the projected value, because an
+/// extra clause is exactly how a withheld fact would leave the process.
+fn require_member_body_is_minimal(
+    body: &Value,
+    projected: &str,
+    withheld: Option<&str>,
+) -> Result<(), LiveError> {
+    let object = body.as_object().ok_or(LiveError::Configuration)?;
+    if object.len() != 3
+        || !object
+            .keys()
+            .all(|key| matches!(key.as_str(), "query" | "limit" | "offset"))
+    {
+        return Err(LiveError::ExcessDisclosure);
+    }
+    let clauses = object
+        .get("query")
+        .and_then(Value::as_object)
+        .and_then(|query| query.get("clauses"))
+        .and_then(Value::as_array)
+        .ok_or(LiveError::Configuration)?;
+    if clauses.len() != 1 {
+        return Err(LiveError::ExcessDisclosure);
+    }
+    let clause = clauses[0].as_object().ok_or(LiveError::Configuration)?;
+    if !clause
+        .keys()
+        .all(|key| matches!(key.as_str(), "eventType" | "status" | "trackingId"))
+    {
+        return Err(LiveError::ExcessDisclosure);
+    }
+    let serialized = serde_json::to_string(body).map_err(|_| LiveError::Configuration)?;
+    if !serialized.contains(projected) {
+        return Err(LiveError::Configuration);
+    }
+    if withheld.is_some_and(|value| serialized.contains(value)) {
+        return Err(LiveError::ExcessDisclosure);
+    }
+    Ok(())
+}
+
+async fn opencrvs_chain_request(
+    client: &Client,
+    search_url: Url,
+    token: &Zeroizing<String>,
+    body: &Value,
+) -> Result<Value, LiveError> {
+    if search_url.query().is_some() {
+        return Err(LiveError::Configuration);
+    }
     let response = client
         .post(search_url)
         .bearer_auth(token.as_str())
-        .json(&search_body)
+        .json(body)
         .send()
         .await
         .map_err(|_| LiveError::Unavailable)?;
     require_success(response.status(), false)?;
     require_json_media(&response, LiveError::SchemaDrift)?;
     let body = bounded_body(response, MAX_SOURCE_RESPONSE_BYTES).await?;
-    let body = parse_json_strict(&body).map_err(|_| LiveError::SchemaDrift)?;
-    validate_opencrvs_search(&body, tracking_id)
+    parse_json_strict(&body).map_err(|_| LiveError::SchemaDrift)
+}
+
+/// Provider-owned cardinality plus the bounded page it returned. A page larger
+/// than the declared limit, or larger than the count the provider reports, is
+/// drift in exactly the relation the extract rule depends on.
+fn opencrvs_chain_page(body: &Value, limit: usize) -> Result<(u64, &Vec<Value>), LiveError> {
+    let object = body.as_object().ok_or(LiveError::SchemaDrift)?;
+    let total = object
+        .get("total")
+        .and_then(Value::as_u64)
+        .ok_or(LiveError::SchemaDrift)?;
+    let results = object
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or(LiveError::SchemaDrift)?;
+    if results.len() > limit {
+        return Err(LiveError::ExcessDisclosure);
+    }
+    if results.len() as u64 > total {
+        return Err(LiveError::SchemaDrift);
+    }
+    Ok((total, results))
 }
 
 fn dhis2_lookup_query(
@@ -756,6 +959,78 @@ mod tests {
         assert_eq!(
             validate_opencrvs_search(&json!({"results": [{}, {}, {}], "total": 3}), selector),
             Err(LiveError::ExcessDisclosure)
+        );
+    }
+
+    #[test]
+    fn chain_member_bodies_are_bounded_and_carry_only_the_declared_projection() {
+        let projected = "TRACKING-CANARY";
+        let withheld = "PARENT-REFERENCE-CANARY";
+        let member = opencrvs_chain_body(projected, "CERTIFIED", 1);
+        assert!(
+            member
+                == json!({
+                    "query": {
+                        "type": "and",
+                        "clauses": [{
+                            "eventType": "birth",
+                            "status": {"type": "exact", "term": "CERTIFIED"},
+                            "trackingId": {
+                                "type": "exact",
+                                "term": projected
+                            }
+                        }]
+                    },
+                    "limit": 1,
+                    "offset": 0
+                }),
+            "chain member body did not match the fixed bounded shape"
+        );
+        assert_eq!(
+            require_member_body_is_minimal(&member, projected, Some(withheld)),
+            Ok(())
+        );
+
+        // A member that carried a fact outside its own allowlist, in the body
+        // channel or in an extra clause, has to fail rather than reach a source.
+        let mut leaking = member.clone();
+        leaking["query"]["clauses"][0]["trackingId"]["term"] =
+            json!(format!("{projected}-{withheld}"));
+        assert_eq!(
+            require_member_body_is_minimal(&leaking, projected, Some(withheld)),
+            Err(LiveError::ExcessDisclosure)
+        );
+        let mut extra_clause = member.clone();
+        extra_clause["query"]["clauses"][0]["declaration.motherReference"] = json!(withheld);
+        assert_eq!(
+            require_member_body_is_minimal(&extra_clause, projected, Some(withheld)),
+            Err(LiveError::ExcessDisclosure)
+        );
+        let mut extra_key = member.clone();
+        extra_key["fields"] = json!(["declaration"]);
+        assert_eq!(
+            require_member_body_is_minimal(&extra_key, projected, Some(withheld)),
+            Err(LiveError::ExcessDisclosure)
+        );
+
+        // Provider-owned cardinality: a page above the declared limit or above
+        // the count the provider reports is drift, while a counted zero is the
+        // register's own answer and stays acceptable.
+        assert_eq!(
+            opencrvs_chain_page(&json!({"total": 0, "results": []}), 1),
+            Ok((0, &vec![]))
+        );
+        assert_eq!(
+            opencrvs_chain_page(&json!({"total": 9, "results": [{}, {}]}), 1),
+            Err(LiveError::ExcessDisclosure)
+        );
+        assert_eq!(
+            opencrvs_chain_page(&json!({"total": 0, "results": [{}]}), 1),
+            Err(LiveError::SchemaDrift)
+        );
+        assert_eq!(
+            opencrvs_chain_page(&json!({"results": [{}]}), 1),
+            Err(LiveError::SchemaDrift)
         );
     }
 }

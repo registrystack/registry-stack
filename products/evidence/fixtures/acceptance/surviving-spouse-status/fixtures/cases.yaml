@@ -1,0 +1,353 @@
+fixture: registry.evidence.acceptance.surviving-spouse-status/v1
+coequal_acceptance_definition: true
+synthetic_only: true
+provider_contract:
+  classification: synthetic-governed-authoritative-union-and-death-registers
+  governance_attestation: urn:example:fixture:governance:survivorship-registers:v1
+  legal_meaning: For this synthetic acceptance definition, the union register's complete recognized-union set and the death register's complete record for one resolved civil reference are together legally authoritative for the declared surviving-spouse concept.
+  acquisition: One bounded demographic search must resolve exactly one civil record reference, and that one reference is the only input either register receives.
+  member_inputs: Each register receives only the search facts it declares in factInputs. The reference namespace is never sent to a register. The union register receives its reference through a Rust-bound path segment and the death register through the body its own preparation builds, so both channels a declared fact can leave through are exercised by one acquisition.
+  cross_register_binding: The death register must state the reference it answered for, and only the derivation, which alone sees both registers' facts, may compare it to the reference the search produced.
+  completeness: A register with nothing to report answers with a complete-set attestation. An empty recognized-union set is a fact; a set declared incomplete is not an answer at all.
+  decision: The latest recognized union ended by the other party's death, for a subject with no recorded death, is true. Any other complete history is false.
+  prohibited: Names, dates of birth, fuzzy matching, partial union histories, absence inferred from an unresolved register, and any disclosure of a union date or of a death record cannot decide survivorship.
+common:
+  observed_at: '2026-08-02T00:00:00Z'
+  selectors:
+    subject: {profile: compound-demographic-v1, values: {family_name: Halvorsen, given_name: Wren, date_of_birth: '1958-04-11'}}
+  expectedRequestParts:
+    civil-record-search:
+      query: []
+      body: {lookup: {family_name: Halvorsen, given_name: Wren, date_of_birth: '1958-04-11'}, fields: [civil_record_reference, reference_namespace], limit: 2}
+    union-register: {query: [], body: ~}
+    death-register: {query: [], body: {subject_reference: synthetic-civil-record-101}}
+  expectedTransport:
+    civil-record-search: {path: /v1/civil-record-search, fixedHeaders: [{name: Accept, value: application/json}]}
+    union-register: {pathTemplate: '/v1/persons/{ref}/unions', boundFrom: civil_record_reference, fixedHeaders: [{name: Accept, value: application/json}]}
+    death-register: {path: /v1/death-record-search, fixedHeaders: [{name: Accept, value: application/json}]}
+cases:
+  - id: positive
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1979-06-02', union_end_reason: dissolution, union_recognized: true}
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-false-is-success
+    # The latest recognized union ended in dissolution. A complete history that
+    # decides against the subject is a signed answer, not a refusal.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1979-06-02', union_end_reason: death-of-other-party, union_recognized: true}
+          - {union_start_date: '1994-09-17', union_end_reason: dissolution, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-latest-recognized-union-wins
+    # Same two unions as the negative case, sent in the opposite array order.
+    # The fold is ordered by union start date, never by the register's layout.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+          - {union_start_date: '1979-06-02', union_end_reason: dissolution, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-unrecognized-union-ignored
+    # A later union the register does not recognize cannot displace the
+    # recognized one, and cannot make an answer of its own.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+          - {union_start_date: '2005-11-30', union_end_reason: ongoing, union_recognized: false}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: boundary-no-union-history
+    # An empty set that the register declares complete is a fact about the
+    # subject. It is a signed false, not a lookup outcome and not a refusal.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: missing-fact
+    # The union register resolved the person and then omitted the completeness
+    # attestation the profile requires of a resolved record.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: missing-record
+    sources:
+      civil-record-search: {total: 0, records: []}
+      union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_lookup: no_match
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+  - id: no-match
+    # The search did not resolve a subject, so neither register is called and
+    # the failure is the one indistinguishable unavailable answer.
+    sources:
+      civil-record-search: {total: 0, records: []}
+      union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_lookup: no_match
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+  - id: ambiguous
+    sources:
+      civil-record-search: {total: 2, records: [{}, {}]}
+      union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_lookup: ambiguous
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+  - id: negative-search-namespace-mismatch
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:other-namespace}]}
+      union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: negative-union-register-unresolved
+    # The search resolved a subject the union register cannot read. That is a
+    # dependency inconsistency, not an empty union history, and execution stops
+    # before the death register is called.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register: {record_found: false}
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: negative-death-register-unresolved
+    # The second member cannot resolve the reference the search produced. A
+    # register that answers "no death record" attests it with a flag; one
+    # that cannot answer at all never becomes a fact about survivorship.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: false}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: negative-two-recognized-unions-share-the-latest-date
+    # Which of these is the latest recognized union is a question the register
+    # has not answered. Folding to whichever arrived first would make the signed
+    # value depend on the order a register serialized its events in, which is
+    # not a property of the subject, so the derivation refuses instead.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+          - {union_start_date: '1994-09-17', union_end_reason: dissolution, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: evidence_not_available
+    derivation_runs: true
+    signed_success: false
+  - id: negative-union-set-incomplete
+    # The register sent a history and admitted it is partial. The derivation
+    # refuses rather than reading the part it received as the whole.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: false
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: evidence_not_available
+    derivation_runs: true
+    signed_success: false
+  - id: negative-death-record-incomplete
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: false}
+    expected_public_problem: evidence_not_available
+    derivation_runs: true
+    signed_success: false
+  - id: negative-death-subject-mismatch
+    # Two registers answered, about two different people. Only the derivation
+    # sees the search FactSet and both member FactSets, so only the derivation
+    # can catch it, and it refuses instead of returning either answer.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-999, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: evidence_not_available
+    derivation_runs: true
+    signed_success: false
+  - id: negative-subject-deceased
+    # A deceased subject is not a surviving spouse. The register attests the
+    # death without sending the date, so the value that decides the answer is
+    # the one bit the answer needs and nothing more.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: true, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_value: false
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-unknown-union-end-reason
+    # The response shape admits any bounded reason code so that an ungoverned
+    # one reaches the closed fact schema and is refused there, rather than
+    # being reshaped into a governed one on the way in.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: retired-code, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: evidence_not_available
+    derivation_runs: false
+    signed_success: false
+  - id: negative-wrong-union-contract
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:other-union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: negative-wrong-death-contract
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:other-death-register:v1, death_record_complete: true}
+    expected_public_problem: dependency_unavailable
+    derivation_runs: false
+    signed_success: false
+  - id: negative-extra-source-field
+    # Both registers volunteer a name the profile never selected. Projection
+    # drops it, so it is not in a FactSet, not in the assertion, and not in a
+    # diagnostic.
+    sources:
+      civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record, subject_display_name: PrivacyCanary}]}
+      union-register:
+        record_found: true
+        union_events:
+          - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true, partner_display_name: PrivacyCanary}
+        union_set_contract: urn:example:fixture:union-set:v1
+        union_set_complete: true
+        register_office_name: PrivacyCanary
+      death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true, cause_of_death: PrivacyCanary}
+    expected_value: true
+    expected_lookup: match
+    derivation_runs: true
+    signed_success: true
+  - id: negative-extra-family-fact
+    injected_derivation:
+      - {concept_id: urn:example:fixture:concept:surviving-spouse-status, value: true}
+      - {concept_id: urn:example:fixture:concept:date-of-death, value: '2021-03-05'}
+    expected: output-gate-rejection
+  - id: source-failure
+    # This acquisition makes three calls and has one failure answer. A register
+    # that times out after the search resolved is the same public
+    # dependency_unavailable as the search timing out, the failure category
+    # names the transport fault rather than the stage, and which register
+    # failed stays in the operator-private audit. Nothing about the subject,
+    # and nothing about how far the acquisition got, leaves the service.
+    source_failure: timeout
+    expected_public_problem: dependency_unavailable
+    signed_success: false
+  - id: anti-reconstruction
+    # One derivation sees a whole union history, a death attestation, and the
+    # reference tying both registers to one subject, which is far more than any
+    # single call carried. Exactly one boolean is disclosed, so reconstruction
+    # would have to come from combining definitions rather than from reading
+    # one answer: a second definition over the same registers could subtract
+    # "the union ended" from "the partner died". Sharing a disclosure family
+    # makes that combination a startup rejection, never a second answer.
+    companion_bundle: survivorship-graph
+    expected: bundle-rejection
+privacy_expectation:
+  evidence_contains: [subject, urn:example:fixture:concept:surviving-spouse-status]
+  evidence_excludes: [civil_record_reference, reference_namespace, death_subject_reference, death_recorded, union_events, union_start_date, union_end_reason, union_recognized, union_set_contract, union_set_complete, death_record_contract, death_record_complete, family_name, given_name, date_of_birth]
+  diagnostics_exclude: [Halvorsen, Wren, '1958-04-11', synthetic-civil-record-101, synthetic-civil-record-999, '1979-06-02', '1994-09-17', '2005-11-30', '2021-03-05', PrivacyCanary]
+  subject_bindings: one audience-scoped opaque binding for one subject role
+  member_inputs: Neither register receives reference_namespace, and neither register's facts reach the other.

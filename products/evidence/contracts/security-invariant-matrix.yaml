@@ -45,7 +45,7 @@ invariants:
   - id: V1-I09
     rule: Source calls are fixed by trusted configuration and executed only by the core.
     threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
-    enforcement: Generic fixed HTTPS executor owns the closed single or search-then-fetch source sequence, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
     negative_test: sec-source-request-immutable
   - id: V1-I10
     rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
@@ -198,10 +198,20 @@ invariants:
     enforcement: The core derives requester and optional actor pseudonyms scoped by operator trust domain, requested purpose, and authenticated audience, while request-rate accounting remains principal-scoped. It constructs the closed refusal branch under its distinct registry.evidence.audit.authorization-refusal/v1 discriminator with operation, assurance profile, bundle revision, denial category and decision, timestamp and duration, durably appends it before the response, and omits every request-derived, authority, selector, response-protection, source, and evaluation field. Authentication, malformed-request, and invalid-selector failures remain operational-only.
     negative_test: sec-authenticated-authorization-refusal-audited
   - id: V1-I40
-    rule: A chained acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
+    rule: A search-then-fetch acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
     threat: Provider-controlled response data becomes a workflow plan, redirects credentials to an unreviewed endpoint, expands one authorized evaluation into unbounded reads, or leaks an intermediate record identifier through audit.
-    enforcement: The closed requirement acquisition enum contains only single and search-then-fetch with distinct startup-validated source ids. Rust owns the two-stage state machine, validates search facts before fetch preparation or path materialization, permits prior-fact bindings only on fetch sources and only for scalar properties required by the search fact schema, rate-limits once, durably audits every actual source call, and records no prior fact or path value.
+    enforcement: The requirement acquisition enum is closed, and this kind's two source ids are distinct and validated at startup. Rust owns the two-stage state machine, validates search facts before fetch preparation or path materialization, permits prior-fact bindings only on fetch sources and only for scalar properties required by the search fact schema, rate-limits once, durably audits every actual source call, and records no prior fact or path value. A wider kind exists only where the bundle declares it and the operator enabled it, and carries its own invariant rather than relaxing this one.
     negative_test: sec-search-then-fetch-bounded
+  - id: V1-I41
+    rule: A search-then-fetch-set acquisition is exactly one fixed search and, only after a unique schema-valid match, the two to four fetch stages the bundle declares, in the order it declares them; each stage receives only the projection of the validated search FactSet onto its own declared allowlist, derivation receives the union of the stage FactSets whose names startup proved pairwise disjoint, and one declared ceiling bounds the whole acquisition.
+    threat: A wider acquisition becomes a response-led plan, carries every search fact to every source so one source learns what another answered, continues past the stages the bundle declared, or runs unbounded because no single stage exceeded its own timeout.
+    enforcement: The stage list is a pure function of the bundle, derived once and consumed by the serving runtime and the offline harness alike, so no response can add, drop, or reorder a stage. Rust projects the validated search FactSet onto each member's declared allowlist before preparation, so a member cannot name a fact outside it through a declared binding or through the request body preparation builds, which no static binding check inspects. Startup proves the members two to four, distinct, none equal to the search, each allowlist non-empty and drawn only from required search facts, and every stage's fact names pairwise disjoint. An unresolved stage ends the acquisition, so an execution is always a prefix of the declared sequence and the stages after it are never contacted. The declared ceiling is checked between stages and around the cancel-safe source future only, never around a durable audit append, and exhaustion is a dependency failure under its own category naming the last stage actually executed.
+    negative_test: sec-fetch-set-bounded
+  - id: V1-I42
+    rule: A gated acquisition kind serves only where the bundle declares it and the operator separately enabled it in the runtime configuration.
+    threat: A bundle silently widens a deployment's source reach past what its operator reviewed, or a deployment that never made the decision begins serving a kind added after its acquisition surface froze.
+    enforcement: The capability vocabulary names only kinds added after the Version 1 acquisition surface froze, so silence enables nothing and a deployment that never made this decision keeps serving exactly what it served before. The bundle declares the gated kinds it uses and the runtime configuration enables them; because the two documents have different authors, a declaration beside the requirement that uses it grants nothing. A requirement needing a capability the deployment has not enabled refuses the bundle during runtime binding, before the listener binds, with a value-free cause, and the check command and doctor report the gap rather than leaving it to the first request.
+    negative_test: sec-acquisition-capability-opt-in
 cross_cutting:
   config_trust:
     threat: A missing, writable, or unreviewed bundle is treated as trusted configuration.
@@ -253,7 +263,7 @@ cross_cutting:
     negative_test: sec-secret-file-identity
   transport_pinning:
     threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the per-stage request ceiling and TLS contracts.
-    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt for that configured stage and never creates a third evidence-data request.
+    enforcement: The production source client selects the rustls backend explicitly and disables reqwest transport retries; a connection failure yields exactly one attempt for that configured stage and never creates an evidence-data request the requirement's acquisition kind did not declare.
     negative_test: sec-transport-backend-and-single-attempt
   jwks_route_parity:
     threat: The configured JWKS path and the served discovery route drift apart.

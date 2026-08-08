@@ -10,6 +10,9 @@ profiles:
   - id: opencrvs-event-search-json
     path: opencrvs-record-search-style
     reference: OpenCRVS version 2 Event Search JSON compatibility shape
+  - id: search-chain-json
+    path: search-chain-style
+    reference: flat dotted-key search followed by two declared fetch members
 rules:
   - Product names and shapes in this subtree are test-only and never production configuration identifiers.
   - Each mock contains only the consumed boundary and is not an emulator, certified connector, or support claim.

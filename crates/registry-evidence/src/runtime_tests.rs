@@ -54,7 +54,7 @@ use crate::{
     },
     observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
-    runtime::{EvidenceRuntime, RuntimeInitializationError},
+    runtime::{acquisition_budget_exhausted, EvidenceRuntime, RuntimeInitializationError},
     server::{build_app, build_app_at_for_test, build_app_with_metrics, serve_listener_for_test},
     signing::EvidenceSigner,
     verifier::{
@@ -4686,6 +4686,717 @@ fn search_then_fetch_rejects_an_unbound_prior_fact_at_startup() {
     );
 }
 
+#[tokio::test]
+async fn fetch_set_is_one_search_then_one_fixed_call_per_declared_member_in_order() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_fetch_set(bundle_root, &source_origin),
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(json!({
+            "lookup": {
+                "given_name": "Amina",
+                "family_name": "Diallo",
+                "birth_date": "2000-01-01"
+            },
+            "fields": ["record_id", "partner_ref"],
+            "limit": 2
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request = adult_request();
+    let jws = runtime
+        .evaluate("operation-fetch-set-ordered", &access_token(None), &request)
+        .await
+        .expect("the declared fetch set produces Evidence");
+    let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let evidence = verify_flattened_jws(
+        &serialized,
+        runtime.jwks(),
+        &verification_policy(&runtime, &request, &serialized),
+    )
+    .expect("the fetch-set assertion verifies");
+    assert_eq!(
+        evidence.supported_values[0].value,
+        PublicValue::Boolean(true)
+    );
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].url.path(), "/v1/search");
+    assert_eq!(requests[1].url.path(), "/v1/records/record-001");
+    assert_eq!(requests[2].url.path(), "/v1/partners");
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit event is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0]["record"]["phase"], "access-attempt");
+    assert_eq!(events[0]["record"]["sourceId"], "source-a");
+    assert_eq!(events[1]["record"]["phase"], "access-attempt");
+    assert_eq!(events[1]["record"]["sourceId"], "source-a-fetch");
+    assert_eq!(events[2]["record"]["phase"], "access-attempt");
+    assert_eq!(events[2]["record"]["sourceId"], "source-a-partner");
+    assert_eq!(events[3]["record"]["phase"], "disclosure-release");
+    assert_eq!(
+        events[3]["record"]["sourceIds"],
+        json!(["source-a", "source-a-fetch", "source-a-partner"])
+    );
+    assert_eq!(
+        events[3]["record"]["adapterIds"],
+        json!([
+            "adult-status-source",
+            "adult-status-fetch-source",
+            "adult-status-partner-source"
+        ])
+    );
+    assert_eq!(events[3]["record"]["sourceId"], "source-a-partner");
+    assert_eq!(
+        events[3]["record"]["adapterId"],
+        "adult-status-partner-source"
+    );
+    assert!(!audit.contains("record-001"));
+    assert!(!audit.contains("partner-77"));
+}
+
+#[tokio::test]
+async fn fetch_set_member_receives_only_its_declared_fact_inputs() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            // The first member declared `record_id` alone, so the reference the
+            // second member declared must not be readable from its context at
+            // all. Reading it is a preparation failure, not an absent value the
+            // script could route around.
+            fs::write(
+                bundle_root.join("adapters/adult-status-fetch-prepare.rhai"),
+                r#"fn prepare(selectors, context) {
+    required(context["prior_facts"]["partner_ref"], "required_fact_missing");
+    #{query: [], body: #{lookup: context["prior_facts"]}}
+}
+"#,
+            )
+            .expect("undeclared prior-fact preparation is written");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-fetch-set-undeclared",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("a member reading an undeclared fact releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/v1/search");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"safeErrorCategory\":\"request-preparation\""));
+    assert!(!audit.contains("source-a-partner"));
+    assert!(!audit.contains("partner-77"));
+}
+
+#[tokio::test]
+async fn fetch_set_member_body_carries_only_its_declared_fact_inputs() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_fetch_set(bundle_root, &source_origin),
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    runtime
+        .evaluate(
+            "operation-fetch-set-body-channel",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect("the declared fetch set produces Evidence");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 3);
+    // A prior fact leaves the process either through a declared path binding,
+    // which startup inspects, or through the JSON body a prepare script builds,
+    // which startup never reads. The allowlist projection is the only control
+    // over the second channel, so it is asserted on the bytes that were sent.
+    let first_body = String::from_utf8(requests[1].body.clone()).expect("member body is UTF-8");
+    assert!(first_body.contains("record-001"));
+    assert!(!first_body.contains("partner-77"));
+    let second_body = String::from_utf8(requests[2].body.clone()).expect("member body is UTF-8");
+    assert!(second_body.contains("partner-77"));
+    assert!(!second_body.contains("record-001"));
+}
+
+#[tokio::test]
+async fn fetch_set_stops_after_an_unresolved_search() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_fetch_set(bundle_root, &source_origin),
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"total": 0})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-fetch-set-no-search",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an unresolved search releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::EvidenceNotAvailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/v1/search");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.lines().count(), 2);
+    assert!(audit.contains("\"sourceId\":\"source-a\""));
+    assert!(!audit.contains("source-a-fetch"));
+    assert!(!audit.contains("source-a-partner"));
+}
+
+#[tokio::test]
+async fn fetch_set_stops_at_the_first_unresolved_member_and_calls_no_further_source() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            fs::write(
+                bundle_root.join("adapters/adult-status-fetch-source.rhai"),
+                r#"fn extract(source_response, context) {
+    #{outcome: "no_match"}
+}
+"#,
+            )
+            .expect("unresolved member extraction is written");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-fetch-set-unresolved",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an unresolved member is not authoritative absence");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].url.path(), "/v1/records/record-001");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains("source-a-partner"));
+    assert!(!audit.contains("record-001"));
+}
+
+#[tokio::test]
+async fn fetch_set_abandons_acquisition_when_the_declared_budget_is_exhausted() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            let configuration_path = bundle_root.join("evidence.yaml");
+            let mut configuration = fs::read_to_string(&configuration_path)
+                .expect("fetch-set configuration is readable");
+            replace_exact(
+                &mut configuration,
+                "      maximumAcquisitionMilliseconds: 5000",
+                "      maximumAcquisitionMilliseconds: 800",
+                1,
+            );
+            fs::write(configuration_path, configuration)
+                .expect("shortened acquisition budget is written");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Well inside the member's own three-second ceiling and well outside the
+    // acquisition budget, so the budget is what refuses and the two remain
+    // separately enforced.
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(2500))
+                .set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-fetch-set-budget",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("an exhausted acquisition budget releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 2);
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.lines().count(), 3);
+    assert!(audit.contains("\"safeErrorCategory\":\"acquisition-budget\""));
+    assert!(!audit.contains("\"safeErrorCategory\":\"source-timeout\""));
+    assert!(!audit.contains("source-a-partner"));
+}
+
+#[test]
+fn fetch_set_reads_an_exhausted_budget_before_it_enters_the_next_stage() {
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(50);
+    assert!(!acquisition_budget_exhausted(Some(deadline), start));
+    assert!(!acquisition_budget_exhausted(
+        Some(deadline),
+        start + Duration::from_millis(49)
+    ));
+    // The deadline itself is spent, not the last usable instant: a stage
+    // entered with nothing left would still poll its request once, and one
+    // poll is enough to contact a source the budget no longer covers.
+    assert!(acquisition_budget_exhausted(
+        Some(deadline),
+        start + Duration::from_millis(50)
+    ));
+    assert!(acquisition_budget_exhausted(
+        Some(deadline),
+        start + Duration::from_millis(51)
+    ));
+    assert!(!acquisition_budget_exhausted(
+        None,
+        start + Duration::from_secs(3600)
+    ));
+}
+
+#[tokio::test]
+async fn fetch_set_derivation_receives_the_union_of_every_stage_fact_set() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            // The set form hands the derivation every stage's facts, not only
+            // the last member's, so a derivation that reads all four names is
+            // the assertion. A name the union did not carry reads as unit and
+            // collapses the released value to false.
+            fs::write(
+                bundle_root.join("derivations/adult-status.rhai"),
+                r#"fn derive(facts, selectors, evaluation_context) {
+    let complete = facts["record_id"] == "record-001"
+        && facts["partner_ref"] == "partner-77"
+        && facts["date_of_birth"] == "2000-01-01"
+        && facts["partner_status"] == "active";
+    [#{concept_id: "urn:example:fixture:concept:adult-status", value: complete}]
+}
+"#,
+            )
+            .expect("union derivation is written");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let request = adult_request();
+    let jws = runtime
+        .evaluate("operation-fetch-set-union", &access_token(None), &request)
+        .await
+        .expect("the merged fact set produces Evidence");
+    let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
+    let evidence = verify_flattened_jws(
+        &serialized,
+        runtime.jwks(),
+        &verification_policy(&runtime, &request, &serialized),
+    )
+    .expect("the fetch-set assertion verifies");
+    assert_eq!(
+        evidence.supported_values[0].value,
+        PublicValue::Boolean(true)
+    );
+}
+
+#[tokio::test]
+async fn fetch_set_refuses_a_merged_fact_set_larger_than_one_derivation_accepts() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            widen_fetch_set_to_four_bulk_members(bundle_root, &source_origin);
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    // Every stage stays inside the bound its own extraction accepts and inside
+    // the total string size one script may return, so nothing before the merge
+    // can refuse. Only the widest declarable set, merged, crosses what a single
+    // derivation accepts.
+    let bulk = json!(vec!["x".repeat(64); 250]);
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77",
+            "search_detail": bulk
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01",
+            "record_detail": bulk
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active",
+            "partner_detail": bulk
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/third"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "third_status": "active",
+            "third_detail": bulk
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/fourth"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "fourth_status": "active",
+            "fourth_detail": bulk
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-fetch-set-oversized",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("a merged fact set past the derivation bound releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("request journal is available")
+            .len(),
+        5
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit event is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 6);
+    assert_eq!(events[5]["record"]["phase"], "transient-failure");
+    assert_eq!(
+        events[5]["record"]["safeErrorCategory"],
+        "acquisition-fact-size"
+    );
+    assert_eq!(events[5]["record"]["sourceId"], "source-a-fourth");
+    assert!(events[5]["record"].get("sourceIds").is_none());
+    assert!(!audit.contains("record-001"));
+    assert!(!audit.contains("xxxx"));
+}
+
+#[tokio::test]
+async fn search_then_fetch_release_still_omits_source_arrays() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_search_then_fetch(bundle_root, &source_origin),
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("search-then-fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "date_of_birth": "2000-01-01"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    runtime
+        .evaluate(
+            "operation-frozen-release-shape",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect("the frozen chain produces Evidence");
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit event is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2]["record"]["phase"], "disclosure-release");
+    // The frozen forms release exactly the event they always released: the
+    // stage arrays belong to the acquisition that makes more than two calls.
+    assert!(events[2]["record"].get("sourceIds").is_none());
+    assert!(events[2]["record"].get("adapterIds").is_none());
+}
+
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
     let server = MockServer::start().await;
     let prepared = prepare_fixture(
@@ -5465,6 +6176,443 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
 "#,
     )
     .expect("chained derivation is written");
+}
+
+/// Rewrite the copied bundle into one search followed by two declared fetch
+/// members, each reading a different search fact.
+///
+/// Both members are POST requests that build their body from the facts they
+/// were given, because the JSON body is the channel no startup check can
+/// inspect: the declared allowlist is the only thing standing between one
+/// member's reference and another member's request.
+fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("copied configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nselectorProfiles:\n",
+        "\nacquisitionCapabilities: [search-then-fetch-set]\n\nselectorProfiles:\n",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    acquisition:\n      kind: single\n      source: source-a",
+        r#"    acquisition:
+      kind: search-then-fetch-set
+      search: source-a
+      fetch:
+        - {source: source-a-fetch, factInputs: [record_id]}
+        - {source: source-a-partner, factInputs: [partner_ref]}
+      maximumAcquisitionMilliseconds: 5000"#,
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        &format!(
+            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: field-projected"
+        ),
+        &format!(
+            "  source-a:\n    transport: http-json\n    baseUrl: {source_origin}\n    posture: record-transformed"
+        ),
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      adapterParameters: {requestedFields: [date_of_birth], resultLimit: 2}",
+        "      adapterParameters: {requestedFields: [record_id, partner_ref], resultLimit: 2}",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      projection: [/total, /date_of_birth]",
+        "      projection: [/total, /record_id, /partner_ref]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "  source-b:\n",
+        r#"  source-a-fetch:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: POST
+      pathTemplate: /v1/records/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/adult-status-fetch-prepare.rhai
+      adapterParameters: {profile: fetch}
+      adapterParametersSchema: schemas/adult-status-fetch-adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/date_of_birth]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-fetch-response.schema.yaml
+    extractScript: adapters/adult-status-fetch-source.rhai
+    factSchema: schemas/adult-status-fetch-facts.schema.yaml
+  source-a-partner:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: POST
+      path: /v1/partners
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/adult-status-partner-prepare.rhai
+      adapterParameters: {profile: partner}
+      adapterParametersSchema: schemas/adult-status-partner-adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/partner_status]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-partner-response.schema.yaml
+    extractScript: adapters/adult-status-partner-source.rhai
+    factSchema: schemas/adult-status-partner-facts.schema.yaml
+  source-b:
+"#,
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    baseUrl: https://source.invalid",
+        &format!("    baseUrl: {source_origin}"),
+        2,
+    );
+    fs::write(configuration_path, configuration).expect("fetch-set configuration is written");
+
+    fs::write(
+        bundle_root.join("adapters/adult-status-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    let parameters = context["parameters"];
+    let subject = selectors["subject"];
+    #{query: [], body: #{lookup: #{given_name: subject["values"]["given_name"], family_name: subject["values"]["family_name"], birth_date: subject["values"]["birth_date"]}, fields: parameters["requestedFields"], limit: parameters["resultLimit"]}}
+}
+"#,
+    )
+    .expect("search preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-source.rhai"),
+        r#"fn extract(source_response, context) {
+    let total = source_response["total"];
+    if total == 0 { return #{outcome: "no_match"}; }
+    if total > 1 { return #{outcome: "ambiguous"}; }
+    #{outcome: "match", facts: #{record_id: required(get_path(source_response, "/record_id"), "required_fact_missing"), partner_ref: required(get_path(source_response, "/partner_ref"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("search extraction is written");
+    // Each member's body is exactly the facts it was handed, so the bytes on
+    // the wire are the projection and nothing else stands between them.
+    fs::write(
+        bundle_root.join("adapters/adult-status-fetch-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    #{query: [], body: #{lookup: context["prior_facts"]}}
+}
+"#,
+    )
+    .expect("first member preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-fetch-source.rhai"),
+        r#"fn extract(source_response, context) {
+    #{outcome: "match", facts: #{date_of_birth: required(get_path(source_response, "/date_of_birth"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("first member extraction is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-partner-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    #{query: [], body: #{lookup: context["prior_facts"]}}
+}
+"#,
+    )
+    .expect("second member preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-partner-source.rhai"),
+        r#"fn extract(source_response, context) {
+    #{outcome: "match", facts: #{partner_status: required(get_path(source_response, "/partner_status"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("second member extraction is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-adapter-parameters.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [record_id, partner_ref]}\n  resultLimit: {const: 2}\n",
+    )
+    .expect("search parameter schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-response.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  record_id: {type: string, minLength: 1, maxLength: 128}\n  partner_ref: {type: string, minLength: 1, maxLength: 128}\n",
+    )
+    .expect("search response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-facts.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [record_id, partner_ref]\nproperties:\n  record_id: {type: string, minLength: 1, maxLength: 128}\n  partner_ref: {type: string, minLength: 1, maxLength: 128}\n",
+    )
+    .expect("search fact schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-adapter-parameters.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [profile]\nproperties:\n  profile: {const: fetch}\n",
+    )
+    .expect("first member parameter schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-response.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string, format: date}\n",
+    )
+    .expect("first member response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-facts.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [date_of_birth]\nproperties:\n  date_of_birth: {type: string, format: date}\n",
+    )
+    .expect("first member fact schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-partner-adapter-parameters.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [profile]\nproperties:\n  profile: {const: partner}\n",
+    )
+    .expect("second member parameter schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-partner-response.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  partner_status: {type: string, minLength: 1, maxLength: 64}\n",
+    )
+    .expect("second member response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-partner-facts.schema.yaml"),
+        "type: object\nadditionalProperties: false\nrequired: [partner_status]\nproperties:\n  partner_status: {type: string, minLength: 1, maxLength: 64}\n",
+    )
+    .expect("second member fact schema is written");
+    fs::write(
+        bundle_root.join("derivations/adult-status.rhai"),
+        r#"fn derive(facts, selectors, evaluation_context) {
+    [#{concept_id: "urn:example:fixture:concept:adult-status", value: facts["date_of_birth"] == "2000-01-01"}]
+}
+"#,
+    )
+    .expect("fetch-set derivation is written");
+}
+
+/// Widen the fetch set to the widest form Version 1 declares: one search and
+/// four members, every stage carrying a bulk array fact beside its scalar one.
+///
+/// Every stage stays inside the total string size one script may return, and
+/// inside the serialized bound one extraction accepts. Their union is bounded
+/// by neither, which is exactly the gap the acquisition closes before it
+/// derives. Three stages cannot reach that gap at all, so the widest set is
+/// what the case needs.
+fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str) {
+    let bulk = "{type: array, maxItems: 250, items: {type: string, maxLength: 64}}";
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("fetch-set configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "        - {source: source-a-partner, factInputs: [partner_ref]}\n",
+        "        - {source: source-a-partner, factInputs: [partner_ref]}\n        - {source: source-a-third, factInputs: [record_id]}\n        - {source: source-a-fourth, factInputs: [partner_ref]}\n",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      projection: [/total, /record_id, /partner_ref]",
+        "      projection: [/total, /record_id, /partner_ref, /search_detail]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      projection: [/date_of_birth]",
+        "      projection: [/date_of_birth, /record_detail]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "      projection: [/partner_status]",
+        "      projection: [/partner_status, /partner_detail]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "  source-b:\n",
+        r#"  source-a-third:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: POST
+      path: /v1/third
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/adult-status-third-prepare.rhai
+      adapterParameters: {profile: third}
+      adapterParametersSchema: schemas/adult-status-third-adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/third_status, /third_detail]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-third-response.schema.yaml
+    extractScript: adapters/adult-status-third-source.rhai
+    factSchema: schemas/adult-status-third-facts.schema.yaml
+  source-a-fourth:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    request:
+      method: POST
+      path: /v1/fourth
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/adult-status-fourth-prepare.rhai
+      adapterParameters: {profile: fourth}
+      adapterParametersSchema: schemas/adult-status-fourth-adapter-parameters.schema.yaml
+      preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
+      projection: [/fourth_status, /fourth_detail]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-fourth-response.schema.yaml
+    extractScript: adapters/adult-status-fourth-source.rhai
+    factSchema: schemas/adult-status-fourth-facts.schema.yaml
+  source-b:
+"#,
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    baseUrl: https://source.invalid",
+        &format!("    baseUrl: {source_origin}"),
+        2,
+    );
+    fs::write(configuration_path, configuration).expect("widened fetch set is written");
+
+    fs::write(
+        bundle_root.join("adapters/adult-status-source.rhai"),
+        r#"fn extract(source_response, context) {
+    let total = source_response["total"];
+    if total == 0 { return #{outcome: "no_match"}; }
+    if total > 1 { return #{outcome: "ambiguous"}; }
+    #{outcome: "match", facts: #{record_id: required(get_path(source_response, "/record_id"), "required_fact_missing"), partner_ref: required(get_path(source_response, "/partner_ref"), "required_fact_missing"), search_detail: required(get_path(source_response, "/search_detail"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("widened search extraction is written");
+    for (adapter, status, detail) in [
+        ("adult-status-fetch", "date_of_birth", "record_detail"),
+        ("adult-status-partner", "partner_status", "partner_detail"),
+        ("adult-status-third", "third_status", "third_detail"),
+        ("adult-status-fourth", "fourth_status", "fourth_detail"),
+    ] {
+        fs::write(
+            bundle_root.join(format!("adapters/{adapter}-prepare.rhai")),
+            r#"fn prepare(selectors, context) {
+    #{query: [], body: #{lookup: context["prior_facts"]}}
+}
+"#,
+        )
+        .expect("widened member preparation is written");
+        fs::write(
+            bundle_root.join(format!("adapters/{adapter}-source.rhai")),
+            format!(
+                r#"fn extract(source_response, context) {{
+    #{{outcome: "match", facts: #{{{status}: required(get_path(source_response, "/{status}"), "required_fact_missing"), {detail}: required(get_path(source_response, "/{detail}"), "required_fact_missing")}}}}
+}}
+"#
+            ),
+        )
+        .expect("widened member extraction is written");
+    }
+    fs::write(
+        bundle_root.join("schemas/adult-status-response.schema.yaml"),
+        format!(
+            "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {{type: integer, minimum: 0, maximum: 1000000}}\n  record_id: {{type: string, minLength: 1, maxLength: 128}}\n  partner_ref: {{type: string, minLength: 1, maxLength: 128}}\n  search_detail: {bulk}\n"
+        ),
+    )
+    .expect("widened search response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-facts.schema.yaml"),
+        format!(
+            "type: object\nadditionalProperties: false\nrequired: [record_id, partner_ref, search_detail]\nproperties:\n  record_id: {{type: string, minLength: 1, maxLength: 128}}\n  partner_ref: {{type: string, minLength: 1, maxLength: 128}}\n  search_detail: {bulk}\n"
+        ),
+    )
+    .expect("widened search fact schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-response.schema.yaml"),
+        format!(
+            "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {{type: string, format: date}}\n  record_detail: {bulk}\n"
+        ),
+    )
+    .expect("widened first member response schema is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-fetch-facts.schema.yaml"),
+        format!(
+            "type: object\nadditionalProperties: false\nrequired: [date_of_birth, record_detail]\nproperties:\n  date_of_birth: {{type: string, format: date}}\n  record_detail: {bulk}\n"
+        ),
+    )
+    .expect("widened first member fact schema is written");
+    for (schema, status, detail) in [
+        ("adult-status-partner", "partner_status", "partner_detail"),
+        ("adult-status-third", "third_status", "third_detail"),
+        ("adult-status-fourth", "fourth_status", "fourth_detail"),
+    ] {
+        fs::write(
+            bundle_root.join(format!("schemas/{schema}-response.schema.yaml")),
+            format!(
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  {status}: {{type: string, minLength: 1, maxLength: 64}}\n  {detail}: {bulk}\n"
+            ),
+        )
+        .expect("widened member response schema is written");
+        fs::write(
+            bundle_root.join(format!("schemas/{schema}-facts.schema.yaml")),
+            format!(
+                "type: object\nadditionalProperties: false\nrequired: [{status}, {detail}]\nproperties:\n  {status}: {{type: string, minLength: 1, maxLength: 64}}\n  {detail}: {bulk}\n"
+            ),
+        )
+        .expect("widened member fact schema is written");
+    }
+    for (schema, profile) in [
+        ("adult-status-third", "third"),
+        ("adult-status-fourth", "fourth"),
+    ] {
+        fs::write(
+            bundle_root.join(format!("schemas/{schema}-adapter-parameters.schema.yaml")),
+            format!(
+                "type: object\nadditionalProperties: false\nrequired: [profile]\nproperties:\n  profile: {{const: {profile}}}\n"
+            ),
+        )
+        .expect("widened member parameter schema is written");
+    }
+}
+
+/// Enable the gated acquisition kind on the operator half of the gate.
+///
+/// The runtime file is sealed read-only the moment it is written, which is the
+/// posture every fixture starts from, so enabling a capability reopens it,
+/// appends the operator declaration, and seals it again before startup reads
+/// it.
+fn enable_fetch_set_acquisition(runtime_path: &Path) {
+    make_file_writable(runtime_path);
+    let mut document =
+        fs::read_to_string(runtime_path).expect("immutable runtime configuration is readable");
+    document.push_str("acquisitionCapabilities: [search-then-fetch-set]\n");
+    fs::write(runtime_path, document).expect("operator capability declaration is written");
+    make_file_read_only(runtime_path);
 }
 
 /// The deployment ceilings a prepared fixture runs under.

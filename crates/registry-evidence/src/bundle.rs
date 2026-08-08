@@ -40,6 +40,8 @@ const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revis
 /// closure. An artifact path can hold no `#`, so this can never collide with a
 /// bundle file.
 const PROJECTION_PATH: &str = "evidence.yaml#requirement";
+/// Projected member holding the bundle's declared acquisition capabilities.
+const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 const ALLOWED_DIRECTORIES: [&str; 6] = [
     "adapters",
@@ -1064,48 +1066,188 @@ fn validate_prior_fact_bindings(
     schemas: &BTreeMap<String, JsonValue>,
 ) -> Result<(), BundleError> {
     for requirement in &config.requirements {
-        let crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } =
-            &requirement.acquisition
-        else {
+        // Exhaustive on purpose: a new acquisition form must state how its
+        // prior-fact bindings are proven, and refusing the bundle is the only
+        // safe answer until it does.
+        match &requirement.acquisition {
+            crate::config::AcquisitionConfig::Single { .. } => {}
+            crate::config::AcquisitionConfig::SearchThenFetch { search, fetch } => {
+                let search_source = config
+                    .sources
+                    .get(search)
+                    .ok_or(invalid_artifact("search source is unavailable"))?;
+                let fetch_source = config
+                    .sources
+                    .get(fetch)
+                    .ok_or(invalid_artifact("fetch source is unavailable"))?;
+                let search_schema = schemas
+                    .get(search_source.fact_schema.as_str())
+                    .and_then(JsonValue::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(JsonValue::as_object)
+                    .ok_or(invalid_artifact("search fact schema is unavailable"))?;
+                // Version 1 froze this form on the single fetch receiving the
+                // whole search FactSet, so every declared search fact is
+                // bindable and there is no allowlist to narrow it.
+                validate_bound_prior_facts(fetch_source, search_schema, None)?;
+            }
+            crate::config::AcquisitionConfig::SearchThenFetchSet { search, fetch, .. } => {
+                validate_fetch_set_fact_schemas(config, schemas, search, fetch)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Prove every prior-fact path binding one source declares names a search fact
+/// it may read, and one the search carries as a scalar.
+///
+/// `declared` is the member's own allowlist, and `None` is the frozen
+/// `search-then-fetch` reading where the single fetch receives every search
+/// fact. A path binding is one of two channels a prior fact can leave through:
+/// the other is the JSON body the source's own `prepare` script builds, which
+/// no static check reads and which the allowlist projection bounds instead.
+fn validate_bound_prior_facts(
+    fetch_source: &crate::config::SourceConfig,
+    search_properties: &JsonMap<String, JsonValue>,
+    declared: Option<&BTreeSet<&str>>,
+) -> Result<(), BundleError> {
+    for (_, binding) in fetch_source.request.path_bindings.iter() {
+        let crate::config::PathBindingConfig::PriorFact { field } = binding else {
             continue;
         };
-        let search_source = config
+        if declared.is_some_and(|allowlist| !allowlist.contains(field.as_str())) {
+            return Err(invalid_artifact(
+                "fetch path binding references a fact the member did not declare",
+            ));
+        }
+        let property = search_properties
+            .get(field.as_str())
+            .and_then(JsonValue::as_object)
+            .ok_or(invalid_artifact(
+                "fetch path binding references an unknown search fact",
+            ))?;
+        let scalar_type = property
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| matches!(value, "string" | "integer" | "boolean"));
+        let scalar_const = property
+            .get("const")
+            .is_some_and(|value| value.is_string() || value.is_i64() || value.is_boolean());
+        if !scalar_type && !scalar_const {
+            return Err(invalid_artifact(
+                "fetch path binding requires a scalar search fact",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The fact names one acquisition stage contributes to the derivation.
+struct StageFacts<'a> {
+    /// Every name the stage may contribute, which is what a merge collides on.
+    properties: &'a JsonMap<String, JsonValue>,
+    /// The subset a validated match always fills, which is what a later stage
+    /// may read and what the merged set actually counts.
+    required: BTreeSet<&'a str>,
+}
+
+fn stage_facts<'a>(
+    schemas: &'a BTreeMap<String, JsonValue>,
+    source: &crate::config::SourceConfig,
+    unavailable: &'static str,
+) -> Result<StageFacts<'a>, BundleError> {
+    let schema = schemas
+        .get(source.fact_schema.as_str())
+        .and_then(JsonValue::as_object)
+        .ok_or(invalid_artifact(unavailable))?;
+    let properties = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .ok_or(invalid_artifact(unavailable))?;
+    let required = schema
+        .get("required")
+        .and_then(JsonValue::as_array)
+        .map(|fields| fields.iter().filter_map(JsonValue::as_str).collect())
+        .ok_or(invalid_artifact(unavailable))?;
+    Ok(StageFacts {
+        properties,
+        required,
+    })
+}
+
+/// Prove one fetch set hands its derivation a well-formed merged fact set.
+///
+/// Each member reads a closed allowlist of the search FactSet and produces a
+/// FactSet of its own, and the derivation receives all of them merged. That
+/// leaves three things the runtime could not recover once acquisition has
+/// started, so the bundle proves them here: every allowlisted name is a fact
+/// the search always fills, no two stages claim one fact name, and the merged
+/// set stays inside the bound a derivation accepts.
+fn validate_fetch_set_fact_schemas(
+    config: &EvidenceConfig,
+    schemas: &BTreeMap<String, JsonValue>,
+    search: &str,
+    members: &[crate::config::FetchSetMember],
+) -> Result<(), BundleError> {
+    let search_source = config
+        .sources
+        .get(search)
+        .ok_or(invalid_artifact("search source is unavailable"))?;
+    let search_facts = stage_facts(schemas, search_source, "search fact schema is unavailable")?;
+    let mut merged = search_facts
+        .properties
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut required_facts = search_facts.required.len();
+
+    for member in members {
+        let member_source = config
             .sources
-            .get(search)
-            .ok_or(invalid_artifact("search source is unavailable"))?;
-        let fetch_source = config
-            .sources
-            .get(fetch)
+            .get(&member.source)
             .ok_or(invalid_artifact("fetch source is unavailable"))?;
-        let search_schema = schemas
-            .get(search_source.fact_schema.as_str())
-            .and_then(JsonValue::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(JsonValue::as_object)
-            .ok_or(invalid_artifact("search fact schema is unavailable"))?;
-        for (_, binding) in fetch_source.request.path_bindings.iter() {
-            let crate::config::PathBindingConfig::PriorFact { field } = binding else {
-                continue;
-            };
-            let property = search_schema
-                .get(field.as_str())
-                .and_then(JsonValue::as_object)
-                .ok_or(invalid_artifact(
-                    "fetch path binding references an unknown search fact",
-                ))?;
-            let scalar_type = property
-                .get("type")
-                .and_then(JsonValue::as_str)
-                .is_some_and(|value| matches!(value, "string" | "integer" | "boolean"));
-            let scalar_const = property
-                .get("const")
-                .is_some_and(|value| value.is_string() || value.is_i64() || value.is_boolean());
-            if !scalar_type && !scalar_const {
+        let member_facts = stage_facts(
+            schemas,
+            member_source,
+            "fetch member fact schema is unavailable",
+        )?;
+
+        // An allowlisted name a validated search match might not carry would
+        // reach the member as an absent input rather than as a refusal.
+        for input in &member.fact_inputs {
+            if !search_facts.required.contains(input.as_str()) {
                 return Err(invalid_artifact(
-                    "fetch path binding requires a scalar search fact",
+                    "fetch member fact input is not a required search fact",
                 ));
             }
         }
+        // Two stages naming one fact would overwrite silently in the merge, so
+        // the collision is refused rather than resolved by declaration order.
+        for name in member_facts.properties.keys() {
+            if !merged.insert(name.as_str()) {
+                return Err(invalid_artifact(
+                    "fetch set stages must declare disjoint fact names",
+                ));
+            }
+        }
+        required_facts = required_facts.saturating_add(member_facts.required.len());
+
+        let allowlist = member
+            .fact_inputs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        validate_bound_prior_facts(member_source, search_facts.properties, Some(&allowlist))?;
+    }
+
+    // Disjoint names make this sum the exact size of the merged fact set, so
+    // reading it here is what keeps the derivation's own input bound from
+    // refusing an otherwise valid request at acquisition time.
+    if required_facts > crate::rhai_runtime::MAXIMUM_FACT_ENTRIES {
+        return Err(invalid_artifact(
+            "fetch set declares more facts than one derivation accepts",
+        ));
     }
     Ok(())
 }
@@ -1993,6 +2135,23 @@ fn validate_runtime_bindings(
             "runtime TLS trust profiles must exactly bind bundle source profiles",
         ));
     }
+    // The operator half of the acquisition gate, and the half that gates.
+    // A bundle declaring the kinds it needs states an intent beside the
+    // requirement that uses it; the deployment decides separately whether it
+    // may serve them. Silence means no, so a deployment that never heard of a
+    // gated form refuses the bundle here, before it serves anything, rather
+    // than acquiring from sources nobody enabled it to reach.
+    for requirement in &bundle.requirements {
+        if requirement
+            .acquisition
+            .required_capability()
+            .is_some_and(|capability| !runtime.enables_acquisition_capability(capability))
+        {
+            return Err(invalid_artifact(
+                "the runtime configuration does not enable an acquisition capability the bundle requires",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -2255,6 +2414,7 @@ fn canonical_projection(
         acquisition_sources.contains(name)
     })?;
     retain_members(members, "selectorProfiles", |name| profiles.contains(name))?;
+    retain_acquisition_capability(members, requirement)?;
     preserve_selector_field_order(members, config, &profiles)?;
     project_authority_profiles(members, &requirement.id)?;
     // RFC 8785 canonicalization, shared with the rest of the stack, makes
@@ -2263,6 +2423,37 @@ fn canonical_projection(
     // a sequence first, so canonicalization cannot erase that distinction.
     canonicalize_json(&document)
         .map_err(|_| invalid_artifact("the projection does not canonicalize"))
+}
+
+/// Keep only the acquisition capability this requirement's own form needs.
+///
+/// The declaration is bundle-wide but it gates one requirement at a time: a
+/// requirement acquiring through a frozen Version 1 form behaves identically
+/// whether or not some other requirement in the same bundle opted in to a
+/// gated form. Projecting the whole list would make it behave otherwise, and
+/// adopting a gated form for one requirement would move the revision every
+/// relying party pinned for all the others. An empty projection drops the
+/// member, so a bundle that adopts nothing projects exactly as it did before
+/// the declaration existed.
+fn retain_acquisition_capability(
+    members: &mut JsonMap<String, JsonValue>,
+    requirement: &RequirementConfig,
+) -> Result<(), BundleError> {
+    if !members.contains_key(ACQUISITION_CAPABILITIES) {
+        return Ok(());
+    }
+    let declared = members
+        .get_mut(ACQUISITION_CAPABILITIES)
+        .and_then(JsonValue::as_array_mut)
+        .ok_or_else(|| {
+            invalid_artifact("the acquisition capabilities do not project as a sequence")
+        })?;
+    let required = requirement.acquisition.required_capability();
+    declared.retain(|capability| capability.as_str() == required);
+    if declared.is_empty() {
+        members.remove(ACQUISITION_CAPABILITIES);
+    }
+    Ok(())
 }
 
 /// Keep only the named members of one projected configuration mapping.
@@ -2514,6 +2705,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Declaring a gated acquisition capability is a bundle-wide statement that
+    /// gates one requirement at a time. A requirement acquiring through a
+    /// frozen Version 1 form behaves identically whether or not some sibling
+    /// opted in, so its revision must not move. Without the projection keeping
+    /// only the capability a requirement's own form needs, adopting a new
+    /// acquisition form for one requirement would silently break the pin every
+    /// other relying party holds.
+    #[cfg(unix)]
+    #[test]
+    fn declaring_an_acquisition_capability_leaves_the_other_revisions_alone() {
+        let (before, after) = revisions_across_edit(|root| {
+            let config = root.join("evidence.yaml");
+            let text = fs::read_to_string(&config).expect("the configuration reads");
+            fs::write(
+                &config,
+                format!("acquisitionCapabilities: [search-then-fetch-set]\n{text}"),
+            )
+            .expect("the configuration writes");
+        });
+
+        assert!(!before.is_empty(), "the fixture configures requirements");
+        assert_eq!(before, after);
     }
 
     /// The same isolation for the configuration file itself, which is the churn
@@ -2965,6 +3180,414 @@ mod tests {
         }
     }
 
+    /// The fact schema of the acceptance bundle's first source, which every
+    /// rewritten acquisition below uses as its search.
+    const SEARCH_FACT_SCHEMA: &str = "schemas/adult-status-facts.schema.yaml";
+    const FIRST_MEMBER_FACT_SCHEMA: &str = "schemas/first-member-facts.schema.yaml";
+    const SECOND_MEMBER_FACT_SCHEMA: &str = "schemas/second-member-facts.schema.yaml";
+
+    /// One declared fetch member: the ordinary fixed request every Version 1
+    /// source already is, bound to the reference the search resolved.
+    const FIRST_MEMBER_SOURCE: &str = r#"  source-e:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-e-token}
+    request:
+      method: GET
+      pathTemplate: /v1/first/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/first-member-prepare.rhai
+      adapterParameters: {profile: first}
+      adapterParametersSchema: schemas/first-member-adapter-parameters.schema.yaml
+      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+      projection: [/total]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/first-member-response.schema.yaml
+    extractScript: adapters/first-member-source.rhai
+    factSchema: schemas/first-member-facts.schema.yaml
+"#;
+
+    const SECOND_MEMBER_SOURCE: &str = r#"  source-f:
+    transport: http-json
+    baseUrl: https://source.invalid
+    posture: field-projected
+    authentication: {kind: static-bearer, tokenRef: secret:file/source-f-token}
+    request:
+      method: GET
+      pathTemplate: /v1/second/{record_id}
+      pathBindings:
+        record_id: {from: prior-fact, field: record_id}
+      fixedHeaders: [{name: Accept, value: application/json}]
+      selectorInputs: []
+      prepareScript: adapters/second-member-prepare.rhai
+      adapterParameters: {profile: second}
+      adapterParametersSchema: schemas/second-member-adapter-parameters.schema.yaml
+      preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+      projection: [/total]
+      redirects: deny
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/second-member-response.schema.yaml
+    extractScript: adapters/second-member-source.rhai
+    factSchema: schemas/second-member-facts.schema.yaml
+"#;
+
+    const SEARCH_THEN_FETCH: &str =
+        "    acquisition:\n      kind: search-then-fetch\n      search: source-a\n      fetch: source-e\n";
+
+    /// The value-free cause one bundle refusal carries.
+    fn refusal_cause(error: BundleError) -> &'static str {
+        error
+            .artifact_fault()
+            .expect("a bundle refusal names its cause")
+            .fault()
+            .cause()
+    }
+
+    /// The declared member sources, followed by the acceptance bundle's own
+    /// second source, which the rewrite displaced.
+    fn member_sources(blocks: &[&str]) -> String {
+        format!("{}  source-b:\n", blocks.concat())
+    }
+
+    /// A closed fact schema over the named fields.
+    ///
+    /// `required` is what a validated match always fills and `optional` is
+    /// declared without being required. A source fact schema is never the
+    /// second shape, which is exactly why the allowlist rule is proven against
+    /// the required set rather than against the declared one.
+    fn fact_schema(required: &[&str], optional: &[&str]) -> JsonValue {
+        let properties = required
+            .iter()
+            .chain(optional)
+            .map(|field| ((*field).to_owned(), serde_json::json!({"type": "string"})))
+            .collect::<JsonMap<_, _>>();
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": required,
+            "properties": properties,
+        })
+    }
+
+    /// A closed fact schema carrying `count` required fields under one prefix,
+    /// for reading the bound on the merged fact set.
+    fn wide_fact_schema(prefix: &str, count: usize) -> JsonValue {
+        let fields = (0..count)
+            .map(|index| format!("{prefix}_{index}"))
+            .collect::<Vec<_>>();
+        let properties = fields
+            .iter()
+            .map(|field| (field.clone(), serde_json::json!({"type": "string"})))
+            .collect::<JsonMap<_, _>>();
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": fields,
+            "properties": properties,
+        })
+    }
+
+    fn fetch_set_schemas(
+        search: JsonValue,
+        first: JsonValue,
+        second: JsonValue,
+    ) -> BTreeMap<String, JsonValue> {
+        BTreeMap::from([
+            (SEARCH_FACT_SCHEMA.to_owned(), search),
+            (FIRST_MEMBER_FACT_SCHEMA.to_owned(), first),
+            (SECOND_MEMBER_FACT_SCHEMA.to_owned(), second),
+        ])
+    }
+
+    /// One acceptance bundle rewritten onto a multi-call acquisition. The
+    /// rewrite parses, so the fact-schema rules under test are the only thing
+    /// left that can refuse it.
+    fn multi_call_config(acquisition: &str, sources: &str) -> EvidenceConfig {
+        let yaml = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let declared = yaml.replace(
+            "\nselectorProfiles:\n",
+            "\nacquisitionCapabilities: [search-then-fetch-set]\n\nselectorProfiles:\n",
+        );
+        assert_ne!(declared, yaml, "the capability declaration applies");
+        let acquired = declared.replace(
+            "    acquisition:\n      kind: single\n      source: source-a\n",
+            acquisition,
+        );
+        assert_ne!(acquired, declared, "the acquisition rewrite applies");
+        let with_sources = acquired.replace("  source-b:\n", sources);
+        assert_ne!(with_sources, acquired, "the declared sources apply");
+        EvidenceConfig::parse_yaml(with_sources.as_bytes())
+            .expect("the rewritten bundle is configuration a deployment could load")
+    }
+
+    /// The declared fetch set: one search resolving a reference, and two
+    /// members reading it under the allowlist each one declares.
+    fn fetch_set_config(first_inputs: &str, second_inputs: &str) -> EvidenceConfig {
+        multi_call_config(
+            &format!(
+                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {{source: source-e, factInputs: [{first_inputs}]}}\n        - {{source: source-f, factInputs: [{second_inputs}]}}\n      maximumAcquisitionMilliseconds: 8000\n"
+            ),
+            &member_sources(&[FIRST_MEMBER_SOURCE, SECOND_MEMBER_SOURCE]),
+        )
+    }
+
+    /// A member's allowlist is the whole of what its request may read, so a
+    /// name the search does not always produce is refused at load rather than
+    /// becoming a silently absent input at acquisition time.
+    #[test]
+    fn a_fetch_member_declares_only_facts_the_search_always_produces() {
+        for (allowlist, reason) in [
+            ("record_id, record_absent", "a name no stage produces"),
+            (
+                "record_id, record_hint",
+                "a name the search declares without requiring",
+            ),
+            ("record_id, second_status", "a name a later member produces"),
+        ] {
+            let config = fetch_set_config(allowlist, "record_id");
+            let schemas = fetch_set_schemas(
+                fact_schema(&["record_id", "record_namespace"], &["record_hint"]),
+                fact_schema(&["first_status"], &[]),
+                fact_schema(&["second_status"], &[]),
+            );
+            assert_eq!(
+                refusal_cause(
+                    validate_prior_fact_bindings(&config, &schemas)
+                        .expect_err("the allowlist is refused")
+                ),
+                "fetch member fact input is not a required search fact",
+                "{reason}"
+            );
+        }
+    }
+
+    /// The derivation receives every stage's facts merged into one map, so two
+    /// stages naming one fact would silently overwrite. Disjointness is proven
+    /// over every declared name, not only the required ones, because a merge
+    /// cannot tell them apart.
+    #[test]
+    fn fetch_set_stages_declare_disjoint_fact_names() {
+        let config = fetch_set_config("record_id", "record_id");
+        for (first, second, reason) in [
+            (
+                fact_schema(&["record_id"], &[]),
+                fact_schema(&["second_status"], &[]),
+                "a member repeats a search fact",
+            ),
+            (
+                fact_schema(&["first_status"], &["shared_detail"]),
+                fact_schema(&["second_status"], &["shared_detail"]),
+                "two members repeat one name",
+            ),
+        ] {
+            let schemas = fetch_set_schemas(
+                fact_schema(&["record_id", "record_namespace"], &[]),
+                first,
+                second,
+            );
+            assert_eq!(
+                refusal_cause(
+                    validate_prior_fact_bindings(&config, &schemas)
+                        .expect_err("the collision is refused")
+                ),
+                "fetch set stages must declare disjoint fact names",
+                "{reason}"
+            );
+        }
+    }
+
+    /// The allowlist is per member, not per acquisition: one member declaring
+    /// a fact does not license another to bind it, which is the whole reason a
+    /// set of members discloses less than a single fetch would.
+    #[test]
+    fn a_fetch_member_binds_only_the_facts_it_declared() {
+        let schemas = || {
+            fetch_set_schemas(
+                fact_schema(&["record_id", "record_namespace"], &[]),
+                fact_schema(&["first_status"], &[]),
+                fact_schema(&["second_status"], &[]),
+            )
+        };
+
+        // Both members bind `record_id`, and only the first declares it.
+        let narrowed = fetch_set_config("record_id", "record_namespace");
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(&narrowed, &schemas())
+                    .expect_err("a binding outside the member's own allowlist is refused")
+            ),
+            "fetch path binding references a fact the member did not declare"
+        );
+
+        // Declaring the bound fact is the only difference.
+        let declared = fetch_set_config("record_id", "record_id, record_namespace");
+        validate_prior_fact_bindings(&declared, &schemas())
+            .expect("a member may bind what it declared");
+    }
+
+    /// Rule 4 makes the merged fact names disjoint, so the merged count is the
+    /// sum of the stage counts exactly. Reading it at load is what keeps the
+    /// derivation's own input bound from failing an otherwise valid request.
+    #[test]
+    fn a_fetch_set_declares_no_more_facts_than_one_derivation_accepts() {
+        let config = fetch_set_config("record_id", "record_id");
+        let search = || fact_schema(&["record_id", "record_namespace"], &[]);
+        assert_eq!(2 + 31 + 31, crate::rhai_runtime::MAXIMUM_FACT_ENTRIES);
+
+        let inside = fetch_set_schemas(
+            search(),
+            wide_fact_schema("first", 31),
+            wide_fact_schema("second", 31),
+        );
+        validate_prior_fact_bindings(&config, &inside)
+            .expect("the merged fact set reaches the bound and stays inside it");
+
+        let beyond = fetch_set_schemas(
+            search(),
+            wide_fact_schema("first", 31),
+            wide_fact_schema("second", 32),
+        );
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(&config, &beyond)
+                    .expect_err("one fact past the bound is refused")
+            ),
+            "fetch set declares more facts than one derivation accepts"
+        );
+    }
+
+    /// A path binding carries one value into a request path, so a fact that is
+    /// not a scalar has never been bindable. A second multi-call form does not
+    /// relax it.
+    #[test]
+    fn a_prior_fact_binding_still_requires_a_scalar_fact() {
+        let structured = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["record_id", "record_namespace"],
+            "properties": {
+                "record_id": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["value"],
+                    "properties": {"value": {"type": "string"}},
+                },
+                "record_namespace": {"type": "string"},
+            },
+        });
+
+        let chained = multi_call_config(SEARCH_THEN_FETCH, &member_sources(&[FIRST_MEMBER_SOURCE]));
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(
+                    &chained,
+                    &BTreeMap::from([(SEARCH_FACT_SCHEMA.to_owned(), structured.clone())]),
+                )
+                .expect_err("a structured search fact is not bindable")
+            ),
+            "fetch path binding requires a scalar search fact"
+        );
+
+        let set = fetch_set_config("record_id", "record_id");
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(
+                    &set,
+                    &fetch_set_schemas(
+                        structured,
+                        fact_schema(&["first_status"], &[]),
+                        fact_schema(&["second_status"], &[]),
+                    ),
+                )
+                .expect_err("a structured search fact is not bindable")
+            ),
+            "fetch path binding requires a scalar search fact"
+        );
+    }
+
+    /// The frozen single fetch reads the whole search FactSet, so its bindings
+    /// are proven against the search schema alone and against no allowlist.
+    /// Admitting the set form through the same exhaustive match must leave that
+    /// reading exactly where Version 1 froze it.
+    #[test]
+    fn search_then_fetch_bindings_are_proven_against_the_whole_search_fact_set() {
+        let two_bindings = FIRST_MEMBER_SOURCE.replace(
+            "      pathTemplate: /v1/first/{record_id}\n      pathBindings:\n        record_id: {from: prior-fact, field: record_id}\n",
+            "      pathTemplate: /v1/first/{record_id}/{namespace}\n      pathBindings:\n        record_id: {from: prior-fact, field: record_id}\n        namespace: {from: prior-fact, field: record_namespace}\n",
+        );
+        assert_ne!(
+            two_bindings, FIRST_MEMBER_SOURCE,
+            "the second binding applies"
+        );
+        let config = multi_call_config(SEARCH_THEN_FETCH, &member_sources(&[&two_bindings]));
+
+        for (search, reason) in [
+            (
+                fact_schema(&["record_id", "record_namespace"], &[]),
+                "one fetch binds every required search fact",
+            ),
+            (
+                fact_schema(&["record_id"], &["record_namespace"]),
+                "and every declared one",
+            ),
+        ] {
+            validate_prior_fact_bindings(
+                &config,
+                &BTreeMap::from([(SEARCH_FACT_SCHEMA.to_owned(), search)]),
+            )
+            .unwrap_or_else(|_| panic!("{reason}"));
+        }
+
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(
+                    &config,
+                    &BTreeMap::from([(
+                        SEARCH_FACT_SCHEMA.to_owned(),
+                        fact_schema(&["record_id"], &[]),
+                    )]),
+                )
+                .expect_err("a fact the search does not declare is refused")
+            ),
+            "fetch path binding references an unknown search fact"
+        );
+    }
+
+    /// The whole set rule read together: two members, each declaring exactly
+    /// the search facts it binds, over three disjoint fact schemas whose merged
+    /// names stay inside the derivation's input bound.
+    #[test]
+    fn a_well_formed_fetch_set_satisfies_every_fact_schema_rule() {
+        let config = fetch_set_config("record_id", "record_id");
+        let schemas = fetch_set_schemas(
+            fact_schema(&["record_id", "record_namespace"], &[]),
+            fact_schema(&["first_status", "first_recorded_on"], &[]),
+            fact_schema(&["second_status", "second_recorded_on"], &[]),
+        );
+        validate_prior_fact_bindings(&config, &schemas).expect("the declared fetch set loads");
+
+        let mut incomplete = schemas;
+        incomplete.remove(SECOND_MEMBER_FACT_SCHEMA);
+        assert_eq!(
+            refusal_cause(
+                validate_prior_fact_bindings(&config, &incomplete)
+                    .expect_err("a member without a fact schema is refused")
+            ),
+            "fetch member fact schema is unavailable"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn writable_bundle_and_unknown_files_fail_closed() {
@@ -3087,6 +3710,118 @@ mod tests {
         assert_eq!(
             fault.fault().cause(),
             "the secret root directory the runtime file names is reachable by group or other"
+        );
+    }
+
+    /// One operator runtime document, written the way a deployment that
+    /// predates the acquisition gate is written: it says nothing about
+    /// acquisition capabilities, because there was nothing to say.
+    const OPERATOR_RUNTIME_DOCUMENT: &str = "version: 1
+bundleDirectory: /etc/registry-evidence/bundle
+listener:
+  bindHost: 127.0.0.1
+  port: 8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  timeoutMilliseconds: 2000
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+";
+
+    /// Both halves of the acquisition gate, from inside the loader.
+    ///
+    /// The bundle declaring the kind it needs states that intent beside the
+    /// requirement that uses it, which gates nothing: the same person wrote
+    /// both lines in the same file. The deployment that will serve it decides
+    /// separately, in a file the bundle author does not write, and silence
+    /// there means no.
+    #[test]
+    fn a_gated_acquisition_kind_binds_only_where_the_operator_enabled_it() {
+        let declared = fetch_set_config("record_id", "record_id");
+        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        assert_eq!(
+            refusal_cause(
+                validate_runtime_bindings(&declared, &silent)
+                    .expect_err("a silent deployment refuses the bundle")
+            ),
+            "the runtime configuration does not enable an acquisition capability the bundle requires"
+        );
+
+        let enabled = RuntimeConfig::parse_yaml(
+            format!(
+                "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
+            )
+            .as_bytes(),
+        )
+        .expect("the enabled operator runtime document parses");
+        validate_runtime_bindings(&declared, &enabled)
+            .expect("the deployment that enabled the kind binds the bundle");
+
+        // A bundle acquiring through the frozen Version 1 forms asks the
+        // operator for nothing, so every deployment that predates the gate
+        // keeps binding exactly the bundles it already bound.
+        let frozen = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("the acceptance bundle validates");
+        validate_runtime_bindings(&frozen, &silent)
+            .expect("a Version 1 bundle needs no operator capability");
+    }
+
+    /// New operator surface must not move the revision of a deployment that did
+    /// not ask for it. The runtime revision digests the exact runtime.yaml
+    /// bytes, so a file written before the acquisition gate existed keeps the
+    /// revision it already published; the pinned digest is what proves the
+    /// digest is still taken over those bytes and not over a serialization that
+    /// grew a member. The absent list also projects to nothing, so the same
+    /// deployment would keep its revision either way.
+    #[test]
+    fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
+        let revision =
+            compute_runtime_revision(OPERATOR_RUNTIME_DOCUMENT.as_bytes(), &BTreeMap::new())
+                .expect("the runtime revision computes");
+        assert_eq!(
+            revision, "sha256:1693e61df2bdad3835fefb03ca6a3990045d77e8f8468e84f68e547596039fe3",
+            "an operator who adopted nothing must keep the revision they published"
+        );
+
+        let config = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        assert!(config.acquisition_capabilities.is_empty());
+        assert!(
+            !serde_json::to_string(&config)
+                .expect("the runtime configuration projects")
+                .contains("acquisitionCapabilities"),
+            "an absent capability list must serialize to nothing at all"
+        );
+
+        // Recording the operator's decision is an edit to the file the digest
+        // covers, so the deployment that adopted the kind says so in its
+        // revision.
+        let adopted = format!(
+            "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
+        );
+        assert_ne!(
+            compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new())
+                .expect("the runtime revision computes"),
+            revision
         );
     }
 }

@@ -1,0 +1,11 @@
+type: object
+additionalProperties: false
+required:
+  - requestedFields
+  - resultLimit
+  - referenceNamespace
+properties:
+  requestedFields:
+    const: [civil_record_reference, reference_namespace]
+  resultLimit: {const: 2}
+  referenceNamespace: {const: urn:example:fixture:civil-record}

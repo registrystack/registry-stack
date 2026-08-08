@@ -1,0 +1,302 @@
+fixture: registry.evidence.source-shape.search-chain-style/v1
+classification: compatibility-shaped-local-mock
+synthetic_only: true
+server: {base_url: 'http://127.0.0.3:18084', bind: '127.0.0.3:18084'}
+reference_shape: Register search returning flat dotted declaration keys, then two declared fetch members
+scope: Only the OAuth client bootstrap and the consumed search, dereference, and relation-count boundaries
+acquisition_kind: search-then-fetch-set
+property_table_cell:
+  member_request_kind: both instances, one member per instance
+  search_fact_kind: reference
+  member_fact_kind: attested boolean, and count
+  negative_capability: attested set completeness
+  credential: static bearer, and per-source OAuth client credentials
+wire_properties:
+  flat_dotted_keys: >-
+    The register returns a declaration object whose keys are literally dotted
+    strings. A projection segment is therefore the whole dotted string and never
+    a nesting level: subject.reference is one segment, and subject.origin is one
+    segment whose value is an object with a real nesting level, code, beneath
+    it. Both the projection and the extract treat the dot as data.
+  silently_widened_query: >-
+    responses/search/widened-query.json and
+    responses/member-count/widened-query.json are what this register returns
+    when it ignored a filter clause it does not implement: its own count is far
+    above one while the bounded result page still arrives. Both extracts reach
+    ambiguous and neither reads the first result. This is the only guard that
+    catches a mis-declared search or member field, because such a typo is
+    invisible offline.
+  unindexed_filter_field_presents_as_an_outage: >-
+    A filter on a field this deployment has not indexed is refused with HTTP
+    500, which maps to the ordinary source-failure path and stops the
+    acquisition before any later stage runs. Which fields are filterable is a
+    provider-side deployment precondition. Evidence cannot validate it offline,
+    so a fixture that passes here proves the wire shape and not the register's
+    index configuration.
+  provider_count_consumed_as_a_value: >-
+    responses/member-count carries two register-supplied integers with different
+    jobs. total is the cardinality guard over holder records. holder.relatedTotal
+    is the count consumed as the value of related_record_count, which is the
+    counting family and is shaped for a bounded-integer concept form. The
+    contract prefers exactly this, a provider count plus at most one bounded
+    result.
+stages:
+  - id: search
+    role: search
+    responses: responses/search
+    validated_source_definition:
+      transport: http-json
+      baseUrl: http://127.0.0.3:18084
+      posture: record-transformed
+      authentication: {kind: static-bearer, tokenRef: secret:file/fixture-search-chain-search-token}
+      request:
+        method: POST
+        path: /registry/records/search
+        selectorInputs:
+          - role: subject
+            alternatives:
+              - {profile: civil-record-reference-v1, fields: [record_reference]}
+        prepareScript: adapters/search-prepare.rhai
+        adapterParameters:
+          registerScope: REGISTER-FIXTURE
+          recordStatus: ACTIVE
+          resultLimit: 2
+          resultOffset: 0
+        adapterParametersSchema: schemas/search-parameters.schema.yaml
+        preparationLimits:
+          query: forbidden
+          jsonBody: required
+          maximumJsonDepth: 8
+          maximumCollectionItems: 8
+          maximumStringBytes: 512
+          maximumNormalizedBytes: 4096
+        projection:
+          - /total
+          - /results/*/declaration/subject.reference
+          - /results/*/declaration/subject.origin/code
+        redirects: deny
+        timeoutMilliseconds: 3000
+        maximumResponseBytes: 65536
+        concurrencyLimit: 4
+      responseSchema: schemas/search-response.schema.yaml
+      extractScript: adapters/search.rhai
+      factSchema: schemas/search-facts.schema.yaml
+    request:
+      method: POST
+      path: /registry/records/search
+      query: {}
+      headers:
+        content-type: application/json
+        authorization: static-bearer injected from secret reference; exact value never snapshotted
+      body:
+        filter:
+          registerScope: REGISTER-FIXTURE
+          recordStatus: ACTIVE
+          subjectReference: {operator: exact, value: REF-SELECTOR-CANARY-0001}
+        limit: 2
+        offset: 0
+      response_shape: [results, total]
+      result_shape: Register index entry carrying a flat dotted declaration map
+      unexpected_request: fail test
+    facts: [subject_reference, register_origin_code]
+  - id: member-dereference
+    role: member
+    fact_inputs: [subject_reference]
+    responses: responses/member-dereference
+    validated_source_definition:
+      transport: http-json
+      baseUrl: http://127.0.0.3:18084
+      posture: record-transformed
+      authentication:
+        kind: oauth2-client-credentials
+        tokenEndpoint: http://127.0.0.3:18084/oauth/token
+        clientIdRef: secret:file/fixture-search-chain-client-id
+        clientSecretRef: secret:file/fixture-search-chain-client-secret
+        scope: fixture.read
+        credentialPlacement: form-body
+        maximumCacheSeconds: 300
+        assumedLifetimeSeconds: 600
+      request:
+        method: GET
+        pathTemplate: /registry/records/{record}
+        pathBindings:
+          record: {from: prior-fact, field: subject_reference}
+        fixedHeaders:
+          - {name: Accept, value: application/json}
+        selectorInputs: []
+        prepareScript: adapters/member-dereference-prepare.rhai
+        adapterParameters:
+          completenessAttested: attested-complete
+          completenessPartial: partial
+          maximumMatched: 2
+        adapterParametersSchema: schemas/member-dereference-parameters.schema.yaml
+        preparationLimits:
+          query: allowed
+          jsonBody: forbidden
+          maximumQueryPairs: 1
+          maximumQueryNameBytes: 16
+          maximumQueryValueBytes: 32
+          maximumNormalizedBytes: 1024
+        projection:
+          - /matched
+          - /record/status.setCompleteness
+        redirects: deny
+        timeoutMilliseconds: 3000
+        maximumResponseBytes: 65536
+        concurrencyLimit: 4
+      responseSchema: schemas/member-dereference-response.schema.yaml
+      extractScript: adapters/member-dereference.rhai
+      factSchema: schemas/member-dereference-facts.schema.yaml
+    request:
+      method: GET
+      path: /registry/records/REF-CANARY-0001
+      query: {}
+      headers:
+        accept: application/json
+        authorization: Bearer token from credential bootstrap; exact value never snapshotted
+      body: absent
+      response_shape: [matched, record]
+      result_shape: One register record carrying a flat dotted status map
+      unexpected_request: fail test
+    facts: [related_set_attested_complete]
+  - id: member-count
+    role: member
+    fact_inputs: [subject_reference]
+    responses: responses/member-count
+    validated_source_definition:
+      transport: http-json
+      baseUrl: http://127.0.0.3:18084
+      posture: record-transformed
+      authentication: {kind: static-bearer, tokenRef: secret:file/fixture-search-chain-relations-token}
+      request:
+        method: POST
+        path: /registry/relations/search
+        selectorInputs: []
+        prepareScript: adapters/member-count-prepare.rhai
+        adapterParameters:
+          registerScope: REGISTER-FIXTURE
+          relationRole: holder
+          resultLimit: 1
+          resultOffset: 0
+          maximumRelatedTotal: 64
+        adapterParametersSchema: schemas/member-count-parameters.schema.yaml
+        preparationLimits:
+          query: forbidden
+          jsonBody: required
+          maximumJsonDepth: 8
+          maximumCollectionItems: 8
+          maximumStringBytes: 512
+          maximumNormalizedBytes: 4096
+        projection:
+          - /total
+          - /results/*/holder.relatedTotal
+        redirects: deny
+        timeoutMilliseconds: 3000
+        maximumResponseBytes: 65536
+        concurrencyLimit: 4
+      responseSchema: schemas/member-count-response.schema.yaml
+      extractScript: adapters/member-count.rhai
+      factSchema: schemas/member-count-facts.schema.yaml
+    request:
+      method: POST
+      path: /registry/relations/search
+      query: {}
+      headers:
+        content-type: application/json
+        authorization: static-bearer injected from a second secret reference; exact value never snapshotted
+      body:
+        filter:
+          registerScope: REGISTER-FIXTURE
+          relationRole: holder
+          holderReference: {operator: exact, value: REF-CANARY-0001}
+        limit: 1
+        offset: 0
+      response_shape: [results, total]
+      result_shape: One holder summary carrying the register's own related-record count
+      unexpected_request: fail test
+    facts: [related_record_count]
+credential_bootstrap:
+  stage: member-dereference
+  method: POST
+  token_endpoint: 'http://127.0.0.3:18084/oauth/token'
+  grant_type: client_credentials
+  credential_placement: form-body
+  credential_placement_rule: The token request carries the client credentials in its body, so no credential reaches the request URL. Version 1 offers no query-string placement.
+  client_id: injected from secret reference
+  client_secret: injected from secret reference
+  maximum_response_bytes: 8192
+  maximum_cache_seconds: 300
+  token_response_fields: [access_token, token_type]
+  omitted_expires_in: The reference shape returns no expires_in, which RFC 6749 section 5.1 permits, so the fixture configures assumedLifetimeSeconds.
+  per_source_credentials: Each stage resolves its own secret references. The two static-bearer stages name different token references, so one stage's credential never authenticates another's request.
+selector_contracts:
+  identifier_only: {profile: civil-record-reference-v1, prepared_field: body.filter.subjectReference.value}
+  member_selectors: Neither member declares a selector input. A member receives only the allowlisted projection of the search FactSet, never the original selector, which is why the committed search fact value differs from the committed selector value.
+chain:
+  declared_order: [search, member-dereference, member-count]
+  execution_is_a_prefix: A stage that does not resolve stops the acquisition, so an execution is always a prefix of the declared order.
+  request_ceiling: 3 evidence-data requests, one plus the two declared members, plus one credential bootstrap
+  fan_out: prohibited
+  member_input_channels:
+    member-dereference: path binding, the record-dereference channel
+    member-count: the JSON body its prepare builds, the search channel
+  prior_fact_projection: Each member receives only the projection of the search FactSet onto its declared fact_inputs. register_origin_code is allowlisted for no member, so it may not appear in any member path, query, or body.
+  union_to_derivation: [subject_reference, register_origin_code, related_set_attested_complete, related_record_count]
+cardinality:
+  zero: [responses/search/no-match.json, responses/member-dereference/no-match.json, responses/member-count/no-match.json]
+  one: [responses/search/match.json, responses/member-dereference/match.json, responses/member-count/match.json]
+  multiple: [responses/search/ambiguous.json, responses/member-dereference/ambiguous.json, responses/member-count/ambiguous.json]
+  widened: [responses/search/widened-query.json, responses/member-count/widened-query.json]
+  inconsistent: [responses/search/inconsistent-cardinality.json, responses/member-dereference/inconsistent-cardinality.json, responses/member-count/inconsistent-cardinality.json]
+  maximum_results: {search: 2, member-dereference: 1, member-count: 1}
+  page_traversal: prohibited
+  evidence_data_requests_after_response: 0
+extraction:
+  match_facts: [subject_reference, register_origin_code, related_set_attested_complete, related_record_count]
+  missing_fact: [responses/search/missing-fact.json, responses/member-dereference/missing-fact.json, responses/member-count/missing-fact.json]
+  error_envelope: [responses/search/error-envelope.json, responses/member-dereference/error-envelope.json, responses/member-count/error-envelope.json]
+  rule: Each stage owns its own cardinality. A count of zero maps to no_match, a count of one with one bounded result maps to match, and a count above one maps to ambiguous without a second request or a local comparison.
+  dotted_key_rule: subject.reference, subject.origin, and status.setCompleteness are literally dotted property names. The extract indexes them as whole keys and never walks a dot.
+  declaration_rule: The broader declaration and record are transient source data. Each adapter exposes only its declared facts.
+  projection_rule: Rust removes ids, contact channels, display names, timestamps, and every unrelated field before extract/2.
+failures:
+  - {case: http-401, public: dependency_unavailable}
+  - {case: http-403, public: dependency_unavailable}
+  - {case: http-429, public: dependency_unavailable, retry_after: bounded}
+  - {case: http-500, public: dependency_unavailable, stands_for: a filter on an unindexed field}
+  - {case: timeout, public: dependency_unavailable}
+  - {case: redirect, expected: reject-without-follow}
+  - {case: invalid-json, public: dependency_unavailable}
+  - {case: wrong-media-type, public: dependency_unavailable}
+  - {case: oversized-response, public: dependency_unavailable}
+  - {case: error-envelope, public: dependency_unavailable}
+redaction_canaries:
+  committed_source_and_selector:
+    - REF-SELECTOR-CANARY-0001
+    - REF-CANARY-0001
+    - ORIGIN-CANARY-DO-NOT-FORWARD
+    - SOURCE-CONTACT-CANARY-DO-NOT-LOG
+    - SOURCE-HOLDER-CANARY-DO-NOT-LOG
+  runtime_generated_secret_classes: [static-bearer, oauth-client-id, oauth-client-secret, oauth-access-token]
+minimization:
+  acquisition: disclosure-minimized only; one bounded search and two bounded member requests, each returning a broader record the projection removes
+  response_posture: >-
+    record-transformed. Every stage returns a broader record than it consumes and
+    every one of those fixtures carries an unrelated synthetic canary, so the
+    chain's weakest posture is also its only posture.
+  persistence: prohibited
+  diagnostics: no declaration field, record field, selector, source fact, credential, token, or response body
+claim: Compatibility-shaped fixture only; not an emulator, connector certification, maintained vendor integration, or legal-parent matching implementation.
+relationship_boundary: A zero-result register search response is no_match and can never be interpreted as a conclusive negative relationship fact.
+counted_zero_boundary: >-
+  This profile adds no absence-as-fact rule. The one sanctioned reading of zero
+  as a counted zero is responses/member-count/counted-zero.json, where an
+  earlier stage already established the subject in this register with a real
+  match and the register then reports its own count of zero related records.
+  That zero is the register's answer, not the acquisition's silence, and it
+  stays a match carrying the value 0.
+conjunction_boundary: >-
+  The relationship reading of this chain is all-positive: every declared member
+  must resolve a record. A negative leg would need a positive completeness
+  attestation to license it, which is what related_set_attested_complete is for
+  and why it is a fact rather than an inference from a missing member.

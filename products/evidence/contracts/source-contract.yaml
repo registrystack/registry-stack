@@ -2,7 +2,8 @@ contract: registry.evidence.fixed-http-json-source/v1
 status: frozen
 ownership:
   governed_bundle:
-    - requirement acquisition kind and its one fixed source, or fixed search and fetch sources
+    - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
+    - the gated acquisition kinds the bundle declares it uses
     - each source's fixed origin, acquisition posture, authentication kind, and logical secret references
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
@@ -10,6 +11,7 @@ ownership:
     - optional logical TLS trust-profile name
   runtime_yaml:
     - bundle directory, listener and process bounds
+    - the gated acquisition kinds this deployment enables; a bundle needing one absent from that list is refused before serving
     - file-secret root and audit-storage path
     - exact private-CA file binding for each governed logical TLS trust profile
   runtime_override: prohibited
@@ -21,8 +23,10 @@ evidence_data_request:
   count:
     single: Exactly one per evaluation.
     search-then-fetch: One search, followed only after a unique schema-valid match by one fetch; the ceiling is exactly two.
+    search-then-fetch-set: One search, followed only after a unique schema-valid match by each declared fetch member in declared order; the ceiling is one plus the declared member count, at most five. The count is fixed by the bundle before any request is made, and no response can raise it, lower it, or reorder it. A member that does not resolve stops the acquisition, so an execution is always a prefix of the declared sequence.
     common_order: Successful authorization and request rate limiting occur once. Each actual source call requires its own durable access audit and complete RequestParts validation before credential resolution.
-  retry: The HTTP client disables transport retry explicitly, so each configured stage yields at most one connection attempt and never creates a third evidence-data request.
+  retry: The HTTP client disables transport retry explicitly, so each configured stage yields at most one connection attempt and never creates an evidence-data request the declared acquisition did not already fix.
+  acquisition_budget: A multi-call acquisition kind may declare one whole-acquisition ceiling in milliseconds, in the same [1, 30000] range one request carries. It bounds the source exchanges and the transitions between stages and never crosses a durable audit append. Exhaustion is a dependency failure naming the last stage actually executed, distinct from a per-source timeout.
   owner: Core runtime.
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
@@ -40,7 +44,8 @@ evidence_data_request:
     fixed: One normalized absolute path.
     template: A placeholder occupies one complete segment and binds directly through tagged pathBindings either to one already authorized selector role, profile, and field or, on a fetch source only, one scalar fact required by the preceding search fact schema.
     prior_fact: Rust validates the search FactSet before path materialization; only string, signed 64-bit integer, and boolean facts can fill a fetch segment, using the same single-pass encoding and hostile-value rejection as selectors.
-    template_reachability: A selector binding is mandatory against the selector set a request activates, not against the union of the sets. Every allowed set must therefore carry each selector-bound role and profile, and plan compilation refuses the source otherwise. A prior-fact binding is instead proven at startup against every search fact schema that can precede that fetch source.
+    template_reachability: A selector binding is mandatory against the selector set a request activates, not against the union of the sets. Every allowed set must therefore carry each selector-bound role and profile, and plan compilation refuses the source otherwise. A prior-fact binding is instead proven at startup against every search fact schema that can precede that fetch source, and, where the acquisition kind declares one, against that member's own closed allowlist of search fact names.
+    prior_fact_projection: A fetch stage receives only the prior facts its acquisition kind gives it. Under search-then-fetch that is the whole validated search FactSet. Under search-then-fetch-set each member receives only the projection of that FactSet onto its declared allowlist, and the derivation receives the union of every stage, whose fact names startup has proven pairwise disjoint. The projection governs every channel a fact can leave through, including a request body that preparation builds, which no static binding check inspects; preparation is handed the projected map alone and so cannot name a fact outside the allowlist.
     encoding: Rust rejects missing, extra, duplicated, empty, slash, backslash, percent, control, and dot-segment values and percent-encodes each accepted segment exactly once.
     script_authority: prohibited
   fixed_headers:
@@ -128,7 +133,7 @@ cardinality:
   outcomes: [match, no_match, ambiguous]
   facts_only_on: match
   prohibited:
-    - broad candidate retrieval, candidate exposure, score comparison, candidate choice, page traversal, retry, response-selected source or transport, a third evidence-data request, or any acquisition kind beyond single and search-then-fetch
+    - broad candidate retrieval, candidate exposure, score comparison, candidate choice, page traversal, retry, response-selected source or transport, an evidence-data request the declared acquisition kind did not already fix, or any acquisition kind beyond single, search-then-fetch, and search-then-fetch-set
     - converting provider inconsistency, returned-subject mismatch, or incomplete relationship data into no_match or an authoritative false concept
 authentication:
   none:
@@ -157,7 +162,7 @@ authentication:
       - Cache lifetime is clamped to provider expiry and the configured maximum.
       - Token request and response are unavailable to Rhai and fully redacted.
     token_lifetime_rule: RFC 6749 section 5.1 makes expires_in recommended rather than required, so a token response carrying only access_token and token_type is accepted when the bundle configures assumedLifetimeSeconds. The assumed lifetime is a governed positive bundle value, never inferred from the token, and the cache is still clamped to the configured maximum. A provider that omits expires_in without a configured assumed lifetime, or returns a zero or non-numeric expires_in, remains a credential failure.
-    token_extension_member_rule: RFC 6749 section 5.1 permits members beyond the ones it defines, and deployed authorization servers send them, so a token response member Version 1 does not read is ignored rather than refused. Ignoring is not trusting: an unread member is never a credential, is never available to Rhai, and is scrubbed with the rest of the parsed response. Every member Version 1 does read stays closed, so a wrong type or a scope other than the configured one remains a credential failure, and duplicate members remain a parse failure, which is what prevents a second access_token arriving as an extension.
+    token_extension_member_rule: 'RFC 6749 section 5.1 permits members beyond the ones it defines, and deployed authorization servers send them, so a token response member Version 1 does not read is ignored rather than refused. Ignoring is not trusting: an unread member is never a credential, is never available to Rhai, and is scrubbed with the rest of the parsed response. Every member Version 1 does read stays closed, so a wrong type or a scope other than the configured one remains a credential failure, and duplicate members remain a parse failure, which is what prevents a second access_token arriving as an extension.'
     credential_placements: [basic-header, form-body]
     credential_placement_rule: RFC 6749 section 2.3.1 defines Basic authentication and the request-body parameters and requires that those parameters never appear in the request URI. Version 1 offers no query-string placement, so no client identifier or secret can reach an authorization-server, proxy, or ingress URL log. The token URL, body, response, and debug output are still fully redacted.
     token_endpoint_transport: The same HTTPS-or-explicit-numeric-loopback rule as the evidence-data origin.
@@ -182,7 +187,7 @@ acquisition_postures:
   record-transformed:
     meaning: A broader legacy record is transiently transformed in memory.
     claim: Disclosure minimization only.
-  chained_rule: A search-then-fetch requirement has the weaker of its two declared source postures; chaining never upgrades a minimization claim.
+  chained_rule: A multi-stage requirement has the weakest of every declared source posture it may call, whether that is two sources or five; chaining never upgrades a minimization claim, and adding a stage can only weaken one.
 failure_classes:
   transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]

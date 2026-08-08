@@ -1,0 +1,24 @@
+# Shape of the projected relation-search response, checked before extraction
+# runs. total is the cardinality guard and holder.relatedTotal is the count the
+# register supplies as a value, so the two integers are bounded differently.
+type: object
+additionalProperties: false
+required: [total, results]
+properties:
+  total:
+    type: integer
+    minimum: 0
+    maximum: 1000000
+  results:
+    type: array
+    minItems: 0
+    maxItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        "holder.relatedTotal":
+          type: integer
+          minimum: 0
+          maximum: 64

@@ -21,6 +21,17 @@
 //! of the access-token fields both products share. It does not discover Mint,
 //! validate either product, read a client registry or key, or make an
 //! authorization decision. The product `check` commands remain authoritative.
+//!
+//! The acquisition check is the same kind of restatement over the two halves of
+//! the acquisition gate: the bundle names the acquisition kinds it needs, the
+//! runtime file names the kinds this deployment may serve, and Evidence refuses
+//! a deployment where the two disagree. That refusal is value-free by design and
+//! names no file to edit, so this reports the gap and names the file and the
+//! entry that closes it, on whichever half is silent. It also renders what each
+//! requirement will call, in order, so an
+//! adopter can read a bundle's acquisition without running it. Sources and fact
+//! names are configuration and appear; a fact value never does, because this
+//! acquires nothing and holds none.
 
 use std::{
     collections::BTreeSet,
@@ -43,6 +54,16 @@ const MINT_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 /// Registry Mint's default public-key route when `signing.jwksPath` is omitted.
 const DEFAULT_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
+
+/// The acquisition kinds an operator must enable in `runtime.yaml` before a
+/// deployment serves them.
+///
+/// The Evidence runtime owns this vocabulary and remains the only authority on
+/// it; it is restated here because this walk reads deployment documents rather
+/// than linking the runtime. The frozen Version 1 forms are deliberately
+/// absent, exactly as they are in both published contracts: a requirement
+/// acquiring through one asks the operator for nothing.
+const GATED_ACQUISITION_KINDS: [&str; 1] = ["search-then-fetch-set"];
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -77,6 +98,7 @@ struct Check {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DoctorReport {
     checks: Vec<Check>,
     passed: bool,
@@ -84,6 +106,10 @@ struct DoctorReport {
     /// count for coverage otherwise: six checks say nothing about whether the
     /// bundle beneath them held four files or four hundred.
     inspected: usize,
+    /// What each requirement will call, in order. This is a description, not a
+    /// check: a bundle whose acquisition is well formed still renders here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    acquisition_plans: Vec<AcquisitionPlanReport>,
 }
 
 pub fn run(args: DoctorArgs) -> Result<ExitCode> {
@@ -106,6 +132,14 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     ];
     checks.extend(check_secrets(project, &runtime, &runtime_path, &bundle));
     checks.push(check_audit(project, &runtime, &runtime_path));
+    let (acquisition, acquisition_plans) = check_acquisition(
+        project,
+        &runtime,
+        &runtime_path,
+        &bundle,
+        &bundle_config_path,
+    );
+    checks.push(acquisition);
     if let Some(mint_config_path) = args.mint_config.as_deref() {
         checks.push(check_mint_compatibility(
             project,
@@ -121,6 +155,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
         checks,
         passed,
         inspected,
+        acquisition_plans,
     };
 
     if args.json {
@@ -262,6 +297,279 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
         require_sole_owner(&mut run, &candidate, &metadata);
     }
     run.finish()
+}
+
+/// One requirement's declared acquisition, projected far enough to say what the
+/// deployment will call and what it must be allowed to call.
+///
+/// Like the paired-Mint projection, this reads the fields it needs and leaves
+/// the rest of the bundle to `evidence check`. It is deliberately not closed
+/// against unknown members: a bundle written for a later runtime must still
+/// render here rather than be reported as broken by adopter tooling.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum AcquisitionProjection {
+    Single {
+        source: String,
+    },
+    SearchThenFetch {
+        search: String,
+        fetch: String,
+    },
+    SearchThenFetchSet {
+        search: String,
+        fetch: Vec<FetchMemberProjection>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchMemberProjection {
+    source: String,
+    fact_inputs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequirementProjection {
+    id: String,
+    acquisition: AcquisitionProjection,
+}
+
+impl AcquisitionProjection {
+    /// The kind, spelled as configuration spells it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Single { .. } => "single",
+            Self::SearchThenFetch { .. } => "search-then-fetch",
+            Self::SearchThenFetchSet { .. } => "search-then-fetch-set",
+        }
+    }
+
+    /// The capability an operator must enable before this acquisition serves.
+    /// The frozen Version 1 forms require none.
+    fn required_capability(&self) -> Option<&'static str> {
+        match self {
+            Self::Single { .. } | Self::SearchThenFetch { .. } => None,
+            Self::SearchThenFetchSet { .. } => Some("search-then-fetch-set"),
+        }
+    }
+
+    /// The ordered calls this acquisition makes, read from configuration alone.
+    fn stages(&self) -> Vec<PlannedStageReport> {
+        match self {
+            Self::Single { source } => vec![PlannedStageReport {
+                source: source.clone(),
+                role: "search",
+                inputs: StageInputsReport::None,
+            }],
+            Self::SearchThenFetch { search, fetch } => vec![
+                PlannedStageReport {
+                    source: search.clone(),
+                    role: "search",
+                    inputs: StageInputsReport::None,
+                },
+                PlannedStageReport {
+                    source: fetch.clone(),
+                    role: "member",
+                    inputs: StageInputsReport::EveryPriorFact,
+                },
+            ],
+            Self::SearchThenFetchSet { search, fetch } => {
+                let mut stages = vec![PlannedStageReport {
+                    source: search.clone(),
+                    role: "search",
+                    inputs: StageInputsReport::None,
+                }];
+                stages.extend(fetch.iter().map(|member| PlannedStageReport {
+                    source: member.source.clone(),
+                    role: "member",
+                    inputs: StageInputsReport::Declared(member.fact_inputs.clone()),
+                }));
+                stages
+            }
+        }
+    }
+}
+
+/// The ordered calls one requirement's acquisition makes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcquisitionPlanReport {
+    requirement: String,
+    kind: &'static str,
+    stages: Vec<PlannedStageReport>,
+}
+
+/// One call in that order: the source it reaches, the role it plays, and what an
+/// earlier call contributes to its request.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannedStageReport {
+    source: String,
+    role: &'static str,
+    inputs: StageInputsReport,
+}
+
+/// What one call receives from the calls before it. These are fact names, which
+/// are configuration; a fact value is acquired at request time and is never
+/// available to, or wanted by, this walk.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum StageInputsReport {
+    /// The first call, which reads no prior fact.
+    None,
+    /// Every fact the preceding call produced, which is what the frozen
+    /// two-call form hands on.
+    EveryPriorFact,
+    /// Only the fact names this member declared, in its declared order.
+    Declared(Vec<String>),
+}
+
+impl StageInputsReport {
+    /// What this call reads from the calls before it, as a report line says it.
+    fn phrase(&self) -> String {
+        match self {
+            Self::None => "reads no prior fact".to_owned(),
+            Self::EveryPriorFact => "reads every fact the search produced".to_owned(),
+            Self::Declared(names) => format!("reads {}", names.join(", ")),
+        }
+    }
+}
+
+/// Both halves of the acquisition gate, and what each requirement will call.
+///
+/// A bundle names the gated kinds its requirements use, and the deployment that
+/// will serve it enables them separately, in a file the bundle author does not
+/// write. Neither half gates anything alone, and Evidence refuses the
+/// deployment at startup when either one leaves a requirement's kind unstated.
+/// Those refusals name no file, so this names the file and the entry for each.
+fn check_acquisition(
+    project: &Path,
+    runtime: &YamlValue,
+    runtime_path: &Path,
+    bundle: &YamlValue,
+    bundle_config_path: &Path,
+) -> (Check, Vec<AcquisitionPlanReport>) {
+    let mut run = CheckRun::new("acquisition", project);
+    run.inspected += 1;
+    let enabled = gate_half(&mut run, runtime, runtime_path, "enables");
+
+    run.inspected += 1;
+    let declared = gate_half(&mut run, bundle, bundle_config_path, "declares");
+    let mut plans = Vec::new();
+    let mut undeclared: Vec<&'static str> = Vec::new();
+    let mut unenabled: Vec<&'static str> = Vec::new();
+    for requirement in bundle
+        .get("requirements")
+        .and_then(YamlValue::as_sequence)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let Ok(projected) = serde_norway::from_value::<RequirementProjection>(requirement.clone())
+        else {
+            // Not passed over in silence: an acquisition this projection does
+            // not recognize is one whose calls it cannot render and whose gate
+            // it cannot answer either.
+            run.refuse(
+                bundle_config_path,
+                "declares a requirement acquisition this check does not recognize; `evidence check` decides".to_owned(),
+            );
+            continue;
+        };
+        if let Some(capability) = projected.acquisition.required_capability() {
+            if !declared.iter().any(|entry| entry == capability)
+                && !undeclared.contains(&capability)
+            {
+                undeclared.push(capability);
+            }
+            if !enabled.iter().any(|entry| entry == capability) && !unenabled.contains(&capability)
+            {
+                unenabled.push(capability);
+            }
+        }
+        plans.push(AcquisitionPlanReport {
+            requirement: projected.id,
+            kind: projected.acquisition.kind(),
+            stages: projected.acquisition.stages(),
+        });
+    }
+
+    // The capability names are the closed published vocabulary, not document
+    // values, so the entry an author or an operator must add can be stated
+    // exactly.
+    for capability in undeclared {
+        run.refuse(
+            bundle_config_path,
+            format!(
+                "does not declare the {capability} acquisition capability a requirement in it uses; add acquisitionCapabilities: [{capability}]"
+            ),
+        );
+    }
+    for capability in unenabled {
+        run.refuse(
+            runtime_path,
+            format!(
+                "does not enable the {capability} acquisition capability a requirement in this bundle needs; add acquisitionCapabilities: [{capability}]"
+            ),
+        );
+    }
+
+    (run.finish(), plans)
+}
+
+/// One half of the gate, read under the three rules the runtime applies to
+/// both: a list, of names this release defines, each named once.
+///
+/// `states` is the verb for the half being read, because a deployment enables a
+/// capability and a bundle declares one, and a refusal carrying the other
+/// half's verb would send a reader to the wrong file.
+fn gate_half(run: &mut CheckRun, document: &YamlValue, path: &Path, states: &str) -> Vec<String> {
+    let listed = match document.get("acquisitionCapabilities") {
+        // Absent states nothing beyond the frozen Version 1 forms, which is the
+        // default posture and what most deployments and most bundles say.
+        None => return Vec::new(),
+        Some(value) => match capability_list(value) {
+            Some(listed) => listed,
+            None => {
+                run.refuse(
+                    path,
+                    "names acquisitionCapabilities that are not a list of capability names"
+                        .to_owned(),
+                );
+                return Vec::new();
+            }
+        },
+    };
+    let mut named: Vec<String> = Vec::new();
+    for capability in listed {
+        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
+            run.refuse(
+                path,
+                format!("{states} an acquisition capability this release does not define; the runtime refuses the deployment at startup"),
+            );
+        }
+        // A repeat states nothing a single entry does not, which is why the
+        // runtime requires each list to be unique rather than tolerating it,
+        // and why doctor must not read the half as stated.
+        if named.contains(&capability) {
+            run.refuse(
+                path,
+                "lists the same acquisition capability twice; the runtime refuses the deployment at startup".to_owned(),
+            );
+        } else {
+            named.push(capability);
+        }
+    }
+    named
+}
+
+/// A capability list, when the value under `acquisitionCapabilities` is one.
+fn capability_list(value: &YamlValue) -> Option<Vec<String>> {
+    value
+        .as_sequence()?
+        .iter()
+        .map(|entry| entry.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// The Evidence fields whose values must agree with a paired Mint deployment.
@@ -741,6 +1049,18 @@ fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
             lines.push(format!("    {}: {}", finding.path, finding.problem));
         }
     }
+    for plan in &report.acquisition_plans {
+        lines.push(format!("PLAN: {} ({})", plan.requirement, plan.kind));
+        for (position, stage) in plan.stages.iter().enumerate() {
+            lines.push(format!(
+                "    {}. {} ({}) {}",
+                position + 1,
+                stage.source,
+                stage.role,
+                stage.inputs.phrase()
+            ));
+        }
+    }
     let passed = report.checks.iter().filter(|check| check.passed).count();
     let failed = report.checks.len() - passed;
     lines.push(format!(
@@ -754,5 +1074,42 @@ fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
         } else {
             println!("{line}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{YamlValue, GATED_ACQUISITION_KINDS};
+
+    /// The Evidence runtime owns this vocabulary and this crate does not link
+    /// it, so the restatement above is the one place a new gated kind can be
+    /// forgotten without any compiler noticing: doctor would simply stop
+    /// reporting the gap it exists to report. The published runtime contract is
+    /// the document both halves of the gate already answer to, so it is what
+    /// the restatement is held against.
+    #[test]
+    fn the_restated_gated_kinds_match_the_published_runtime_contract() {
+        let contract = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/evidence/contracts/runtime.schema.yaml"
+        );
+        let schema: YamlValue = serde_norway::from_slice(
+            &std::fs::read(contract).expect("the published runtime contract is readable"),
+        )
+        .expect("the published runtime contract parses");
+        let published = schema
+            .get("properties")
+            .and_then(|properties| properties.get("acquisitionCapabilities"))
+            .and_then(|capabilities| capabilities.get("items"))
+            .and_then(|items| items.get("enum"))
+            .and_then(YamlValue::as_sequence)
+            .expect("the runtime contract enumerates the gated acquisition kinds")
+            .iter()
+            .map(|kind| kind.as_str().expect("each gated kind is a name").to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            published, GATED_ACQUISITION_KINDS,
+            "doctor's restated vocabulary drifted from the published contract"
+        );
     }
 }
