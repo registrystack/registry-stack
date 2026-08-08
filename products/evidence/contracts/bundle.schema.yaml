@@ -969,9 +969,12 @@ $defs:
               to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple
               String Comparison, so it is an opaque identifier rather than a URL and is signed
               byte for byte. It names who may accept the assertion, never where it is sent.
+              A blank value is refused here rather than at the first token request, where
+              signing rejects a whitespace-only audience as empty.
             type: string
             minLength: 1
             maxLength: 512
+            pattern: \S
           scope:
             description: >-
               Fixed scope requested in the client-credentials exchange; a token response reporting

@@ -1995,6 +1995,13 @@ impl SourceAuthentication {
                         512,
                         "OAuth client assertion audience",
                     )?;
+                    // Signing refuses a whitespace-only audience, so a bundle
+                    // that carried one would satisfy its own contract and then
+                    // fail at the first token request as a credential error
+                    // naming nothing the operator can act on.
+                    if client_assertion_audience.trim().is_empty() {
+                        return invalid("OAuth client assertion audience is blank");
+                    }
                 }
                 if let Some(scope) = scope {
                     validate_string(scope, 1, 512, "OAuth scope")?;
@@ -5472,6 +5479,11 @@ mod tests {
             (Some("a"), true),
             (Some("a".repeat(512).as_str()), true),
             (Some(""), false),
+            // Blank is refused here rather than at the first token request,
+            // where signing rejects a whitespace-only audience as empty. A
+            // bundle that passes its own contract and then fails as a
+            // credential error names nothing the operator can act on.
+            (Some("   "), false),
             (Some("a".repeat(513).as_str()), false),
             (None, true),
         ] {
