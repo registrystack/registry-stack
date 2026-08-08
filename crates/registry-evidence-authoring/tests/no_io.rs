@@ -5,30 +5,67 @@
 //! unsaved buffer, and what keeps the rules usable from a context that has no
 //! project directory at all, so it is worth more than a paragraph.
 //!
-//! Two sweeps hold it. The first reads this crate's own sources and refuses the
-//! spellings that would perform input or output, at the call sites as well as
-//! in the imports, and it is held to that from both sides: a corpus of hostile
-//! source it must refuse, and a corpus of ordinary source it must not, because
-//! a sweep that cries wolf is argued down to nothing and a sweep that refuses
-//! nothing was never anything. Where those two pull against each other the
-//! exceptions are written down by name. The second sweep reads the manifest and
+//! **What this file is not.** It is not the guarantee. The guarantee is the
+//! lint configuration in `clippy.toml` beside this crate, which disallows the
+//! types, methods and macros that would perform input or output, and it is
+//! worth more than everything here because clippy matches the path the compiler
+//! resolved rather than the characters an author typed. An alias, a type alias,
+//! a `Default::default()` against an annotated binding and a module redirected
+//! by `#[path]` all arrive at the lint as the one real name. Every earlier
+//! attempt to hold this invariant by reading text was defeated by a spelling
+//! nobody had thought of, three times, and each defeat was answered by a wider
+//! list until the list refused hundreds of ordinary lines in the crates next
+//! door. That is the road that ends with the check deleted.
+//!
+//! **What this file is.** A tripwire for the shapes it names, and two things
+//! the lint cannot do.
+//!
+//! The source sweep reads this crate's own sources and refuses the spellings it
+//! lists, at the call sites as well as in the imports. It is held to that from
+//! both sides: a corpus of hostile source it must refuse, and a corpus of
+//! ordinary source it must not. Where a shape cannot be separated from ordinary
+//! work by reading text, the sweep says nothing and `BEYOND_THE_SWEEP` records
+//! which lint entry answers for it instead. Read it as a fast, local warning
+//! about a spelling somebody wrote, not as a statement about every spelling
+//! they could have written.
+//!
+//! The two things the lint cannot do are here in full. A `#[path]` attribute
+//! has resolved into an ordinary module before any lint runs, so the sweep is
+//! what refuses one, in any attribute and any spelling. And a manifest sweep
 //! refuses a dependency that could perform input or output on this crate's
-//! behalf, because a rule that only searched source text would be satisfied by
-//! a crate that called an HTTP client in one line.
+//! behalf, because no rule about this crate's own code is troubled by a crate
+//! next door that calls an HTTP client in one line.
 //!
-//! Neither sweep is a sandbox, and the dependency that could read a file on
-//! this crate's behalf is `rhai`: an engine straight from `Engine::new` opens
-//! whatever path a program's `import` statement names. The engine this crate
-//! builds gives that resolver up, so the capability is absent rather than
-//! merely unused, and the sweep refuses the entry points that would want it
-//! back, including the synonyms of `Engine::new` that would arrive under a name
-//! the guard does not read.
+//! **What runs rather than reads.** Reading source is not watching it run, so
+//! two tests here run the checks against a derivation that imports a module and
+//! watch what happens to the module's path. One shows the verdict does not move
+//! when the file behind that path does; the other puts a named pipe there,
+//! which nothing but an open can wait on, and watches the crate not wait. That
+//! last one is the only check in this file that observes behaviour rather than
+//! spelling, and it is the only one that would notice a file being read by a
+//! route nobody wrote down.
 //!
-//! Reading source is not watching it run, so the last two tests here run the
-//! checks against a derivation that imports a module and watch what happens to
-//! the module's path. One shows the verdict does not move when the file behind
-//! that path does; the other puts a named pipe there, which nothing but an open
-//! can wait on, and watches the crate not wait.
+//! **What none of it proves.** Not that this crate performs no input or output.
+//! It proves that no path this configuration names is reachable by name from
+//! this crate's compiled source, that the crates it links are the seven listed
+//! here, that the one rhai engine it builds has given up its module resolver
+//! and both of its printing handlers, and that reading an authored `import`
+//! does not open the file it names. A capability arriving by a route none of
+//! these lists covers is not covered.
+
+// The lint configuration beside this crate is scoped to the package, and this
+// test binary is in it. A test that watches the library not read a file has to
+// read files itself: it writes the modules an authored `import` names, makes
+// the named pipe, and builds the armed engine that proves the probe can tell a
+// reader from a non-reader. Allowing that here is the same boundary the
+// dependency sweep below draws when it leaves `dev-dependencies` alone: the
+// invariant is about what this library links into a caller, and a test binary
+// is not that.
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::disallowed_macros
+)]
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
@@ -97,27 +134,31 @@ const FORBIDDEN: &[(&str, &str)] = &[
     // of these asks the operating system about a path instead of reading the
     // characters in it, and each is written as a method, so each is written
     // down as one: a bare `exists` is a word that belongs to prose as well.
+    //
+    // `is_file`, `is_dir` and `is_symlink` are not here, and their absence is
+    // the boundary this sweep is honest about. On a `Path` each is a system
+    // call; on the `Metadata` or `FileType` a caller already holds, each is a
+    // bit test that asks nobody anything, and reading text cannot tell the two
+    // receivers apart. Refusing them refuses hundreds of ordinary lines in the
+    // crates next door, which is how a sweep gets deleted. The lint beside this
+    // one refuses them by resolved path, where `std::path::Path::is_dir` and
+    // `std::fs::Metadata::is_dir` are simply different functions.
     (".exists()", "asks whether a path is there"),
     (".try_exists()", "asks whether a path is there"),
-    (".is_file()", "asks what a path is"),
-    (".is_dir()", "asks what a path is"),
-    (".is_symlink()", "asks what a path is"),
     (".metadata()", "stats a file"),
     (".symlink_metadata()", "stats a file without following it"),
     (".canonicalize()", "resolves a path against the file system"),
     (".read_link()", "reads where a link points"),
     ("include_str!", "reads a file at build time"),
     ("include_bytes!", "reads a file at build time"),
-    // Code the sweep would otherwise never read. It walks `src`, so a splice
-    // and an out-of-tree module are both ways of compiling source it never
-    // opens; refusing the two spellings keeps every line it judges the crate's.
+    // Code the sweep would otherwise never read: it walks `src`, so a splice is
+    // a way of compiling source it never opens. The other way, an out-of-tree
+    // module, is refused by `out_of_tree_modules` instead, because the word
+    // that redirects one can sit inside any attribute rather than only at the
+    // front of a literal `#[path`.
     (
         "include!",
         "splices code from a file this sweep never reads",
-    ),
-    (
-        "#[path",
-        "compiles a module from a file this sweep never reads",
     ),
     ("eval_file", "runs a program from a file"),
     ("run_file", "runs a program from a file"),
@@ -182,6 +223,22 @@ const NOT_ENTRY_POINTS: &[(&str, &str)] = &[
     (
         "clap::Command",
         "a command line, which is parsed rather than run",
+    ),
+    // The three names that make `io::` worth keeping short. An error, its kind
+    // and the result alias are pure types: this workspace returns them from
+    // functions that never touch a stream, and a sweep that called them input
+    // or output would refuse hundreds of ordinary lines and be deleted for it.
+    (
+        "io::Error",
+        "an error value, which reads and writes nothing",
+    ),
+    (
+        "io::ErrorKind",
+        "an error classification, which reads and writes nothing",
+    ),
+    (
+        "io::Result",
+        "a result alias, which reads and writes nothing",
     ),
 ];
 
@@ -249,23 +306,38 @@ fn without_the_names_that_open_nothing(text: &str) -> String {
     readable
 }
 
+/// Whether a line is prose rather than code.
+///
+/// A line that begins with `//` compiles to nothing, and the prose worth
+/// writing about this invariant names the entry points it is about: the comment
+/// above `parser` says `println!` because saying which handler an engine
+/// arrives with is the point of it. Only a line that starts as a comment is
+/// dropped, so a comment at the end of a line of code never hides the code in
+/// front of it.
+fn is_prose(line: &str) -> bool {
+    line.trim_start().starts_with("//")
+}
+
 /// Every refusal a stretch of Rust earns.
 ///
-/// Two readings are needed. Reading line by line catches the call sites, which
-/// is where the input or output actually happens. Reading each `use` as a
+/// Three readings are needed. Reading line by line catches the call sites,
+/// which is where the input or output actually happens. Reading each `use` as a
 /// whole statement catches the import whatever shape it is written in: a
 /// grouped import is how this workspace normally writes its imports, and
 /// neither `use std::{fs, path::Path};` nor the line `fs,` left behind once
 /// rustfmt has split that group over several lines holds the spelling
-/// `std::fs` anywhere in it.
+/// `std::fs` anywhere in it. Reading each attribute as a whole catches the
+/// module compiled from somewhere else, which is code no reading of this
+/// directory would ever see.
 fn refusals(text: &str) -> Vec<Refusal> {
     let mut candidates = text
         .lines()
         .enumerate()
+        .filter(|(_, line)| !is_prose(line))
         .map(|(index, line)| (index + 1, line.to_owned()))
         .collect::<Vec<_>>();
     candidates.extend(imported_paths(text));
-    let mut found = Vec::new();
+    let mut found = out_of_tree_modules(text);
     for (line, candidate) in candidates {
         let candidate = without_the_names_that_open_nothing(&candidate);
         for &(spelling, reason) in FORBIDDEN {
@@ -275,6 +347,82 @@ fn refusals(text: &str) -> Vec<Refusal> {
                     spelling,
                     reason,
                 });
+            }
+        }
+    }
+    found
+}
+
+/// A refusal for every attribute that points the compiler at a file.
+///
+/// `#[path = "..."]` moves a module's source somewhere this sweep never walks,
+/// and the literal spelling is the least of its forms: `#[cfg_attr(unix, path =
+/// "...")]` compiles the same module on the platforms CI uses, and `#[ path =
+/// ... ]` compiles it everywhere. So the rule is about where the word sits
+/// rather than about how the attribute opens: `path`, as a name of its own,
+/// assigned inside any attribute, is refused.
+///
+/// This is the one refusal the lint beside it cannot make, because an
+/// attribute that redirects a module has resolved into an ordinary module by
+/// the time any lint runs. What the lint does instead is read the file it
+/// redirected to, which this sweep never opens.
+fn out_of_tree_modules(text: &str) -> Vec<Refusal> {
+    let mut found = Vec::new();
+    for (line, attribute) in attributes(text) {
+        for at in named_at(&attribute, "path") {
+            let rest = &attribute[at + "path".len()..];
+            // A longer name that merely starts the same way, such as a
+            // `path_prefix` an attribute macro of its own understands.
+            if rest.starts_with(inside_a_name) {
+                continue;
+            }
+            if rest.trim_start().starts_with('=') {
+                found.push(Refusal {
+                    line,
+                    spelling: "path =",
+                    reason: "compiles a module from a file this sweep never reads",
+                });
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// The inside of every `#[...]` and `#![...]` in a stretch of Rust, paired with
+/// the line it opens on.
+///
+/// An attribute is read to its matching bracket rather than to the end of its
+/// line, because rustfmt wraps a long one and a `cfg_attr` is the shape that
+/// gets long.
+fn attributes(text: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut line = 1usize;
+    for (at, character) in text.char_indices() {
+        if character == '\n' {
+            line += 1;
+            continue;
+        }
+        if character != '#' {
+            continue;
+        }
+        let opened = match text[at + 1..].chars().next() {
+            Some('[') => at + 1,
+            Some('!') if text[at + 2..].starts_with('[') => at + 2,
+            _ => continue,
+        };
+        let mut depth = 0usize;
+        for (end, bracket) in text[opened..].char_indices() {
+            match bracket {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        found.push((line, text[opened + 1..opened + end].to_owned()));
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -460,19 +608,39 @@ io::copy(&mut source, &mut sink).unwrap();
 reader.read_to_end(&mut bytes).unwrap();
 let root = path.ancestors().find(|step| step.join(".evidence").exists());
 if !path.try_exists().unwrap_or(false) { return; }
-if path.is_file() { return; }
-if path.is_dir() { return; }
-if path.is_symlink() { return; }
 let stamp = path.metadata().unwrap().modified().unwrap();
 let link = path.symlink_metadata().unwrap();
 let real = path.canonicalize().unwrap();
 let target = path.read_link().unwrap();
 include!("../../shared/io_helpers.rs");
 #[path = "../../shared/io_helpers.rs"]
+#[cfg_attr(unix, path = "../../shared/io_helpers.rs")]
+#[ path = "../../shared/io_helpers.rs" ]
 let engine = rhai::Engine::default();
 let engine = rhai::Engine::new_raw();
 let engine = rhai::Engine::RAW;
 "#;
+
+/// Source that reaches the file system and that no reading of text can separate
+/// from work that reaches nothing, with the lint entry that refuses each.
+///
+/// These are the lines the sweep is deliberately silent about. `is_dir` on a
+/// `Path` is a system call and `is_dir` on a `Metadata` is a bit test, and the
+/// two are the same eleven characters; refusing the shape refuses the second
+/// along with the first, in this crate and in every crate a reader compares it
+/// to. So the sweep says nothing and the lint says it exactly, by the path the
+/// compiler resolved.
+///
+/// Holding the pair here rather than deleting the question is the point: a
+/// blind spot nobody wrote down is a blind spot nobody maintains.
+const BEYOND_THE_SWEEP: &[(&str, &str)] = &[
+    ("if path.is_file() { return; }", "std::path::Path::is_file"),
+    ("if path.is_dir() { return; }", "std::path::Path::is_dir"),
+    (
+        "if path.is_symlink() { return; }",
+        "std::path::Path::is_symlink",
+    ),
+];
 
 /// Ordinary lines lifted from this crate's own sources, so that the sweep is
 /// measured against real work as well as against hostile work. A sweep that
@@ -507,6 +675,11 @@ Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {}
 match (std::env::consts::OS, std::env::consts::ARCH) {
 use std::process::ExitCode;
 let command = clap::Command::new("evidencectl");
+fn load(path: &Path) -> Result<Bundle, std::io::Error> {
+pub fn stored(&self, root: &Path) -> io::Result<()> {
+Err(io::Error::new(io::ErrorKind::NotFound, "no such key"))
+if metadata.is_dir() && !metadata.is_file() && !file_type.is_symlink() {
+// This crate never calls println! and never opens a File::.
 "#;
 
 #[test]
@@ -562,17 +735,31 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
     );
 }
 
-/// `rhai::Engine::new()` installs a module resolver that reads files: with the
-/// default features this workspace pins, that is a `FileModuleResolver`, and it
-/// opens whatever path an `import` statement names. Nothing in this crate asks
-/// for a module today, but "nothing asks for it" is a fact about one call site
-/// rather than a property of the engine, and one call changed from `compile` to
-/// `compile_into_self_contained` would turn an editor into a file reader driven
-/// by an author's own text.
+/// The three capabilities `rhai::Engine::new()` hands out that this crate must
+/// not have, each with the call that takes it back.
 ///
-/// So the engine is built without that capability rather than merely never
-/// using it, and any engine this crate builds later has to disarm itself the
-/// same way.
+/// With the default features this workspace pins, a new engine carries a
+/// `FileModuleResolver`, which opens whatever path an `import` statement names,
+/// and a print and a debug handler that are `println!` (rhai 1.25.1,
+/// `src/engine.rs:305-318`). The resolver turns an editor into a file reader
+/// driven by an author's own text; the other two put author-controlled text on
+/// the file descriptor the editor's JSON-RPC conversation runs over. Nothing in
+/// this crate asks for a module or evaluates a program today, but "nothing asks
+/// for it" is a fact about one call site rather than a property of the engine.
+///
+/// So all three are given up where the engine is built rather than merely never
+/// used, and any engine this crate builds later has to disarm itself the same
+/// way.
+const DISARMING_CALLS: &[(&str, &str)] = &[
+    (
+        "set_module_resolver",
+        "resolves an import by reading a file",
+    ),
+    ("on_print", "writes an authored `print` to standard output"),
+    ("on_debug", "writes an authored `debug` to standard output"),
+];
+
+/// Whether a file takes every capability back from every engine it builds.
 ///
 /// `Engine::new(` is the only construction spelling the forbidden list leaves,
 /// so counting it counts the engines. The count is a bound rather than a proof:
@@ -580,12 +767,24 @@ fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
 /// so a file that disarmed one engine twice and left a second alone would
 /// satisfy it. What it does hold is the shape a second engine actually arrives
 /// in, which is a second call site next to a first that already disarms.
+///
+/// Zero engines is the answer this counting cannot tell from an engine under
+/// another name, so it is not read as good news. A file that says `rhai::` or
+/// names `Engine` and shows the counter nothing is a file the counter cannot
+/// speak for, and it is refused here and settled by the lint, which reads the
+/// name the compiler resolved rather than the one the author typed.
 fn disarms_every_engine(text: &str) -> bool {
-    named_at(text, "set_module_resolver").len() >= named_at(text, "Engine::new(").len()
+    let engines = named_at(text, "Engine::new(").len();
+    if engines == 0 {
+        return !names(text, "rhai::") && !names(text, "Engine");
+    }
+    DISARMING_CALLS
+        .iter()
+        .all(|(call, _)| named_at(text, call).len() >= engines)
 }
 
 #[test]
-fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
+fn every_rhai_engine_this_crate_builds_gives_up_what_it_arrives_with() {
     let armed = rust_sources()
         .into_iter()
         .filter(|path| {
@@ -601,8 +800,13 @@ fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
         .collect::<Vec<_>>();
     assert!(
         armed.is_empty(),
-        "these sources build a rhai engine and leave its file-reading module \
-         resolver in place: {armed:?}"
+        "these sources name a rhai engine and do not take back everything one \
+         arrives with ({}): {armed:?}",
+        DISARMING_CALLS
+            .iter()
+            .map(|(call, reason)| format!("`{call}`, because it otherwise {reason}"))
+            .collect::<Vec<_>>()
+            .join("; ")
     );
 }
 
@@ -610,6 +814,7 @@ fn every_rhai_engine_this_crate_builds_gives_up_its_module_resolver() {
 fn the_engine_guard_reads_every_engine_a_file_builds() {
     let disarmed = "fn parser() -> Engine {\n    let mut engine = Engine::new();\n\
                     \n    engine.set_module_resolver(DummyModuleResolver::new());\n\
+                    \n    engine.on_print(|_| {});\n    engine.on_debug(|_, _, _| {});\n\
                     \n    engine\n}\n";
     assert!(disarms_every_engine(disarmed));
     // A second call site, added the way a second call site gets added: the
@@ -617,13 +822,35 @@ fn the_engine_guard_reads_every_engine_a_file_builds() {
     // that asks whether the file mentions disarming at all reads this as clean.
     let second = format!("{disarmed}\nfn schema_parser() -> Engine {{\n    Engine::new()\n}}\n");
     assert!(!disarms_every_engine(&second));
-    // The synonym this guard cannot see, and the division of labour that makes
-    // that all right: counting cannot tell `Engine::default` from no engine at
-    // all, so the forbidden list is what leaves one construction spelling for
-    // the counting to be about.
-    let synonym = "fn parser() -> Engine {\n    Engine::default()\n}\n";
-    assert!(disarms_every_engine(synonym));
-    assert!(!refusals(synonym).is_empty());
+    // One capability left behind is one capability too many, and each is
+    // counted on its own so that disarming twice cannot pay for the other.
+    for (call, _) in DISARMING_CALLS {
+        assert!(
+            !disarms_every_engine(&disarmed.replace(call, "on_var")),
+            "the guard read an engine that never calls `{call}` as disarmed"
+        );
+    }
+    // The synonyms this counting cannot see, and why zero is refused rather
+    // than passed. Counting cannot tell `Engine::default` or an engine reached
+    // through an alias from no engine at all, so a file that names one and
+    // shows none is refused here and named by the lint.
+    for synonym in [
+        "fn parser() -> Engine {\n    Engine::default()\n}\n",
+        "use rhai::Engine as Interpreter;\nfn parser() -> Interpreter {\n    \
+         Interpreter::new()\n}\n",
+        "type Interpreter = rhai::Engine;\nfn parser() -> Interpreter {\n    \
+         Interpreter::new()\n}\n",
+    ] {
+        assert!(
+            !disarms_every_engine(synonym),
+            "the guard read {synonym:?} as holding no engine, which is the \
+             reading that fails open"
+        );
+    }
+    // A file with no engine and no word for one is not held to any of this.
+    assert!(disarms_every_engine(
+        "fn narrow(schema: &Value) -> Value {\n    ..\n}\n"
+    ));
 }
 
 /// A directory of this test's own, under the system temporary directory.
@@ -690,14 +917,38 @@ fn an_authored_import_does_not_read_the_file_it_names() {
     fs::remove_dir_all(&directory).expect("the scratch directory is removable");
 }
 
-/// Whether a piece of work finishes inside a deadline.
+/// How a piece of work ran out of a deadline.
+///
+/// Three outcomes rather than two, because "did not finish" is the answer that
+/// hides the failure that matters. Work that panics ends without sending, in no
+/// time at all, and a probe that read that as blocking would report that an
+/// armed engine blocked on a pipe when what really happened is that it fell
+/// over before reaching one, and the control that proves the probe works would
+/// prove nothing.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    /// The work returned, after the time carried here.
+    Finished(std::time::Duration),
+    /// The deadline passed with the work still running.
+    Blocked(std::time::Duration),
+    /// The work ended without returning, which is a panic.
+    Failed,
+}
+
+/// Run a piece of work against a deadline and say which of the three it did.
 ///
 /// The work runs on a thread of its own, so work that never finishes stops this
 /// suite waiting rather than stopping this suite. A thread left blocked in
 /// `open` cannot be woken from here and is not joined: it holds one descriptor
 /// on a file in a scratch directory, and it goes when the test binary does.
+///
+/// A panic is told from a block by the channel rather than by the clock: the
+/// sender is dropped as the thread unwinds, and a disconnected channel is
+/// exactly the case where nothing sent and nothing is still running.
 #[cfg(unix)]
-fn finishes_within(deadline: std::time::Duration, work: impl FnOnce() + Send + 'static) -> bool {
+fn outcome_within(deadline: std::time::Duration, work: impl FnOnce() + Send + 'static) -> Outcome {
+    let started = std::time::Instant::now();
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         work();
@@ -705,7 +956,43 @@ fn finishes_within(deadline: std::time::Duration, work: impl FnOnce() + Send + '
         // function returns, not a failure to report.
         let _ = done.send(());
     });
-    finished.recv_timeout(deadline).is_ok()
+    match finished.recv_timeout(deadline) {
+        Ok(()) => Outcome::Finished(started.elapsed()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Outcome::Blocked(started.elapsed()),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Outcome::Failed,
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_deadline_probe_tells_blocking_from_falling_over() {
+    use std::time::Duration;
+
+    let deadline = Duration::from_millis(200);
+    assert!(matches!(
+        outcome_within(deadline, || {}),
+        Outcome::Finished(_)
+    ));
+    // The case the named-pipe control below depends on being able to see. The
+    // panic is the subject, so its report is silenced for as long as it takes
+    // to make one: `outcome_within` only answers `Failed` once the unwind has
+    // dropped the sender, and the hook has run by then.
+    let reporting = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let fell_over = outcome_within(deadline, || panic!("a deliberate panic"));
+    std::panic::set_hook(reporting);
+    assert_eq!(
+        fell_over,
+        Outcome::Failed,
+        "work that panicked was read as work that blocked, so the control in \
+         the named-pipe test would pass without an engine ever reaching a pipe"
+    );
+    let Outcome::Blocked(waited) = outcome_within(deadline, || {
+        std::thread::sleep(Duration::from_secs(30));
+    }) else {
+        panic!("work still running at the deadline was not read as blocked");
+    };
+    assert!(waited >= deadline, "the probe answered before it waited");
 }
 
 /// The same claim as above, observed at the system call rather than at the
@@ -753,33 +1040,165 @@ fn reading_an_authored_import_never_opens_the_path_it_names() {
     );
 
     // The control. A probe that cannot tell a reader from a non-reader says
-    // nothing about either, so the reader is run first and has to hang.
+    // nothing about either, so the reader is run first and has to hang, and it
+    // has to hang rather than merely not answer: `Failed` here would mean the
+    // engine fell over before it ever reached the pipe.
+    let control = Duration::from_secs(2);
     let armed = {
         let program = program.clone();
-        finishes_within(Duration::from_secs(2), move || {
+        outcome_within(control, move || {
             let engine = rhai::Engine::new();
             // The verdict is not what is being read here; the duration is.
             let _ = engine.compile_into_self_contained(&rhai::Scope::new(), program);
         })
     };
+    let Outcome::Blocked(waited) = armed else {
+        panic!(
+            "an engine carrying rhai's own module resolver did not block on {}, \
+             it {armed:?}, so this probe proves nothing and needs rewriting",
+            pipe.display()
+        );
+    };
     assert!(
-        !armed,
-        "an engine carrying rhai's own module resolver returned without \
-         blocking on {}, so this probe proves nothing and needs rewriting",
+        waited >= control,
+        "the control answered after {waited:?}, short of the {control:?} it was \
+         given, so nothing here waited on {}",
         pipe.display()
     );
 
-    let subject = finishes_within(Duration::from_secs(30), move || {
+    let subject = outcome_within(Duration::from_secs(30), move || {
         let _ = validate_authored_answer(&program);
     });
     assert!(
-        subject,
-        "reading a derivation that imports `{}` blocked, which is what opening \
-         a named pipe with no writer does",
+        matches!(subject, Outcome::Finished(_)),
+        "reading a derivation that imports `{}` {subject:?}, and blocking is \
+         what opening a named pipe with no writer does",
         pipe.display()
     );
 
     fs::remove_dir_all(&directory).expect("the scratch directory is removable");
+}
+
+/// The lint configuration beside this crate, read as text.
+///
+/// Reading it here is not how it is enforced: `cargo clippy` finds it from this
+/// package's directory and applies it to every target in it, and the
+/// expectation on `parser` fails the build if it stops being applied. What this
+/// reading is for is the other half, the entries that would go quiet without
+/// anything failing, and it runs under `cargo test` so that a change to the
+/// list is answered by the suite that reads the sweep beside it.
+fn lint_configuration() -> String {
+    fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("clippy.toml"))
+        .expect("the lint configuration beside this crate is readable")
+}
+
+#[test]
+fn the_lint_names_every_entry_point_the_sweep_is_silent_about() {
+    let configuration = lint_configuration();
+    let missing = BEYOND_THE_SWEEP
+        .iter()
+        .filter(|(_, path)| !configuration.contains(&format!("\"{path}\"")))
+        .map(|(line, path)| format!("`{line}` is refused by nothing: `{path}` is not disallowed"))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "the sweep stays silent about these because the lint refuses them, and \
+         it does not:\n{}",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn the_source_sweep_is_silent_about_what_it_cannot_separate_from_ordinary_work() {
+    let reported = BEYOND_THE_SWEEP
+        .iter()
+        .filter(|(line, _)| !refusals(line).is_empty())
+        .map(|(line, path)| format!("`{line}`, which `{path}` was to answer for"))
+        .collect::<Vec<_>>();
+    assert!(
+        reported.is_empty(),
+        "the sweep refused a shape it was widened away from, so either the \
+         widening came back or this list is stale:\n{}",
+        reported.join("\n")
+    );
+}
+
+/// The engine capabilities are given up in code and counted by the guard above,
+/// and neither says anything about an engine reached under another name. The
+/// lint is what says that, so what it disallows is pinned here beside the
+/// counting rather than left to a reviewer to notice.
+#[test]
+fn the_lint_disallows_the_engine_and_every_way_of_running_one() {
+    let configuration = lint_configuration();
+    let missing = [
+        // The type, which is what catches an engine reached through an alias,
+        // a type alias, or `Default::default()` against an annotated binding:
+        // all four resolve to this one name before any lint runs.
+        "rhai::Engine",
+        "rhai::Engine::new",
+        "rhai::Engine::new_raw",
+        "rhai::module_resolvers::FileModuleResolver",
+        // Reading a program is safe only while it stays reading. These are the
+        // entry points that would evaluate one, and an evaluated program is
+        // what reaches a print handler, so they are refused as well as
+        // disarmed.
+        "rhai::Engine::run",
+        "rhai::Engine::run_ast",
+        "rhai::Engine::eval",
+        "rhai::Engine::eval_ast",
+        "rhai::Engine::eval_expression",
+        "rhai::Engine::call_fn",
+        "rhai::Engine::compile_into_self_contained",
+        "rhai::Engine::compile_file",
+        "rhai::Engine::eval_file",
+        "rhai::Engine::run_file",
+    ]
+    .into_iter()
+    .filter(|path| !configuration.contains(&format!("\"{path}\"")))
+    .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "these are not disallowed, so an engine or a program run could arrive \
+         under a name no reading of text would catch: {missing:?}"
+    );
+}
+
+#[test]
+fn the_source_sweep_reads_prose_as_prose() {
+    // The comment above `parser` names the handler an engine arrives with,
+    // because saying which one is the point of it.
+    assert!(refusals("/// arrives carrying `println!` (rhai 1.25.1)").is_empty());
+    assert!(refusals("// let bytes = fs::read(path)?;").is_empty());
+    // A comment at the end of a line does not cover the line.
+    assert!(!refusals("let bytes = fs::read(path)?; // the hazard").is_empty());
+}
+
+#[test]
+fn the_source_sweep_refuses_a_redirected_module_in_any_attribute() {
+    for attribute in [
+        "#[path = \"../../shared/io_helpers.rs\"]",
+        "#[cfg_attr(unix, path = \"../../shared/io_helpers.rs\")]",
+        "#[ path = \"../../shared/io_helpers.rs\" ]",
+        "#[cfg_attr(\n    unix,\n    path = \"../../shared/io_helpers.rs\"\n)]",
+        "#![cfg_attr(unix, path = \"../../shared/io_helpers.rs\")]",
+    ] {
+        assert!(
+            !refusals(&format!("{attribute}\npub mod escaped;\n")).is_empty(),
+            "the sweep read {attribute:?} as clean"
+        );
+    }
+    // Attributes this crate and its neighbours write every day.
+    for attribute in [
+        "#[serde(rename_all = \"kebab-case\")]",
+        "#[derive(Debug, Clone, PartialEq)]",
+        "#[cfg_attr(feature = \"schema\", derive(JsonSchema))]",
+        "#[expect(clippy::disallowed_types, reason = \"the one engine\")]",
+    ] {
+        assert!(
+            refusals(&format!("{attribute}\npub struct Question;\n")).is_empty(),
+            "the sweep refused {attribute:?}"
+        );
+    }
 }
 
 #[test]

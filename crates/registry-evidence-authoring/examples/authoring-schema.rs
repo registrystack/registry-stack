@@ -4,6 +4,17 @@
 //! crate's own invariant. Writing them is this example's whole job, so the
 //! committed artifact has exactly one producer and the drift gate can rerun it.
 
+// The lint configuration beside this crate is scoped to the package, and this
+// generator is in it. Its whole job is the file the library will not write, and
+// it is a separate binary run by a drift gate rather than anything a caller
+// links, which is the same boundary the crate's dependency sweep draws when it
+// leaves `dev-dependencies` alone.
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_macros,
+    clippy::disallowed_types
+)]
+
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {

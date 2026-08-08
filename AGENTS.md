@@ -195,6 +195,18 @@ Regenerate them with the generator the gate runs, never by hand:
 cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
 ```
 
+`registry-evidence-authoring` is linked into the language server, so it reads no
+file, opens no socket, starts no process, and touches neither standard stream.
+`crates/registry-evidence-authoring/clippy.toml` is what holds that, by
+disallowing the resolved types, methods, and macros that would break it; every
+clippy run applies it, and this gate additionally fails the build when an entry
+stops resolving and proves the lints still refuse the shapes they were written
+for:
+
+```bash
+products/evidence/scripts/check-authoring-no-io.sh
+```
+
 Evidence client bindings, from `crates/registry-evidence-client-node`:
 
 ```bash
