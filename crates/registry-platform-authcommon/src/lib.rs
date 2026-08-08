@@ -1,6 +1,8 @@
 //! Shared authentication primitives that are independent of any identity
 //! provider.
 
+pub mod client_assertion;
+
 use std::env;
 use std::fs;
 use std::io::Read;

@@ -12,6 +12,12 @@
 //! scope, a resource indicator, or a body `client_id` on this grant needs support
 //! this provider does not offer.
 //!
+//! The assertion itself is built by
+//! [`registry_platform_authcommon::client_assertion`], which is shared with
+//! everything else in the stack that authenticates this way. What this module
+//! owns is the token request that presents one and the credential it is
+//! exchanged for.
+//!
 //! # What is cached, and for how long
 //!
 //! An access token is reused until it has less life left than the refresh margin,
@@ -29,15 +35,15 @@ use std::{
 };
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
+use registry_platform_authcommon::client_assertion::{
+    sign_client_assertion, ClientAssertionError, ClientAssertionRequest,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::read_bounded;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde::Deserialize;
-use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
-use ulid::Ulid;
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -50,17 +56,15 @@ use crate::{
     token::{BearerToken, OAuthErrorCode, TokenError, TokenProvider},
 };
 
-/// Lifetime of one client assertion, when the integrator states none.
+/// How long an assertion is good for by default, and the longest one this
+/// provider will sign.
 ///
-/// The assertion is presented once, immediately, to one endpoint. Seconds are
-/// enough, and a short window is what limits what a captured assertion is worth.
-pub const DEFAULT_ASSERTION_LIFETIME_SECONDS: i64 = 60;
-
-/// Longest assertion lifetime this provider will sign.
-///
-/// Authorization servers bound what they accept, and a request signed outside
-/// that bound is refused with a code that says nothing about the reason.
-pub const MAXIMUM_ASSERTION_LIFETIME_SECONDS: i64 = 300;
+/// Both bound the assertion rather than the token request it is presented on,
+/// so they belong to the builder. They are re-exported because an integrator
+/// configuring this provider is the one who has to stay inside them.
+pub use registry_platform_authcommon::client_assertion::{
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+};
 
 /// What the constructor signs to prove the client key can sign at all.
 ///
@@ -270,9 +274,6 @@ pub struct PrivateKeyJwt {
     refresh_margin_seconds: i64,
     client_key: PrivateJwk,
     key_id: String,
-    /// The JOSE name of what `client_key` signs with, resolved once at
-    /// construction so the header cannot disagree with the key.
-    algorithm: &'static str,
     clock: Arc<dyn Clock>,
     /// The credential in hand, if it is still worth presenting.
     cached: RwLock<Option<CachedToken>>,
@@ -317,22 +318,22 @@ impl PrivateKeyJwt {
                 "the token endpoint must use HTTPS, or HTTP with a loopback host",
             ));
         }
-        // The header names the algorithm so the server can verify without
-        // guessing, which means it must state what this key actually signs with
-        // rather than one fixed name. Restricting the client to a single
-        // algorithm would refuse keys a conforming authorization server accepts:
-        // `token_endpoint_auth_signing_alg_values_supported` is the server's
-        // choice to publish, not this client's to narrow. Parsing a `PrivateJwk`
-        // already refuses any algorithm the crypto crate does not support, so
-        // the error arm is a floor rather than a path a caller can reach.
-        let algorithm = match config.client_key.algorithm() {
-            Ok(algorithm) => algorithm.jwa_name(),
-            Err(_) => {
-                return Err(refuse(
-                    "the client key must state a supported signing algorithm",
-                ))
-            }
-        };
+        // The assertion header names the algorithm so the server can verify
+        // without guessing, which means it must state what this key actually
+        // signs with rather than one fixed name. Restricting the client to a
+        // single algorithm would refuse keys a conforming authorization server
+        // accepts: `token_endpoint_auth_signing_alg_values_supported` is the
+        // server's choice to publish, not this client's to narrow. Parsing a
+        // `PrivateJwk` already refuses any algorithm the crypto crate does not
+        // support, so this arm is a floor rather than a path a caller can reach.
+        // Checking here rather than leaving it to the builder is what keeps the
+        // promise this constructor makes: a key that cannot produce an assertion
+        // is refused now, not once per request.
+        if config.client_key.algorithm().is_err() {
+            return Err(refuse(
+                "the client key must state a supported signing algorithm",
+            ));
+        }
         let key_id = config
             .client_key
             .kid
@@ -402,7 +403,6 @@ impl PrivateKeyJwt {
             refresh_margin_seconds: config.refresh_margin_seconds,
             client_key: config.client_key,
             key_id,
-            algorithm,
             clock,
             cached: RwLock::new(None),
             refresh_lock: Mutex::new(()),
@@ -427,44 +427,16 @@ impl PrivateKeyJwt {
 
     /// One client assertion, valid from `now` for the configured lifetime.
     fn sign_assertion(&self, now: i64) -> Result<Zeroizing<String>, TokenError> {
-        let header = json!({
-            "alg": self.algorithm,
-            "typ": "JWT",
-            // The server selects the registered public key by this identifier.
-            "kid": self.key_id,
-        });
-        let claims = json!({
-            "iss": self.client_id,
-            "sub": self.client_id,
-            "aud": self.audience,
-            "iat": now,
-            "exp": now.saturating_add(self.assertion_lifetime_seconds),
-            // Every assertion is single use. A server that caches identifiers to
-            // refuse a replay needs each request to bring its own, so one is
-            // generated per request and never reused.
-            "jti": Ulid::new().to_string(),
-        });
-
-        let encode = |value: &Value| -> Result<String, TokenError> {
-            serde_json::to_vec(value)
-                .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
-                .map_err(|_| TokenError::Configuration {
-                    reason: "the client assertion cannot be serialized",
-                })
-        };
-        let signing_input = format!("{}.{}", encode(&header)?, encode(&claims)?);
-        // The algorithm was resolved at construction, so this reports a key that
-        // parsed and named an algorithm yet cannot sign with it. It stays an
-        // explicit failure rather than a retry, because no later request would
-        // sign either.
-        let signature = registry_platform_crypto::sign(signing_input.as_bytes(), &self.client_key)
-            .map_err(|_| TokenError::Configuration {
-                reason: "the client key cannot sign a client assertion",
-            })?;
-        Ok(Zeroizing::new(format!(
-            "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature)
-        )))
+        sign_client_assertion(
+            &self.client_key,
+            &ClientAssertionRequest {
+                client_id: &self.client_id,
+                audience: &self.audience,
+                lifetime_seconds: self.assertion_lifetime_seconds,
+                issued_at: now,
+            },
+        )
+        .map_err(assertion_refusal)
     }
 
     /// Exchange one fresh assertion for an access token.
@@ -626,6 +598,31 @@ struct IssuedToken {
 #[derive(Deserialize)]
 struct DeclinedToken {
     error: String,
+}
+
+/// Report a refusal from the assertion builder in this provider's own words.
+///
+/// Every one of these was ruled out when the provider was built, so reaching
+/// one means a configuration that passed those checks still cannot produce an
+/// assertion. It stays an explicit failure rather than a retry, because no
+/// later request would sign either. The match is exhaustive so a refusal added
+/// to the builder has to be given a reason here, rather than arriving as one
+/// the adopter cannot act on.
+fn assertion_refusal(error: ClientAssertionError) -> TokenError {
+    let reason = match error {
+        ClientAssertionError::EmptyClientId => "the client identifier must not be empty",
+        ClientAssertionError::EmptyAudience => "the assertion audience must not be empty",
+        ClientAssertionError::MissingKeyId => "the client key must carry a key identifier",
+        ClientAssertionError::UnsupportedAlgorithm => {
+            "the client key must state a supported signing algorithm"
+        }
+        ClientAssertionError::LifetimeOutOfRange => {
+            "the assertion lifetime must be within 1..=300 seconds"
+        }
+        ClientAssertionError::NotSerializable => "the client assertion cannot be serialized",
+        ClientAssertionError::CannotSign => "the client key cannot sign a client assertion",
+    };
+    TokenError::Configuration { reason }
 }
 
 /// Map a refused token request onto the code it reported.
