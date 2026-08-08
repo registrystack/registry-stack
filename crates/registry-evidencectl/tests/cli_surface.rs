@@ -38,23 +38,28 @@ fn every_top_level_command_is_listed_and_dispatchable() {
     }
 }
 
-#[test]
-fn tooling_lists_and_dispatches_language_server() {
-    let help = evidencectl(&["tooling", "--help"]);
-    assert!(
-        help.contains("language-server"),
-        "`evidencectl tooling --help` does not list `language-server`:\n{help}"
-    );
+/// The complete `tooling` subcommand set, held to the same rule.
+const TOOLING_COMMANDS: [&str; 2] = ["editor", "language-server"];
 
-    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-        .args(["tooling", "language-server", "--help"])
-        .output()
-        .expect("run evidencectl");
-    assert!(
-        output.status.success(),
-        "`evidencectl tooling language-server --help` failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+#[test]
+fn tooling_lists_and_dispatches_every_subcommand() {
+    let help = evidencectl(&["tooling", "--help"]);
+    for command in TOOLING_COMMANDS {
+        assert!(
+            help.contains(command),
+            "`evidencectl tooling --help` does not list `{command}`:\n{help}"
+        );
+
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["tooling", command, "--help"])
+            .output()
+            .expect("run evidencectl");
+        assert!(
+            output.status.success(),
+            "`evidencectl tooling {command} --help` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

@@ -20,6 +20,7 @@ mod request;
 mod scaffold;
 mod suggest;
 mod tooling;
+mod tooling_editor;
 mod verify;
 
 #[derive(Debug, Parser)]
