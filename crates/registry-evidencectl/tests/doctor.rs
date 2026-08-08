@@ -852,6 +852,79 @@ fn doctor_reports_an_acquisition_capability_the_deployment_listed_twice() {
     );
 }
 
+/// The gate has two halves and the bundle writes one of them. A requirement
+/// using the gated kind in a bundle that never declared it is refused at
+/// startup even on a deployment that enabled the kind, so a doctor reading only
+/// the deployment's half passes a project that will not start.
+#[test]
+fn doctor_reports_a_gated_acquisition_kind_the_bundle_did_not_declare() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions_stating(&project, "");
+    enable_acquisition_capability(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a project the runtime would refuse:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "bundle/evidence.yaml: does not declare the search-then-fetch-set acquisition capability"
+        ) && stdout.contains("acquisitionCapabilities: [search-then-fetch-set]"),
+        "doctor did not name the file and the entry to add:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains(CANARY),
+        "doctor echoed a document value:\n{stdout}"
+    );
+}
+
+/// A misspelled declaration is the same defect twice over: the name the bundle
+/// states is not one this release defines, and the kind its requirement uses
+/// stays undeclared. The runtime refuses on the first; an author reading a
+/// report that mentioned only the second would go looking in the wrong file.
+#[test]
+fn doctor_reports_a_bundle_acquisition_capability_this_release_does_not_define() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions_stating(
+        &project,
+        "acquisitionCapabilities:\n  - search-then-fetch-sets\n",
+    );
+    enable_acquisition_capability(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a project the runtime would refuse:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "bundle/evidence.yaml: declares an acquisition capability this release does not define"
+        ),
+        "doctor did not name the undefined capability:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "bundle/evidence.yaml: does not declare the search-then-fetch-set acquisition capability"
+        ),
+        "doctor did not report the requirement left ungated:\n{stdout}"
+    );
+}
+
 /// An adopter reading a bundle needs to know what it will call before anything
 /// is running: which sources, in what order, and which facts one call hands to
 /// the next. All of that is configuration. A fact value is not: it is acquired
@@ -981,11 +1054,24 @@ sourceToken: secret:file/source-bearer-token
     }
 }
 
-/// Give the fixture bundle one requirement per acquisition form.
+/// Give the fixture bundle one requirement per acquisition form, and the
+/// bundle half of the gate the gated form needs.
 fn declare_acquisitions(project: &Path) {
+    declare_acquisitions_stating(
+        project,
+        "acquisitionCapabilities:\n  - search-then-fetch-set\n",
+    );
+}
+
+/// The same requirements, with the bundle half of the gate exactly as written.
+///
+/// That half is a parameter because the runtime reads it under the same rules
+/// as the deployment half, and doctor has to restate both.
+fn declare_acquisitions_stating(project: &Path, capabilities: &str) {
     let path = project.join("bundle/evidence.yaml");
     let mut document = fs::read_to_string(&path).expect("Evidence configuration");
     document.push_str(DECLARED_ACQUISITIONS);
+    document.push_str(capabilities);
     fs::write(&path, document).expect("declare the acquisitions");
 }
 

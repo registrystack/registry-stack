@@ -26,8 +26,9 @@
 //! the acquisition gate: the bundle names the acquisition kinds it needs, the
 //! runtime file names the kinds this deployment may serve, and Evidence refuses
 //! a deployment where the two disagree. That refusal is value-free by design and
-//! names no file to edit, so this reports the gap and the entry the operator
-//! must add. It also renders what each requirement will call, in order, so an
+//! names no file to edit, so this reports the gap and names the file and the
+//! entry that closes it, on whichever half is silent. It also renders what each
+//! requirement will call, in order, so an
 //! adopter can read a bundle's acquisition without running it. Sources and fact
 //! names are configuration and appear; a fact value never does, because this
 //! acquires nothing and holds none.
@@ -435,14 +436,13 @@ impl StageInputsReport {
     }
 }
 
-/// The operator half of the acquisition gate, and what each requirement will
-/// call.
+/// Both halves of the acquisition gate, and what each requirement will call.
 ///
-/// The bundle naming the kinds it needs states an intent beside the requirement
-/// that uses it, which gates nothing on its own: the same person wrote both
-/// lines in the same file. The deployment decides separately, and Evidence
-/// refuses a deployment whose runtime file did not enable a kind the bundle
-/// requires. That refusal names no file, so this names the file and the entry.
+/// A bundle names the gated kinds its requirements use, and the deployment that
+/// will serve it enables them separately, in a file the bundle author does not
+/// write. Neither half gates anything alone, and Evidence refuses the
+/// deployment at startup when either one leaves a requirement's kind unstated.
+/// Those refusals name no file, so this names the file and the entry for each.
 fn check_acquisition(
     project: &Path,
     runtime: &YamlValue,
@@ -452,46 +452,13 @@ fn check_acquisition(
 ) -> (Check, Vec<AcquisitionPlanReport>) {
     let mut run = CheckRun::new("acquisition", project);
     run.inspected += 1;
-    let enabled = match runtime.get("acquisitionCapabilities") {
-        // Absent enables nothing beyond the frozen Version 1 forms, which is
-        // the default posture and what most deployments say.
-        None => Vec::new(),
-        Some(value) => match capability_list(value) {
-            Some(enabled) => enabled,
-            None => {
-                run.refuse(
-                    runtime_path,
-                    "names acquisitionCapabilities that are not a list of capability names"
-                        .to_owned(),
-                );
-                Vec::new()
-            }
-        },
-    };
-    let mut named: Vec<&str> = Vec::new();
-    for capability in &enabled {
-        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
-            run.refuse(
-                runtime_path,
-                "enables an acquisition capability this release does not define; the runtime refuses the deployment at startup".to_owned(),
-            );
-        }
-        // A repeat enables nothing a single entry does not, which is why the
-        // runtime requires the list to be unique rather than tolerating it,
-        // and why doctor must not read the deployment as enabled.
-        if named.contains(&capability.as_str()) {
-            run.refuse(
-                runtime_path,
-                "lists the same acquisition capability twice; the runtime refuses the deployment at startup".to_owned(),
-            );
-        } else {
-            named.push(capability);
-        }
-    }
+    let enabled = gate_half(&mut run, runtime, runtime_path, "enables");
 
     run.inspected += 1;
+    let declared = gate_half(&mut run, bundle, bundle_config_path, "declares");
     let mut plans = Vec::new();
-    let mut missing: Vec<&'static str> = Vec::new();
+    let mut undeclared: Vec<&'static str> = Vec::new();
+    let mut unenabled: Vec<&'static str> = Vec::new();
     for requirement in bundle
         .get("requirements")
         .and_then(YamlValue::as_sequence)
@@ -510,8 +477,14 @@ fn check_acquisition(
             continue;
         };
         if let Some(capability) = projected.acquisition.required_capability() {
-            if !enabled.iter().any(|entry| entry == capability) && !missing.contains(&capability) {
-                missing.push(capability);
+            if !declared.iter().any(|entry| entry == capability)
+                && !undeclared.contains(&capability)
+            {
+                undeclared.push(capability);
+            }
+            if !enabled.iter().any(|entry| entry == capability) && !unenabled.contains(&capability)
+            {
+                unenabled.push(capability);
             }
         }
         plans.push(AcquisitionPlanReport {
@@ -522,8 +495,17 @@ fn check_acquisition(
     }
 
     // The capability names are the closed published vocabulary, not document
-    // values, so the entry an operator must add can be stated exactly.
-    for capability in missing {
+    // values, so the entry an author or an operator must add can be stated
+    // exactly.
+    for capability in undeclared {
+        run.refuse(
+            bundle_config_path,
+            format!(
+                "does not declare the {capability} acquisition capability a requirement in it uses; add acquisitionCapabilities: [{capability}]"
+            ),
+        );
+    }
+    for capability in unenabled {
         run.refuse(
             runtime_path,
             format!(
@@ -535,7 +517,53 @@ fn check_acquisition(
     (run.finish(), plans)
 }
 
-/// A `runtime.yaml` capability list, when it is one.
+/// One half of the gate, read under the three rules the runtime applies to
+/// both: a list, of names this release defines, each named once.
+///
+/// `states` is the verb for the half being read, because a deployment enables a
+/// capability and a bundle declares one, and a refusal carrying the other
+/// half's verb would send a reader to the wrong file.
+fn gate_half(run: &mut CheckRun, document: &YamlValue, path: &Path, states: &str) -> Vec<String> {
+    let listed = match document.get("acquisitionCapabilities") {
+        // Absent states nothing beyond the frozen Version 1 forms, which is the
+        // default posture and what most deployments and most bundles say.
+        None => return Vec::new(),
+        Some(value) => match capability_list(value) {
+            Some(listed) => listed,
+            None => {
+                run.refuse(
+                    path,
+                    "names acquisitionCapabilities that are not a list of capability names"
+                        .to_owned(),
+                );
+                return Vec::new();
+            }
+        },
+    };
+    let mut named: Vec<String> = Vec::new();
+    for capability in listed {
+        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
+            run.refuse(
+                path,
+                format!("{states} an acquisition capability this release does not define; the runtime refuses the deployment at startup"),
+            );
+        }
+        // A repeat states nothing a single entry does not, which is why the
+        // runtime requires each list to be unique rather than tolerating it,
+        // and why doctor must not read the half as stated.
+        if named.contains(&capability) {
+            run.refuse(
+                path,
+                "lists the same acquisition capability twice; the runtime refuses the deployment at startup".to_owned(),
+            );
+        } else {
+            named.push(capability);
+        }
+    }
+    named
+}
+
+/// A capability list, when the value under `acquisitionCapabilities` is one.
 fn capability_list(value: &YamlValue) -> Option<Vec<String>> {
     value
         .as_sequence()?
