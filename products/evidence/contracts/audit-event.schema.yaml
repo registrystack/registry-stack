@@ -127,6 +127,18 @@ allOf:
     then: {required: [adapterIds, sourceId, adapterId]}
   - if: {required: [adapterIds]}
     then: {required: [sourceIds, sourceId, adapterId]}
+  # The two arrays are positionally aligned, one entry per executed stage, so
+  # they are the same length. That much a schema can state, and a reader
+  # validating against this document alone gets it. The remaining half of the
+  # alignment, each array's last entry equalling its scalar, compares one
+  # instance value with another and is not expressible here; it stays a rule
+  # the producing runtime enforces, stated in source_identity below.
+  - if: {required: [sourceIds], properties: {sourceIds: {minItems: 3, maxItems: 3}}}
+    then: {properties: {adapterIds: {minItems: 3, maxItems: 3}}}
+  - if: {required: [sourceIds], properties: {sourceIds: {minItems: 4, maxItems: 4}}}
+    then: {properties: {adapterIds: {minItems: 4, maxItems: 4}}}
+  - if: {required: [sourceIds], properties: {sourceIds: {minItems: 5, maxItems: 5}}}
+    then: {properties: {adapterIds: {minItems: 5, maxItems: 5}}}
 audit_rules:
   authorization_refusal_gate: After successful authentication, an authorization refusal is durably accepted before the generic HTTP 403 is returned. Audit failure changes the outward result to service_unavailable with HTTP 503.
   authorization_refusal_minimization: The refusal event contains only its chain and event identifiers, operation, timestamp and duration, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, and the closed denial category and decision. Requester and actor pseudonym scope binds the operator trust domain, requested purpose, and authenticated audience, while those scope inputs remain omitted from the event. It omits the untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, and source or evaluation material.

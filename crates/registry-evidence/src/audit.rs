@@ -1333,6 +1333,13 @@ mod tests {
         release_with_repeated_source["sourceIds"] =
             serde_json::json!(["source-a", "source-a", "source-c"]);
 
+        // The arrays are positionally aligned, so one more adapter than source
+        // describes no acquisition. An external reader validating against the
+        // published schema alone must reject it, exactly as this runtime does.
+        let mut release_with_unequal_arrays = fixture["disclosure_release_fetch_set"].clone();
+        release_with_unequal_arrays["adapterIds"] =
+            serde_json::json!(["adapter-a", "adapter-b", "adapter-c", "adapter-d"]);
+
         let mut refusal_with_stage_arrays = fixture["authorization_refusal"].clone();
         refusal_with_stage_arrays
             .as_object_mut()
@@ -1358,6 +1365,7 @@ mod tests {
             ),
             ("release-with-one-stage-array", release_with_one_stage_array),
             ("release-with-repeated-source", release_with_repeated_source),
+            ("release-with-unequal-arrays", release_with_unequal_arrays),
             ("refusal-with-stage-arrays", refusal_with_stage_arrays),
         ] {
             assert!(
