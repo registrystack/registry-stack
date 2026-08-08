@@ -20,7 +20,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-export const FORMAT_VERSION = '1.3';
+export const FORMAT_VERSION = '1.0';
 
 export const CONTRACTS = [
   {
