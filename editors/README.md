@@ -49,6 +49,41 @@ The installer does not trust a project or approve a development extension. Those
 with the user. Pass `--open <existing-directory>` only as a convenience to open a directory after
 installation. It does not configure that directory. Use `--help` for the complete interface.
 
+## Evidence projects
+
+The same language server and editor launchers also serve an Evidence authoring project. There is
+no separate Evidence editor integration: one client per workspace folder covers both project
+families, and neither `vscode` nor `zed` branches on which one a folder is.
+
+A folder is an Evidence project root when it contains the `evidence-project.yaml` marker, or, for
+a project created before the marker existed, the legacy pair of a `source.openapi.yaml` file and a
+`questions` directory. Either form gets the same cross-file definitions, references,
+workspace/document symbols, and reference diagnostics over its authoring documents (selectors,
+questions, sources, access policies, and the schemas they cite) that a `registry-stack.yaml` root
+gets for Relay.
+
+Project setup and schema refresh mirror the Relay commands, spelled with `evidencectl` instead of
+`registryctl`:
+
+```console
+evidencectl new /path/to/evidence-project
+evidencectl tooling editor --project /path/to/evidence-project
+```
+
+`evidencectl tooling editor` writes the same kind of project-local, version-matched YAML schema
+mappings that `registryctl tooling editor` writes for a Relay project. Run it again after changing
+the authoring project's shape.
+
+Two gaps to know about before relying on this for Evidence work:
+
+- VS Code does not complete Evidence YAML string values yet (source names, selector references,
+  and similar). Schema-driven completion for a string value needs
+  `editor.quickSuggestions.strings: true`, which this integration does not set and does not ship
+  completion behavior for. That is planned for a later phase, not this one.
+- Rhai request-preparation and derivation scripts (`*.rhai`) get no editor behavior from this
+  integration in either editor. Neither the VS Code client's document selector nor the Zed
+  extension associates `.rhai` files with the language server yet.
+
 ## Local end-to-end smoke test
 
 Run the commands in this section from the repository root. They create a disposable HTTP starter

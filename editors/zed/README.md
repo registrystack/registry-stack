@@ -46,6 +46,23 @@ It does not read or change a project.
 The installer cannot approve the development extension on the user's behalf. This is a deliberate
 Zed trust boundary, not missing automation.
 
+## Evidence projects
+
+This extension attaches to an Evidence authoring project the same way it attaches to a Relay
+project: one language-server client per worktree, found through the same
+`registry-language-server` / `registryctl` / `evidencectl` fallback chain described above.
+`evidencectl new` and `evidencectl tooling editor` are the Evidence-side equivalents of
+`registryctl init` and `registryctl -C <project> tooling editor` mentioned earlier.
+
+Rhai request-preparation and derivation scripts (`*.rhai`) get no support from this extension: no
+`tree-sitter-rhai` grammar is bundled or referenced here, so an open `.rhai` file gets neither
+syntax highlighting nor a language server from Registry Stack. This is a known gap in the current
+integration, not a defect to work around.
+
+Zed's extension API has no worktree-root predicate, so this extension cannot itself distinguish a
+Relay worktree from an Evidence worktree before attaching; see the note at the end of this file for
+what that means in practice.
+
 ## Iterate
 
 - After changing the Rust server, run `cargo build --locked -p registry-language-server`, then
@@ -72,7 +89,7 @@ from that page after the smoke test if you do not want the override to remain ac
 
 Zed does not permit shipping an external language server inside the extension.
 The current Zed extension API registers a language server against a language name, but has no
-worktree-root predicate for `registry-stack.yaml`.
+worktree-root predicate for `registry-stack.yaml` or `evidence-project.yaml`.
 The integration therefore attaches to YAML while the development extension remains installed.
 It has no Registry Stack behavior without a server binary, but Zed can log a missing-server error
 when you open unrelated YAML in another worktree.
