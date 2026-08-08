@@ -13,7 +13,7 @@ use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 use crate::{
     refs::{
         bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
-        IndexedSymbol, RegistrySymbolKind, SymbolKey, SymbolQuery,
+        IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
     },
     yaml::YamlValue,
 };
@@ -249,9 +249,9 @@ impl IndexBuilder<'_> {
                 self.extract_environment(path, relative, document);
             } else if !claimed_definition_files.contains(path) {
                 if is_integration_path(relative) {
-                    self.extract_orphan_definition(path, document, RegistrySymbolKind::Integration);
+                    self.extract_orphan_definition(path, document, RelayKind::Integration);
                 } else if is_entity_path(relative) {
-                    self.extract_orphan_definition(path, document, RegistrySymbolKind::Entity);
+                    self.extract_orphan_definition(path, document, RelayKind::Entity);
                 }
             }
         }
@@ -268,7 +268,7 @@ impl IndexBuilder<'_> {
             .and_then(|registry| registry.get_scalar("id"))
         {
             self.add_resolvable_symbol(
-                SymbolKey::global(RegistrySymbolKind::Registry, &registry_id.value),
+                SymbolKey::global(RelayKind::Registry, &registry_id.value),
                 None,
                 path,
                 registry_id.range,
@@ -279,14 +279,14 @@ impl IndexBuilder<'_> {
             path,
             manifest,
             "integrations",
-            RegistrySymbolKind::Integration,
+            RelayKind::Integration,
             claimed_definition_files,
         );
         self.extract_aliases(
             path,
             manifest,
             "entities",
-            RegistrySymbolKind::Entity,
+            RelayKind::Entity,
             claimed_definition_files,
         );
 
@@ -296,7 +296,7 @@ impl IndexBuilder<'_> {
         for service in services {
             let service_name = service.key.value.clone();
             self.add_resolvable_symbol(
-                SymbolKey::global(RegistrySymbolKind::Service, &service_name),
+                SymbolKey::global(RelayKind::Service, &service_name),
                 None,
                 path,
                 service.key.range,
@@ -304,7 +304,7 @@ impl IndexBuilder<'_> {
 
             if let Some(entity) = service.value.get_scalar("entity") {
                 self.add_reference(
-                    SymbolQuery::global(RegistrySymbolKind::Entity, &entity.value),
+                    SymbolQuery::global(RelayKind::Entity, &entity.value),
                     path,
                     entity.range,
                 );
@@ -318,7 +318,7 @@ impl IndexBuilder<'_> {
                 for consultation in consultations {
                     self.add_resolvable_symbol(
                         SymbolKey::scoped(
-                            RegistrySymbolKind::Consultation,
+                            RelayKind::Consultation,
                             &service_name,
                             &consultation.key.value,
                         ),
@@ -328,10 +328,7 @@ impl IndexBuilder<'_> {
                     );
                     if let Some(integration) = consultation.value.get_scalar("integration") {
                         self.add_reference(
-                            SymbolQuery::global(
-                                RegistrySymbolKind::Integration,
-                                &integration.value,
-                            ),
+                            SymbolQuery::global(RelayKind::Integration, &integration.value),
                             path,
                             integration.range,
                         );
@@ -346,7 +343,7 @@ impl IndexBuilder<'_> {
         manifest_path: &Path,
         manifest: &YamlValue,
         field: &str,
-        kind: RegistrySymbolKind,
+        kind: RelayKind,
         claimed_definition_files: &mut BTreeSet<PathBuf>,
     ) {
         let Some(aliases) = manifest.get(field).and_then(YamlValue::as_mapping) else {
@@ -404,12 +401,7 @@ impl IndexBuilder<'_> {
         }
     }
 
-    fn extract_orphan_definition(
-        &mut self,
-        path: &Path,
-        document: &YamlValue,
-        kind: RegistrySymbolKind,
-    ) {
+    fn extract_orphan_definition(&mut self, path: &Path, document: &YamlValue, kind: RelayKind) {
         if let Some(id) = document.get_scalar("id") {
             self.add_non_resolving_symbol(SymbolKey::global(kind, &id.value), None, path, id.range);
         }
@@ -418,7 +410,7 @@ impl IndexBuilder<'_> {
     fn extract_fixture(&mut self, path: &Path, document: &YamlValue) {
         if let Some(name) = document.get_scalar("name") {
             self.add_resolvable_symbol(
-                SymbolKey::global(RegistrySymbolKind::Fixture, &name.value),
+                SymbolKey::global(RelayKind::Fixture, &name.value),
                 None,
                 path,
                 name.range,
@@ -430,15 +422,15 @@ impl IndexBuilder<'_> {
         if let Some(name) = relative.file_stem().and_then(|name| name.to_str()) {
             let range = Range::new(Position::new(0, 0), Position::new(0, 0));
             self.add_resolvable_symbol(
-                SymbolKey::global(RegistrySymbolKind::Environment, name),
+                SymbolKey::global(RelayKind::Environment, name),
                 None,
                 path,
                 range,
             );
         }
         for (field, kind) in [
-            ("integrations", RegistrySymbolKind::Integration),
-            ("entities", RegistrySymbolKind::Entity),
+            ("integrations", RelayKind::Integration),
+            ("entities", RelayKind::Entity),
         ] {
             if let Some(entries) = document.get(field).and_then(YamlValue::as_mapping) {
                 for entry in entries {
@@ -504,7 +496,7 @@ impl IndexBuilder<'_> {
     }
 }
 
-fn safe_definition_path(root: &Path, relative: &str, kind: RegistrySymbolKind) -> Option<PathBuf> {
+fn safe_definition_path(root: &Path, relative: &str, kind: RelayKind) -> Option<PathBuf> {
     let path = Path::new(relative);
     if path.is_absolute()
         || path
@@ -515,8 +507,8 @@ fn safe_definition_path(root: &Path, relative: &str, kind: RegistrySymbolKind) -
     }
     let candidate = root.join(path);
     let supported = match kind {
-        RegistrySymbolKind::Integration => is_integration_path(path),
-        RegistrySymbolKind::Entity => is_entity_path(path),
+        RelayKind::Integration => is_integration_path(path),
+        RelayKind::Entity => is_entity_path(path),
         _ => false,
     };
     supported.then_some(candidate)
@@ -564,7 +556,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        refs::ProjectIndex,
+        refs::{ProjectIndex, SymbolKind},
         yaml::{parse_yaml, YamlValue},
     };
     use tempfile::TempDir;
@@ -626,17 +618,18 @@ services:
 
         assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
         assert!(index.symbols().iter().any(|symbol| {
-            symbol.kind == RegistrySymbolKind::Integration
+            symbol.kind == SymbolKind::Relay(RelayKind::Integration)
                 && symbol.name == "people"
                 && symbol.location.path.ends_with("integration.yaml")
         }));
         assert!(index.symbols().iter().any(|symbol| {
-            symbol.kind == RegistrySymbolKind::Entity
+            symbol.kind == SymbolKind::Relay(RelayKind::Entity)
                 && symbol.name == "residents"
                 && symbol.location.path.ends_with("residents.yaml")
         }));
         assert!(index.symbols().iter().any(|symbol| {
-            symbol.kind == RegistrySymbolKind::Consultation && symbol.name == "person_record"
+            symbol.kind == SymbolKind::Relay(RelayKind::Consultation)
+                && symbol.name == "person_record"
         }));
 
         let manifest = temp.path().join(PROJECT_FILE);
@@ -835,18 +828,18 @@ services:
 
         assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
         for (kind, name) in [
-            (RegistrySymbolKind::Registry, "fictional-citizen-registry"),
-            (RegistrySymbolKind::Integration, "person-record"),
-            (RegistrySymbolKind::Service, "person-verification"),
-            (RegistrySymbolKind::Consultation, "person_record"),
-            (RegistrySymbolKind::Fixture, "active-person"),
-            (RegistrySymbolKind::Environment, "local"),
+            (RelayKind::Registry, "fictional-citizen-registry"),
+            (RelayKind::Integration, "person-record"),
+            (RelayKind::Service, "person-verification"),
+            (RelayKind::Consultation, "person_record"),
+            (RelayKind::Fixture, "active-person"),
+            (RelayKind::Environment, "local"),
         ] {
             assert!(
                 index
                     .symbols()
                     .iter()
-                    .any(|symbol| symbol.kind == kind && symbol.name == name),
+                    .any(|symbol| symbol.kind == SymbolKind::Relay(kind) && symbol.name == name),
                 "missing {kind:?} {name}"
             );
         }

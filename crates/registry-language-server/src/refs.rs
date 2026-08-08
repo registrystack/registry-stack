@@ -7,12 +7,42 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range, SymbolKind};
+use tower_lsp_server::ls_types::{
+    DiagnosticSeverity, Position, Range, SymbolKind as LspSymbolKind,
+};
 
 use crate::relay;
 
+/// The kind of a symbol, qualified by the document family that declares it. Keys, queries, and
+/// diagnostics compare whole kinds, so one family's names never resolve another family's
+/// references.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum RegistrySymbolKind {
+pub enum SymbolKind {
+    Relay(RelayKind),
+}
+
+impl SymbolKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Relay(kind) => kind.label(),
+        }
+    }
+
+    pub fn lsp_kind(self) -> LspSymbolKind {
+        match self {
+            Self::Relay(kind) => kind.lsp_kind(),
+        }
+    }
+}
+
+impl From<RelayKind> for SymbolKind {
+    fn from(kind: RelayKind) -> Self {
+        Self::Relay(kind)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RelayKind {
     Registry,
     Integration,
     Entity,
@@ -22,7 +52,7 @@ pub enum RegistrySymbolKind {
     Environment,
 }
 
-impl RegistrySymbolKind {
+impl RelayKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Registry => "registry",
@@ -35,41 +65,41 @@ impl RegistrySymbolKind {
         }
     }
 
-    pub fn lsp_kind(self) -> SymbolKind {
+    pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
-            Self::Registry => SymbolKind::NAMESPACE,
-            Self::Integration | Self::Entity => SymbolKind::MODULE,
-            Self::Service => SymbolKind::INTERFACE,
-            Self::Consultation => SymbolKind::FUNCTION,
-            Self::Fixture => SymbolKind::EVENT,
-            Self::Environment => SymbolKind::PACKAGE,
+            Self::Registry => LspSymbolKind::NAMESPACE,
+            Self::Integration | Self::Entity => LspSymbolKind::MODULE,
+            Self::Service => LspSymbolKind::INTERFACE,
+            Self::Consultation => LspSymbolKind::FUNCTION,
+            Self::Fixture => LspSymbolKind::EVENT,
+            Self::Environment => LspSymbolKind::PACKAGE,
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct SymbolKey {
-    pub(crate) kind: RegistrySymbolKind,
+    pub(crate) kind: SymbolKind,
     pub(crate) scope: Option<String>,
     pub(crate) name: String,
 }
 
 impl SymbolKey {
-    pub(crate) fn global(kind: RegistrySymbolKind, name: impl Into<String>) -> Self {
+    pub(crate) fn global(kind: impl Into<SymbolKind>, name: impl Into<String>) -> Self {
         Self {
-            kind,
+            kind: kind.into(),
             scope: None,
             name: name.into(),
         }
     }
 
     pub(crate) fn scoped(
-        kind: RegistrySymbolKind,
+        kind: impl Into<SymbolKind>,
         scope: impl Into<String>,
         name: impl Into<String>,
     ) -> Self {
         Self {
-            kind,
+            kind: kind.into(),
             scope: Some(scope.into()),
             name: name.into(),
         }
@@ -85,7 +115,7 @@ pub struct IndexedLocation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IndexedSymbol {
     pub name: String,
-    pub kind: RegistrySymbolKind,
+    pub kind: SymbolKind,
     pub container_name: Option<String>,
     pub location: IndexedLocation,
     pub(crate) key: SymbolKey,
@@ -102,15 +132,15 @@ pub struct IndexedDiagnostic {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SymbolQuery {
-    pub(crate) kind: RegistrySymbolKind,
+    pub(crate) kind: SymbolKind,
     pub(crate) scope: Option<String>,
     pub(crate) name: String,
 }
 
 impl SymbolQuery {
-    pub(crate) fn global(kind: RegistrySymbolKind, name: impl Into<String>) -> Self {
+    pub(crate) fn global(kind: impl Into<SymbolKind>, name: impl Into<String>) -> Self {
         Self {
-            kind,
+            kind: kind.into(),
             scope: None,
             name: name.into(),
         }

@@ -6,7 +6,7 @@ mod relay;
 mod server;
 mod yaml;
 
-pub use refs::{ProjectIndex, RegistrySymbolKind};
+pub use refs::{ProjectIndex, RelayKind, SymbolKind};
 pub use server::Backend;
 
 /// Serve the Registry Stack language protocol over standard input and output.
