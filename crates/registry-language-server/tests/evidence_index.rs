@@ -894,6 +894,84 @@ fn the_same_source_is_reported_once_a_question_reads_it() {
     );
 }
 
+/// A source is opened for a question the form accepts, not for any document that spells its name.
+///
+/// `read_inputs` in `crates/registry-evidencectl/src/authoring.rs:464-492` refuses a question at
+/// `first_finding(validate_question(&question))?` before a single source is compiled, so a question
+/// whose shape the form refuses never reaches `compile_referenced_question` (:1127-1144) and the
+/// source it names is never read for its artifacts. The editor answers that one malformed document
+/// with the one sentence that holds its departure, and says nothing in a file the author has not
+/// touched.
+#[test]
+fn a_source_named_only_by_a_question_the_form_refuses_is_left_alone() {
+    let missing_schema = without(&adult_status_project(), "schemas/people-facts.schema.yaml");
+    let refused = EvidenceProject::new(&replacing(
+        &missing_schema,
+        QUESTION_PATH,
+        &QUESTION.replace("    type: boolean\n", "    type: mystery\n"),
+    ));
+    let quiet = refused.index();
+
+    assert_eq!(
+        only_diagnostic_in(&quiet, &refused, QUESTION_PATH)
+            .code
+            .as_deref(),
+        Some("evidence/question-shape")
+    );
+    assert_eq!(quiet.diagnostics().len(), 1, "{:?}", quiet.diagnostics());
+
+    // The source is still the source its file names, and the names it spells still resolve, so an
+    // author reading either document navigates while the shape is what they fix.
+    assert_eq!(
+        definition_paths(&quiet, &refused, QUESTION_PATH, "source-ref"),
+        vec![refused.path(SOURCE_PATH)]
+    );
+    assert_eq!(
+        definition_paths(&quiet, &refused, SOURCE_PATH, "response-schema"),
+        vec![refused.path("schemas/people-response.schema.yaml")]
+    );
+
+    // The reading is the gate, not the check. The same project with the question it started as
+    // reports the schema that is missing, which is `a_source_schema_that_is_not_there_is_reported`.
+    let accepted = EvidenceProject::new(&missing_schema);
+    let reported = accepted.index();
+    assert_eq!(
+        only_diagnostic_in(&reported, &accepted, SOURCE_PATH)
+            .code
+            .as_deref(),
+        Some("evidence/unknown-schema-file")
+    );
+}
+
+/// The gate is one question's own reading, not the state of the project as a whole.
+///
+/// `compile_plan` walks the questions and pulls each one's source out of the set it loaded, so a
+/// source a question the form accepts reads is a source the build opens. A second question that is
+/// malformed is a sentence about that second document, and silencing the source it also names would
+/// hide a schema the build really refuses this project for.
+#[test]
+fn a_source_an_accepted_question_reads_keeps_its_checks_beside_a_refused_one() {
+    let project = EvidenceProject::new(&second_question_naming_one_source_project());
+    let index = project.index();
+
+    let diagnostic = only_diagnostic_in(&index, &project, SOURCE_PATH);
+    assert_eq!(
+        diagnostic.range.start,
+        project.cursor(SOURCE_PATH, "fact-schema")
+    );
+    assert_eq!(
+        diagnostic.code.as_deref(),
+        Some("evidence/unknown-schema-file")
+    );
+    assert_eq!(
+        only_diagnostic_in(&index, &project, SECOND_QUESTION_PATH)
+            .code
+            .as_deref(),
+        Some("evidence/question-shape")
+    );
+    assert_eq!(index.diagnostics().len(), 2, "{:?}", index.diagnostics());
+}
+
 /// `request.prepareScript` and `extractScript` are edges the compiler enforces:
 /// `referenced_source_artifacts` reads both, and the bundle writer copies what they name. The index
 /// walks neither, because the reference vocabulary has no kind for an authored script and naming
@@ -1069,6 +1147,22 @@ fn unread_second_source_project() -> Vec<ProjectFile> {
             "factSchema: <|fact-schema|>schemas/people-facts.schema.yaml",
             "factSchema: <|fact-schema|>schemas/registry-facts.schema.yaml",
         ),
+    )
+}
+
+const SECOND_QUESTION_PATH: &str = "questions/registry-status.yaml";
+
+/// The same project short of the schema the source's facts are checked against, with a second
+/// question beside the one that reads that source: the same document under its own name, with an
+/// answer type the deserializer refuses, naming the same source.
+fn second_question_naming_one_source_project() -> Vec<ProjectFile> {
+    let files = without(&adult_status_project(), "schemas/people-facts.schema.yaml");
+    replacing(
+        &files,
+        SECOND_QUESTION_PATH,
+        &QUESTION
+            .replace("id: <|id|>adult-status", "id: registry-status")
+            .replace("    type: boolean\n", "    type: mystery\n"),
     )
 }
 

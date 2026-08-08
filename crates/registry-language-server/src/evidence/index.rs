@@ -8,8 +8,8 @@
 //! would accept, because a diagnostic an author cannot act on teaches them to ignore the channel.
 //! Two rules hold that property where it is hardest to keep: a document this root could not read
 //! still declares the name its path gives it, so the documents spelling that name are not told it
-//! is missing, and a source no question reads has its names resolved for navigation and reported to
-//! nobody, because nothing in the build looks inside it either.
+//! is missing, and a source no question the form accepts reads has its names resolved for
+//! navigation and reported to nobody, because nothing in the build looks inside it either.
 //!
 //! Four of those edges are drawn against the project's own OpenAPI description rather than against
 //! another authored document: `source.operation` names an operation it publishes,
@@ -62,7 +62,7 @@ use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 
 use crate::{
     evidence::{
-        diagnostics::read_question,
+        diagnostics::{read_question, QuestionReading},
         layout::{document_role, is_source_artifact, DocumentRole},
         openapi::Description,
     },
@@ -91,7 +91,11 @@ pub(crate) fn build_index(
         operations_published_under_get: BTreeSet::new(),
         derivation_claims: BTreeMap::new(),
     };
-    let read_sources = sources_questions_read(root, parsed);
+    // Every question is read once, before anything is walked, because two of the things the walk
+    // does depend on the answer: what the question itself reports, and whether the source it names
+    // is a source anything looks inside.
+    let mut readings = read_questions(root, documents, parsed);
+    let read_sources = sources_accepted_questions_read(root, parsed, &readings);
     // The one project file the loader leaves on disk, read once for the whole build. Every operation
     // it publishes is defined here, whether or not a question names it, so that `Find references` on
     // an operation answers from the description an author is looking at.
@@ -124,14 +128,11 @@ pub(crate) fn build_index(
         };
         match role {
             DocumentRole::Question => {
-                // The document is read before it is walked, because what the walk reports depends
-                // on the answer. A question the form refuses is one sentence, at the field that
-                // holds the departure, and the names it spells are walked for navigation and
-                // reported to nobody. A root holding no text for a document reads nothing, and the
-                // names in it are reported as they always were.
-                let reading = documents
-                    .get(path)
-                    .map(|source| read_question(path, source, document));
+                // The reading taken above. A question the form refuses is one sentence, at the
+                // field that holds the departure, and the names it spells are walked for navigation
+                // and reported to nobody. A root holding no text for a document reads nothing, and
+                // the names in it are reported as they always were.
+                let reading = readings.remove(path.as_path());
                 let accepted = reading
                     .as_ref()
                     .is_none_or(|reading| reading.validated.is_some());
@@ -577,10 +578,11 @@ impl IndexBuilder<'_> {
     /// Nothing inside a source document names it: the project reads a source by its file, which is
     /// also how a question spells it, so the symbol is anchored at the start of the file.
     ///
-    /// What it names is only reported when a question reads it. The compile walks the questions and
-    /// pulls each one's source out of the set it loaded, so a source no question names is never
-    /// looked inside: the build accepts a project holding one that is half written, and the editor
-    /// resolves its names for navigation without saying anything about them.
+    /// What it names is only reported when a question the form accepts reads it. The compile walks
+    /// the questions it has already accepted and pulls each one's source out of the set it loaded,
+    /// so a source no such question names is never looked inside: the build accepts a project
+    /// holding one that is half written, and the editor resolves its names for navigation without
+    /// saying anything about them.
     fn walk_source(
         &mut self,
         path: &Path,
@@ -953,19 +955,56 @@ fn document_name(relative: &Path) -> Option<&str> {
     relative.file_stem()?.to_str()
 }
 
-/// The sources some question reads, by the name the project spells them under.
+/// Whether a path this root holds is one of the project's questions.
+fn is_question(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root).ok().and_then(document_role) == Some(DocumentRole::Question)
+}
+
+/// Every question document this root holds text for, read against the authoring form.
+///
+/// A question with no entry is one the root holds no text for: a file past its ceiling, one that is
+/// not valid UTF-8, one the server could not open. Nothing is read for it, which is the same
+/// silence [`IndexBuilder::define_by_its_place`] leaves it in, and the sentence it already carries
+/// stands alone.
+fn read_questions<'a>(
+    root: &Path,
+    documents: &BTreeMap<PathBuf, String>,
+    parsed: &'a BTreeMap<PathBuf, ParsedDocument>,
+) -> BTreeMap<&'a Path, QuestionReading> {
+    parsed
+        .iter()
+        .filter(|(path, _)| is_question(root, path))
+        .filter_map(|(path, document)| {
+            let source = documents.get(path)?;
+            Some((path.as_path(), read_question(path, source, document)))
+        })
+        .collect()
+}
+
+/// The sources some question the form accepts reads, by the name the project spells them under.
 ///
 /// The compile walks the questions and pulls each one's source out of the set of documents it
 /// loaded, so this is the set of sources anything checks. A source outside it is loaded, read far
 /// enough to see that it is an object under a usable name, and never opened again.
-fn sources_questions_read(
+///
+/// A question the form refuses is outside it too, whatever it spells. `read_inputs`
+/// (`crates/registry-evidencectl/src/authoring.rs:464-492`) stops at
+/// `first_finding(validate_question(&question))?` before a source is compiled, so
+/// `compile_referenced_question` (:1127-1144) never reads the artifacts of the source that question
+/// names. Classifying that source as read would answer one malformed document with a second
+/// sentence, in a file the author has not touched and may have nothing wrong with it.
+fn sources_accepted_questions_read<'a>(
     root: &Path,
-    parsed: &BTreeMap<PathBuf, ParsedDocument>,
+    parsed: &'a BTreeMap<PathBuf, ParsedDocument>,
+    readings: &BTreeMap<&'a Path, QuestionReading>,
 ) -> BTreeSet<String> {
     parsed
         .iter()
+        .filter(|(path, _)| is_question(root, path))
         .filter(|(path, _)| {
-            path.strip_prefix(root).ok().and_then(document_role) == Some(DocumentRole::Question)
+            readings
+                .get(path.as_path())
+                .is_none_or(|reading| reading.validated.is_some())
         })
         .filter_map(|(_, document)| {
             document
