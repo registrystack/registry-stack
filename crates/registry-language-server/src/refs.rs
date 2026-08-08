@@ -661,7 +661,7 @@ impl ProjectIndex {
             );
             for symbol in definitions {
                 markdown.push_str("\n\nDefined in `");
-                markdown.push_str(&bounded_value(&self.relative(&symbol.location.path)));
+                markdown.push_str(&bounded_span(&self.relative(&symbol.location.path)));
                 markdown.push('`');
             }
             return Some(HoverText {
@@ -869,13 +869,29 @@ fn scope_suffix(kind: SymbolKind, scope: Option<&str>) -> String {
 }
 
 /// The first line of a card: what this is, what it is called, and the scope it is called that in.
+///
+/// This composes the same sentence [`scope_suffix`] ends, and does not reuse it, because a card is
+/// markup where a message is text: every piece the author wrote is drawn here inside a code span,
+/// which is not what a message wants around a name it quotes mid-sentence.
 fn headline(kind: SymbolKind, name: &str, scope: Option<&str>) -> String {
-    format!(
-        "**{}** `{}`{}",
-        kind.label(),
-        bounded_value(name),
-        scope_suffix(kind, scope)
-    )
+    let scope = scope
+        .map(|scope| format!(" in {} `{}`", kind.scope_label(), bounded_span(scope)))
+        .unwrap_or_default();
+    format!("**{}** `{}`{}", kind.label(), bounded_span(name), scope)
+}
+
+/// One piece of text an author wrote, made safe to draw inside the code span a card quotes it in.
+///
+/// A card is the one thing this server renders as markup rather than states as text, and the names
+/// and paths inside one come from a project its reader did not write. [`bounded_value`] makes such a
+/// name safe to quote in a sentence a client draws as text, which is a different promise: it leaves
+/// markdown's punctuation alone, as a message wants. Inside a code span every one of those characters
+/// is inert but the backtick, which closes the span and hands the rest of the line to the author. So
+/// the backtick is what this replaces, and replacing it is what keeps a card this crate's sentence
+/// rather than the author's markup. A name that reaches a card carrying one is a name `evidence
+/// check` rejects; the editor draws it anyway, which is the whole reason the card cannot assume it.
+fn bounded_span(value: &str) -> String {
+    bounded_value(value).replace('`', "\u{fffd}")
 }
 
 /// The ceiling on a whole card, in characters.
@@ -891,7 +907,8 @@ const MAX_HOVER_CHARS: usize = 4096;
 ///
 /// Unlike [`bounded`], this leaves control characters alone, because the newlines separating the
 /// lines of a card are its own. Every piece of author-written text inside one has already been
-/// through [`bounded_value`], which replaced the control characters that came from the author.
+/// through [`bounded_span`], which replaced both the control characters and the one markdown
+/// character that would have let the author draw the rest of the card.
 fn bounded_hover(markdown: &str) -> String {
     let mut bounded = markdown.chars().take(MAX_HOVER_CHARS).collect::<String>();
     if markdown.chars().count() > MAX_HOVER_CHARS {

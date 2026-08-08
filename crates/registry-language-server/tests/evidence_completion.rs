@@ -328,7 +328,7 @@ fn a_scoped_reference_names_the_question_it_belongs_to() {
     assert!(hover.markdown.contains("**concept**"), "{hover:?}");
     assert!(hover.markdown.contains("`is_adult`"), "{hover:?}");
     assert!(
-        hover.markdown.contains("in question 'adult-status'"),
+        hover.markdown.contains("in question `adult-status`"),
         "{hover:?}"
     );
 }
@@ -409,5 +409,69 @@ fn a_name_too_long_to_draw_is_cut_inside_the_card() {
             .markdown
             .contains(&format!("{}\u{2026}", "l".repeat(120))),
         "{hover:?}"
+    );
+}
+
+/// A card is the one thing this server renders rather than states, and the names inside one come
+/// from a project its reader did not write.
+///
+/// `bounded_value` makes a name safe to quote in a sentence a client draws as text, which says
+/// nothing about the same name drawn as markup: a backtick the author wrote closes the span the name
+/// is drawn in, and every character after it is the author's markup rather than this crate's. A name
+/// carrying one is a name `evidence check` rejects, which is exactly why an editor sees it, because
+/// an editor is what an author reads before it is rejected.
+#[test]
+fn a_name_carrying_markup_does_not_get_to_draw_it() {
+    let payload = "is_adult` **not what it says**";
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &QUESTION
+            .replace("<|concept|>is_adult", &format!("<|concept|>{payload}"))
+            .replace("<|allow|>is_adult", &format!("<|allow|>{payload}")),
+    ));
+    let index = project.index();
+
+    let hover = index
+        .hover_at(
+            &project.path(QUESTION_PATH),
+            project.cursor(QUESTION_PATH, "allow"),
+        )
+        .expect("the concept describes itself");
+    assert!(
+        !hover.markdown.contains(payload),
+        "the author's backtick reached the card and closed the span the name is drawn in: {hover:?}"
+    );
+    assert!(
+        hover
+            .markdown
+            .contains("is_adult\u{fffd} **not what it says**"),
+        "the name is still the whole name the author wrote, minus the one character: {hover:?}"
+    );
+}
+
+/// The scope a card names is written by the same author as the name it scopes, and reaches the card
+/// by the same route. It is drawn in a span of its own so that a question id carrying markup cannot
+/// draw the rest of the line either.
+#[test]
+fn a_scope_carrying_markup_does_not_get_to_draw_it_either() {
+    let payload = "adult-status` [see](https://example.invalid)";
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &QUESTION.replace("<|id|>adult-status", &format!("<|id|>{payload}")),
+    ));
+    let index = project.index();
+
+    let hover = index
+        .hover_at(
+            &project.path(QUESTION_PATH),
+            project.cursor(QUESTION_PATH, "allow"),
+        )
+        .expect("the concept describes itself");
+    assert!(
+        !hover.markdown.contains("[see](https://example.invalid)")
+            || !hover.markdown.contains("adult-status`"),
+        "the question id closed the span its scope is drawn in: {hover:?}"
     );
 }
