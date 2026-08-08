@@ -1955,6 +1955,20 @@ semantics:
 11. Which permitted existence-disclosure behavior applies to each enabled
     requirement under the closed public problem contract?
 
+Item 7 chooses where a deployment puts durable storage, not which sink to
+build. The chain head is recovered from local segments at startup and held in
+process memory, so a write-only external receiver can only mirror a local
+system of record, never replace it. A shipped copy is verified with the same
+keyed HMAC that wrote it, which makes the verifying key the forging key: an
+off-host reader who does not hold the audit master cannot check the chain, and
+one who does could reconstruct it. Signed checkpoints over the chain head would
+close that gap, and the trigger for designing them is a deployment that names an
+external auditor who must establish continuity without trusting the operator,
+under a key custody boundary distinct from the service signing key. Absent that
+party, checkpoints add a second custody boundary and a record shape the closed
+audit schema does not admit, while proving nothing the operator cannot already
+prove.
+
 ## 23. Working references
 
 - SEMIC, [Core Criterion and Core Evidence Vocabulary 2.2.0](https://semiceu.github.io/CCCEV/releases/2.2.0/).
