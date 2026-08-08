@@ -91,6 +91,7 @@ The governed file is `bundle/evidence.yaml`.
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds this bundle opts in to, at most one entry. Omission and `[]` both enable nothing. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
@@ -189,7 +190,10 @@ requirement revision, purpose, audience, authority profile, and every
 role/profile/origin tuple as one decision before credentials or source access.
 
 A profile matches only when every tag in its `requesterTags` is present in the
-verified claim, so adding a tag narrows the profile. Access is per requester
+verified claim, so adding a tag narrows the profile. A request whose verified
+token carries an actor claim matches only a profile whose `kind` is
+`delegated`, so `kind` is an authorization condition and not only an audit
+label. Access is per requester
 class rather than per client identity: two clients carrying the same tags have
 the same access, and differentiated requirements, purposes, or `valueClaims`
 are expressed by issuing different tags. To bind purpose to the token issuer
@@ -205,7 +209,7 @@ Each requirement declares these fields:
 | Key | Required | Meaning |
 |---|---|---|
 | `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
-| `acquisition` | yes | Exactly `{kind: single, source: <id>}` or `{kind: search-then-fetch, search: <id>, fetch: <id>}`. The latter has a hard two-call ceiling and no response-led routing. |
+| `acquisition` | yes | One of the three closed shapes below. None permits response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
 | `subjectRoles` | yes | Complete role set, `cardinality: one`, and permitted selector profile ids. Public subject array order is not semantic; roles are resolved uniquely and canonicalized to declaration order. |
 | `referenceFrameworks`, `evidenceType` | yes | Governed legal/procedural framework URIs and the exact Evidence Type URI. |
@@ -216,6 +220,30 @@ Each requirement declares these fields:
 | `fixtures` | conditional | Bundle-relative sanitized project fixture referenced by exactly one requirement. It may be omitted only under `assuranceProfile: local`; production and evidence-grade require it and complete coverage. |
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
+
+`acquisition.kind` selects one of three closed shapes:
+
+| `kind` | Other keys | Call ceiling |
+|---|---|---|
+| `single` | `source` | One. |
+| `search-then-fetch` | `search`, `fetch` (one source id) | Two. |
+| `search-then-fetch-set` | `search`, `fetch` (2 through 4 members), `maximumAcquisitionMilliseconds` | One plus the declared member count. |
+
+`search-then-fetch-set` is a gated kind. It serves only where this bundle names
+it under `acquisitionCapabilities` and the operator separately names it under
+the runtime file's `acquisitionCapabilities`; a bundle missing either half is
+refused before the listener binds. Each `fetch[]` member declares its own
+`source` and a `factInputs` allowlist of 1 through 16 validated search fact
+names, which is the only search-derived data that member receives through any
+channel, including the body its preparation builds. Members must be distinct
+from each other and from the search source, and each fact name must be a
+required fact of the search source's fact schema. Members are called in
+declared order after the search resolves to a unique schema-valid match, and
+derivation receives the union of the stage FactSets, whose names startup proved
+disjoint. `maximumAcquisitionMilliseconds` is 1 through 30,000 and bounds the
+whole acquisition, including the transitions between stages; exceeding it fails
+the requirement as a dependency failure and never cancels a durable audit
+append.
 
 Supported concept forms are `boolean`, `controlled-code`,
 `controlled-category`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
@@ -348,6 +376,13 @@ Version 1 offers no query-string placement and no credential can reach a token
 URL log. Token redirects are denied and token responses are bounded. The token
 request is credential bootstrap, not a second evidence-data lookup.
 
+RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
+compliant provider may return only `access_token` and `token_type`. A token
+response omitting `expires_in` is a credential failure unless
+`assumedLifetimeSeconds` states the lifetime to credit. The runtime never
+infers a lifetime from the token, and the credited lifetime is still clamped by
+`maximumCacheSeconds`.
+
 Secret files are byte strings, not base64 fields. Do not base64-encode the
 audit or subject-binding key unless those encoded ASCII bytes are intentionally
 the key. Generate independent random values of at least 32 bytes and store the
@@ -460,13 +495,20 @@ are required.
 `query` and `jsonBody` are independently `required`, `allowed`, or `forbidden`.
 The remaining keys are optional stricter limits beneath the ABI hard ceilings:
 
-- `maximumQueryPairs`
-- `maximumQueryNameBytes`
-- `maximumQueryValueBytes`
-- `maximumJsonDepth`
-- `maximumCollectionItems`
-- `maximumStringBytes`
-- `maximumNormalizedBytes`
+| Key | Bounds |
+|---|---|
+| `maximumQueryPairs` | How many query pairs `prepare` returns. |
+| `maximumQueryNameBytes` | Each query-pair name, measured before percent-encoding. |
+| `maximumQueryValueBytes` | Each query-pair value, measured before percent-encoding. |
+| `maximumJsonDepth` | Nesting depth of the JSON body. |
+| `maximumCollectionItems` | Entries in each JSON body array and members in each JSON body object. |
+| `maximumStringBytes` | Every string `prepare` returns: query names and values, and JSON body strings and object member names. |
+| `maximumNormalizedBytes` | Serialized size of the query pairs and body together. |
+
+`maximumStringBytes` applies to query names and values in addition to
+`maximumQueryNameBytes` and `maximumQueryValueBytes`, so the smaller of the two
+applicable bounds is the effective one. A returned value exceeding any bound
+fails preparation, and no source request is made.
 
 At least one output channel must be usable. `required` means non-empty. For a
 JSON body, JSON `null` is absent; an empty object or array is present.
@@ -568,6 +610,7 @@ outboundTls:
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds this deployment enables, at most one entry. Omission and `[]` both enable nothing, so a bundle needing a gated kind is refused before the listener binds. |
 
 `bundleDirectory`, secret roots, audit destinations, and CA files must be
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
@@ -736,3 +779,294 @@ to an offered contract changes that definition's returned
 `configurationRevision` and needs a coordinated rollout with the relying parties
 consuming that requirement; clients do not infer alternatives from runtime
 errors.
+
+## Complete key-path inventory
+
+Every key path the frozen contracts define, in one machine-checked list. A
+property is written `name`, an array item `name[]`, and a map value `name.*`.
+A recursive definition, currently only nested adapter parameter values, appears
+once at the point it re-enters itself.
+
+`products/evidence/scripts/check-config-key-paths.sh` fails when either block
+and its contract disagree in either direction, so a key added to a contract
+cannot ship without a line here, and a line here cannot outlive its key. The
+blocks are generated. After changing a contract, run
+`products/evidence/scripts/check-config-key-paths.sh --write`, review the diff,
+and document the new keys in the prose above.
+
+### `bundle/evidence.yaml`
+
+<!-- evidence-bundle-key-paths:start -->
+```text
+acquisitionCapabilities
+acquisitionCapabilities[]
+assuranceProfile
+audit
+audit.failClosed
+audit.format
+audit.hashKeyVersion
+audit.hashSecretRef
+authentication
+authentication.actorClaim
+authentication.algorithms
+authentication.algorithms[]
+authentication.audiences
+authentication.audiences[]
+authentication.evidenceAudienceClaim
+authentication.grantAuthorityClaim
+authentication.grantIdClaim
+authentication.issuer
+authentication.jwksUri
+authentication.kind
+authentication.maximumTokenLifetimeSeconds
+authentication.principalClaim
+authentication.requesterTagsClaim
+authentication.revokedKeyIds
+authentication.revokedKeyIds[]
+authentication.tokenTypes
+authentication.tokenTypes[]
+authorityProfiles
+authorityProfiles.*
+authorityProfiles.*.grants
+authorityProfiles.*.grants[]
+authorityProfiles.*.grants[].audienceFrom
+authorityProfiles.*.grants[].purpose
+authorityProfiles.*.grants[].requirement
+authorityProfiles.*.grants[].responseFormats
+authorityProfiles.*.grants[].responseFormats[]
+authorityProfiles.*.grants[].subjects
+authorityProfiles.*.grants[].subjects[]
+authorityProfiles.*.grants[].subjects[].role
+authorityProfiles.*.grants[].subjects[].selectorProfile
+authorityProfiles.*.grants[].subjects[].valueClaims
+authorityProfiles.*.grants[].subjects[].valueClaims.*
+authorityProfiles.*.grants[].subjects[].valueOrigin
+authorityProfiles.*.kind
+authorityProfiles.*.requesterTags
+authorityProfiles.*.requesterTags[]
+issuer
+issuer.id
+rateLimits
+rateLimits.burstPerPrincipal
+rateLimits.failedSelectorAttemptsPerPrincipalAuthorityPerMinute
+rateLimits.requestsPerPrincipalPerMinute
+requirements
+requirements[]
+requirements[].acquisition
+requirements[].acquisition.fetch
+requirements[].acquisition.fetch[]
+requirements[].acquisition.fetch[].factInputs
+requirements[].acquisition.fetch[].factInputs[]
+requirements[].acquisition.fetch[].source
+requirements[].acquisition.kind
+requirements[].acquisition.maximumAcquisitionMilliseconds
+requirements[].acquisition.search
+requirements[].acquisition.source
+requirements[].concepts
+requirements[].concepts[]
+requirements[].concepts[].constraints
+requirements[].concepts[].constraints.bucketScheme
+requirements[].concepts[].constraints.categoryScheme
+requirements[].concepts[].constraints.codelist
+requirements[].concepts[].constraints.codelistVersion
+requirements[].concepts[].constraints.maximum
+requirements[].concepts[].constraints.maximumBytes
+requirements[].concepts[].constraints.maximumItems
+requirements[].concepts[].constraints.maximumScale
+requirements[].concepts[].constraints.maximumSerializedBytes
+requirements[].concepts[].constraints.minimum
+requirements[].concepts[].constraints.minimumItems
+requirements[].concepts[].constraints.schema
+requirements[].concepts[].constraints.schemeVersion
+requirements[].concepts[].constraints.unique
+requirements[].concepts[].form
+requirements[].concepts[].id
+requirements[].concepts[].required
+requirements[].concepts[].sdJwtVc
+requirements[].concepts[].sdJwtVc.claim
+requirements[].concepts[].sdJwtVc.disclosure
+requirements[].derivation
+requirements[].derivation.parameters
+requirements[].derivation.parameters.*
+requirements[].derivation.parameters.*.type
+requirements[].derivation.parameters.*.value
+requirements[].derivation.parameters.*[]
+requirements[].derivation.parameters.*[].code
+requirements[].derivation.parameters.*[].maximumExclusive
+requirements[].derivation.parameters.*[].maximumExclusive.type
+requirements[].derivation.parameters.*[].maximumExclusive.value
+requirements[].derivation.parameters.*[].minimumInclusive
+requirements[].derivation.parameters.*[].minimumInclusive.type
+requirements[].derivation.parameters.*[].minimumInclusive.value
+requirements[].derivation.script
+requirements[].derivation.selectorInputs
+requirements[].derivation.selectorInputs[]
+requirements[].derivation.selectorInputs[].alternatives
+requirements[].derivation.selectorInputs[].alternatives[]
+requirements[].derivation.selectorInputs[].alternatives[].fields
+requirements[].derivation.selectorInputs[].alternatives[].fields[]
+requirements[].derivation.selectorInputs[].alternatives[].profile
+requirements[].derivation.selectorInputs[].role
+requirements[].disclosureGuard
+requirements[].disclosureGuard.families
+requirements[].disclosureGuard.families[]
+requirements[].evidenceType
+requirements[].existenceDisclosure
+requirements[].fixtures
+requirements[].id
+requirements[].kind
+requirements[].observationTimezone
+requirements[].purposes
+requirements[].purposes[]
+requirements[].referenceFrameworks
+requirements[].referenceFrameworks[]
+requirements[].subjectRoles
+requirements[].subjectRoles[]
+requirements[].subjectRoles[].cardinality
+requirements[].subjectRoles[].role
+requirements[].subjectRoles[].selectorProfiles
+requirements[].subjectRoles[].selectorProfiles[]
+requirements[].validitySeconds
+responseFormats
+responseFormats[]
+selectorProfiles
+selectorProfiles.*
+selectorProfiles.*.fields
+selectorProfiles.*.fields.*
+selectorProfiles.*.fields.*.codelist
+selectorProfiles.*.fields.*.codelistVersion
+selectorProfiles.*.fields.*.maximum
+selectorProfiles.*.fields.*.maximumBytes
+selectorProfiles.*.fields.*.minimum
+selectorProfiles.*.fields.*.minimumBytes
+selectorProfiles.*.fields.*.type
+selectorProfiles.*.maximumAggregateBytes
+service
+service.providerId
+service.trustDomain
+signing
+signing.activePublicJwkFile
+signing.algorithm
+signing.format
+signing.jwksPath
+signing.maximumAssertionValiditySeconds
+signing.publishedPublicJwkFiles
+signing.publishedPublicJwkFiles[]
+signing.revokedKeyIds
+signing.revokedKeyIds[]
+signing.verifierClockSkewSeconds
+sources
+sources.*
+sources.*.authentication
+sources.*.authentication.assumedLifetimeSeconds
+sources.*.authentication.clientIdRef
+sources.*.authentication.clientSecretRef
+sources.*.authentication.credentialPlacement
+sources.*.authentication.headerName
+sources.*.authentication.kind
+sources.*.authentication.maximumCacheSeconds
+sources.*.authentication.passwordRef
+sources.*.authentication.scope
+sources.*.authentication.tokenEndpoint
+sources.*.authentication.tokenRef
+sources.*.authentication.usernameRef
+sources.*.authentication.valueRef
+sources.*.baseUrl
+sources.*.extractScript
+sources.*.factSchema
+sources.*.posture
+sources.*.request
+sources.*.request.adapterParameters
+sources.*.request.adapterParameters.*
+sources.*.request.adapterParameters.*.*
+sources.*.request.adapterParameters.*[]
+sources.*.request.adapterParametersSchema
+sources.*.request.concurrencyLimit
+sources.*.request.fixedHeaders
+sources.*.request.fixedHeaders[]
+sources.*.request.fixedHeaders[].name
+sources.*.request.fixedHeaders[].value
+sources.*.request.maximumResponseBytes
+sources.*.request.method
+sources.*.request.path
+sources.*.request.pathBindings
+sources.*.request.pathBindings.*
+sources.*.request.pathBindings.*.field
+sources.*.request.pathBindings.*.from
+sources.*.request.pathBindings.*.profile
+sources.*.request.pathBindings.*.role
+sources.*.request.pathTemplate
+sources.*.request.preparationLimits
+sources.*.request.preparationLimits.jsonBody
+sources.*.request.preparationLimits.maximumCollectionItems
+sources.*.request.preparationLimits.maximumJsonDepth
+sources.*.request.preparationLimits.maximumNormalizedBytes
+sources.*.request.preparationLimits.maximumQueryNameBytes
+sources.*.request.preparationLimits.maximumQueryPairs
+sources.*.request.preparationLimits.maximumQueryValueBytes
+sources.*.request.preparationLimits.maximumStringBytes
+sources.*.request.preparationLimits.query
+sources.*.request.prepareScript
+sources.*.request.projection
+sources.*.request.projection[]
+sources.*.request.redirects
+sources.*.request.selectorInputs
+sources.*.request.selectorInputs[]
+sources.*.request.selectorInputs[].alternatives
+sources.*.request.selectorInputs[].alternatives[]
+sources.*.request.selectorInputs[].alternatives[].fields
+sources.*.request.selectorInputs[].alternatives[].fields[]
+sources.*.request.selectorInputs[].alternatives[].profile
+sources.*.request.selectorInputs[].role
+sources.*.request.timeoutMilliseconds
+sources.*.responseSchema
+sources.*.tlsTrustProfile
+sources.*.transport
+subjectBinding
+subjectBinding.keyVersion
+subjectBinding.secretRef
+version
+```
+<!-- evidence-bundle-key-paths:end -->
+
+### `runtime.yaml`
+
+<!-- evidence-runtime-key-paths:start -->
+```text
+acquisitionCapabilities
+acquisitionCapabilities[]
+auditStorage
+auditStorage.maximumFileBytes
+auditStorage.path
+bundleDirectory
+listener
+listener.bindHost
+listener.maximumConcurrentRequests
+listener.maximumRequestBytes
+listener.port
+listener.requestTimeoutMilliseconds
+listener.shutdownGraceMilliseconds
+listener.tlsTermination
+listener.trustProxyIdentityHeaders
+metricsListener
+metricsListener.bindHost
+metricsListener.port
+outboundTls
+outboundTls.systemRoots
+outboundTls.trustProfiles
+outboundTls.trustProfiles.*
+outboundTls.trustProfiles.*.caBundleFile
+secretProviders
+secretProviders.file
+secretProviders.file.root
+signer
+signer.keyName
+signer.keyVersion
+signer.kind
+signer.mount
+signer.privateKeyRef
+signer.timeoutMilliseconds
+signer.unixSocketPath
+version
+```
+<!-- evidence-runtime-key-paths:end -->

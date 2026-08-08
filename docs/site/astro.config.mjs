@@ -403,6 +403,7 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Project configuration', slug: 'reference/project-configuration' },
+            { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
             { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
             { label: 'registryctl CLI', slug: 'reference/registryctl' },
             {

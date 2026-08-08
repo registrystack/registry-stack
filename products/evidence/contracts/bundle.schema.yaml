@@ -3,147 +3,350 @@ $id: https://registrystack.org/schemas/evidence/bundle-v1.json
 title: Evidence immutable deployment bundle Version 1
 type: object
 additionalProperties: false
-required: [version, assuranceProfile, service, issuer, authentication, audit, subjectBinding, rateLimits, signing, selectorProfiles, sources, authorityProfiles, requirements]
+required:
+  - version
+  - assuranceProfile
+  - service
+  - issuer
+  - authentication
+  - audit
+  - subjectBinding
+  - rateLimits
+  - signing
+  - selectorProfiles
+  - sources
+  - authorityProfiles
+  - requirements
 properties:
-  version: {const: 1}
-  assuranceProfile: {enum: [local, production, evidence-grade]}
+  version:
+    description: >-
+      Selects the bundle grammar the rest of this document is read against, and a version
+      the runtime does not implement is rejected at startup.
+    const: 1
+  assuranceProfile:
+    description: >-
+      Declares the governed assurance boundary of the whole bundle, and the value is visible
+      in every assertion, so an authentic `local` assertion never satisfies a relying procedure
+      expecting a deployable profile. `local` is an authoring profile that lets a requirement
+      omit `fixtures` and disables no other runtime boundary; the deployable profiles require
+      every requirement to reference a fixture suite with complete coverage before the bundle
+      loads.
+    enum:
+      - local
+      - production
+      - evidence-grade
   service:
+    description: >-
+      Carries the identity this deployment asserts under: the technical Evidence provider
+      identity placed in evidence and the operator-controlled trust domain of the process.
     type: object
     additionalProperties: false
-    required: [providerId, trustDomain]
+    required:
+      - providerId
+      - trustDomain
     properties:
-      providerId: {type: string, format: uri, maxLength: 512}
-      trustDomain: {type: string, format: uri, maxLength: 512}
+      providerId:
+        description: >-
+          Technical provider URI placed in every assertion as `providedBy`. Enabling `sd-jwt-vc`
+          outside local assurance requires this value to be the stable HTTPS origin of the
+          deployment, because issuer metadata and the published JWKS URI are derived from
+          that origin.
+        type: string
+        format: uri
+        maxLength: 512
+      trustDomain:
+        description: >-
+          Scopes the process to one operator-controlled trust domain, whose URI is bound into
+          subject bindings and into requester pseudonym scope, so the same subject yields
+          different pseudonyms under a different trust domain.
+        type: string
+        format: uri
+        maxLength: 512
   issuer:
+    description: >-
+      Carries the legal issuer identity placed in every assertion, kept separate from the
+      technical provider that operates the process and signs.
     type: object
     additionalProperties: false
-    required: [id]
-    properties: {id: {type: string, format: uri, maxLength: 512}}
-  authentication: {$ref: '#/$defs/authentication'}
-  audit: {$ref: '#/$defs/audit'}
-  subjectBinding: {$ref: '#/$defs/subject-binding'}
-  rateLimits: {$ref: '#/$defs/rate-limits'}
-  signing:
-    type: object
-    additionalProperties: false
-    required: [format, algorithm, activePublicJwkFile, publishedPublicJwkFiles, revokedKeyIds, jwksPath, maximumAssertionValiditySeconds, verifierClockSkewSeconds]
+    required:
+      - id
     properties:
-      format: {const: flattened-jws-json}
-      algorithm: {const: ES256}
-      activePublicJwkFile: {$ref: '#/$defs/public-jwk-path'}
+      id:
+        description: >-
+          Legal issuer URI placed in every assertion as `issuedBy`, and governance must authorize
+          the provider named in `service.providerId` to act for that issuer.
+        type: string
+        format: uri
+        maxLength: 512
+  authentication:
+    description: >-
+      Verification policy for inbound bearer tokens: the runtime validates each token against
+      these values itself and ignores upstream identity headers.
+    $ref: '#/$defs/authentication'
+  audit:
+    description: >-
+      Governs audit pseudonymization and the fail-closed policy for the whole deployment;
+      `runtime.yaml` contributes only the storage location.
+    $ref: '#/$defs/audit'
+  subjectBinding:
+    description: >-
+      Keys the audience- and purpose-scoped subject bindings an assertion carries in place
+      of selector values, derived over the complete canonical role, profile, and value set
+      rather than as per-field hashes.
+    $ref: '#/$defs/subject-binding'
+  rateLimits:
+    description: >-
+      Governs the anti-enumeration budget for authenticated callers, counted against scoped
+      pseudonyms of the principal and the authority rather than against any raw selector value.
+    $ref: '#/$defs/rate-limits'
+  signing:
+    description: >-
+      Governs signature format, active and published key selection, key retirement, and assertion
+      validity; missing signing material fails readiness and no unsigned fallback exists.
+    type: object
+    additionalProperties: false
+    required:
+      - format
+      - algorithm
+      - activePublicJwkFile
+      - publishedPublicJwkFiles
+      - revokedKeyIds
+      - jwksPath
+      - maximumAssertionValiditySeconds
+      - verifierClockSkewSeconds
+    properties:
+      format:
+        description: >-
+          Fixes the wire serialization of a signed assertion to flattened JWS JSON, returned
+          as `application/jose+json`.
+        const: flattened-jws-json
+      algorithm:
+        description: >-
+          Binds assertion signatures to ES256 over P-256, and a verifier rejects any protected
+          header `alg` that differs from the algorithm bound to the trusted key.
+        const: ES256
+      activePublicJwkFile:
+        description: >-
+          Names the bundle-held public JWK the runtime signer's key must equal exactly, proven
+          by one sign-and-verify test before readiness.
+        $ref: '#/$defs/public-jwk-path'
       publishedPublicJwkFiles:
+        description: >-
+          Retains predecessor public keys in the served key set so assertions signed before
+          a rollover still verify, for at least the maximum assertion validity plus the verifier
+          clock skew.
         type: array
         maxItems: 32
         uniqueItems: true
-        items: {$ref: '#/$defs/public-jwk-path'}
+        items:
+          description: >-
+            One retained public key served beside the active key; an entry that repeats the
+            active key or names a revoked identifier is rejected at startup.
+          $ref: '#/$defs/public-jwk-path'
       revokedKeyIds:
+        description: >-
+          Emergency denylist: a listed identifier is excluded from the active set, the published
+          set, and the served key set, and a verifier rejects that identifier before selecting
+          a pinned public key.
         type: array
         maxItems: 33
         uniqueItems: true
-        items: {$ref: '#/$defs/service-key-id'}
-      jwksPath: {const: /.well-known/evidence/jwks.json}
-      maximumAssertionValiditySeconds: {type: integer, minimum: 1, maximum: 31536000}
-      verifierClockSkewSeconds: {type: integer, minimum: 0, maximum: 300}
-  responseFormats: {$ref: '#/$defs/response-formats'}
+        items:
+          description: >-
+            One denied service key, named by its RFC 7638 thumbprint rather than by a provider-assigned
+            key name.
+          $ref: '#/$defs/service-key-id'
+      jwksPath:
+        description: >-
+          Route where the deployment serves its public key set; that route is not a trust
+          anchor, because a verifier pins the provider identity and key location through its
+          own governed configuration.
+        const: /.well-known/evidence/jwks.json
+      maximumAssertionValiditySeconds:
+        description: >-
+          Ceiling every `requirements[].validitySeconds` must stay within, and the base of
+          the window a retired public key stays published.
+        type: integer
+        minimum: 1
+        maximum: 31536000
+      verifierClockSkewSeconds:
+        description: >-
+          Skew a relying party applies when checking current validity, and the margin added
+          to the maximum assertion validity before a retired public key may be removed.
+        type: integer
+        minimum: 0
+        maximum: 300
+  responseFormats:
+    description: >-
+      Sets the deployment-wide ceiling of response serializations, and omission means `[signed-jws]`.
+      A bundle that drops signed JWS is rejected at startup, and every other listed format
+      additionally requires the one matched grant's `authorityProfiles.*.grants[].responseFormats`
+      to permit that format.
+    $ref: '#/$defs/response-formats'
   selectorProfiles:
+    description: >-
+      Named registry of selector profiles that requirement subject roles and authority-grant
+      subjects reference by id; an id absent from the map fails validation before startup.
     type: object
     minProperties: 1
     maxProperties: 128
-    propertyNames: {$ref: '#/$defs/local-id'}
-    additionalProperties: {$ref: '#/$defs/selector-profile'}
+    propertyNames:
+      $ref: '#/$defs/local-id'
+    additionalProperties:
+      description: >-
+        One named, closed profile of deployment-defined fields and their combined byte bound;
+        a profile is not an identity type, and possession of its field values does not by
+        itself grant authority.
+      $ref: '#/$defs/selector-profile'
   sources:
+    description: >-
+      Complete map of fixed sources a requirement can reference by id in its `acquisition`
+      field, fixed at startup and immune to override by `runtime.yaml`.
     type: object
     minProperties: 1
     maxProperties: 128
-    propertyNames: {$ref: '#/$defs/local-id'}
-    additionalProperties: {$ref: '#/$defs/source'}
+    propertyNames:
+      $ref: '#/$defs/local-id'
+    additionalProperties:
+      description: >-
+        One fixed source referenced by this map key from a requirement's `acquisition` field,
+        combining a fixed origin, transport, and minimization posture with the extraction
+        script and schemas that turn the source's response into facts.
+      $ref: '#/$defs/source'
   authorityProfiles:
+    description: >-
+      Named authority profiles deciding which requester class may obtain which assertion.
+      Exactly one authority path may match a request, and two paths covering the same requirement,
+      purpose, and subject tuple deny that request rather than failing startup.
     type: object
     minProperties: 1
     maxProperties: 128
-    propertyNames: {$ref: '#/$defs/local-id'}
-    additionalProperties: {$ref: '#/$defs/authority-profile'}
+    propertyNames:
+      $ref: '#/$defs/local-id'
+    additionalProperties:
+      description: >-
+        Everything one requester class may ask for. Access is per requester class rather than
+        per client identity, so two clients carrying the same tags have identical access.
+      $ref: '#/$defs/authority-profile'
   acquisitionCapabilities:
-    # Acquisition kinds this bundle opts in to beyond the frozen Version 1
-    # forms. A gated kind absent from this list cannot be served, so a bundle
-    # written before a form existed keeps serving exactly what it served
-    # before. The Version 1 forms are absent from the enumeration on purpose:
-    # every bundle already had them, so declaring one would say nothing and
-    # omitting one would have to mean something.
-    # An explicit empty list is accepted and says exactly what absence says.
-    # The loader treats the two as one document, so refusing it here would
-    # refuse a bundle startup loads.
+    description: >-
+      Gated acquisition kinds this bundle opts in to. The Version 1 forms are absent from
+      the vocabulary on purpose, because every bundle already had them; omission and an explicit
+      empty list both enable nothing.
     type: array
     maxItems: 1
     uniqueItems: true
-    items: {enum: [search-then-fetch-set]}
+    items:
+      description: >-
+        One gated acquisition kind this bundle declares, which is the bundle half of a two-sided
+        gate; a requirement using a kind absent here is rejected at startup.
+      enum:
+        - search-then-fetch-set
   requirements:
+    description: >-
+      Requirement identifiers and Evidence Type URIs must each be unique across every entry;
+      a repeat of either rejects the whole bundle at startup.
     type: array
     minItems: 1
     maxItems: 128
-    items: {$ref: '#/$defs/requirement'}
+    items:
+      description: >-
+        One independently versioned evidence definition; its configuration revision spans
+        only this requirement's own configuration and artifact closure, letting a relying
+        party pin this requirement without depending on the rest of the deployment.
+      $ref: '#/$defs/requirement'
 allOf:
   - if:
-      properties: {assuranceProfile: {const: local}}
+      properties:
+        assuranceProfile:
+          const: local
     then:
       properties:
         authentication:
           properties:
-            issuer: {pattern: '^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}$)'}
-            jwksUri: {pattern: '^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}/\.well-known/jwks\.json$)'}
+            issuer:
+              pattern: ^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}$)
+            jwksUri:
+              pattern: >-
+                ^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}/\.well-known/jwks\.json$)
   - if:
-      properties: {assuranceProfile: {enum: [production, evidence-grade]}}
+      properties:
+        assuranceProfile:
+          enum:
+            - production
+            - evidence-grade
     then:
       properties:
         authentication:
           properties:
-            issuer: {pattern: '^https://'}
-            jwksUri: {pattern: '^https://'}
+            issuer:
+              pattern: ^https://
+            jwksUri:
+              pattern: ^https://
         requirements:
-          items: {required: [fixtures]}
+          items:
+            required:
+              - fixtures
         sources:
           additionalProperties:
             properties:
               authentication:
                 not:
                   type: object
-                  required: [kind]
-                  properties: {kind: {const: none}}
+                  required:
+                    - kind
+                  properties:
+                    kind:
+                      const: none
   - if:
       properties:
-        assuranceProfile: {enum: [production, evidence-grade]}
-        responseFormats: {contains: {const: sd-jwt-vc}}
-      required: [assuranceProfile, responseFormats]
+        assuranceProfile:
+          enum:
+            - production
+            - evidence-grade
+        responseFormats:
+          contains:
+            const: sd-jwt-vc
+      required:
+        - assuranceProfile
+        - responseFormats
     then:
       properties:
         service:
           properties:
             providerId:
               type: string
-              pattern: '^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$'
-  # A gated acquisition kind is served only where the bundle opted in, so a
-  # document that uses one without declaring it is a document startup refuses.
-  # The loader refuses it too, and states which requirement is at fault; the
-  # contract states only that the pair is required, because that is the whole
-  # of what a schema can see. Naming the capability rather than counting the
-  # list keeps this true when a second gated kind joins the enumeration.
+              pattern: ^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$
   - if:
       properties:
         requirements:
           contains:
-            required: [acquisition]
+            required:
+              - acquisition
             properties:
               acquisition:
-                required: [kind]
-                properties: {kind: {const: search-then-fetch-set}}
-      required: [requirements]
+                required:
+                  - kind
+                properties:
+                  kind:
+                    const: search-then-fetch-set
+      required:
+        - requirements
     then:
-      required: [acquisitionCapabilities]
+      required:
+        - acquisitionCapabilities
       properties:
-        acquisitionCapabilities: {contains: {const: search-then-fetch-set}}
+        acquisitionCapabilities:
+          contains:
+            const: search-then-fetch-set
 $defs:
-  local-id: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
-  uri: {type: string, format: uri, maxLength: 512}
+  local-id:
+    type: string
+    pattern: ^[a-z][a-z0-9._-]{0,127}$
+  uri:
+    type: string
+    format: uri
+    maxLength: 512
   response-formats:
     # Closed enabled response formats. Signed flattened JWS is mandatory and
     # remains the default; the unsigned and SD-JWT VC formats must each be
@@ -153,554 +356,1601 @@ $defs:
     minItems: 1
     maxItems: 3
     uniqueItems: true
-    contains: {const: signed-jws}
-    items: {enum: [signed-jws, unsigned-json, sd-jwt-vc]}
+    contains:
+      const: signed-jws
+    items:
+      description: >-
+        One permitted serialization of the same assertion, which introduces no separate issuance
+        protocol and no credential state; a format reaches a response only when the bundle
+        and the one matched grant both permit that format.
+      enum:
+        - signed-jws
+        - unsigned-json
+        - sd-jwt-vc
   secret-ref:
-    {type: string, pattern: '^secret:file/[a-z][a-z0-9._-]{0,127}$'}
-  relative-path: {type: string, pattern: '^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$'}
-  public-jwk-path: {type: string, pattern: '^public-keys/[A-Za-z0-9._-]+\.jwk\.json$'}
-  service-key-id: {type: string, pattern: '^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$'}
+    type: string
+    pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$
+  relative-path:
+    type: string
+    pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$
+  public-jwk-path:
+    type: string
+    pattern: ^public-keys/[A-Za-z0-9._-]+\.jwk\.json$
+  service-key-id:
+    type: string
+    pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
   authentication:
     type: object
     additionalProperties: false
-    required: [kind, issuer, audiences, tokenTypes, algorithms, jwksUri, principalClaim, requesterTagsClaim, evidenceAudienceClaim, grantIdClaim, grantAuthorityClaim, maximumTokenLifetimeSeconds, revokedKeyIds]
+    required:
+      - kind
+      - issuer
+      - audiences
+      - tokenTypes
+      - algorithms
+      - jwksUri
+      - principalClaim
+      - requesterTagsClaim
+      - evidenceAudienceClaim
+      - grantIdClaim
+      - grantAuthorityClaim
+      - maximumTokenLifetimeSeconds
+      - revokedKeyIds
     properties:
-      kind: {const: oidc-access-token}
-      issuer: {type: string, pattern: '^https?://', maxLength: 512}
+      kind:
+        description: >-
+          Selects the inbound credential model, and Version 1 defines exactly one such profile.
+        const: oidc-access-token
+      issuer:
+        description: >-
+          Exact token issuer an inbound access token must declare, with path-based issuers
+          supported; deployable bundles require HTTPS.
+        type: string
+        pattern: ^https?://
+        maxLength: 512
       audiences:
+        description: >-
+          Exact allowlist of audience values an inbound access token must carry to be accepted.
         type: array
         minItems: 1
         maxItems: 16
         uniqueItems: true
-        items: {type: string, minLength: 1, maxLength: 512}
+        items:
+          description: One exact audience value an inbound access token may carry.
+          type: string
+          minLength: 1
+          maxLength: 512
       tokenTypes:
+        description: >-
+          Allowlist of the exact `typ` value an inbound token's protected JWT header must
+          declare.
         type: array
         minItems: 1
         maxItems: 4
         uniqueItems: true
-        items: {enum: [at+jwt, application/at+jwt]}
+        items:
+          description: >-
+            One exact protected-header `typ` value accepted on an inbound access token.
+          enum:
+            - at+jwt
+            - application/at+jwt
       algorithms:
+        description: >-
+          Closes the set of signature algorithms accepted on an inbound access token, and
+          no algorithm fallback outside the set is permitted.
         type: array
         minItems: 1
         maxItems: 3
         uniqueItems: true
-        items: {enum: [EdDSA, ES256, RS256]}
-      jwksUri: {type: string, pattern: '^https?://', maxLength: 512}
-      principalClaim: {$ref: '#/$defs/claim-name'}
-      requesterTagsClaim: {$ref: '#/$defs/claim-name'}
-      evidenceAudienceClaim: {$ref: '#/$defs/claim-name'}
-      grantIdClaim: {$ref: '#/$defs/claim-name'}
-      grantAuthorityClaim: {$ref: '#/$defs/claim-name'}
-      maximumTokenLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
+        items:
+          description: >-
+            One signature algorithm the token verifier accepts on an inbound access token.
+          enum:
+            - EdDSA
+            - ES256
+            - RS256
+      jwksUri:
+        description: >-
+          Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may resolve
+          to a public or private address, so DNS is pinned for each fetch, ambient proxies
+          are disabled, and cloud-metadata destinations remain prohibited.
+        type: string
+        pattern: ^https?://
+        maxLength: 512
+      principalClaim:
+        description: >-
+          The only claim read as the principal, whose absence denies the request; `client_id`,
+          `azp`, request data, and proxy headers are not fallbacks.
+        $ref: '#/$defs/claim-name'
+      requesterTagsClaim:
+        description: >-
+          Names the verified claim whose tag list selects which authority profile can match
+          the request.
+        $ref: '#/$defs/claim-name'
+      evidenceAudienceClaim:
+        description: >-
+          Names the verified claim that fixes the audience an assertion is issued to, and
+          the public request cannot choose another audience.
+        $ref: '#/$defs/claim-name'
+      grantIdClaim:
+        description: >-
+          Names the verified claim carrying the grant identifier, read only when a subject's
+          `valueOrigin` is `authenticated-grant`.
+        $ref: '#/$defs/claim-name'
+      grantAuthorityClaim:
+        description: >-
+          Names the verified claim carrying the granting authority, read only when a subject's
+          `valueOrigin` is `authenticated-grant`; the claim value must equal the matched authority-profile
+          id.
+        $ref: '#/$defs/claim-name'
+      maximumTokenLifetimeSeconds:
+        description: >-
+          Caps the accepted `exp - iat` interval, and its presence requires `iat` and an `exp`
+          greater than `iat`.
+        type: integer
+        minimum: 1
+        maximum: 86400
       revokedKeyIds:
+        description: >-
+          Emergency denylist of issuer key identifiers, checked before cached JWKS key selection
+          so a compromised key is refused even while the cache still holds the key.
         type: array
         maxItems: 32
         uniqueItems: true
-        items: {type: string, minLength: 1, maxLength: 256, pattern: '^[^\u0000-\u001F\u007F-\u009F]+$'}
-      actorClaim: {$ref: '#/$defs/claim-name'}
+        items:
+          description: >-
+            One issuer key identifier the verifier refuses, whatever the cached JWKS still
+            holds.
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[^\u0000-\u001F\u007F-\u009F]+$
+      actorClaim:
+        description: >-
+          Names the verified claim read as the actor alongside the principal, and omitting
+          the key enables no fallback actor source.
+        $ref: '#/$defs/claim-name'
   audit:
     type: object
     additionalProperties: false
-    required: [format, hashSecretRef, hashKeyVersion, failClosed]
+    required:
+      - format
+      - hashSecretRef
+      - hashKeyVersion
+      - failClosed
     properties:
-      format: {const: keyed-jsonl}
-      hashSecretRef: {$ref: '#/$defs/secret-ref'}
-      hashKeyVersion: {type: integer, minimum: 1, maximum: 2147483647}
-      failClosed: {const: true}
+      format:
+        description: >-
+          Fixes the audit record form to the keyed JSONL chain, whose sealed segments an operator
+          replays out of band to prove retained history.
+        const: keyed-jsonl
+      hashSecretRef:
+        description: >-
+          Points at the file secret Rust separates into the audit chain and identifier subkeys;
+          the same reference cannot also serve `subjectBinding.secretRef`.
+        $ref: '#/$defs/secret-ref'
+      hashKeyVersion:
+        description: >-
+          Stamped into every audit pseudonym as its version prefix, so pseudonyms produced
+          under different audit key material stay distinguishable within one chain.
+        type: integer
+        minimum: 1
+        maximum: 2147483647
+      failClosed:
+        description: >-
+          Holds every audit gate closed, so an authorization refusal, access attempt, or disclosure
+          release whose record cannot be durably written stops the response instead of being
+          served unaudited.
+        const: true
   subject-binding:
     type: object
     additionalProperties: false
-    required: [secretRef, keyVersion]
+    required:
+      - secretRef
+      - keyVersion
     properties:
-      secretRef: {$ref: '#/$defs/secret-ref'}
-      keyVersion: {type: integer, minimum: 1, maximum: 2147483647}
+      secretRef:
+        description: >-
+          Points at the file secret keying every subject binding; that reference and its resolved
+          bytes must both differ from the audit master, and a match fails startup.
+        $ref: '#/$defs/secret-ref'
+      keyVersion:
+        description: >-
+          Scopes each derived binding and appears in the binding value, so a new version changes
+          every binding a relying party already retains as an expectation.
+        type: integer
+        minimum: 1
+        maximum: 2147483647
   rate-limits:
     type: object
     additionalProperties: false
-    required: [requestsPerPrincipalPerMinute, burstPerPrincipal, failedSelectorAttemptsPerPrincipalAuthorityPerMinute]
+    required:
+      - requestsPerPrincipalPerMinute
+      - burstPerPrincipal
+      - failedSelectorAttemptsPerPrincipalAuthorityPerMinute
     properties:
-      requestsPerPrincipalPerMinute: {type: integer, minimum: 1, maximum: 1000000}
-      burstPerPrincipal: {type: integer, minimum: 1, maximum: 100000}
-      failedSelectorAttemptsPerPrincipalAuthorityPerMinute: {type: integer, minimum: 1, maximum: 100000}
-  claim-name: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_.-]{0,127}$'}
-  claim-path: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'}
+      requestsPerPrincipalPerMinute:
+        description: >-
+          Rate at which one principal's request budget refills, spread continuously across
+          the minute rather than granted in full at its start.
+        type: integer
+        minimum: 1
+        maximum: 1000000
+      burstPerPrincipal:
+        description: >-
+          Capacity of one principal's request bucket, bounding how many requests may arrive
+          back to back before `requestsPerPrincipalPerMinute` governs the pace.
+        type: integer
+        minimum: 1
+        maximum: 100000
+      failedSelectorAttemptsPerPrincipalAuthorityPerMinute:
+        description: >-
+          Budget for selector-resolution failures, checked before source access and consumed
+          only when selector validation itself fails, so repeated probing is refused before
+          it reaches a source.
+        type: integer
+        minimum: 1
+        maximum: 100000
+  claim-name:
+    type: string
+    pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$
+  claim-path:
+    type: string
+    pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$
   selector-profile:
     type: object
     additionalProperties: false
-    required: [maximumAggregateBytes, fields]
+    required:
+      - maximumAggregateBytes
+      - fields
     properties:
-      maximumAggregateBytes: {type: integer, minimum: 1, maximum: 8192}
+      maximumAggregateBytes:
+        description: >-
+          Caps the summed canonical byte size of every field value resolved for one authorized
+          use of the profile; exceeding it denies the request.
+        type: integer
+        minimum: 1
+        maximum: 8192
       fields:
+        description: >-
+          Closed map of the profile's field declarations, keyed by adopter-chosen names that
+          are opaque to Rust and carry no meaning of their own.
         type: object
         minProperties: 1
         maxProperties: 16
-        propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
-        additionalProperties: {$ref: '#/$defs/selector-field'}
+        propertyNames:
+          type: string
+          pattern: ^[a-z][a-z0-9._-]{0,63}$
+        additionalProperties:
+          description: >-
+            One field's exact declaration: Rust matches a supplied value against it verbatim,
+            performing no case folding, normalization, transliteration, tokenization, partial-date
+            matching, or fuzzy scoring.
+          $ref: '#/$defs/selector-field'
   selector-field:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [type, minimumBytes, maximumBytes]
+        required:
+          - type
+          - minimumBytes
+          - maximumBytes
         properties:
-          type: {const: string}
-          minimumBytes: {type: integer, minimum: 1, maximum: 8192}
-          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+          type:
+            description: >-
+              Selects the field's scalar kind, fixing which other declaration keys are required;
+              a supplied value of a different kind is rejected.
+            const: string
+          minimumBytes:
+            description: >-
+              Inclusive lower bound, in UTF-8 bytes, on this field's accepted string value;
+              it cannot exceed the field's own `maximumBytes`.
+            type: integer
+            minimum: 1
+            maximum: 8192
+          maximumBytes:
+            description: >-
+              Inclusive upper bound, in UTF-8 bytes, on this field's accepted string or `controlled-code`
+              value; it cannot exceed the profile's `maximumAggregateBytes`.
+            type: integer
+            minimum: 1
+            maximum: 8192
       - type: object
         additionalProperties: false
-        required: [type]
-        properties: {type: {const: date}}
-      - type: object
-        additionalProperties: false
-        required: [type, minimum, maximum]
+        required:
+          - type
         properties:
-          type: {const: integer}
-          minimum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
-          maximum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+          type:
+            const: date
       - type: object
         additionalProperties: false
-        required: [type]
-        properties: {type: {const: boolean}}
-      - type: object
-        additionalProperties: false
-        required: [type, codelist, codelistVersion, maximumBytes]
+        required:
+          - type
+          - minimum
+          - maximum
         properties:
-          type: {const: controlled-code}
-          codelist: {$ref: '#/$defs/relative-path'}
-          codelistVersion: {type: string, minLength: 1, maxLength: 128}
-          maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+          type:
+            const: integer
+          minimum:
+            description: >-
+              Inclusive lower bound on this field's accepted integer selector value; a submitted
+              value less than this bound is rejected rather than clamped.
+            type: integer
+            minimum: -9007199254740991
+            maximum: 9007199254740991
+          maximum:
+            description: >-
+              Inclusive upper bound on this field's accepted integer selector value; a submitted
+              value greater than this bound is rejected rather than clamped.
+            type: integer
+            minimum: -9007199254740991
+            maximum: 9007199254740991
+      - type: object
+        additionalProperties: false
+        required:
+          - type
+        properties:
+          type:
+            const: boolean
+      - type: object
+        additionalProperties: false
+        required:
+          - type
+          - codelist
+          - codelistVersion
+          - maximumBytes
+        properties:
+          type:
+            const: controlled-code
+          codelist:
+            description: >-
+              Path to the bundled codelist artifact a `controlled-code` value must belong
+              to; a missing referenced artifact fails bundle loading.
+            $ref: '#/$defs/relative-path'
+          codelistVersion:
+            description: >-
+              Version this field's `controlled-code` values are pinned to; it must equal the
+              referenced codelist artifact's own version or bundle loading fails.
+            type: string
+            minLength: 1
+            maxLength: 128
+          maximumBytes:
+            type: integer
+            minimum: 1
+            maximum: 8192
   source:
     type: object
     additionalProperties: false
-    required: [transport, baseUrl, posture, authentication, request, responseSchema, extractScript, factSchema]
+    required:
+      - transport
+      - baseUrl
+      - posture
+      - authentication
+      - request
+      - responseSchema
+      - extractScript
+      - factSchema
     properties:
-      transport: {const: http-json}
+      transport:
+        description: >-
+          Selects the source's transport implementation. Version 1 defines exactly one, so
+          every source uses the same HTTP-plus-JSON request and response contract for method,
+          media type, and body shape.
+        const: http-json
       baseUrl:
+        description: >-
+          Fixed HTTPS origin the source's evidence-data requests target, with no path, query,
+          fragment, user information, or runtime substitution. An HTTP numeric-loopback origin
+          is accepted only when `sources.*.authentication.kind` is `none`.
         oneOf:
-          - {type: string, pattern: '^https://[^/?#]+$'}
-          - {type: string, pattern: '^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?$'}
-      posture: {enum: [source-derived, field-projected, record-transformed]}
-      tlsTrustProfile: {$ref: '#/$defs/local-id'}
-      authentication: {$ref: '#/$defs/source-authentication'}
-      request: {$ref: '#/$defs/fixed-request'}
-      responseSchema: {$ref: '#/$defs/relative-path'}
-      extractScript: {$ref: '#/$defs/relative-path'}
-      factSchema: {$ref: '#/$defs/relative-path'}
+          - type: string
+            pattern: ^https://[^/?#]+$
+          - type: string
+            pattern: ^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?$
+      posture:
+        description: >-
+          Describes how much of the underlying record crosses the source wire, weakest at
+          `record-transformed` and strongest at `source-derived`. A chained search-then-fetch
+          requirement can claim no stronger minimization than the weaker of its two sources'
+          postures.
+        enum:
+          - source-derived
+          - field-projected
+          - record-transformed
+      tlsTrustProfile:
+        description: >-
+          Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`.
+          Omission trusts only configured system roots, and the profile is rejected outright
+          when `sources.*.authentication.kind` is `none`.
+        $ref: '#/$defs/local-id'
+      authentication:
+        description: >-
+          One closed credential profile the runtime presents on this source's outbound calls,
+          distinct from the inbound caller policy at the bundle's top-level `authentication`.
+          Reference members name secrets that resolve only after authorization, durable access
+          audit, and request-parts validation, and no secret reaches a script.
+        $ref: '#/$defs/source-authentication'
+      request:
+        description: >-
+          The one fixed evidence-data request plan for this source; a preparation script,
+          a caller, and a source response hold no authority over method, path, headers, redirects,
+          bounds, or request count.
+        $ref: '#/$defs/fixed-request'
+      responseSchema:
+        description: >-
+          Bundle-relative closed JSON Schema the projected source response must satisfy before
+          `sources.*.extractScript` runs; a response outside this shape fails as a source-protocol
+          error and no script runs. Unlike `sources.*.factSchema`, this schema may require
+          fewer members than it declares and may mark a leaf nullable, because projection
+          can legitimately drop or null a value the record did not carry.
+        $ref: '#/$defs/relative-path'
+      extractScript:
+        description: >-
+          Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated
+          projected response and adapter context to a match, no-match, or ambiguous outcome.
+          The script never selects a candidate among multiple records and never turns protocol
+          inconsistency into a closed lookup outcome.
+        $ref: '#/$defs/relative-path'
+      factSchema:
+        description: >-
+          Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly
+          satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates
+          what the script returns, not what the source sent.
+        $ref: '#/$defs/relative-path'
     allOf:
       - if:
-          required: [authentication]
+          required:
+            - authentication
           properties:
             authentication:
               type: object
-              required: [kind]
-              properties: {kind: {const: none}}
+              required:
+                - kind
+              properties:
+                kind:
+                  const: none
         then:
           properties:
             baseUrl:
               type: string
-              pattern: '^http://(?:127\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\[::1\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$'
-          not: {required: [tlsTrustProfile]}
+              pattern: >-
+                ^http://(?:127\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\[::1\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$
+          not:
+            required:
+              - tlsTrustProfile
   source-authentication:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [kind]
-        properties: {kind: {const: none}}
+        required:
+          - kind
+        properties:
+          kind:
+            description: >-
+              Selects which credential the runtime presents to this source and closes the
+              member set to that profile. `none` sends no credential and is admitted only
+              by a `local` assurance bundle at a canonical numeric-loopback origin; production
+              and evidence-grade bundles reject that kind.
+            const: none
       - type: object
         additionalProperties: false
-        required: [kind, usernameRef, passwordRef]
+        required:
+          - kind
+          - usernameRef
+          - passwordRef
         properties:
-          kind: {const: basic}
-          usernameRef: {$ref: '#/$defs/secret-ref'}
-          passwordRef: {$ref: '#/$defs/secret-ref'}
+          kind:
+            const: basic
+          usernameRef:
+            description: >-
+              Logical file-secret reference for the user name half of the HTTP Basic credential
+              the runtime presents to this source.
+            $ref: '#/$defs/secret-ref'
+          passwordRef:
+            description: >-
+              Logical file-secret reference for the password half of the HTTP Basic credential
+              the runtime encodes into the Authorization header of every request to this source.
+            $ref: '#/$defs/secret-ref'
       - type: object
         additionalProperties: false
-        required: [kind, tokenRef]
+        required:
+          - kind
+          - tokenRef
         properties:
-          kind: {const: static-bearer}
-          tokenRef: {$ref: '#/$defs/secret-ref'}
+          kind:
+            const: static-bearer
+          tokenRef:
+            description: >-
+              Logical file-secret reference for the static bearer token the runtime places
+              in the Authorization header of every request to this source.
+            $ref: '#/$defs/secret-ref'
       - type: object
         additionalProperties: false
-        required: [kind, headerName, valueRef]
+        required:
+          - kind
+          - headerName
+          - valueRef
         properties:
-          kind: {const: static-api-key}
-          headerName: {$ref: '#/$defs/configurable-header-name'}
-          valueRef: {$ref: '#/$defs/secret-ref'}
+          kind:
+            const: static-api-key
+          headerName:
+            description: >-
+              Names the header carrying this source's API-key value. The name is validated
+              as an HTTP field name and rejected when it collides with authentication, routing,
+              framing, cookie, forwarding, proxy, tracing, or hop-by-hop headers.
+            $ref: '#/$defs/configurable-header-name'
+          valueRef:
+            description: >-
+              Logical file-secret reference for the API-key value the runtime places in `headerName`;
+              the resolved value is bounded and rejects control characters, CR, and LF.
+            $ref: '#/$defs/secret-ref'
       - type: object
         additionalProperties: false
-        required: [kind, tokenEndpoint, clientIdRef, clientSecretRef, credentialPlacement, maximumCacheSeconds]
+        required:
+          - kind
+          - tokenEndpoint
+          - clientIdRef
+          - clientSecretRef
+          - credentialPlacement
+          - maximumCacheSeconds
         properties:
-          kind: {const: oauth2-client-credentials}
+          kind:
+            const: oauth2-client-credentials
           tokenEndpoint:
+            description: >-
+              Fixed endpoint the runtime exchanges client credentials at before calling this
+              source; the exchange is credential bootstrap, never an evidence-data request
+              or a fact source.
             oneOf:
-              - {type: string, pattern: '^https://[^?#]+$'}
-              - {type: string, pattern: '^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?/[^?#]*$'}
-          clientIdRef: {$ref: '#/$defs/secret-ref'}
-          clientSecretRef: {$ref: '#/$defs/secret-ref'}
-          scope: {type: string, minLength: 1, maxLength: 512}
-          credentialPlacement: {enum: [basic-header, form-body]}
-          maximumCacheSeconds: {type: integer, minimum: 0, maximum: 86400}
-          assumedLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
+              - type: string
+                pattern: ^https://[^?#]+$
+              - type: string
+                pattern: ^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?/[^?#]*$
+          clientIdRef:
+            description: >-
+              Logical file-secret reference for the client identifier the runtime presents
+              in the client-credentials exchange at `tokenEndpoint`.
+            $ref: '#/$defs/secret-ref'
+          clientSecretRef:
+            description: >-
+              Logical file-secret reference for the client secret the runtime presents at
+              `tokenEndpoint`; the token URL, body, response, and debug output stay redacted,
+              so the resolved value reaches no log.
+            $ref: '#/$defs/secret-ref'
+          scope:
+            description: >-
+              Fixed scope requested in the client-credentials exchange; a token response reporting
+              a scope other than this one is a credential failure.
+            type: string
+            minLength: 1
+            maxLength: 512
+          credentialPlacement:
+            description: >-
+              Selects whether the client identifier and secret travel in the Authorization
+              header or the form body of the token request; Version 1 offers no query-string
+              placement, so neither value can reach an authorization-server, proxy, or ingress
+              URL log.
+            enum:
+              - basic-header
+              - form-body
+          maximumCacheSeconds:
+            description: >-
+              Bounds how long one acquired token is reused across evidence requests for this
+              source; the cache lifetime is the smaller of this bound and the provider's reported
+              expiry.
+            type: integer
+            minimum: 0
+            maximum: 86400
+          assumedLifetimeSeconds:
+            description: >-
+              Lifetime credited to an acquired token whose response omits `expires_in`, rather
+              than inferring one from the token. Without this key such a response is a credential
+              failure, and the cached lifetime is still clamped to `maximumCacheSeconds`.
+            type: integer
+            minimum: 1
+            maximum: 86400
   fixed-request:
     type: object
     additionalProperties: false
-    required: [method, selectorInputs, prepareScript, adapterParameters, adapterParametersSchema, preparationLimits, projection, redirects, timeoutMilliseconds, maximumResponseBytes, concurrencyLimit]
+    required:
+      - method
+      - selectorInputs
+      - prepareScript
+      - adapterParameters
+      - adapterParametersSchema
+      - preparationLimits
+      - projection
+      - redirects
+      - timeoutMilliseconds
+      - maximumResponseBytes
+      - concurrencyLimit
     properties:
-      method: {enum: [GET, POST]}
-      path: {type: string, pattern: '^/(?!/)[A-Za-z0-9._~!$&''()*+,;=:@%/-]*$'}
-      pathTemplate: {type: string, minLength: 2, maxLength: 2048, pattern: '^/(?!/)[A-Za-z0-9._~!$&''()*+,;=:@%/{\}-]*$'}
+      method:
+        description: >-
+          Fixes the HTTP method for every request to this source; a `GET` source must also
+          set `preparationLimits.jsonBody` to `forbidden`.
+        enum:
+          - GET
+          - POST
+      path:
+        description: >-
+          Fixed normalized absolute path used for every request to this source; a source declares
+          this or `pathTemplate` and never both.
+        type: string
+        pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$
+      pathTemplate:
+        description: >-
+          Fixed absolute path whose placeholders each occupy one complete segment and are
+          expanded by Rust; a template carrying a scheme, authority, query, fragment, empty
+          segment, or dot segment fails startup.
+        type: string
+        minLength: 2
+        maxLength: 2048
+        pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{\}-]*$
       pathBindings:
+        description: >-
+          Supplies each `pathTemplate` placeholder with a Rust-resolved value, and a script
+          chooses neither a binding origin nor a path value.
         type: object
         minProperties: 1
         maxProperties: 16
-        propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
-        additionalProperties: {$ref: '#/$defs/path-binding'}
+        propertyNames:
+          type: string
+          pattern: ^[a-z][a-z0-9._-]{0,63}$
+        additionalProperties:
+          description: >-
+            One placeholder's tagged binding, filling exactly one complete path segment from
+            a value Rust has already validated.
+          $ref: '#/$defs/path-binding'
       fixedHeaders:
+        description: >-
+          Ordered non-secret header constants sent on every request to this source; a script
+          cannot add, remove, or change a header.
         type: array
         maxItems: 32
         items:
+          description: >-
+            One constant name and value pair added to every request to this source, in the
+            order declared.
           type: object
           additionalProperties: false
-          required: [name, value]
+          required:
+            - name
+            - value
           properties:
-            name: {$ref: '#/$defs/configurable-header-name'}
-            value: {type: string, maxLength: 4096, pattern: '^[^\u0000-\u001F\u007F-\u009F]*$'}
+            name:
+              description: >-
+                Header field name, rejected at startup when it falls in the authentication,
+                host and routing, cookie, body framing, content length or type, connection,
+                forwarding, proxy, or tracing families Rust owns.
+              $ref: '#/$defs/configurable-header-name'
+            value:
+              description: >-
+                Constant value sent verbatim, with any control character rejected at startup,
+                which closes header injection through configuration.
+              type: string
+              maxLength: 4096
+              pattern: ^[^\u0000-\u001F\u007F-\u009F]*$
       selectorInputs:
+        description: >-
+          Closes the minimized authorized selector alternatives a preparation script can see;
+          an empty array is accepted only on a fetch source.
         type: array
         minItems: 0
         maxItems: 8
-        items: {$ref: '#/$defs/selector-input'}
-      prepareScript: {$ref: '#/$defs/relative-path'}
+        items:
+          description: >-
+            One subject role together with the alternative profiles and exact field sets a
+            preparation script may receive for that role.
+          $ref: '#/$defs/selector-input'
+      prepareScript:
+        description: >-
+          Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the
+          minimized authorized selectors, closed parameters, and any prior facts into ordered
+          query pairs and at most one JSON body.
+        $ref: '#/$defs/relative-path'
       adapterParameters:
+        description: >-
+          Closed non-secret constants supplied to both the preparation and the extraction
+          script, rejected at bundle load when they fall outside `adapterParametersSchema`.
         type: object
         maxProperties: 64
-        propertyNames: {$ref: '#/$defs/parameter-key'}
-        additionalProperties: {$ref: '#/$defs/adapter-parameter-value'}
-      adapterParametersSchema: {$ref: '#/$defs/relative-path'}
-      preparationLimits: {$ref: '#/$defs/preparation-limits'}
+        propertyNames:
+          $ref: '#/$defs/parameter-key'
+        additionalProperties:
+          description: >-
+            One constant read by both the preparation and the extraction script, which may
+            itself nest further parameter values.
+          $ref: '#/$defs/adapter-parameter-value'
+      adapterParametersSchema:
+        description: >-
+          Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties
+          rule turns an undeclared or missing parameter into a startup failure.
+        $ref: '#/$defs/relative-path'
+      preparationLimits:
+        description: >-
+          Channel policy and output bounds Rust applies to the request parts a preparation
+          script returns, all checked before credentials are resolved or the source is contacted.
+        $ref: '#/$defs/preparation-limits'
       projection:
+        description: >-
+          Allowlist of response leaves Rust retains, alongside the containers needed to reach
+          them, so an extraction script never observes a field the source returned but the
+          bundle did not select.
         type: array
         minItems: 1
         maxItems: 64
         uniqueItems: true
-        items: {type: string, minLength: 2, maxLength: 256, pattern: '^/(?!/)([^/~]|~[01]|/|\*)+$'}
-      redirects: {const: deny}
-      timeoutMilliseconds: {type: integer, minimum: 1, maximum: 30000}
-      maximumResponseBytes: {type: integer, minimum: 1, maximum: 1048576}
-      concurrencyLimit: {type: integer, minimum: 1, maximum: 256}
+        items:
+          description: >-
+            One extended JSON Pointer whose `*` segment visits every element of the current
+            array, with no numeric index, recursive descent, filter, predicate, union, or
+            script-computed path admitted.
+          type: string
+          minLength: 2
+          maxLength: 256
+          pattern: ^/(?!/)([^/~]|~[01]|/|\*)+$
+      redirects:
+        description: >-
+          Refuses to follow a redirect, so a source response cannot move the request to a
+          different origin; a redirect is classed as a transport failure.
+        const: deny
+      timeoutMilliseconds:
+        description: >-
+          Bounds one attempt at this source end to end, covering concurrency admission, any
+          wait on the token single-flight boundary, and the HTTP exchange.
+        type: integer
+        minimum: 1
+        maximum: 30000
+      maximumResponseBytes:
+        description: >-
+          Caps the response body read from this source before parsing and projection, so an
+          oversized response fails as a transport failure rather than being parsed.
+        type: integer
+        minimum: 1
+        maximum: 1048576
+      concurrencyLimit:
+        description: >-
+          Bounds how many evaluations may hold an outbound request to this source at once,
+          and waiting for that admission is bounded by `timeoutMilliseconds`.
+        type: integer
+        minimum: 1
+        maximum: 256
     oneOf:
-      - required: [path]
-        not: {anyOf: [{required: [pathTemplate]}, {required: [pathBindings]}]}
-      - required: [pathTemplate, pathBindings]
-        not: {required: [path]}
+      - required:
+          - path
+        not:
+          anyOf:
+            - required:
+                - pathTemplate
+            - required:
+                - pathBindings
+      - required:
+          - pathTemplate
+          - pathBindings
+        not:
+          required:
+            - path
     allOf:
       - if:
-          required: [method]
-          properties: {method: {const: GET}}
+          required:
+            - method
+          properties:
+            method:
+              const: GET
         then:
           properties:
             preparationLimits:
-              properties: {jsonBody: {const: forbidden}}
+              properties:
+                jsonBody:
+                  const: forbidden
   selector-input:
     type: object
     additionalProperties: false
-    required: [role, alternatives]
+    required:
+      - role
+      - alternatives
     properties:
-      role: {$ref: '#/$defs/local-id'}
+      role:
+        description: >-
+          Subject role this selector input covers, unique across the declaration; the runtime
+          resolves request subjects by role rather than by array position.
+        $ref: '#/$defs/local-id'
       alternatives:
+        description: >-
+          Closed set of profile and field combinations permitted for the role; the runtime
+          materializes only the combination the matched authority grant carries, never the
+          union of every alternative declared.
         type: array
         minItems: 1
         maxItems: 16
         items:
+          description: >-
+            One permitted selector profile paired with the exact field subset that alternative
+            exposes.
           type: object
           additionalProperties: false
-          required: [profile, fields]
+          required:
+            - profile
+            - fields
           properties:
-            profile: {$ref: '#/$defs/local-id'}
+            profile:
+              description: >-
+                Selector profile this alternative admits for the role; a profile absent from
+                `selectorProfiles` is rejected at startup.
+              $ref: '#/$defs/local-id'
             fields:
+              description: >-
+                Exact subset of the named profile's declared fields this alternative exposes,
+                which is how a consumer is handed less than the authorized selector carries.
               type: array
               minItems: 1
               maxItems: 16
               uniqueItems: true
-              items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+              items:
+                description: >-
+                  One selector field name, which the named profile must declare or the bundle
+                  is rejected at startup.
+                type: string
+                pattern: ^[a-z][a-z0-9._-]{0,63}$
   path-binding:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [from, role, profile, field]
+        required:
+          - from
+          - role
+          - profile
+          - field
         properties:
-          from: {const: selector}
-          role: {$ref: '#/$defs/local-id'}
-          profile: {$ref: '#/$defs/local-id'}
-          field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          from:
+            description: >-
+              Chooses whether Rust reads the placeholder value from an already authorized
+              selector or from a scalar prior fact, and a prior-fact binding is accepted only
+              on a fetch source.
+            const: selector
+          role:
+            description: >-
+              Subject role whose authorized selector supplies the value; every selector set
+              the request can activate must carry this role and profile, or plan compilation
+              refuses the source.
+            $ref: '#/$defs/local-id'
+          profile:
+            description: >-
+              Selector profile the bound field belongs to; the same role, profile, and field
+              must also be declared in `selectorInputs`, or the source is rejected at startup.
+            $ref: '#/$defs/local-id'
+          field:
+            description: >-
+              Names the selector field or prior-fact property whose value fills the placeholder;
+              a value carrying `/`, `\`, `%`, a control, `.`, or `..` is rejected, which closes
+              path traversal and segment injection.
+            type: string
+            pattern: ^[a-z][a-z0-9._-]{0,63}$
       - type: object
         additionalProperties: false
-        required: [from, field]
+        required:
+          - from
+          - field
         properties:
-          from: {const: prior-fact}
-          field: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+          from:
+            const: prior-fact
+          field:
+            type: string
+            pattern: ^[a-z][a-z0-9._-]{0,63}$
   configurable-header-name:
     type: string
     minLength: 1
     maxLength: 64
-    pattern: '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$'
-  parameter-key: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9._-]{0,127}$'}
+    pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$
+  parameter-key:
+    type: string
+    pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$
   adapter-parameter-value:
     oneOf:
-      - {type: boolean}
-      - {type: integer, minimum: -9223372036854775808, maximum: 9223372036854775807}
-      - {type: string, maxLength: 16384}
+      - type: boolean
+      - type: integer
+        minimum: -9223372036854775808
+        maximum: 9223372036854775807
+      - type: string
+        maxLength: 16384
       - type: array
         maxItems: 256
-        items: {$ref: '#/$defs/adapter-parameter-value'}
+        items:
+          description: >-
+            One element of a parameter array, which is a parameter value in turn, so the parameter
+            shape nests rather than flattening.
+          $ref: '#/$defs/adapter-parameter-value'
       - type: object
         maxProperties: 256
-        propertyNames: {$ref: '#/$defs/parameter-key'}
-        additionalProperties: {$ref: '#/$defs/adapter-parameter-value'}
+        propertyNames:
+          $ref: '#/$defs/parameter-key'
+        additionalProperties:
+          description: >-
+            One member of a parameter object, which is a parameter value in turn, so the parameter
+            shape nests rather than flattening.
+          $ref: '#/$defs/adapter-parameter-value'
   preparation-limits:
     type: object
     additionalProperties: false
-    required: [query, jsonBody]
+    required:
+      - query
+      - jsonBody
     properties:
-      query: {enum: [required, allowed, forbidden]}
-      jsonBody: {enum: [required, allowed, forbidden]}
-      maximumQueryPairs: {type: integer, minimum: 1, maximum: 64}
-      maximumQueryNameBytes: {type: integer, minimum: 1, maximum: 64}
-      maximumQueryValueBytes: {type: integer, minimum: 1, maximum: 4096}
-      maximumJsonDepth: {type: integer, minimum: 1, maximum: 32}
-      maximumCollectionItems: {type: integer, minimum: 1, maximum: 256}
-      maximumStringBytes: {type: integer, minimum: 1, maximum: 16384}
-      maximumNormalizedBytes: {type: integer, minimum: 1, maximum: 65536}
+      query:
+        description: >-
+          Decides whether a preparation script may, must, or must not return query pairs,
+          where `required` means at least one pair. Setting this key and `jsonBody` both to
+          `forbidden` fails startup, because one output channel must stay usable.
+        enum:
+          - required
+          - allowed
+          - forbidden
+      jsonBody:
+        description: >-
+          Decides whether a preparation script may, must, or must not return a JSON body,
+          where JSON `null` counts as absent and an empty object or array counts as present.
+        enum:
+          - required
+          - allowed
+          - forbidden
+      maximumQueryPairs:
+        description: >-
+          Caps how many query pairs a preparation script may return, bounding the query string
+          the source receives.
+        type: integer
+        minimum: 1
+        maximum: 64
+      maximumQueryNameBytes:
+        description: >-
+          Caps the length of each query-pair name a preparation script returns, applied before
+          the pair is percent-encoded.
+        type: integer
+        minimum: 1
+        maximum: 64
+      maximumQueryValueBytes:
+        description: >-
+          Caps the length of each query-pair value a preparation script returns, applied before
+          the pair is percent-encoded.
+        type: integer
+        minimum: 1
+        maximum: 4096
+      maximumJsonDepth:
+        description: >-
+          Caps the nesting depth of the prepared JSON body; a deeper body fails preparation
+          and no request is made.
+        type: integer
+        minimum: 1
+        maximum: 32
+      maximumCollectionItems:
+        description: >-
+          Caps the entries in each array and object of the prepared JSON body; a body over
+          the cap fails preparation and no request is made.
+        type: integer
+        minimum: 1
+        maximum: 256
+      maximumStringBytes:
+        description: >-
+          Caps every string a preparation script returns, covering query names and values
+          as well as JSON body strings and member names.
+        type: integer
+        minimum: 1
+        maximum: 16384
+      maximumNormalizedBytes:
+        description: >-
+          Caps the serialized size of the complete request parts, query pairs and body together,
+          so the outbound request stays bounded whichever channel a script fills.
+        type: integer
+        minimum: 1
+        maximum: 65536
     not:
       properties:
-        query: {const: forbidden}
-        jsonBody: {const: forbidden}
-      required: [query, jsonBody]
+        query:
+          const: forbidden
+        jsonBody:
+          const: forbidden
+      required:
+        - query
+        - jsonBody
   authority-profile:
     type: object
     additionalProperties: false
-    required: [kind, requesterTags, grants]
+    required:
+      - kind
+      - requesterTags
+      - grants
     properties:
-      kind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+      kind:
+        description: >-
+          Declared basis of authority for this profile's grants; a request whose verified
+          token carries an actor claim matches only a `delegated` profile.
+        enum:
+          - statutory
+          - organizational
+          - consent
+          - delegated
+          - explicit-request
       requesterTags:
+        description: >-
+          Complete tag set the claim named by `authentication.requesterTagsClaim` must contain
+          for this profile to match, so adding a tag narrows the profile rather than widening
+          it.
         type: array
         minItems: 1
         maxItems: 32
         uniqueItems: true
-        items: {$ref: '#/$defs/local-id'}
+        items:
+          description: >-
+            One tag that must be present in the verified claim; differentiated requirements,
+            purposes, or `valueClaims` are expressed by issuing different tags rather than
+            by naming individual clients.
+          $ref: '#/$defs/local-id'
       grants:
+        description: >-
+          Complete set of authorized paths this requester class has. Permissions are never
+          unioned across grants, so one grant must cover an entire request on its own.
         type: array
         minItems: 1
         maxItems: 128
         items:
+          description: >-
+            One authorized path, binding a single requirement, a single purpose, the audience
+            origin, and the referenced requirement's complete subject-role set.
           type: object
           additionalProperties: false
-          required: [requirement, purpose, audienceFrom, subjects]
+          required:
+            - requirement
+            - purpose
+            - audienceFrom
+            - subjects
           properties:
-            requirement: {$ref: '#/$defs/uri'}
-            purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
-            audienceFrom: {const: authenticated-requester}
-            responseFormats: {$ref: '#/$defs/response-formats'}
+            requirement:
+              description: >-
+                The one requirement this path authorizes, named by its exact requirement URI;
+                a requirement no bundle entry declares fails startup.
+              $ref: '#/$defs/uri'
+            purpose:
+              description: >-
+                The one purpose this path authorizes, matched exactly against the request
+                purpose; a purpose the referenced requirement does not declare fails startup.
+              type: string
+              pattern: ^[a-z][a-z0-9._:-]{0,127}$
+            audienceFrom:
+              description: >-
+                Binds the assertion audience to the requester's verified evidence audience
+                claim, so the public request cannot name another audience.
+              const: authenticated-requester
+            responseFormats:
+              description: >-
+                Serializations this path permits, defaulting to signed JWS alone when omitted.
+                Unsigned and SD-JWT VC output each require both the bundle-level `responseFormats`
+                and the one matched grant to permit them.
+              $ref: '#/$defs/response-formats'
             subjects:
+              description: >-
+                Authorization for the referenced requirement's complete subject-role set;
+                a grant that omits a declared role, or repeats one, fails startup.
               type: array
               minItems: 1
               maxItems: 8
               items:
+                description: >-
+                  Authorization for one subject role, fixing which selector profile identifies
+                  the subject and where that subject's selector values may originate.
                 type: object
                 additionalProperties: false
-                required: [role, selectorProfile, valueOrigin]
+                required:
+                  - role
+                  - selectorProfile
+                  - valueOrigin
                 properties:
-                  role: {$ref: '#/$defs/local-id'}
-                  selectorProfile: {$ref: '#/$defs/local-id'}
-                  valueOrigin: {enum: [authenticated-context, authenticated-grant, request]}
+                  role:
+                    description: >-
+                      Names the requirement subject role this authorization covers; a role
+                      the requirement's `subjectRoles` does not declare fails startup, and
+                      no role may appear twice in one grant.
+                    $ref: '#/$defs/local-id'
+                  selectorProfile:
+                    description: >-
+                      The selector profile whose field set identifies this role's subject;
+                      a profile the requirement's `subjectRoles` entry does not permit for
+                      the role fails startup.
+                    $ref: '#/$defs/local-id'
+                  valueOrigin:
+                    description: >-
+                      Fixes where this role's selector values originate. A `request` origin
+                      takes values from the closed public request and prohibits `valueClaims`;
+                      `authenticated-context` rejects caller values and reads the exact `valueClaims`
+                      map; `authenticated-grant` reads that same map and additionally requires
+                      a verified grant id and a grant authority equal to the matched authority-profile
+                      id.
+                    enum:
+                      - authenticated-context
+                      - authenticated-grant
+                      - request
                   valueClaims:
+                    description: >-
+                      Maps every field of the named selector profile to the claim path in
+                      the verified access token that supplies that field's value. Missing,
+                      extra, duplicate-target, or invalid claim paths fail startup.
                     type: object
                     minProperties: 1
                     maxProperties: 16
-                    propertyNames: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
-                    additionalProperties: {$ref: '#/$defs/claim-path'}
+                    propertyNames:
+                      type: string
+                      pattern: ^[a-z][a-z0-9._-]{0,63}$
+                    additionalProperties:
+                      description: >-
+                        Claim path resolved only from the strictly verified access token,
+                        so a caller-supplied selector, grant reference, or approval value
+                        cannot supply the field.
+                      $ref: '#/$defs/claim-path'
                 allOf:
                   - if:
-                      required: [valueOrigin]
+                      required:
+                        - valueOrigin
                       properties:
-                        valueOrigin: {enum: [authenticated-context, authenticated-grant]}
-                    then: {required: [valueClaims]}
-                  - if:
-                      required: [valueOrigin]
-                      properties:
-                        valueOrigin: {const: request}
+                        valueOrigin:
+                          enum:
+                            - authenticated-context
+                            - authenticated-grant
                     then:
-                      not: {required: [valueClaims]}
+                      required:
+                        - valueClaims
+                  - if:
+                      required:
+                        - valueOrigin
+                      properties:
+                        valueOrigin:
+                          const: request
+                    then:
+                      not:
+                        required:
+                          - valueClaims
   acquisition:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [kind, source]
+        required:
+          - kind
+          - source
         properties:
-          kind: {const: single}
-          source: {$ref: '#/$defs/local-id'}
+          kind:
+            description: >-
+              Selects this requirement's closed acquisition shape, and therefore how many
+              fixed source calls the runtime issues; a gated kind serves only where the bundle
+              and the deployment both name it under `acquisitionCapabilities`.
+            const: single
+          source:
+            description: >-
+              Read only when `acquisition.kind` is `single`; the one configured source this
+              requirement queries in its single fixed call.
+            $ref: '#/$defs/local-id'
       - type: object
         additionalProperties: false
-        required: [kind, search, fetch]
+        required:
+          - kind
+          - search
+          - fetch
         properties:
-          kind: {const: search-then-fetch}
-          search: {$ref: '#/$defs/local-id'}
-          fetch: {$ref: '#/$defs/local-id'}
-      # One search followed by the declared fetch members, executed in the
-      # order they appear. Each member reads only the search facts it lists,
-      # and the budget covers the whole acquisition.
+          kind:
+            const: search-then-fetch
+          search:
+            description: >-
+              Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`;
+              names the first-stage source, and the runtime aborts before the fetch stage
+              unless this call resolves to exactly one match.
+            $ref: '#/$defs/local-id'
+          fetch:
+            description: >-
+              Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`;
+              the fixed second-stage source, or the ordered array of member sources, invoked
+              after the search resolves and never chosen from response content.
+            $ref: '#/$defs/local-id'
       - type: object
         additionalProperties: false
-        required: [kind, search, fetch, maximumAcquisitionMilliseconds]
+        required:
+          - kind
+          - search
+          - fetch
+          - maximumAcquisitionMilliseconds
         properties:
-          kind: {const: search-then-fetch-set}
-          search: {$ref: '#/$defs/local-id'}
+          kind:
+            const: search-then-fetch-set
+          search:
+            $ref: '#/$defs/local-id'
           fetch:
             type: array
             minItems: 2
             maxItems: 4
             items:
+              description: >-
+                One declared fetch member of a `search-then-fetch-set` acquisition, called
+                in the order the array declares and reached only after the search resolves
+                to a unique schema-valid match. Members must be distinct from each other and
+                from the search source.
               type: object
               additionalProperties: false
-              required: [source, factInputs]
+              required:
+                - source
+                - factInputs
               properties:
-                source: {$ref: '#/$defs/local-id'}
+                source:
+                  description: >-
+                    The one configured source this member calls, fixed by the bundle like
+                    every other acquisition source.
+                  $ref: '#/$defs/local-id'
                 factInputs:
+                  description: >-
+                    Allowlist of validated search facts this member receives, and the only
+                    search-derived data reaching it through any channel, including the body
+                    its preparation builds.
                   type: array
                   minItems: 1
                   maxItems: 16
                   uniqueItems: true
-                  items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
-          maximumAcquisitionMilliseconds: {type: integer, minimum: 1, maximum: 30000}
+                  items:
+                    description: >-
+                      One search fact name this member is permitted to read, which the search
+                      source's fact schema must require or the bundle is rejected at startup.
+                    type: string
+                    pattern: ^[a-z][a-z0-9._-]{0,63}$
+          maximumAcquisitionMilliseconds:
+            description: >-
+              Ceiling on the whole acquisition, covering the search, every declared member,
+              and the transitions between stages; exceeding it fails the requirement as a
+              dependency failure and never cancels a durable audit append.
+            type: integer
+            minimum: 1
+            maximum: 30000
   requirement:
     type: object
     additionalProperties: false
-    required: [id, kind, acquisition, purposes, subjectRoles, referenceFrameworks, evidenceType, validitySeconds, derivation, concepts, disclosureGuard, existenceDisclosure]
+    required:
+      - id
+      - kind
+      - acquisition
+      - purposes
+      - subjectRoles
+      - referenceFrameworks
+      - evidenceType
+      - validitySeconds
+      - derivation
+      - concepts
+      - disclosureGuard
+      - existenceDisclosure
     properties:
-      id: {$ref: '#/$defs/uri'}
-      kind: {enum: [criterion, information-requirement, constraint]}
-      acquisition: {$ref: '#/$defs/acquisition'}
+      id:
+        description: >-
+          Stable requirement URI a public request names to select this requirement; the runtime
+          looks up requirements by this exact value and no other.
+        $ref: '#/$defs/uri'
+      kind:
+        description: >-
+          Requirement classification carried unchanged into every assertion issued for this
+          requirement.
+        enum:
+          - criterion
+          - information-requirement
+          - constraint
+      acquisition:
+        description: >-
+          Fixes this requirement's complete source-request shape to one call over a single
+          source, or to a fixed sequence of calls named here; no response content chooses
+          a different source or an additional call.
+        $ref: '#/$defs/acquisition'
       purposes:
+        description: >-
+          Closed set of purpose codes this requirement can be requested under; an authority-profile
+          grant must bind one of them together with a role and selector profile, or that combination
+          has no authority path and the bundle fails to load.
         type: array
         minItems: 1
         maxItems: 32
         uniqueItems: true
-        items: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+        items:
+          description: >-
+            One purpose code eligible for this requirement; an authority-profile grant must
+            name this exact code before a request under it is authorized.
+          type: string
+          pattern: ^[a-z][a-z0-9._:-]{0,127}$
       subjectRoles:
+        description: >-
+          Complete set of subject positions this requirement resolves; incoming request array
+          order carries no meaning, and resolved subjects are always canonicalized to this
+          array's declaration order before signing.
         type: array
         minItems: 1
         maxItems: 8
         items:
+          description: >-
+            One subject position this requirement resolves; a request supplying a different
+            number of subjects, a duplicate role, or a role this requirement does not declare
+            is unauthorized.
           type: object
           additionalProperties: false
-          required: [role, cardinality, selectorProfiles]
+          required:
+            - role
+            - cardinality
+            - selectorProfiles
           properties:
-            role: {$ref: '#/$defs/local-id'}
-            cardinality: {const: one}
+            role:
+              description: >-
+                Deployment-chosen identifier distinguishing this subject position from the
+                requirement's others; requests, grants, and derivation inputs all address
+                the position by this exact value, never by array position.
+              $ref: '#/$defs/local-id'
+            cardinality:
+              description: >-
+                Fixes this subject position to a single resolved value; Evidence Version 1
+                defines no plural or list-valued role.
+              const: one
             selectorProfiles:
+              description: >-
+                Selector profiles permitted for this subject position; every one of them must
+                be reachable by some authority-profile grant for every code in `purposes`,
+                or the bundle fails to load.
               type: array
               minItems: 1
               maxItems: 16
               uniqueItems: true
-              items: {$ref: '#/$defs/local-id'}
+              items:
+                description: >-
+                  One selector profile id permitted for this position; it must name an entry
+                  in the bundle's `selectorProfiles` map, or the bundle fails to load.
+                $ref: '#/$defs/local-id'
       referenceFrameworks:
+        description: >-
+          Governed legal or procedural framework URIs carried as a whole into every assertion
+          issued for this requirement.
         type: array
         minItems: 1
         maxItems: 16
         uniqueItems: true
-        items: {$ref: '#/$defs/uri'}
-      evidenceType: {$ref: '#/$defs/uri'}
-      observationTimezone: {type: string, minLength: 1, maxLength: 128}
-      validitySeconds: {type: integer, minimum: 1, maximum: 31536000}
+        items:
+          description: >-
+            One governed framework URI in that set, copied unchanged into the assertion alongside
+            its siblings; the runtime does not select or rank among them.
+          $ref: '#/$defs/uri'
+      evidenceType:
+        description: >-
+          Exact Evidence Type URI placed in every assertion issued for this requirement; it
+          must be unique across the bundle, and a duplicate rejects the bundle at startup.
+        $ref: '#/$defs/uri'
+      observationTimezone:
+        description: >-
+          IANA timezone resolving `legal_local_date` and `legal_local_time` from the runtime-supplied
+          `observed_at` instant; an unrecognized name fails validation, and omitting the field
+          resolves both values in UTC instead.
+        type: string
+        minLength: 1
+        maxLength: 128
+      validitySeconds:
+        description: >-
+          Sets the assertion's validity window measured from `issuedAt`; the bundle fails
+          to load if this exceeds `signing.maximumAssertionValiditySeconds`.
+        type: integer
+        minimum: 1
+        maximum: 31536000
       derivation:
+        description: >-
+          Determines which Rhai script computes the requirement's concept values as `derive/3`,
+          and what minimized selector inputs and closed typed parameters that script is allowed
+          to see.
         type: object
         additionalProperties: false
-        required: [script, parameters]
+        required:
+          - script
+          - parameters
         properties:
-          script: {$ref: '#/$defs/relative-path'}
+          script:
+            description: >-
+              Bundle-relative Rhai script compiled at startup to expose the requirement's
+              `derive/3` entry point before the runtime reaches readiness.
+            $ref: '#/$defs/relative-path'
           selectorInputs:
+            description: >-
+              Optional closed set of authorized selector roles the derivation may read; omission
+              means `derive/3` receives an empty selector map.
             type: array
             maxItems: 8
-            items: {$ref: '#/$defs/selector-input'}
+            items:
+              description: >-
+                Declares one subject role the derivation may read, together with the closed
+                profile alternatives permitted for that role; only the alternative matching
+                the authorized request subject reaches `derive/3`.
+              $ref: '#/$defs/selector-input'
           parameters:
+            description: >-
+              Closed set of adopter-named parameter values available to the requirement's
+              derivation; the map cannot carry secrets or runtime authority.
             type: object
             maxProperties: 32
-            additionalProperties: {$ref: '#/$defs/parameter-value'}
+            additionalProperties:
+              description: >-
+                One named parameter's value, closed to a bounded string, a safe integer, a
+                boolean, one typed canonical decimal, or a bounded array of decimal bucket
+                boundaries whose own bounds reuse that same typed-decimal shape.
+              $ref: '#/$defs/parameter-value'
       concepts:
+        description: >-
+          Declares the complete, closed set of values this requirement's assertion may disclose;
+          a value the derivation produces under an identifier absent from this list fails
+          evaluation instead of being disclosed.
         type: array
         minItems: 1
         maxItems: 16
         items:
+          description: >-
+            One value the requirement may disclose, corresponding to exactly one `cccev:InformationConcept`,
+            and becoming one entry of the assertion's supported values when the derivation
+            produces that value.
           type: object
           additionalProperties: false
-          required: [id, form, required]
+          required:
+            - id
+            - form
+            - required
           properties:
-            id: {$ref: '#/$defs/uri'}
-            form: {enum: [boolean, controlled-code, controlled-category, bounded-integer, bounded-decimal, date-bucket, time-bucket, audience-scoped-entity-reference, controlled-code-list, entity-reference-list, reviewed-structured-value]}
-            required: {type: boolean}
-            constraints: {type: object}
-            sdJwtVc: {$ref: '#/$defs/sd-jwt-vc-concept-projection'}
+            id:
+              description: >-
+                Stable identifier that names this concept as `providesValueFor` in the assertion
+                and, unless an `sdJwtVc.claim` override is declared, is also the concept's
+                claim name in the SD-JWT VC serialization.
+              $ref: '#/$defs/uri'
+            form:
+              enum:
+                - boolean
+                - controlled-code
+                - controlled-category
+                - bounded-integer
+                - bounded-decimal
+                - date-bucket
+                - time-bucket
+                - audience-scoped-entity-reference
+                - controlled-code-list
+                - entity-reference-list
+                - reviewed-structured-value
+            required:
+              description: >-
+                Whether the derivation must produce a value for this concept; a missing required
+                concept fails the whole evaluation, and a missing optional concept is left
+                out of the disclosed supported values.
+              type: boolean
+            constraints:
+              type: object
+            sdJwtVc:
+              description: >-
+                Optional per-concept projection that the concept declaration may set only
+                for `reviewed-structured-value` concepts, selecting how that structured value's
+                fields are exposed as SD-JWT VC disclosures.
+              $ref: '#/$defs/sd-jwt-vc-concept-projection'
           allOf:
             - oneOf:
                 - properties:
-                    form: {const: boolean}
-                    constraints: {$ref: '#/$defs/boolean-constraints'}
-                - required: [constraints]
+                    form:
+                      description: >-
+                        Selects the concept's closed value shape, which fixes the exact set
+                        of keys `constraints` must declare and no others.
+                      const: boolean
+                    constraints:
+                      description: >-
+                        Closed, form-specific bounds a derived value must satisfy before it
+                        is accepted into evidence; which keys apply is fixed entirely by the
+                        concept's `form`.
+                      $ref: '#/$defs/boolean-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: controlled-code}
-                    constraints: {$ref: '#/$defs/controlled-code-constraints'}
-                - required: [constraints]
+                    form:
+                      const: controlled-code
+                    constraints:
+                      $ref: '#/$defs/controlled-code-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: controlled-category}
-                    constraints: {$ref: '#/$defs/controlled-category-constraints'}
-                - required: [constraints]
+                    form:
+                      const: controlled-category
+                    constraints:
+                      $ref: '#/$defs/controlled-category-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: bounded-integer}
-                    constraints: {$ref: '#/$defs/bounded-integer-constraints'}
-                - required: [constraints]
+                    form:
+                      const: bounded-integer
+                    constraints:
+                      $ref: '#/$defs/bounded-integer-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: bounded-decimal}
-                    constraints: {$ref: '#/$defs/bounded-decimal-constraints'}
-                - required: [constraints]
+                    form:
+                      const: bounded-decimal
+                    constraints:
+                      $ref: '#/$defs/bounded-decimal-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: date-bucket}
-                    constraints: {$ref: '#/$defs/bucket-constraints'}
-                - required: [constraints]
+                    form:
+                      const: date-bucket
+                    constraints:
+                      $ref: '#/$defs/bucket-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: time-bucket}
-                    constraints: {$ref: '#/$defs/bucket-constraints'}
-                - required: [constraints]
+                    form:
+                      const: time-bucket
+                    constraints:
+                      $ref: '#/$defs/bucket-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: audience-scoped-entity-reference}
-                    constraints: {$ref: '#/$defs/entity-reference-constraints'}
-                - required: [constraints]
+                    form:
+                      const: audience-scoped-entity-reference
+                    constraints:
+                      $ref: '#/$defs/entity-reference-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: controlled-code-list}
-                    constraints: {$ref: '#/$defs/controlled-code-list-constraints'}
-                - required: [constraints]
+                    form:
+                      const: controlled-code-list
+                    constraints:
+                      $ref: '#/$defs/controlled-code-list-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: entity-reference-list}
-                    constraints: {$ref: '#/$defs/entity-reference-list-constraints'}
-                - required: [constraints]
+                    form:
+                      const: entity-reference-list
+                    constraints:
+                      $ref: '#/$defs/entity-reference-list-constraints'
+                - required:
+                    - constraints
                   properties:
-                    form: {const: reviewed-structured-value}
-                    constraints: {$ref: '#/$defs/reviewed-structured-value-constraints'}
-            - if: {required: [sdJwtVc]}
+                    form:
+                      const: reviewed-structured-value
+                    constraints:
+                      $ref: '#/$defs/reviewed-structured-value-constraints'
+            - if:
+                required:
+                  - sdJwtVc
               then:
                 properties:
-                  form: {const: reviewed-structured-value}
-      fixtures: {$ref: '#/$defs/relative-path'}
+                  form:
+                    const: reviewed-structured-value
+      fixtures:
+        description: >-
+          Bundle-relative path to this requirement's sanitized fixture suite; omitting it
+          is accepted only under `assuranceProfile: local`, and `production` or `evidence-grade`
+          refuse to load without it and its complete case coverage.
+        $ref: '#/$defs/relative-path'
       disclosureGuard:
+        description: >-
+          Binds this requirement's release to the reviewed disclosure families a human combined-disclosure
+          review has already assessed.
         type: object
         additionalProperties: false
-        required: [families]
+        required:
+          - families
         properties:
           families:
+            description: >-
+              Non-empty set of those reviewed family URIs; sharing even one family with another
+              enabled requirement rejects the whole bundle at startup.
             type: array
             minItems: 1
             maxItems: 16
             uniqueItems: true
-            items: {$ref: '#/$defs/uri'}
-      existenceDisclosure: {enum: [collapse-unresolved]}
+            items:
+              description: >-
+                One reviewed disclosure-family URI; this exact value, not what it represents,
+                is what the startup check compares for reuse across requirements.
+              $ref: '#/$defs/uri'
+      existenceDisclosure:
+        description: >-
+          Governs the outward shape of an unresolved outcome: the runtime returns one identical
+          public problem whether the subject was absent, ambiguous, or found with inconsistent
+          derivation inputs, so a caller cannot distinguish the cause from the response.
+        enum:
+          - collapse-unresolved
   boolean-constraints:
     type: object
     additionalProperties: false
@@ -708,154 +1958,413 @@ $defs:
   controlled-code-constraints:
     type: object
     additionalProperties: false
-    required: [codelist, codelistVersion, maximumBytes]
+    required:
+      - codelist
+      - codelistVersion
+      - maximumBytes
     properties:
-      codelist: {$ref: '#/$defs/relative-path'}
-      codelistVersion: {type: string, minLength: 1, maxLength: 128}
-      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+      codelist:
+        description: >-
+          Bundle-relative path to the closed codelist artifact whose entries fix exact membership
+          for `controlled-code`, `controlled-category`, and `controlled-code-list` concepts,
+          validated at startup.
+        $ref: '#/$defs/relative-path'
+      codelistVersion:
+        description: >-
+          Version tag paired with `codelist` for `controlled-code` and `controlled-code-list`
+          concepts that must exactly equal the referenced codelist artifact's own declared
+          version, or the bundle fails to load.
+        type: string
+        minLength: 1
+        maxLength: 128
+      maximumBytes:
+        description: >-
+          Caps the disclosed byte length of a `controlled-code`, `controlled-category`, or
+          `audience-scoped-entity-reference` concept's value; a value or projected reference
+          longer than the cap fails validation instead of being truncated.
+        type: integer
+        minimum: 1
+        maximum: 8192
   controlled-category-constraints:
     type: object
     additionalProperties: false
-    required: [categoryScheme, schemeVersion, codelist, maximumBytes]
+    required:
+      - categoryScheme
+      - schemeVersion
+      - codelist
+      - maximumBytes
     properties:
-      categoryScheme: {$ref: '#/$defs/uri'}
-      schemeVersion: {type: string, minLength: 1, maxLength: 128}
-      codelist: {$ref: '#/$defs/relative-path'}
-      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+      categoryScheme:
+        description: >-
+          URI naming the reviewed category vocabulary a `controlled-category` concept's value
+          must belong to; matched against `schemeVersion` and `codelist` at startup, it enforces
+          exact category membership and rejects any unreviewed category.
+        $ref: '#/$defs/uri'
+      schemeVersion:
+        description: >-
+          Version tag that must exactly equal a referenced codelist artifact's own declared
+          version at startup; pairs with `categoryScheme` for `controlled-category` concepts
+          and with `bucketScheme` for `date-bucket` and `time-bucket` concepts.
+        type: string
+        minLength: 1
+        maxLength: 128
+      codelist:
+        $ref: '#/$defs/relative-path'
+      maximumBytes:
+        type: integer
+        minimum: 1
+        maximum: 8192
   bounded-integer-constraints:
     type: object
     additionalProperties: false
-    required: [minimum, maximum]
+    required:
+      - minimum
+      - maximum
     properties:
-      minimum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
-      maximum: {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      minimum:
+        description: >-
+          Inclusive lower bound paired with `maximum` for `bounded-integer` and `bounded-decimal`
+          concepts; a derived value under it fails evaluation instead of being disclosed.
+        type: integer
+        minimum: -9007199254740991
+        maximum: 9007199254740991
+      maximum:
+        description: >-
+          Inclusive upper bound paired with `minimum` for `bounded-integer` and `bounded-decimal`
+          concepts; a derived value over it fails evaluation instead of being disclosed.
+        type: integer
+        minimum: -9007199254740991
+        maximum: 9007199254740991
   bounded-decimal-constraints:
     type: object
     additionalProperties: false
-    required: [minimum, maximum, maximumScale]
+    required:
+      - minimum
+      - maximum
+      - maximumScale
     properties:
-      minimum: {$ref: '#/$defs/canonical-decimal-text'}
-      maximum: {$ref: '#/$defs/canonical-decimal-text'}
-      maximumScale: {type: integer, minimum: 0, maximum: 9}
+      minimum:
+        $ref: '#/$defs/canonical-decimal-text'
+      maximum:
+        $ref: '#/$defs/canonical-decimal-text'
+      maximumScale:
+        description: >-
+          Upper bound on the number of fractional digits accepted for a `bounded-decimal`
+          concept's derived value; a finer scale fails validation instead of being rounded.
+        type: integer
+        minimum: 0
+        maximum: 9
   canonical-decimal-text:
     type: string
-    pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'
+    pattern: ^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$
   bucket-constraints:
     type: object
     additionalProperties: false
-    required: [bucketScheme, schemeVersion]
+    required:
+      - bucketScheme
+      - schemeVersion
     properties:
-      bucketScheme: {$ref: '#/$defs/uri'}
-      schemeVersion: {type: string, minLength: 1, maxLength: 128}
+      bucketScheme:
+        description: >-
+          URI naming the reviewed bucket scheme for a `date-bucket` or `time-bucket` concept;
+          paired with `schemeVersion`, `bucketScheme` resolves to exactly one codelist artifact,
+          so only the matched bucket code is disclosed and the underlying date, instant, or
+          duration never appears in the assertion.
+        $ref: '#/$defs/uri'
+      schemeVersion:
+        type: string
+        minLength: 1
+        maxLength: 128
   entity-reference-constraints:
     type: object
     additionalProperties: false
-    required: [maximumBytes]
+    required:
+      - maximumBytes
     properties:
-      maximumBytes: {type: integer, minimum: 1, maximum: 8192}
+      maximumBytes:
+        type: integer
+        minimum: 1
+        maximum: 8192
   controlled-code-list-constraints:
     type: object
     additionalProperties: false
-    required: [codelist, codelistVersion, minimumItems, maximumItems, unique]
+    required:
+      - codelist
+      - codelistVersion
+      - minimumItems
+      - maximumItems
+      - unique
     properties:
-      codelist: {$ref: '#/$defs/relative-path'}
-      codelistVersion: {type: string, minLength: 1, maxLength: 128}
-      minimumItems: {type: integer, minimum: 1, maximum: 64}
-      maximumItems: {type: integer, minimum: 1, maximum: 64}
-      unique: {const: true}
+      codelist:
+        $ref: '#/$defs/relative-path'
+      codelistVersion:
+        type: string
+        minLength: 1
+        maxLength: 128
+      minimumItems:
+        description: >-
+          Inclusive lower bound paired with `maximumItems` on how many items a `controlled-code-list`
+          or `entity-reference-list` concept discloses; a shorter derived list fails validation.
+        type: integer
+        minimum: 1
+        maximum: 64
+      maximumItems:
+        description: >-
+          Inclusive upper bound paired with `minimumItems` on how many items a `controlled-code-list`
+          or `entity-reference-list` concept discloses; a longer derived list fails validation.
+        type: integer
+        minimum: 1
+        maximum: 64
+      unique:
+        description: >-
+          Requires every item in a `controlled-code-list` or `entity-reference-list` concept's
+          disclosed list to be pairwise distinct; a duplicate item fails validation instead
+          of being deduplicated or disclosed twice.
+        const: true
   entity-reference-list-constraints:
     type: object
     additionalProperties: false
-    required: [minimumItems, maximumItems, unique]
+    required:
+      - minimumItems
+      - maximumItems
+      - unique
     properties:
-      minimumItems: {type: integer, minimum: 1, maximum: 64}
-      maximumItems: {type: integer, minimum: 1, maximum: 64}
-      unique: {const: true}
+      minimumItems:
+        type: integer
+        minimum: 1
+        maximum: 64
+      maximumItems:
+        type: integer
+        minimum: 1
+        maximum: 64
+      unique:
+        const: true
   reviewed-structured-value-constraints:
     type: object
     additionalProperties: false
-    required: [schema, maximumSerializedBytes]
+    required:
+      - schema
+      - maximumSerializedBytes
     properties:
-      schema: {$ref: '#/$defs/uri'}
-      maximumSerializedBytes: {type: integer, minimum: 1, maximum: 65536}
+      schema:
+        description: >-
+          URI resolving to exactly one closed JSON Schema artifact in the immutable bundle
+          that a `reviewed-structured-value` concept's fields are validated against; the schema
+          closes every property, so unexpected or additional JSON in the derived value fails
+          validation.
+        $ref: '#/$defs/uri'
+      maximumSerializedBytes:
+        description: >-
+          Caps the serialized JSON byte length of a `reviewed-structured-value` concept's
+          entire disclosed object; an oversized derived value fails validation before signing.
+        type: integer
+        minimum: 1
+        maximum: 65536
   sd-jwt-vc-concept-projection:
     type: object
     additionalProperties: false
-    required: [claim, disclosure]
+    required:
+      - claim
+      - disclosure
     properties:
       claim:
+        description: >-
+          Public claim name substituted for the concept identifier in the SD-JWT VC response;
+          it must be unique within the requirement and cannot collide with a profile-owned
+          claim.
         type: string
-        pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'
-      disclosure: {const: top-level}
+        pattern: ^[A-Za-z][A-Za-z0-9_]{0,63}$
+      disclosure:
+        description: >-
+          Fixes where the structured value's field-level disclosures are exposed in the SD-JWT
+          VC claim set: as an always-visible top-level object under `sdJwtVc.claim`.
+        const: top-level
   parameter-value:
     oneOf:
-      - {type: string, maxLength: 1024}
-      - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
-      - {type: boolean}
-      - {$ref: '#/$defs/decimal-value'}
+      - type: string
+        maxLength: 1024
+      - type: integer
+        minimum: -9007199254740991
+        maximum: 9007199254740991
+      - type: boolean
+      - $ref: '#/$defs/decimal-value'
       - type: array
         minItems: 1
         maxItems: 64
-        items: {$ref: '#/$defs/bucket-boundary'}
+        items:
+          description: >-
+            One decimal bucket boundary in an ordered array parameter, evaluated by the `bucket_number`
+            primitive to classify a derived decimal into the matching boundary's code; each
+            lower bound must equal the previous boundary's upper bound, and a gap fails validation
+            at startup.
+          $ref: '#/$defs/bucket-boundary'
   decimal-value:
     type: object
     additionalProperties: false
-    required: [type, value]
+    required:
+      - type
+      - value
     properties:
-      type: {const: decimal}
-      value: {type: string, pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$'}
+      type:
+        description: >-
+          Literal `decimal` discriminator marking the typed-decimal form, required wherever
+          that form appears and present only alongside `value`.
+        const: decimal
+      value:
+        description: >-
+          Canonical decimal text of the typed-decimal form, restricted to exact finite decimal
+          text with no exponent, no leading zero, and no trailing fractional zero.
+        type: string
+        pattern: ^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$
   bucket-boundary:
     type: object
     additionalProperties: false
-    required: [minimumInclusive, maximumExclusive, code]
+    required:
+      - minimumInclusive
+      - maximumExclusive
+      - code
     properties:
-      minimumInclusive: {$ref: '#/$defs/decimal-value'}
-      maximumExclusive: {$ref: '#/$defs/decimal-value'}
-      code: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+      minimumInclusive:
+        description: >-
+          Inclusive lower bound of this boundary's half-open interval, expressed with the
+          same typed-decimal shape as a scalar parameter value.
+        $ref: '#/$defs/decimal-value'
+      maximumExclusive:
+        description: >-
+          Exclusive upper bound of this boundary's half-open interval, expressed with the
+          same typed-decimal shape as a scalar parameter value.
+        $ref: '#/$defs/decimal-value'
+      code:
+        description: >-
+          Output code returned when a derived decimal falls inside this boundary's interval;
+          duplicate codes across the array fail validation at startup.
+        type: string
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
 bundle_layout:
   root: evidence.yaml
-  allowed_directories: [adapters, derivations, schemas, codelists, fixtures, public-keys]
+  allowed_directories:
+    - adapters
+    - derivations
+    - schemas
+    - codelists
+    - fixtures
+    - public-keys
   symlinks: prohibited
   path_escape: prohibited
   unknown_files: prohibited
 atomic_revision:
   digest: sha256 over a canonical sorted path manifest plus exact file bytes
   trust: Established by operator deployment controls, not by the digest itself.
-  lifetime: Mounted read-only and loaded once; reload, merge, mutation, fallback, and partial serving are prohibited.
+  lifetime: >-
+    Mounted read-only and loaded once; reload, merge, mutation, fallback, and partial serving
+    are prohibited.
 startup_checks:
   - Unique stable identifiers and no dangling references.
   - Complete role/profile/origin/authority/source bindings.
-  - Secret references resolve without expanding values into YAML or diagnostics.
-  - Scripts compile and use only the Version 1 ABI and primitive allowlist.
+  - >-
+    Secret references resolve without expanding values into YAML or diagnostics.
+  - >-
+    Scripts compile and use only the Version 1 ABI and primitive allowlist.
   - Schemas and codelists are closed, versioned, bounded, and referenced.
-  - Each reviewed structured-value schema URI resolves to exactly one schema artifact by its `$id`; missing, duplicate, unreferenced, or open schemas fail startup.
-  - Each date- or time-bucket scheme URI and version resolves to exactly one reviewed codelist artifact; missing, duplicate, or unreferenced schemes fail startup.
-  - Fixtures cover positive, negative, boundary, missing, no-match, ambiguous, source failure, and anti-reconstruction cases.
-  - The complete simultaneously enabled requirement set passes disclosure-combination review.
-  - No two enabled requirements share a disclosureGuard family; a shared family rejects the bundle regardless of purposes, audiences, requester entitlements, or rate limits.
-  - Each context-derived or grant-derived subject has valueClaims whose keys exactly equal the named selector profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
+  - >-
+    Each reviewed structured-value schema URI resolves to exactly one schema artifact by its
+    `$id`; missing, duplicate, unreferenced, or open schemas fail startup.
+  - >-
+    Each date- or time-bucket scheme URI and version resolves to exactly one reviewed codelist
+    artifact; missing, duplicate, or unreferenced schemes fail startup.
+  - >-
+    Fixtures cover positive, negative, boundary, missing, no-match, ambiguous, source failure,
+    and anti-reconstruction cases.
+  - >-
+    The complete simultaneously enabled requirement set passes disclosure-combination review.
+  - >-
+    No two enabled requirements share a disclosureGuard family; a shared family rejects the
+    bundle regardless of purposes, audiences, requester entitlements, or rate limits.
+  - >-
+    Each context-derived or grant-derived subject has valueClaims whose keys exactly equal
+    the named selector profile field set; missing, extra, duplicate-target, or invalid claim
+    paths fail startup.
   - Request-derived subjects have no valueClaims.
-  - Request preparation receives only the closed selectorInputs alternatives and the exact adapter context of parameters plus empty or validated prior facts; it cannot choose transport authority, path-binding origin, headers, credentials, or request count.
-  - Configured authority claim names are distinct and none names a registered JWT claim; `sub` is permitted for principalClaim alone, because it already carries the principal. A repeated or shadowing name would read one verified token member as something the issuer wrote for another purpose.
-  - For authenticated-grant origin, verified token values at authentication.grantIdClaim and grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must bind requirement, purpose, audience, role, selector profile, and valueClaims result before selector resolution.
-  - Required signing, audit, credential, and source dependencies are ready.
-  - The active and published public JWK files are public-only exact ES256 P-256 JWKs whose 43-character kid equals their RFC 7638 thumbprint; paths, kids, and key material are unique and no revoked identifier is active, published, or served.
-  - The active plus published set contains at most 33 keys. A published predecessor remains available for the maximum assertion validity plus clock skew, unless emergency revocation requires immediate removal and denylisting.
-  - The runtime signer matches the governed active public JWK exactly and passes a startup sign-and-verify test; local assurance uses local-jwk and production or evidence-grade uses Transit.
-  - Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml secretProviders.file.root.
-  - Fixed path and path-template forms are mutually exclusive and every template placeholder has exactly one tagged selector or prior-fact binding. Prior-fact bindings are allowed only on fetch sources and must name a scalar property required by every preceding search fact schema.
-  - Every selector set an authority grant can activate for a source carries each role and profile that source's selector path bindings require. The sets are derived one per grant, so covering a bound role across their union is not enough: a single grant omitting one yields a set with no value to substitute, which fails startup rather than every request that grant would serve.
-  - Fixed headers and static API-key header names reject authentication, routing, framing, cookie, forwarding, proxy, tracing, and hop-by-hop collisions after ASCII case folding.
-  - Extended JSON Pointer projections are non-empty, uniquely decoded, and reject duplicate or overlapping ancestor, descendant, and wildcard paths.
-  - Every source preparation, extraction, and derivation selector-input contract is closed and cross-referenced to the exact authorized role/profile/field set.
+  - >-
+    Request preparation receives only the closed selectorInputs alternatives and the exact
+    adapter context of parameters plus empty or validated prior facts; it cannot choose transport
+    authority, path-binding origin, headers, credentials, or request count.
+  - >-
+    Configured authority claim names are distinct and none names a registered JWT claim; `sub`
+    is permitted for principalClaim alone, because it already carries the principal. A repeated
+    or shadowing name would read one verified token member as something the issuer wrote for
+    another purpose.
+  - >-
+    For authenticated-grant origin, verified token values at authentication.grantIdClaim and
+    grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile
+    identifier, and the same entitlement must bind requirement, purpose, audience, role, selector
+    profile, and valueClaims result before selector resolution.
+  - >-
+    Required signing, audit, credential, and source dependencies are ready.
+  - >-
+    The active and published public JWK files are public-only exact ES256 P-256 JWKs whose
+    43-character kid equals their RFC 7638 thumbprint; paths, kids, and key material are unique
+    and no revoked identifier is active, published, or served.
+  - >-
+    The active plus published set contains at most 33 keys. A published predecessor remains
+    available for the maximum assertion validity plus clock skew, unless emergency revocation
+    requires immediate removal and denylisting.
+  - >-
+    The runtime signer matches the governed active public JWK exactly and passes a startup
+    sign-and-verify test; local assurance uses local-jwk and production or evidence-grade
+    uses Transit.
+  - >-
+    Every secret reference uses the closed file-secret grammar and is resolved beneath runtime.yaml
+    secretProviders.file.root.
+  - >-
+    Fixed path and path-template forms are mutually exclusive and every template placeholder
+    has exactly one tagged selector or prior-fact binding. Prior-fact bindings are allowed
+    only on fetch sources and must name a scalar property required by every preceding search
+    fact schema.
+  - ? >-
+      Every selector set an authority grant can activate for a source carries each role and
+      profile that source's selector path bindings require. The sets are derived one per grant,
+      so covering a bound role across their union is not enough
+    : >-
+      a single grant omitting one yields a set with no value to substitute, which fails startup
+      rather than every request that grant would serve.
+  - >-
+    Fixed headers and static API-key header names reject authentication, routing, framing,
+    cookie, forwarding, proxy, tracing, and hop-by-hop collisions after ASCII case folding.
+  - >-
+    Extended JSON Pointer projections are non-empty, uniquely decoded, and reject duplicate
+    or overlapping ancestor, descendant, and wildcard paths.
+  - >-
+    Every source preparation, extraction, and derivation selector-input contract is closed
+    and cross-referenced to the exact authorized role/profile/field set.
 secret_policy:
-  permitted: File-provider logical names matching the exact secret-reference grammar only.
-  prohibited: private key, password, bearer token, client secret, or expanded environment value in any bundle file
-  oauth_placement_rule: Client credentials travel in the Authorization header or the token request body only. There is no query-string placement, so no credential can reach a token URL, and the token URL, body, response, and debug output are still fully redacted.
-  file_provider_rule: Resolve secret:file logical names beneath the configured owner-controlled fileRoot, reject symlinks and path traversal, require regular owner-only files, and parse values as data.
+  permitted: >-
+    File-provider logical names matching the exact secret-reference grammar only.
+  prohibited: >-
+    private key, password, bearer token, client secret, or expanded environment value in any
+    bundle file
+  oauth_placement_rule: >-
+    Client credentials travel in the Authorization header or the token request body only.
+    There is no query-string placement, so no credential can reach a token URL, and the token
+    URL, body, response, and debug output are still fully redacted.
+  file_provider_rule: >-
+    Resolve secret:file logical names beneath the configured owner-controlled fileRoot, reject
+    symlinks and path traversal, require regular owner-only files, and parse values as data.
 deployment_rules:
-  authentication: Evidence independently validates the bearer token against exact configured issuer, audience, token type, algorithm, and JWKS; upstream identity headers are ignored and rejected if mapped
-  audit: failClosed and keyed pseudonymization remain governed; storage path and rotation bound come only from runtime.yaml
-  rate_limit_labels: principal and authority use scoped pseudonyms; raw selector values are never labels or keys
-  source_urls: HTTPS is required except explicit HTTP numeric loopback on 127.0.0.0/8 or ::1 for deterministic local mocks; Rust parses IP and port strictly and rejects userinfo, DNS localhost aliases, non-loopback HTTP, invalid octets, fragments, and URL ambiguity
-  runtime_split: runtime.yaml cannot override any field in this schema; the two closed documents have independent digests and immutable startup lifetimes
+  authentication: >-
+    Evidence independently validates the bearer token against exact configured issuer, audience,
+    token type, algorithm, and JWKS; upstream identity headers are ignored and rejected if
+    mapped
+  audit: >-
+    failClosed and keyed pseudonymization remain governed; storage path and rotation bound
+    come only from runtime.yaml
+  rate_limit_labels: >-
+    principal and authority use scoped pseudonyms; raw selector values are never labels or
+    keys
+  source_urls: >-
+    HTTPS is required except explicit HTTP numeric loopback on 127.0.0.0/8 or ::1 for deterministic
+    local mocks; Rust parses IP and port strictly and rejects userinfo, DNS localhost aliases,
+    non-loopback HTTP, invalid octets, fragments, and URL ambiguity
+  runtime_split: >-
+    runtime.yaml cannot override any field in this schema; the two closed documents have independent
+    digests and immutable startup lifetimes

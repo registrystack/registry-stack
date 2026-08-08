@@ -33,6 +33,7 @@ config:
       - ProjectStarterSequence
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
+      - EvidenceConfigurationReference
       - DiagnosticReference
       - Steps
 globs:

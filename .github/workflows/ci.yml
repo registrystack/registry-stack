@@ -467,6 +467,12 @@ jobs:
       - name: Enforce Evidence verifier portability
         run: products/evidence/scripts/check-verifier-portability.sh
 
+      - name: Self-test the Evidence configuration key-path gate
+        run: python3 products/evidence/scripts/test_evidence_config_key_paths.py
+
+      - name: Enforce Evidence configuration reference parity
+        run: products/evidence/scripts/check-config-key-paths.sh
+
   relay-contracts:
     name: Relay API contracts
     needs: changes
