@@ -277,7 +277,7 @@ sources:
     posture: record-transformed
     tlsTrustProfile: government-internal-pki
     authentication:
-      kind: static-bearer
+      kind: static-authorization
       tokenRef: secret:file/source-token
     request: {}
     responseSchema: schemas/source-a-response.schema.yaml
@@ -334,7 +334,7 @@ authentication:
 
 # Authorization: Bearer <secret>
 authentication:
-  kind: static-bearer
+  kind: static-authorization
   tokenRef: secret:file/source-token
 
 # A provider-specific API-key header

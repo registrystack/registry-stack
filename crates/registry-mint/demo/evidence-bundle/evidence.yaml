@@ -49,7 +49,7 @@ sources:
     # permits plain HTTP only for a numeric loopback host.
     baseUrl: http://127.0.0.1:8092
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/facts

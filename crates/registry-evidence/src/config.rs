@@ -1842,7 +1842,7 @@ pub enum SourceAuthentication {
         #[serde(rename = "passwordRef")]
         password_ref: SecretRef,
     },
-    StaticBearer {
+    StaticAuthorization {
         #[serde(rename = "tokenRef")]
         token_ref: SecretRef,
     },
@@ -1889,7 +1889,7 @@ impl SourceAuthentication {
                 username_ref: _,
                 password_ref: _,
             }
-            | Self::StaticBearer { token_ref: _ } => Ok(()),
+            | Self::StaticAuthorization { token_ref: _ } => Ok(()),
             Self::StaticApiKey {
                 header_name,
                 value_ref: _,
@@ -1933,7 +1933,7 @@ impl SourceAuthentication {
                 username_ref,
                 password_ref,
             } => vec![username_ref, password_ref],
-            Self::StaticBearer { token_ref } => vec![token_ref],
+            Self::StaticAuthorization { token_ref } => vec![token_ref],
             Self::StaticApiKey { value_ref, .. } => vec![value_ref],
             Self::Oauth2ClientCredentials {
                 client_id_ref,
@@ -5617,7 +5617,7 @@ outboundTls:
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-e-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-e-token}
     request:
       method: GET
       pathTemplate: /v1/first/{record_id}
@@ -5641,7 +5641,7 @@ outboundTls:
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-f-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-f-token}
     request:
       method: GET
       pathTemplate: /v1/second/{record_id}

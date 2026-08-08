@@ -499,7 +499,7 @@ sources:
     posture: field-projected
     tls_trust_profile: government-internal-pki
     authentication:
-      kind: static-bearer
+      kind: static-authorization
       token_ref: secret:file/civil-registry-token
     request:
       method: POST

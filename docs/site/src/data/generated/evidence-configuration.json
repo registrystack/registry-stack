@@ -2676,7 +2676,7 @@
             "none",
             "oauth2-client-credentials",
             "static-api-key",
-            "static-bearer"
+            "static-authorization"
           ],
           "values_conditional": false,
           "constraints": [],

@@ -228,7 +228,7 @@ fn disposable_local_identifiers_fail_before_runtime_delegation() {
 fn plain_http_and_unauthenticated_sources_fail_before_runtime_delegation() {
     for (from, to) in [
         ("https://registry.invalid", "http://127.0.0.1:8088"),
-        ("kind: static-bearer", "kind: none"),
+        ("kind: static-authorization", "kind: none"),
     ] {
         let fixture = Fixture::new();
         fixture.replace_in_source(from, to);
@@ -766,7 +766,7 @@ fn workspace_root() -> PathBuf {
 const SOURCE: &str = r#"transport: http-json
 baseUrl: https://registry.invalid
 posture: field-projected
-authentication: {kind: static-bearer, tokenRef: 'secret:file/source-token'}
+authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}
 request:
   method: POST
   path: /v1/facts

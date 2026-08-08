@@ -87,7 +87,7 @@ sources:
     transport: http-json
     baseUrl: https://source.example
     posture: record-transformed
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/search

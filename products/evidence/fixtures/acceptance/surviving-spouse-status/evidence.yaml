@@ -22,7 +22,7 @@ sources:
     transport: http-json
     baseUrl: https://civil-source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/civil-record-search-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/civil-record-search-token}
     request:
       method: POST
       path: /v1/civil-record-search
@@ -52,7 +52,7 @@ sources:
     transport: http-json
     baseUrl: https://union-source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/union-register-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/union-register-token}
     request:
       method: GET
       pathTemplate: /v1/persons/{ref}/unions
@@ -81,7 +81,7 @@ sources:
     transport: http-json
     baseUrl: https://death-source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/death-register-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/death-register-token}
     request:
       method: POST
       path: /v1/death-record-search

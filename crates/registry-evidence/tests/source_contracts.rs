@@ -438,7 +438,7 @@ fn stage_credentials(label: &str, authentication: &Value) -> StageCredentials {
         .as_str()
         .expect("declared authentication kind")
     {
-        "static-bearer" => {
+        "static-authorization" => {
             let token = reference("tokenRef");
             StageCredentials {
                 expected_authorization: format!("Bearer {}", secret_canary(&token)),
@@ -743,7 +743,7 @@ fn materialized_request_reuses_path_template_query_and_body_without_auth_materia
     let (_root, secrets) = resolver(&[]);
     let source = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/missing-token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
         json!(["record_id"]),
         json!([{"name": "X-Fixed-Contract", "value": "fixed-header-canary"}]),
         json!(["/ok"]),
@@ -848,7 +848,7 @@ async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and
     let (_root, secrets) = resolver(&[("token", "credential-canary")]);
     let source = source_config(
         &server.uri(),
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -895,7 +895,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
     let (_empty_root, empty_secrets) = resolver(&[]);
     let base = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/missing-token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -990,7 +990,7 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
 
     let mut static_source = fixed_source(
         &data_server.uri(),
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/missing-token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
     );
     static_source.request.method = HttpMethod::GET;
     static_source.request.preparation_limits.json_body = PreparationChannelPolicy::Forbidden;
@@ -1770,7 +1770,7 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
         let (_root, secrets) = resolver(&[("token", "synthetic-posture-token")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         source.posture = posture;
         source.request.projection = std::iter::once("/total".to_owned())
@@ -1878,7 +1878,7 @@ async fn basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_reda
             ),
         ),
         (
-            json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
             vec![("token", "bearer-token")],
             "authorization",
             "Bearer bearer-token".into(),
@@ -2372,7 +2372,7 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
         let (_root, secrets) = resolver(&[("token", "token")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         source.request.projection = vec!["/results/*/optional".into()];
         let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
@@ -2449,7 +2449,7 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
         let (_root, secrets) = resolver(&[("token", "credential-canary")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         if case_id == "timeout" {
             source.request.timeout_milliseconds = 20;
@@ -2637,7 +2637,7 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     .expect("TLS config deserializes");
     let mut source = fixed_source(
         &format!("https://127.0.0.1:{}", address.port()),
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     source.tls_trust_profile = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
@@ -2702,7 +2702,7 @@ async fn a_reset_transport_failure_yields_exactly_one_connection_attempt() {
     let (address, attempts, server) = spawn_reset_on_connect_server().await;
     let source = fixed_source(
         &format!("http://127.0.0.1:{}", address.port()),
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     let (_root, secrets) = resolver(&[("token", "token")]);
     let result = SourceExecutor::new(&source, secrets)
@@ -2738,7 +2738,7 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
     .expect("TLS config deserializes");
     let mut source = fixed_source(
         "https://127.0.0.1:443",
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     source.tls_trust_profile = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
@@ -2901,7 +2901,7 @@ async fn ambient_proxy_child() {
     ]);
     let source = fixed_source(
         &server.uri(),
-        json!({"kind": "static-bearer", "tokenRef": "secret:file/token"}),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     SourceExecutor::new(&source, Arc::clone(&secrets))
         .expect("executor builds")

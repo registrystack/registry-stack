@@ -659,7 +659,7 @@ impl Fixture {
                 r#"transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-bearer, tokenRef: 'secret:file/source-token'}}
+authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/facts
@@ -846,7 +846,7 @@ privacy_expectation:
                 r#"transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-bearer, tokenRef: 'secret:file/source-token'}}
+authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/immunizations
@@ -877,7 +877,7 @@ factSchema: schemas/immunizations-facts.schema.yaml
                 r#"transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
-authentication: {{kind: static-bearer, tokenRef: 'secret:file/source-token'}}
+authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
 request:
   method: POST
   path: /v1/relationships

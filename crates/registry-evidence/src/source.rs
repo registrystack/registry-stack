@@ -170,7 +170,7 @@ enum AuthenticationPlan {
         username_ref: SecretRef,
         password_ref: SecretRef,
     },
-    StaticBearer {
+    StaticAuthorization {
         token_ref: SecretRef,
     },
     StaticApiKey {
@@ -419,7 +419,7 @@ impl SourceExecutor {
                 let password = resolve(&self.secrets, password_ref)?;
                 basic_authorization(&username, &password)?
             }
-            AuthenticationPlan::StaticBearer { token_ref } => {
+            AuthenticationPlan::StaticAuthorization { token_ref } => {
                 let token = resolve(&self.secrets, token_ref)?;
                 bearer_authorization(token.expose_secret())?
             }
@@ -820,9 +820,11 @@ fn compile_authentication(
             username_ref: username_ref.clone(),
             password_ref: password_ref.clone(),
         }),
-        SourceAuthentication::StaticBearer { token_ref } => Ok(AuthenticationPlan::StaticBearer {
-            token_ref: token_ref.clone(),
-        }),
+        SourceAuthentication::StaticAuthorization { token_ref } => {
+            Ok(AuthenticationPlan::StaticAuthorization {
+                token_ref: token_ref.clone(),
+            })
+        }
         SourceAuthentication::StaticApiKey {
             header_name,
             value_ref,
@@ -1643,7 +1645,7 @@ mod tests {
             "baseUrl": server.uri(),
             "posture": "source-derived",
             "authentication": {
-                "kind": "static-bearer",
+                "kind": "static-authorization",
                 "tokenRef": "secret:file/missing-source-token"
             },
             "request": {
@@ -1772,7 +1774,7 @@ mod tests {
             "baseUrl": format!("https://{address}"),
             "posture": "source-derived",
             "authentication": {
-                "kind": "static-bearer",
+                "kind": "static-authorization",
                 "tokenRef": "secret:file/missing-source-token"
             },
             "request": {

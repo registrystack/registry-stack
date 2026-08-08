@@ -146,7 +146,7 @@ authentication:
   basic:
     inputs: [username_secret_ref, password_secret_ref]
     placement: Authorization header.
-  static-bearer:
+  static-authorization:
     inputs: [token_secret_ref]
     placement: Authorization header.
   static-api-key:

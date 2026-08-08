@@ -858,7 +858,7 @@ $defs:
           - tokenRef
         properties:
           kind:
-            const: static-bearer
+            const: static-authorization
           tokenRef:
             description: >-
               Logical file-secret reference for the static bearer token the runtime places

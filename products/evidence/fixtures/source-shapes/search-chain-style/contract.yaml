@@ -48,7 +48,7 @@ stages:
       transport: http-json
       baseUrl: http://127.0.0.3:18084
       posture: record-transformed
-      authentication: {kind: static-bearer, tokenRef: secret:file/fixture-search-chain-search-token}
+      authentication: {kind: static-authorization, tokenRef: secret:file/fixture-search-chain-search-token}
       request:
         method: POST
         path: /registry/records/search
@@ -87,7 +87,7 @@ stages:
       query: {}
       headers:
         content-type: application/json
-        authorization: static-bearer injected from secret reference; exact value never snapshotted
+        authorization: static-authorization injected from secret reference; exact value never snapshotted
       body:
         filter:
           registerScope: REGISTER-FIXTURE
@@ -167,7 +167,7 @@ stages:
       transport: http-json
       baseUrl: http://127.0.0.3:18084
       posture: record-transformed
-      authentication: {kind: static-bearer, tokenRef: secret:file/fixture-search-chain-relations-token}
+      authentication: {kind: static-authorization, tokenRef: secret:file/fixture-search-chain-relations-token}
       request:
         method: POST
         path: /registry/relations/search
@@ -203,7 +203,7 @@ stages:
       query: {}
       headers:
         content-type: application/json
-        authorization: static-bearer injected from a second secret reference; exact value never snapshotted
+        authorization: static-authorization injected from a second secret reference; exact value never snapshotted
       body:
         filter:
           registerScope: REGISTER-FIXTURE
@@ -228,7 +228,7 @@ credential_bootstrap:
   maximum_cache_seconds: 300
   token_response_fields: [access_token, token_type]
   omitted_expires_in: The reference shape returns no expires_in, which RFC 6749 section 5.1 permits, so the fixture configures assumedLifetimeSeconds.
-  per_source_credentials: Each stage resolves its own secret references. The two static-bearer stages name different token references, so one stage's credential never authenticates another's request.
+  per_source_credentials: Each stage resolves its own secret references. The two static-authorization stages name different token references, so one stage's credential never authenticates another's request.
 selector_contracts:
   identifier_only: {profile: civil-record-reference-v1, prepared_field: body.filter.subjectReference.value}
   member_selectors: Neither member declares a selector input. A member receives only the allowlisted projection of the search FactSet, never the original selector, which is why the committed search fact value differs from the committed selector value.
@@ -277,7 +277,7 @@ redaction_canaries:
     - ORIGIN-CANARY-DO-NOT-FORWARD
     - SOURCE-CONTACT-CANARY-DO-NOT-LOG
     - SOURCE-HOLDER-CANARY-DO-NOT-LOG
-  runtime_generated_secret_classes: [static-bearer, oauth-client-id, oauth-client-secret, oauth-access-token]
+  runtime_generated_secret_classes: [static-authorization, oauth-client-id, oauth-client-secret, oauth-access-token]
 minimization:
   acquisition: disclosure-minimized only; one bounded search and two bounded member requests, each returning a broader record the projection removes
   response_posture: >-
