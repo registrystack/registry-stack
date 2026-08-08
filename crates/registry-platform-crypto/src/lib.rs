@@ -4,7 +4,10 @@
 use async_trait::async_trait;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
-use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256};
+use aws_lc_rs::signature::{
+    EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING,
+    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256,
+};
 #[cfg(feature = "transit")]
 use base64::engine::general_purpose::STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -15,13 +18,13 @@ use ed25519_dalek::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use p256::ecdsa::{
-    signature::Verifier as _, Signature as P256Signature, SigningKey as P256SigningKey,
-    VerifyingKey as P256VerifyingKey,
+    signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
 };
 #[cfg(feature = "transit")]
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 #[cfg(feature = "transit")]
 use p256::pkcs8::DecodePublicKey as _;
+#[cfg(feature = "transit")]
 use p256::PublicKey as P256PublicKey;
 use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
 pub use registry_platform_canonical_json::{
@@ -963,13 +966,10 @@ impl PublicJwk {
                 if self.kty != "EC" || self.crv.as_deref() != Some("P-256") {
                     return Err(JwkError::Invalid("ES256 keys must be EC/P-256"));
                 }
-                let x = decode_fixed(self.x.as_deref(), 32, "x")?;
-                let y = decode_fixed(self.y.as_deref(), 32, "y")?;
-                let mut encoded = Vec::with_capacity(65);
-                encoded.push(0x04);
-                encoded.extend_from_slice(&x);
-                encoded.extend_from_slice(&y);
-                P256PublicKey::from_sec1_bytes(&encoded)
+                let x = decode_coordinate(self.x.as_deref(), "x")?;
+                let y = decode_coordinate(self.y.as_deref(), "y")?;
+                UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, es256_uncompressed_point(&x, &y))
+                    .parse()
                     .map_err(|_| JwkError::Invalid("ES256 public point"))?;
             }
             Ok(SigningAlgorithm::Rs256) => {
@@ -1263,10 +1263,44 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
     if d.len() != 32 {
         return Err(JwkError::Invalid("d length").into());
     }
-    let signing_key = P256SigningKey::from_slice(&d)
-        .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
-    let signature: P256Signature = signing_key.sign(payload);
-    Ok(signature.to_bytes().to_vec())
+    let x = decode_coordinate(jwk.x.as_deref(), "x")?;
+    let y = decode_coordinate(jwk.y.as_deref(), "y")?;
+    // Importing the pair, rather than the scalar alone, rejects two distinct
+    // unusable keys: a scalar outside 1..n-1, and a public half that belongs to
+    // a different pair. The second used to sign perfectly well and produce
+    // signatures no holder of the JWK's stated public half could verify.
+    let key_pair = EcdsaKeyPair::from_private_key_and_public_key(
+        &ECDSA_P256_SHA256_FIXED_SIGNING,
+        &d,
+        &es256_uncompressed_point(&x, &y),
+    )
+    .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
+    // FIXED is the raw r || s encoding JWS carries. The ASN.1 signing
+    // algorithms produce a DER SEQUENCE no JWS verifier accepts.
+    let signature = key_pair
+        .sign(&SystemRandom::new(), payload)
+        .map_err(|_| CryptoError::Crypto("ES256 signing failed"))?;
+    Ok(signature.as_ref().to_vec())
+}
+
+/// Assemble the SEC 1 uncompressed point `0x04 || x || y` that aws-lc-rs reads
+/// as a P-256 public half, from a JWK's fixed-width coordinates.
+///
+/// Taking arrays rather than slices keeps the encoding total: there is no
+/// coordinate width that reaches the curve library as a malformed point.
+fn es256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
+    let mut encoded = [0u8; 65];
+    encoded[0] = 0x04;
+    encoded[1..33].copy_from_slice(x);
+    encoded[33..65].copy_from_slice(y);
+    encoded
+}
+
+/// Decode a JWK coordinate into the fixed 32-byte width P-256 requires.
+fn decode_coordinate(value: Option<&str>, field: &'static str) -> Result<[u8; 32], JwkError> {
+    decode_fixed(value, 32, field)?
+        .try_into()
+        .map_err(|_| JwkError::Invalid(field))
 }
 
 fn sign_rs256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
@@ -1563,6 +1597,11 @@ fn hex_value(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The Transit tests derive a provider's public half from a scalar to build
+    // the PEM a real provider would publish. Signing itself no longer reaches
+    // for RustCrypto, so this import is test scaffolding, not a signing path.
+    #[cfg(all(unix, feature = "transit"))]
+    use p256::ecdsa::SigningKey as P256SigningKey;
     #[cfg(all(unix, feature = "transit"))]
     use p256::pkcs8::{EncodePublicKey as _, LineEnding};
     use serde_json::json;
@@ -1577,6 +1616,21 @@ mod tests {
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
+    /// A second, unrelated P-256 pair. Its private scalar is 1, so `x` and `y`
+    /// are the curve's base point: a valid public half that belongs to no other
+    /// key in these tests.
+    const SECOND_P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"did:web:issuer.test#p256-key-2"}"#;
+
+    const ES256_FIXED_VECTOR_PAYLOAD: &[u8] = b"registry-platform-crypto es256 migration vector";
+    /// A signature over `ES256_FIXED_VECTOR_PAYLOAD` with `P256_JWK`, produced
+    /// by the RustCrypto `p256` signer this crate used before ES256 signing
+    /// moved to aws-lc-rs.
+    ///
+    /// Frozen so the backend move cannot quietly narrow what this crate
+    /// accepts. Every Evidence response signed before the move carries a
+    /// signature of exactly this shape, and must still verify after it.
+    const ES256_PRE_MIGRATION_SIGNATURE: &str =
+        "Rle6NzhA6z80JzmFr-GdJqUws2TlPoxXAtod7KVT9hPw6xfOdBHaD56f6NKxATy3b7bo8pL-Fq2mFiMyzeqy9w";
 
     #[cfg(all(unix, feature = "transit"))]
     struct MockTransitReply {
@@ -2507,6 +2561,102 @@ mod tests {
             verify(b"tampered", &signature, &public),
             Err(CryptoError::InvalidSignature)
         ));
+    }
+
+    /// Backward compatibility across the aws-lc-rs move: a signature this crate
+    /// produced before the migration still verifies after it.
+    #[test]
+    fn es256_verifies_a_signature_produced_before_the_aws_lc_rs_migration() {
+        let public = PrivateJwk::parse(P256_JWK)
+            .expect("p256 private jwk parses")
+            .public();
+        let signature = URL_SAFE_NO_PAD
+            .decode(ES256_PRE_MIGRATION_SIGNATURE)
+            .expect("the frozen vector decodes");
+
+        verify(ES256_FIXED_VECTOR_PAYLOAD, &signature, &public)
+            .expect("a pre-migration signature still verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    /// Forward compatibility across the aws-lc-rs move: what this crate signs
+    /// now verifies under the RustCrypto implementation that signed before it.
+    ///
+    /// Verifying through this crate's own `verify` would only prove one backend
+    /// agrees with itself, so this reaches for `p256` directly and keeps the
+    /// check independent of which backend `verify` happens to use.
+    #[test]
+    fn es256_signatures_verify_under_the_independent_rustcrypto_verifier() {
+        let private = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        let public = private.public();
+        let signature = sign(ES256_FIXED_VECTOR_PAYLOAD, &private).expect("payload signs");
+        assert_eq!(signature.len(), 64, "ES256 JWS signatures are raw r || s");
+
+        let mut sec1 = [0u8; 65];
+        sec1[0] = 0x04;
+        sec1[1..33].copy_from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(public.x.as_deref().expect("x"))
+                .expect("x decodes"),
+        );
+        sec1[33..65].copy_from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(public.y.as_deref().expect("y"))
+                .expect("y decodes"),
+        );
+        let verifying_key = P256VerifyingKey::from_sec1_bytes(&sec1).expect("public point parses");
+        let parsed = P256Signature::from_slice(&signature).expect("r || s parses");
+
+        verifying_key
+            .verify(ES256_FIXED_VECTOR_PAYLOAD, &parsed)
+            .expect("RustCrypto verifies what aws-lc-rs signed");
+    }
+
+    /// Zero is a well-formed 32-byte string and an invalid P-256 scalar. It has
+    /// to stay rejected at import, since callers rely on a key that cannot sign
+    /// being refused where it is used rather than once per request.
+    #[test]
+    fn es256_sign_rejects_a_zero_scalar_private_key() {
+        let mut key = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        key.d = Some(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+
+        assert!(matches!(
+            sign(ES256_FIXED_VECTOR_PAYLOAD, &key),
+            Err(CryptoError::Crypto("invalid ES256 private key"))
+        ));
+    }
+
+    /// Importing the pair rather than the scalar alone means a `d` sitting
+    /// beside another pair's `x` and `y` no longer signs. Such a JWK used to
+    /// produce a perfectly valid signature over a public half it does not
+    /// describe, which no relying party holding the stated key could verify.
+    #[test]
+    fn es256_sign_rejects_a_private_key_whose_public_half_is_another_pair() {
+        let mut key = PrivateJwk::parse(P256_JWK).expect("p256 private jwk parses");
+        let other = PrivateJwk::parse(SECOND_P256_JWK).expect("second p256 private jwk parses");
+        key.x = other.x.clone();
+        key.y = other.y.clone();
+
+        assert!(matches!(
+            sign(ES256_FIXED_VECTOR_PAYLOAD, &key),
+            Err(CryptoError::Crypto("invalid ES256 private key"))
+        ));
+    }
+
+    /// The base point is the smallest valid public half, and a scalar of 1 the
+    /// smallest valid private one. Point validation has to keep accepting both.
+    #[test]
+    fn es256_accepts_the_base_point_as_a_public_half() {
+        let private = PrivateJwk::parse(SECOND_P256_JWK).expect("second p256 private jwk parses");
+        let public = private.public();
+        let public_json = serde_json::to_string(&public).expect("public jwk serializes");
+        PublicJwk::parse(&public_json).expect("the base point is a valid public half");
+
+        let signature = sign(ES256_FIXED_VECTOR_PAYLOAD, &private).expect("payload signs");
+        verify(ES256_FIXED_VECTOR_PAYLOAD, &signature, &public).expect("signature verifies");
     }
 
     fn rsa_public_json() -> String {
