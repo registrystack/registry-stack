@@ -868,6 +868,13 @@ fn header_segments(header: &str) -> Vec<String> {
 }
 
 /// The crates a manifest adds to a normal build of this package.
+///
+/// One line declares one crate. A key line that assigns nothing, or one whose
+/// value opens an inline table it does not close, stops the sweep rather than
+/// being read as far as it goes: a wrapped table read a line at a time turns
+/// `features = [` into a crate called `features` and a git revision into a
+/// crate called `rev`, and the sweep would rather say it cannot read the
+/// manifest than answer with names nobody wrote.
 fn declared_dependencies(manifest: &str) -> Vec<String> {
     let mut declared = Vec::new();
     let mut inside = false;
@@ -886,7 +893,18 @@ fn declared_dependencies(manifest: &str) -> Vec<String> {
         if !inside || line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (assigned, _) = line.split_once('=').expect("a dependency line assigns");
+        let unreadable = format!(
+            "`{line}` declares a dependency in a shape this sweep does not read: \
+             teach it the shape rather than reading part of a line as a crate name"
+        );
+        let Some((assigned, value)) = line.split_once('=') else {
+            panic!("{unreadable}");
+        };
+        assert_eq!(
+            value.matches('{').count(),
+            value.matches('}').count(),
+            "{unreadable}"
+        );
         // `name.workspace = true` and `name = { ... }` both name the crate
         // first; the dotted form is the one this workspace writes.
         let name = assigned
@@ -934,6 +952,29 @@ fn the_dependency_sweep_leaves_test_and_build_only_tables_alone() {
 #[should_panic(expected = "a shape this sweep does not read")]
 fn the_dependency_sweep_refuses_a_dependency_table_in_an_unfamiliar_place() {
     declared_dependencies("[workspace.dependencies]\nserde = \"1\"\n");
+}
+
+#[test]
+#[should_panic(expected = "a shape this sweep does not read")]
+fn the_dependency_sweep_refuses_an_inline_table_wrapped_over_several_lines() {
+    // What rustfmt leaves once an inline table is long enough. A line at a
+    // time, the middle of this declares a crate called `features` and the end
+    // of it declares nothing at all.
+    declared_dependencies(
+        "[dependencies]\nrhai = { workspace = true, features = [\n    \"sync\",\n] }\n",
+    );
+}
+
+#[test]
+#[should_panic(expected = "a shape this sweep does not read")]
+fn the_dependency_sweep_refuses_a_git_source_wrapped_over_several_lines() {
+    // A line at a time, the second line of this declares a crate called `rev`.
+    // It would be reported as a dependency outside the permitted set, which is
+    // the right verdict reached by reading a revision as a crate name.
+    declared_dependencies(
+        "[dependencies]\ncrosswalk = { git = \"https://example.invalid/crosswalk\",\n\
+         \n    rev = \"0000000\" }\n",
+    );
 }
 
 #[test]
