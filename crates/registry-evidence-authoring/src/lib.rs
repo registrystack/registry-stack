@@ -23,12 +23,17 @@
 pub mod derivation;
 pub mod finding;
 pub mod layout;
+pub mod marker;
 pub mod model;
 pub mod openapi;
 pub mod validate;
 
 pub use derivation::validate_authored_answer;
 pub use finding::{FieldPath, FieldStep, Finding};
+pub use marker::{
+    default_project_marker_document, parse_project_marker, ProjectKind, ProjectMarker,
+    PROJECT_MARKER_FILE,
+};
 pub use model::{
     default_response_formats, AnswerType, FactCombination, Question, QuestionAnswer,
     QuestionDisclosure, QuestionFact, QuestionGovernance, QuestionResponseFormat, QuestionSdJwtVc,

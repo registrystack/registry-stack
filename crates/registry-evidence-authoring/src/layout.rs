@@ -30,6 +30,8 @@ pub const ACCESS_POLICIES_DIRECTORY: &str = "policies";
 
 /// The largest OpenAPI description a project may carry.
 pub const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
+/// The largest project marker document.
+pub const MAX_PROJECT_MARKER_BYTES: u64 = 4 * 1024;
 /// The largest authored question document.
 pub const MAX_QUESTION_BYTES: u64 = 64 * 1024;
 /// The largest authored access policy document.
