@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from ci_changes import (
     AUTHORING_REFERENCE_CONTRACT_SOURCES,
@@ -22,6 +23,74 @@ from ci_changes import (
     validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
+
+
+# The path the authoring-form routing tests classify. It names a file inside
+# registry-evidence-authoring, so the classifier seeds that package alone and
+# everything else in the result arrives through the dependency closure.
+AUTHORING_FORM_CHANGE = ("crates/registry-evidence-authoring/src/lib.rs",)
+
+
+def normal_dependency_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild cargo metadata keeping only the edges a package links against.
+
+    Cargo reports normal, build and dev dependencies in one list per package
+    and tells them apart with a `kind` of null, "build" or "dev". The
+    classifier keeps all three on purpose, because a dev-dependency edge is
+    still a reason to run the dependent's tests. That makes its closure the
+    wrong witness for a claim about what a shipped binary contains: it cannot
+    see the difference between a crate an editor session compiles in and a
+    crate only a test harness pulls in. A test that has to prove the stronger
+    claim classifies against this reduced workspace as well, so a link moved
+    out of `[dependencies]` fails it however many test-only edges survive.
+    """
+
+    packages = [
+        {
+            **package,
+            "dependencies": [
+                dependency
+                for dependency in package["dependencies"]
+                if dependency.get("kind") is None
+            ],
+        }
+        for package in metadata["packages"]
+    ]
+    return {**metadata, "packages": packages}
+
+
+def dev_only_dependency_metadata(
+    metadata: dict[str, Any], *, consumer: str, dependency: str
+) -> dict[str, Any]:
+    """Rebuild cargo metadata with one link demoted to a test-only edge.
+
+    This is the severing a routing claim about linked code has to survive: the
+    consumer stops compiling the dependency in and keeps depending on it from
+    its tests alone. Raising when there is no normal edge to demote keeps the
+    fixture honest, because a mutation that quietly does nothing would let the
+    test it feeds pass without exercising anything.
+    """
+
+    demoted = 0
+    packages: list[dict[str, Any]] = []
+    for package in metadata["packages"]:
+        if package["name"] != consumer:
+            packages.append(package)
+            continue
+        dependencies: list[dict[str, Any]] = []
+        for entry in package["dependencies"]:
+            if entry["name"] == dependency and entry.get("kind") is None:
+                demoted += 1
+                dependencies.append({**entry, "kind": "dev"})
+            else:
+                dependencies.append(entry)
+        packages.append({**package, "dependencies": dependencies})
+
+    if demoted == 0:
+        raise ValueError(
+            f"{consumer} has no normal dependency on {dependency} to demote"
+        )
+    return {**metadata, "packages": packages}
 
 
 class CiRetirementTest(unittest.TestCase):
@@ -76,7 +145,10 @@ class CiChangesTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        cls.workspace = Workspace(json.loads(metadata.stdout))
+        # Kept beside the workspace so a test can classify against a reduced or
+        # deliberately broken copy of the same dependency graph.
+        cls.metadata = json.loads(metadata.stdout)
+        cls.workspace = Workspace(cls.metadata)
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]
@@ -242,10 +314,7 @@ class CiChangesTest(unittest.TestCase):
         # link the language server. A change to the authoring form can therefore
         # break an editor session without touching a line of either binary, so
         # the closure has to carry it into their shards.
-        outputs = classify(
-            self.workspace,
-            ("crates/registry-evidence-authoring/src/lib.rs",),
-        )
+        outputs = classify(self.workspace, AUTHORING_FORM_CHANGE)
         self.assertTrue(outputs["evidence_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
@@ -253,6 +322,68 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-language-server", outputs["rust_packages"])
         self.assertIn("registryctl", outputs["rust_packages"])
+
+        # The language server also dev-depends on the authoring form, for the
+        # testing feature its own suite drives, and the classifier's closure
+        # reads every dependency table alike. The assertions above therefore
+        # hold on that test-only edge by itself, which is a weaker fact than
+        # the one this test is named for: a test-only edge puts nothing inside
+        # an adopter's editor. Repeating the closure over normal edges alone
+        # ties the shards to the link the editor actually compiles against.
+        strict = classify(
+            Workspace(normal_dependency_metadata(self.metadata)),
+            AUTHORING_FORM_CHANGE,
+        )
+        self.assertEqual(
+            {entry["name"] for entry in strict["rust_matrix"]["include"]},
+            {"evidence", "developer-tools", "registryctl"},
+        )
+        self.assertIn("registry-language-server", strict["rust_packages"])
+        self.assertIn("registryctl", strict["rust_packages"])
+
+    def test_a_test_only_editor_edge_does_not_satisfy_the_authoring_routing(
+        self,
+    ) -> None:
+        # The check above is only worth its name if it can tell the two edges
+        # apart, so hold it against the workspace where it must not hold: the
+        # language server keeps the test-only dependency and loses the one it
+        # compiles against. Both halves matter here. The kind-blind closure
+        # still reaches every editor shard, which is the reason the routing
+        # claim cannot rest on it, and the normal-edge closure stops at the
+        # authoring form's own shard, which is the power the routing claim
+        # borrows from it.
+        mutated = dev_only_dependency_metadata(
+            self.metadata,
+            consumer="registry-language-server",
+            dependency="registry-evidence-authoring",
+        )
+
+        blind = classify(Workspace(mutated), AUTHORING_FORM_CHANGE)
+        self.assertIn("registry-language-server", blind["rust_packages"])
+        self.assertIn("registryctl", blind["rust_packages"])
+
+        strict = classify(
+            Workspace(normal_dependency_metadata(mutated)),
+            AUTHORING_FORM_CHANGE,
+        )
+        self.assertNotIn("registry-language-server", strict["rust_packages"])
+        self.assertNotIn("registryctl", strict["rust_packages"])
+        self.assertEqual(
+            {entry["name"] for entry in strict["rust_matrix"]["include"]},
+            {"evidence"},
+        )
+
+    def test_the_mutation_fixture_refuses_to_demote_an_absent_link(self) -> None:
+        # The fixture above proves nothing if it silently demotes nothing, so
+        # a link that was never normal has to raise rather than hand back an
+        # unchanged workspace. registryctl reaches the authoring form through
+        # the language server and declares no dependency on it of its own.
+        with self.assertRaisesRegex(ValueError, "no normal dependency"):
+            dev_only_dependency_metadata(
+                self.metadata,
+                consumer="registryctl",
+                dependency="registry-evidence-authoring",
+            )
 
     def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
         # A Node-binding-only change has no bearing on any tutorial's shell
