@@ -7,9 +7,12 @@
 //!
 //! Two sweeps hold it. The first reads this crate's own sources and refuses the
 //! spellings that would perform input or output, at the call sites as well as
-//! in the imports, and it is held to that by a corpus of hostile source it must
-//! refuse and a corpus of ordinary source it must not. The second reads its
-//! manifest and refuses a dependency that could perform input or output on its
+//! in the imports, and it is held to that from both sides: a corpus of hostile
+//! source it must refuse, and a corpus of ordinary source it must not, because
+//! a sweep that cries wolf is argued down to nothing and a sweep that refuses
+//! nothing was never anything. Where those two pull against each other the
+//! exceptions are written down by name. The second sweep reads the manifest and
+//! refuses a dependency that could perform input or output on this crate's
 //! behalf, because a rule that only searched source text would be satisfied by
 //! a crate that called an HTTP client in one line.
 //!
@@ -18,7 +21,14 @@
 //! whatever path a program's `import` statement names. The engine this crate
 //! builds gives that resolver up, so the capability is absent rather than
 //! merely unused, and the sweep refuses the entry points that would want it
-//! back.
+//! back, including the synonyms of `Engine::new` that would arrive under a name
+//! the guard does not read.
+//!
+//! Reading source is not watching it run, so the last two tests here run the
+//! checks against a derivation that imports a module and watch what happens to
+//! the module's path. One shows the verdict does not move when the file behind
+//! that path does; the other puts a named pipe there, which nothing but an open
+//! can wait on, and watches the crate not wait.
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
