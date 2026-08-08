@@ -189,7 +189,10 @@ requirement revision, purpose, audience, authority profile, and every
 role/profile/origin tuple as one decision before credentials or source access.
 
 A profile matches only when every tag in its `requesterTags` is present in the
-verified claim, so adding a tag narrows the profile. Access is per requester
+verified claim, so adding a tag narrows the profile. A request whose verified
+token carries an actor claim matches only a profile whose `kind` is
+`delegated`, so `kind` is an authorization condition and not only an audit
+label. Access is per requester
 class rather than per client identity: two clients carrying the same tags have
 the same access, and differentiated requirements, purposes, or `valueClaims`
 are expressed by issuing different tags. To bind purpose to the token issuer
@@ -348,6 +351,13 @@ Version 1 offers no query-string placement and no credential can reach a token
 URL log. Token redirects are denied and token responses are bounded. The token
 request is credential bootstrap, not a second evidence-data lookup.
 
+RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
+compliant provider may return only `access_token` and `token_type`. A token
+response omitting `expires_in` is a credential failure unless
+`assumedLifetimeSeconds` states the lifetime to credit. The runtime never
+infers a lifetime from the token, and the credited lifetime is still clamped by
+`maximumCacheSeconds`.
+
 Secret files are byte strings, not base64 fields. Do not base64-encode the
 audit or subject-binding key unless those encoded ASCII bytes are intentionally
 the key. Generate independent random values of at least 32 bytes and store the
@@ -460,13 +470,20 @@ are required.
 `query` and `jsonBody` are independently `required`, `allowed`, or `forbidden`.
 The remaining keys are optional stricter limits beneath the ABI hard ceilings:
 
-- `maximumQueryPairs`
-- `maximumQueryNameBytes`
-- `maximumQueryValueBytes`
-- `maximumJsonDepth`
-- `maximumCollectionItems`
-- `maximumStringBytes`
-- `maximumNormalizedBytes`
+| Key | Bounds |
+|---|---|
+| `maximumQueryPairs` | How many query pairs `prepare` returns. |
+| `maximumQueryNameBytes` | Each query-pair name, measured before percent-encoding. |
+| `maximumQueryValueBytes` | Each query-pair value, measured before percent-encoding. |
+| `maximumJsonDepth` | Nesting depth of the JSON body. |
+| `maximumCollectionItems` | Entries in each JSON body array and members in each JSON body object. |
+| `maximumStringBytes` | Every string `prepare` returns: query names and values, and JSON body strings and object member names. |
+| `maximumNormalizedBytes` | Serialized size of the query pairs and body together. |
+
+`maximumStringBytes` applies to query names and values in addition to
+`maximumQueryNameBytes` and `maximumQueryValueBytes`, so the smaller of the two
+applicable bounds is the effective one. A returned value exceeding any bound
+fails preparation, and no source request is made.
 
 At least one output channel must be usable. `required` means non-empty. For a
 JSON body, JSON `null` is absent; an empty object or array is present.
