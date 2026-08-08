@@ -874,6 +874,22 @@ mod tests {
         })
     }
 
+    /// A fresh ES256 signing key, in the shape `evidencectl access client add
+    /// --generate-local-key` writes.
+    fn generated_es256_client_key_json(key_id: &str) -> Value {
+        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let point = key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "kid": key_id,
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("the public point has x")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("the public point has y")),
+            "d": URL_SAFE_NO_PAD.encode(key.to_bytes()),
+        })
+    }
+
     fn valid_config_json_with_static_token() -> Value {
         serde_json::json!({
             "baseUrl": "https://evidence.example.org",
@@ -907,6 +923,26 @@ mod tests {
             },
         });
         config_from_json(&config_json).expect("the config converts");
+    }
+
+    /// The client key an adopter holds is the one `evidencectl` generated for
+    /// them, and that is ES256. A binding that took only EdDSA would refuse
+    /// every client the tooling creates.
+    #[test]
+    fn a_private_key_jwt_token_accepts_an_es256_client_key() {
+        let config_json = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
+            "token": {
+                "privateKeyJwt": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": generated_es256_client_key_json("signing-key-es256"),
+                },
+            },
+        });
+        config_from_json(&config_json).expect("an ES256 client key converts");
     }
 
     #[test]

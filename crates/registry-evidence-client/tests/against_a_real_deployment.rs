@@ -73,6 +73,7 @@ const SOURCE_BEARER: &str = "source-bearer-canary";
 /// credentials it issues with.
 const CLIENT_ID: &str = "client-suite-relying-party";
 const CLIENT_KEY_ID: &str = "client-suite-client-key";
+const ES256_CLIENT_KEY_ID: &str = "client-suite-client-key-es256";
 
 /// The shortest access token lifetime the authorization server accepts. The
 /// refresh margin case needs a margin wider than a whole credential's life.
@@ -621,6 +622,46 @@ async fn a_credential_inside_the_refresh_margin_is_replaced() {
     assert_eq!(format!("{second:?}"), "BearerToken { .. }");
 }
 
+/// An ES256 client key authenticates against a real token endpoint and carries a
+/// request all the way to a verified assertion.
+///
+/// This is the key an adopter actually holds: `evidencectl access client add
+/// --generate-local-key` writes a P-256/ES256 JWK, and the published tutorial
+/// feeds that file straight into this provider. The client therefore has to sign
+/// with what the key states rather than one fixed algorithm, and the proof that
+/// it does is a real server accepting the assertion, not a header assertion in a
+/// unit test.
+#[tokio::test]
+async fn an_es256_client_key_authenticates_and_carries_a_request() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let client =
+        deployment.client_using(issuer.provider_signing_with(issuer.es256_client_key.clone()));
+
+    let proof: Result<_, Box<dyn Error>> = async {
+        let definitions = client.discover().await?;
+        let prepared = client.prepare(spec(
+            &definitions,
+            "es256-client-key",
+            SubjectExpectations::AcceptFirstUse,
+        ))?;
+        Ok(client.request_and_verify(&prepared).await?)
+    }
+    .await;
+    let accepted = proof.expect("the ES256 client authenticates and the response verifies");
+
+    assert_eq!(
+        accepted.evidence().supports_requirement,
+        REQUIREMENT,
+        "the deployment accepted the credential the ES256 assertion bought"
+    );
+    // One acquisition covers both discovery and the request: the credential the
+    // ES256 assertion bought is cached and still inside its window for the
+    // second. That it is one rather than none is what says the server
+    // authenticated this key at all.
+    assert_eq!(issuer.issued_credential_count(), 1);
+}
+
 /// A client whose key the authorization server never registered acquires
 /// nothing, and the failure is the registered OAuth code. This is proven
 /// against the issuer's own audit chain, which records zero credentials
@@ -1076,6 +1117,8 @@ struct TokenIssuer {
     token_endpoint: Url,
     /// The key the registered client signs its assertions with.
     client_key: PrivateJwk,
+    /// A second key registered to the same client, signing with ES256.
+    es256_client_key: PrivateJwk,
     /// The issuer's own audit chain, which is where a released credential is
     /// recorded and therefore how this suite counts what it issued.
     audit_path: PathBuf,
@@ -1186,10 +1229,18 @@ async fn start_token_issuer() -> TokenIssuer {
     let client_key = generate_key(CLIENT_KEY_ID);
     let public_key =
         serde_json::to_string(&client_key.public()).expect("the public key serializes");
+    // A second registered key for the same client, signing with ES256 rather than
+    // EdDSA. This is the shape `evidencectl access client add
+    // --generate-local-key` writes, so registering it here is what proves an
+    // adopter's own key against a real token endpoint. The assertion's `kid`
+    // selects between the two.
+    let es256_client_key = generate_es256_key(ES256_CLIENT_KEY_ID);
+    let es256_public_key =
+        serde_json::to_string(&es256_client_key.public()).expect("the public key serializes");
     fs::write(
         root.join(format!("clients/{CLIENT_ID}.yaml")),
         format!(
-            "clientId: {CLIENT_ID}\nprincipal: {PRINCIPAL}\nevidenceAudience: {RELYING_AUDIENCE}\nrequesterTags: [{CONFIGURED_TAG}]\nkeys: [{public_key}]\n"
+            "clientId: {CLIENT_ID}\nprincipal: {PRINCIPAL}\nevidenceAudience: {RELYING_AUDIENCE}\nrequesterTags: [{CONFIGURED_TAG}]\nkeys: [{public_key}, {es256_public_key}]\n"
         ),
     )
     .expect("write the client registration");
@@ -1230,7 +1281,7 @@ accessTokens:
 clientAssertion:
   audience: {token_endpoint}
   maximumLifetimeSeconds: 300
-  algorithms: [EdDSA]
+  algorithms: [EdDSA, ES256]
 clients:
   directory: clients
 "#,
@@ -1259,6 +1310,7 @@ clients:
         origin,
         token_endpoint,
         client_key,
+        es256_client_key,
         audit_path,
         shutdown: Some(shutdown_tx),
         server,
@@ -1387,6 +1439,24 @@ fn private_client_jwk(key_id: &str) -> String {
 
 fn generate_key(key_id: &str) -> PrivateJwk {
     PrivateJwk::parse(&private_client_jwk(key_id)).expect("the generated key parses")
+}
+
+/// A fresh ES256 private JWK for a client, in the shape `evidencectl access
+/// client add --generate-local-key` writes.
+fn generate_es256_key(key_id: &str) -> PrivateJwk {
+    let signing_key = SigningKey::random(&mut OsRng);
+    let point = signing_key.verifying_key().to_encoded_point(false);
+    let document = json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "kid": key_id,
+        "d": URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        "x": URL_SAFE_NO_PAD.encode(point.x().expect("the public point has x")),
+        "y": URL_SAFE_NO_PAD.encode(point.y().expect("the public point has y")),
+    })
+    .to_string();
+    PrivateJwk::parse(&document).expect("the generated key parses")
 }
 
 /// A fresh ES256 service key whose identifier is its RFC 7638 thumbprint.

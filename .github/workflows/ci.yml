@@ -976,6 +976,13 @@ jobs:
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-evidence -p registry-evidencectl -p registry-mint
+          # The application tutorial imports the Python client. It is built for
+          # the stable ABI, so the container step below imports this same file
+          # rather than building inside a read-only mount.
+          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
+            cargo build --locked --profile ci \
+            -p registry-evidence-client-py --lib \
+            --features registry-evidence-client-py/extension-module
 
       - name: Test the exact local Evidence lifecycle
         shell: bash
@@ -1001,6 +1008,7 @@ jobs:
             --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
             --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
             --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
+            --env EVIDENCE_CLIENT_PY_LIB=/work/target/evidence-tutorial-source/ci/libregistry_evidence_client.so \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 

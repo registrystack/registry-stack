@@ -17,17 +17,33 @@
 # branch to load_spec. Each spec pins:
 #   SPEC_FENCES     how many sh fences the tutorial holds; bump it when you
 #                   intentionally add or remove a documented command block
-#   SPEC_STEPS      the reader journey, in order:
+#   SPEC_STEPS      the reader journey, in order, which need not follow fence
+#                   order: a tutorial that leaves one terminal in an earlier
+#                   directory is replayed by running its fence first
 #                     run:N or run:N-M   execute those sh fences
+#                     run-fails:N        execute one sh fence the tutorial
+#                                        documents as refused, and require it
+#                                        to exit non-zero
 #                     edit:H|lang|occ|H2|lang2|occ2|target
 #                                        apply a documented before/after fence
 #                                        pair to an existing file
+#                     save:H|lang|occ|target
+#                                        write a documented non-shell fence to
+#                                        the file the reader is told to create
+#                     background:N       run a one-line sh fence the tutorial
+#                                        leaves running in a second terminal
+#                     wait-http:URL      block until that URL answers
+#                     python-client      install the Python client from this
+#                                        checkout, standing in for the
+#                                        documented clone and build
 #   SPEC_LITERALS   commands and outputs the tutorial must keep documenting
 #   SPEC_OUTPUTS    lines the replay transcript must contain
 #
 # Configuration:
 #   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
 #   MINT_BIN                              building from source
+#   EVIDENCE_CLIENT_PY_LIB                import this prebuilt Python client
+#                                         module instead of building one
 #   EVIDENCE_TUTORIAL_CARGO_PROFILE       ci (default) or release
 #   EVIDENCE_TUTORIAL_DOCS_ROOT           tutorial directory override (tests)
 
@@ -50,6 +66,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	request-evidence-as-sd-jwt-vc
+	request-evidence-from-an-application
 	return-a-governed-value
 	assert-a-role-bound-relationship
 	refuse-unsafe-evidence-requests
@@ -269,6 +286,58 @@ load_spec() {
 			'"value": true'
 		)
 		;;
+	request-evidence-from-an-application)
+		SPEC_FENCES=16
+		SPEC_STEPS=(
+			# The registry runs in the terminal the reader never moved out of
+			# the first tutorial's directory, so it starts before fence 1's
+			# `cd` rather than where the page prints it.
+			"background:7"
+			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"run:1-4"
+			# Stands in for fences 5 and 6, the documented clone and build.
+			"python-client"
+			"run:8"
+			"run-fails:9"
+			"run:10-11"
+			"save:Write the relying procedure|python|1|age_check.py"
+			"run:12-14"
+			"run-fails:15"
+			"run:16"
+		)
+		SPEC_LITERALS=(
+			"evidencectl access policy add app-age-checks --question adult-status"
+			"evidencectl access client add age-check-app"
+			"--generate-local-key"
+			"evidencectl jwks --out trusted-issuer-keys.json secrets/signing-p256-public.jwk.json"
+			'git clone --depth 1 --branch "v$installed"'
+			"-p registry-evidence-client-py --lib"
+			"--features registry-evidence-client-py/extension-module"
+			'cp "../registry-stack/target/debug/$built" python-module/registry_evidence_client.so'
+			'"private_key_jwt"'
+			'Path(".evidence/clients/age-check-app/private.jwk").read_text()'
+			"client.request_and_verify(client.prepare(spec))"
+			"subject_expectations=expectations_for(person_id)"
+		)
+		SPEC_OUTPUTS=(
+			"Registry listening on http://127.0.0.1:8000"
+			"Added access policy app-age-checks for adult-status."
+			"Added client age-check-app with policy app-age-checks."
+			"evidenceAudience: urn:registrystack:evidence:local:client:age-check-app"
+			"wrote trusted-issuer-keys.json"
+			"Evidence ready at http://127.0.0.1:8080"
+			"Mint ready at http://127.0.0.1:8081"
+			"evidencectl: the active project requires a registered client selected with --client"
+			'"assuranceProfile": "local"'
+			'"response_format": "signed-jws"'
+			"person-123 is_adult=True"
+			"person-456 is_adult=False"
+			"pinned binding recorded in subject-bindings.json"
+			"unverifiable response, nothing read (policy)"
+			"Local Evidence stopped"
+			"Removed stopped local Evidence state"
+		)
+		;;
 	*)
 		printf '%s is not a registered Evidence tutorial\n' "$1" >&2
 		exit 2
@@ -306,8 +375,12 @@ done
 if [[ -n "$ONLY" ]]; then
 	# load_spec exits on an unregistered slug, which is the check we want here.
 	load_spec "$ONLY"
+	# Every follow-up begins from the project first-evidence-assertion builds.
+	# A full run gets that from the list order; --only has to name it.
 	case "$ONLY" in
-	request-evidence-as-sd-jwt-vc)
+	request-evidence-as-sd-jwt-vc | return-a-governed-value | \
+		refuse-unsafe-evidence-requests | verify-an-assertion-as-a-consumer | \
+		control-who-can-request-evidence | request-evidence-from-an-application)
 		EVIDENCE_TUTORIALS=(first-evidence-assertion "$ONLY")
 		;;
 	*) EVIDENCE_TUTORIALS=("$ONLY") ;;
@@ -380,6 +453,52 @@ prepare_toolset() {
 	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
+# The Python client extension module, built once for whichever tutorials import
+# it.
+#
+# The documented build clones the repository at the installed runtime's release
+# tag, which is the right instruction for a reader and the wrong one for this
+# gate: it needs the network, and it would prove a released client rather than
+# the one in this checkout. Building the same crate from here instead is what
+# makes a client regression fail this gate on the commit that introduces it.
+# The documented commands stay pinned as SPEC_LITERALS, so an edit to them
+# still has to be deliberate.
+# The module is built for the stable ABI, so one built outside this script
+# imports under any CPython the replay userland carries, exactly as
+# EVIDENCE_CLIENT_PY_LIB's siblings let CI mount prebuilt binaries.
+PYTHON_CLIENT_LIB="${EVIDENCE_CLIENT_PY_LIB:-}"
+
+prepare_python_client() {
+	if [[ -n "$PYTHON_CLIENT_LIB" ]]; then
+		if [[ "$PYTHON_CLIENT_LIB" != /* ]]; then
+			printf 'Python client module path must be absolute: %s\n' \
+				"$PYTHON_CLIENT_LIB" >&2
+			exit 1
+		fi
+	else
+		local profile_dir built
+		profile_dir="$(resolve_profile_dir)"
+		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
+			cargo build --locked --profile "$BUILD_PROFILE" \
+			-p registry-evidence-client-py --lib \
+			--features registry-evidence-client-py/extension-module)
+		case "$(uname -s)" in
+		Darwin) built="libregistry_evidence_client.dylib" ;;
+		Linux) built="libregistry_evidence_client.so" ;;
+		*)
+			printf 'the Python Evidence client tutorial covers macOS and Linux, not %s\n' \
+				"$(uname -s)" >&2
+			exit 1
+			;;
+		esac
+		PYTHON_CLIENT_LIB="$TARGET_DIR/$profile_dir/$built"
+	fi
+	if [[ ! -f "$PYTHON_CLIENT_LIB" ]]; then
+		printf 'Python client module not built: %s\n' "$PYTHON_CLIENT_LIB" >&2
+		exit 1
+	fi
+}
+
 # ---------------------------------------------------------------------------
 # Journey assembly
 # ---------------------------------------------------------------------------
@@ -400,6 +519,48 @@ emit_run_step() {
 		printf '\nprintf "==> %s fence %02d\\n"\n' "$slug" "$i"
 		cat "$fence"
 	done
+}
+
+# Emit one sh fence the tutorial documents as refused, and require it to fail.
+#
+# A refusal the tutorial teaches is as much a documented outcome as a success,
+# so replaying it means asserting the non-zero exit rather than tolerating it:
+# a fence that starts succeeding has stopped teaching what the page says.
+#
+# The fence runs on its own line rather than as an `if` condition, because bash
+# suppresses errexit throughout a condition, subshells included, even one that
+# sets it itself. A fence that refuses on its first command and then prints
+# would run that print and report success, which is neither what the reader
+# sees nor what the page documents. `set +e` around the run keeps the failure
+# from ending the journey, and reinstates errexit for the steps after it.
+emit_run_fails_step() {
+	local slug="$1" number="$2" fence_dir="$3"
+	local fence
+	fence="$(printf '%s/fence-%02d.sh' "$fence_dir" "$number")"
+	if [[ ! -f "$fence" ]]; then
+		printf 'tutorial spec error in %s: run-fails step names sh fence %s, which does not exist\n' \
+			"$slug" "$number" >&2
+		exit 2
+	fi
+	printf '\nprintf "==> %s fence %02d (documented refusal)\\n"\n' "$slug" "$number"
+	printf 'set +e\n'
+	printf '( set -e\n'
+	cat "$fence"
+	printf ')\nrefusal_status=$?\nset -e\n'
+	printf 'if ((refusal_status == 0))\nthen\n'
+	printf '  printf "tutorial drift in %s: fence %02d succeeded, but the page documents a refusal\\n" >&2\n' \
+		"$slug" "$number"
+	printf '  exit 1\n'
+	printf 'fi\n'
+}
+
+# Install the Python client the way the tutorial's clone-and-build fences do,
+# from this checkout. The destination path and module name are the reader's.
+emit_python_client_step() {
+	local slug="$1"
+	printf '\nprintf "==> %s install the Python client from this checkout\\n"\n' "$slug"
+	printf 'mkdir -p python-module\n'
+	printf 'cp %q python-module/registry_evidence_client.so\n' "$PYTHON_CLIENT_LIB"
 }
 
 # Emit a documented before/after fence pair applied to a file the reader edits.
@@ -500,6 +661,8 @@ emit_journey() {
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
+		run-fails:*) emit_run_fails_step "$slug" "${step#run-fails:}" "$fence_dir" ;;
+		python-client) emit_python_client_step "$slug" ;;
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
 		save:*) emit_save_step "$slug" "${step#save:}" ;;
 		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
@@ -523,7 +686,7 @@ executed_fence_count() {
 			last="${range##*-}"
 			total=$((total + last - first + 1))
 			;;
-		background:*) total=$((total + 1)) ;;
+		run-fails:* | background:*) total=$((total + 1)) ;;
 		esac
 	done
 	printf '%d' "$total"
@@ -591,6 +754,15 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		reader_dir="$WORK_ROOT/reader/request-evidence-as-sd-jwt-vc"
 		cp -R "$WORK_ROOT/reader/evidence-start/first-evidence-assertion" "$reader_dir"
 		;;
+	request-evidence-from-an-application)
+		# This follow-up gives the project its first access policy, which
+		# retires the unnamed development caller the other follow-ups still
+		# use, and writes a trusted key file one of them writes too. Both are
+		# the reader's own project to change, so it gets a copy, and it takes
+		# it here, before any follow-up has touched the starter project.
+		reader_dir="$WORK_ROOT/reader/request-evidence-from-an-application"
+		cp -R "$WORK_ROOT/reader/evidence-start/first-evidence-assertion" "$reader_dir"
+		;;
 	return-a-governed-value)
 		reader_dir="$WORK_ROOT/reader/evidence-start/first-evidence-assertion"
 		;;
@@ -606,6 +778,11 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	*) reader_dir="$WORK_ROOT/reader/$slug" ;;
 	esac
 	mkdir -p "$reader_dir"
+	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
+		if [[ "$step" == "python-client" ]]; then
+			prepare_python_client
+		fi
+	done
 	run_script="$WORK_ROOT/run-$slug.sh"
 	emit_journey "$slug" "$fence_dir" "$tutorial_file" >"$run_script"
 

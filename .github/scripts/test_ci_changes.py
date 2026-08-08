@@ -237,6 +237,37 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
+    def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
+        self,
+    ) -> None:
+        # `request-evidence-from-an-application` builds the Python binding and
+        # asks for an assertion through it, so the binding, the SDK beneath it
+        # and the verifier beneath that are all tutorial source under test.
+        # Leaving any of them out is how a client that cannot authenticate
+        # against an evidencectl deployment reached a published tutorial.
+        for path in (
+            "crates/registry-evidence-client-py/src/convert.rs",
+            "crates/registry-evidence-client/src/private_key_jwt.rs",
+            "crates/registry-evidence-verifier/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["evidence_tutorial"])
+
+    def test_python_binding_only_change_runs_its_own_job_and_the_tutorial(
+        self,
+    ) -> None:
+        # The tutorial reaches the binding through one journey. The npm suite,
+        # the type-drift check and the Python unittest suite are what cover the
+        # rest of its API, so earning a tutorial trigger must not cost a binding
+        # its own job.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client-py/src/lib.rs",),
+        )
+        self.assertTrue(outputs["client_bindings"])
+        self.assertTrue(outputs["evidence_tutorial"])
+
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
         # so either can change the native surface or the error envelope the

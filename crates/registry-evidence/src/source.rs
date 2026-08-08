@@ -1944,13 +1944,20 @@ mod tests {
             .expect("the token is cached")
             .expires_at;
         // The slack covers only what happens between `before` and the request
-        // going out: taking the mutex and reading two secret files. It is well
-        // below the latency above, so a deadline anchored after the round trip
-        // cannot pass this.
-        let slack = Duration::from_millis(100);
+        // going out: taking the mutex and reading two secret files. Half the
+        // measured round trip is the bound rather than a fixed figure, because
+        // a fixed one has to be picked for the slowest host this ever runs on
+        // and a loaded runner will still beat it eventually. The two candidate
+        // anchors are a whole round trip apart, and a host slow enough to spend
+        // half of one on two file reads has inflated the round trip it is being
+        // measured against by the same stall, so the bound moves with it while
+        // staying below where the wrong anchor would put the deadline.
+        let slack = elapsed / 2;
         assert!(
             expires_at <= before + Duration::from_secs(1) + slack,
-            "the cache deadline outlives the token by about the round trip"
+            "the cache deadline outlives the token by about the round trip: \
+             deadline is {:?} past the anchor, round trip took {elapsed:?}",
+            expires_at.saturating_duration_since(before + Duration::from_secs(1))
         );
     }
 }
