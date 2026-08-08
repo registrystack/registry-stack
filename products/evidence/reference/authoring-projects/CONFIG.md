@@ -126,6 +126,18 @@ is the one the form accepts wherever an author names something: question `id`
 and `purpose`, subject `role`, `selector`, and `profile`, fact `name`, answer
 `concept`, and a `source.ref`.
 
+Two names the form accepts can still compose into one it refuses. A question
+with more than one subject compiles a selector profile named
+`local-subject-{id}-{role}-v1`, and `validate_named_map` in
+`crates/registry-evidence/src/config.rs` holds every named-map key,
+`selectorProfiles` included, to a 128-byte local identifier, so a 64-byte `id`
+beside a 64-byte `role` produces a 146-byte key the bundle check refuses. The
+compile measures nothing it generates, and the refusal says only that a local
+identifier is invalid, naming neither the question, nor the role, nor the
+length. A single-subject question's profile name reaches 81 bytes and a
+generated source name 77, so the multi-subject form is the only one that can
+cross the ceiling.
+
 ### Subjects
 
 A question is asked about one party or about several. Write `subject` for one,
@@ -142,9 +154,21 @@ or `subjects` for a list of 1 to 8. Declaring both, or neither, is rejected.
 
 `subjects[]` carries the same four keys as `subject`.
 
-Every subject has to be reachable: `evidencectl` rejects a subject that the
-source does not use and that is not declared for derivation. A two-party
-question declares both roles and lets the source consume both selectors:
+A question that names a `source.ref` has to reach its subjects through that
+source: `compile_referenced_subjects` in
+`crates/registry-evidencectl/src/authoring.rs` rejects a subject the source
+does not use and that is not declared for derivation. Use is narrower than the
+match that settles the profile. `source_uses_subject` requires the matched
+alternative's `fields` to hold the subject's selector and nothing beside it,
+and it runs however the profile was settled, so an alternative listing a second
+field is refused and writing `subject.profile` out does not rescue it. A second
+pass then requires each source role to be selected by exactly one subject. An
+inline `operation` question is held to none of this: its subjects are compared
+with the operation's own path parameters instead, as the Source section
+describes.
+
+A two-party question declares both roles and lets the source consume both
+selectors:
 
 ```yaml
 subjects:
@@ -163,18 +187,33 @@ projects out of the response.
 | Key | Required | Meaning |
 |---|---|---|
 | `source.ref` | one of the two | The name of a definition under `sources/`. A question using `ref` declares no `facts` and no `collectionBounds`. |
-| `source.operation` | one of the two | One `operationId` from `source.openapi.yaml`. Non-empty, at most 256 bytes, no control characters. |
+| `source.operation` | one of the two | One `operationId` from `source.openapi.yaml`. Non-empty, at most 256 bytes, no control characters. Compiles for a local run only. |
 | `source.facts` | with `operation` | 1 to 16 values projected out of the response. |
 | `source.collectionBounds` | with a collection | Up to 16 pointers, each bounding one array the facts walk into. |
 
-Declaring both forms, or neither, is rejected. An `operationId` must resolve to
-exactly one operation, and that operation must be a GET; a match on any other
-method is refused with the same finality as a match on none. What it resolves
-to is read under the same closed profile the document is: the selected path
-item carries only `get` and `parameters`, and the operation itself only
-`operationId`, `parameters`, and `responses`, so an ordinary `summary` or
-`description` beside them is refused, and so are an operation-level `security`,
-a request body, and `servers` on either the path item or the operation.
+Declaring both forms, or neither, is rejected. The two do not reach the same
+destination. A question a deployment build can compile names a `source.ref`; an
+inline `operation` serves a local run and stops there. `compile_plan` in
+`crates/registry-evidencectl/src/authoring.rs` takes the inline branch as soon
+as one question omits `source.ref`, and that branch compiles each inline
+question's source against the loopback HTTP origin `exact_loopback_server`
+reads out of the description, with an authentication kind of `none` written
+beside it. `render_production_bundle` then replaces the bundle's whole
+`sources` object with what those plans produced, so the governance a deployment
+build is given cannot substitute an authenticated source, and
+`validate_production_sources` refuses a production source that is not
+authenticated HTTPS. A `source.openapi.yaml` that declares the HTTPS server
+such a source would need never reaches that check: `exact_loopback_server`
+refuses it while the plan is still being compiled.
+
+An `operationId` must resolve to exactly one operation, and that operation must
+be a GET; a match on any other method is refused with the same finality as a
+match on none. What it resolves to is read under the same closed profile the
+document is: the selected path item carries only `get` and `parameters`, and
+the operation itself only `operationId`, `parameters`, and `responses`, so an
+ordinary `summary` or `description` beside them is refused, and so are an
+operation-level `security`, a request body, and `servers` on either the path
+item or the operation.
 
 The question's subjects and that operation's parameters are then required to be
 the same set, one parameter per subject. `exact_path_selectors` in
@@ -273,11 +312,11 @@ both are named. A question whose facts visit no collection therefore writes
 | Key | Required | Meaning |
 |---|---|---|
 | `answers[].concept` | yes | The concept's local name. Lowercase local identifier, unique within the question. |
-| `answers[].id` | for production | The stable URI a relying party matches on. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. |
+| `answers[].id` | for production | The stable URI a relying party matches on. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. Bounded as a URI by the bundle check, not by the form. |
 | `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-integer`, or `reviewed-structured-value`. |
-| `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters. |
+| `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters, and each spelled as a codelist code. |
 | `answers[].minimum`, `answers[].maximum` | for `bounded-integer` | Both required together, both within plus or minus 9007199254740991, and `minimum` no greater than `maximum`. |
-| `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI. |
+| `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI, which becomes the concept's `schema` constraint under the same deferred bound. |
 | `answers[].maximumSerializedBytes` | for `reviewed-structured-value` | The serialized ceiling for the value, in 1 to 65536. |
 | `answers[].sdJwtVc` | optional with `reviewed-structured-value` | How this answer appears in the SD-JWT VC serialization. No other answer type accepts it. |
 
@@ -286,6 +325,27 @@ no `values`, no bounds, no `schema`, no `maximumSerializedBytes`, and no
 `sdJwtVc`. A `controlled-category` answer declares no numeric bounds and no
 `sdJwtVc`. A `bounded-integer` answer declares no `values` and no `sdJwtVc`. A
 `reviewed-structured-value` answer declares no scalar constraints.
+
+A `controlled-category` answer's `values` are held to a second grammar the form
+does not state. `compile_concept` writes them into a generated codelist as its
+codes, and `validate_code` in `crates/registry-evidence/src/bundle.rs` requires
+each code to begin with an ASCII alphanumeric and to continue with ASCII
+alphanumerics, `.`, `_`, `:`, or `-`. A value such as `New York` satisfies
+every rule in the table above and is then refused as an invalid codelist code.
+The other three types carry no second grammar: a `boolean` compiles to an empty
+constraint object, a `bounded-integer` states the same bound in both layers,
+and a `reviewed-structured-value`'s named schema is the only authority on its
+value's shape.
+
+Four URIs an authoring project writes are bounded only after the form has
+accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
+a URI to 1 through 512 bytes and then requires it to parse, and it is what
+reads an answer `id`, the `$id` of the file `answers[].schema` names,
+`governance.requirement`, and `governance.evidenceType`. The form reads none of
+the four: `validate_answer` never looks at `answer.id`, and `validate_question`
+never opens `governance` at all. A `controlled-category` answer's `id` is
+measured twice over, because the compile derives that concept's category scheme
+as `{id}:categories` and holds the derived URI to the same 512 bytes.
 
 ### Disclosure
 
@@ -356,18 +416,32 @@ becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
 
 | Key | Required | Meaning |
 |---|---|---|
-| `governance.requirement` | with `governance` | The requirement URI this question answers. |
+| `governance.requirement` | with `governance` | The requirement URI this question answers. Under the deferred URI bound the Answers section states. |
 | `governance.kind` | with `governance` | `criterion`, `information-requirement`, or `constraint`. Without `governance`, a question with one boolean concept compiles as `criterion` and anything else as `information-requirement`. |
 | `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. The form itself accepts any list, an empty one included; `RequirementConfig::validate` in `crates/registry-evidence/src/config.rs` requires 1 to 16 unique entries, each an absolute URI of at most 512 bytes, so an empty list, a repeated framework, and a seventeenth entry are refused by the bundle check instead. |
-| `governance.evidenceType` | with `governance` | The exact Evidence Type URI. |
+| `governance.evidenceType` | with `governance` | The exact Evidence Type URI. Under the same deferred URI bound. |
 | `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. The form itself accepts any whole number; the bundle grammar bounds it to 1 through 31536000, and a deployment caps it again at its own `signing.maximumAssertionValiditySeconds`. |
 | `governance.observationTimezone` | with `governance` | The IANA timezone the derivation's legal local date and time are computed in. |
-| `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. |
+| `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. Its content is a contract the compile never reads. |
 | `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. `DisclosureGuard::validate` bounds this list exactly as `RequirementConfig::validate` bounds `referenceFrameworks`. |
 
 A production compile also requires a stable `id` on every answer, and refuses a
 disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
 `evidenceType`, `disclosureFamilies`, or an answer `id`.
+
+`governance.fixtures` is the widest deferral on this table.
+`validate_production_inputs` confirms the two path components, the `yaml`
+extension, and that the file is there, and never opens it.
+`validate_fixture_coverage` in `crates/registry-evidence/src/bundle.rs`, which
+`Bundle::load` reaches for every requirement naming a fixture, is what states
+the contract: the file declares `synthetic_only: true` and a `cases` sequence
+of 1 to 256 entries, each carrying a unique string `id` of 1 to 128 bytes, and
+those ids have to cover all eight categories. Four are exact ids, `positive`,
+`no-match`, `source-failure`, and `anti-reconstruction`, and four are prefixes,
+`negative`, `boundary`, `missing`, and `ambiguous`. A fixture missing one of
+them compiles and is refused by the bundle check.
+[The fixture reference](../request-adapter/deployment-projects/FIXTURES.md)
+describes what a case holds.
 
 Authored `governance` is also where two questions can collide, and the compile
 is not what catches it. It reads one question at a time; `BundleConfig::validate`
