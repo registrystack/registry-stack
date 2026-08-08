@@ -12,6 +12,11 @@ SD-JWT VC issuance and holder-proof validation helpers.
 - Disclosure digest sorting for deterministic `_sd` payload ordering.
 - Holder-proof validation with signature, audience, lifetime, subject, replay id,
   disclosure hash, evaluation id, credential profile, and claim-set bindings.
+- `validate_key_binding_jwt` for RFC 9901 section 4.3 key-binding JWTs: the
+  confirmed holder key signs a closed four-claim payload over a challenge, an
+  audience, an issue time, and the `sd_hash` of the presented SD-JWT.
+- `validate_oid4vci_proof_jwt` for OpenID for Verifiable Credential Issuance 1.0
+  proof JWTs, returning the one public key the proof authenticated.
 
 ## Typical Use
 
@@ -70,6 +75,19 @@ Ok(())
   detection in their own storage.
 - `HolderProofPolicy::default` uses a 5-minute max lifetime and an empty
   audience. Set the audience explicitly in production.
+- `validate_key_binding_jwt` and `validate_oid4vci_proof_jwt` verify the
+  signature before parsing any claim, so no decision is taken from an unverified
+  token. Both reject duplicate JSON members outright instead of resolving them,
+  accept only the header parameters and payload claims they name, compare the
+  challenge in constant time, and bound `iat` with checked arithmetic so a
+  policy duration that cannot be represented is reported rather than clamped.
+- Comparing a challenge is not consuming one. Both validators check equality
+  only; single use of a nonce or `c_nonce` belongs to the caller's challenge
+  store, as RFC 9901 section 7.3 requires.
+- `validate_oid4vci_proof_jwt` accepts a `jwk` header and refuses `kid` and
+  `x5c`: `kid` needs a key registered before the request, which a
+  pre-authorized code flow does not have, and `x5c` needs a certificate trust
+  anchor this crate does not hold.
 - This crate validates cryptographic and binding checks, not credential
   revocation, replay storage, or authorization policy.
 
