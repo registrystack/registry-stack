@@ -251,28 +251,50 @@
   adoption_mode: profiled
   used_by:
     - registry-platform
+    - registry-evidence
   surfaces:
     - credential issuance
     - selective disclosure contracts
     - shared SD-JWT VC issuance and holder-proof helpers
+    - Evidence Gateway SD-JWT VC response format
+    - holder-bound subject binding and key-binding JWT presentation verification
   evidence_docs:
+    - label: Evidence Gateway SD-JWT VC profile
+      url: https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/products/evidence/contracts/sd-jwt-vc-profile.yaml
+    - label: Evidence Gateway strict verification policy schema
+      url: https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/products/evidence/contracts/verification-policy.schema.yaml
+    - label: Evidence Gateway portable SD-JWT VC verifier
+      url: https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/crates/registry-evidence-verifier/src/sdjwt_vc.rs
     - label: Registry Notary SD-JWT VC conformance profile
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/docs/sd-jwt-vc-conformance-profile.md
     - label: Registry Notary format constants
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-core/src/model.rs
     - label: Registry Platform SD-JWT crate
       url: https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-sdjwt
-  last_checked: 2026-06-13
+  last_checked: 2026-08-08
   notes: >-
     Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers.
-    Registry Notary owned the claim-to-credential workflow and the service routes
-    that used them, and is retired; its pinned conformance profile and format
-    constants are kept as the record of that workflow. The helpers stay
-    constrained: `application/dc+sd-jwt` credentials, issuer signing with EdDSA
-    over Ed25519 or ES256 over P-256, and EdDSA `did:jwk` holder binding. The
-    retired product also rejected pre-rename format aliases such as
-    `application/vc+sd-jwt` in operator configuration. Full SD-JWT VC conformance
-    is not claimed.
+    Evidence Gateway serializes its stateless assertion as an SD-JWT VC under its
+    own frozen profile, and that profile is the source of truth for the claim set
+    it emits. Two subject binding modes exist. Under the default audience-scoped
+    mode the credential is meaningful only to the relying party the assertion
+    names, and a caller-supplied holder key is echoed into `cnf` unverified.
+    Under the declared holder-bound mode the binding derives from the RFC 7638
+    thumbprint of the holder key, `cnf` is required, and possession is proven at
+    presentation by a key-binding JWT under RFC 9901 section 4.3 rather than by
+    the audience at issuance. Verifying a key-binding JWT proves possession at
+    signing time over the presented bytes; comparing its nonce is not consuming
+    it, so nothing here is replay prevention. The holder-bound profile document
+    and its verification policy schema are not yet on a citable commit, so no
+    evidence link pins them. Registry Notary owned the claim-to-credential
+    workflow and the service routes that used them, and is retired; its pinned
+    conformance profile and format constants are kept as the record of that
+    workflow. The Registry Platform helpers stay constrained:
+    `application/dc+sd-jwt` credentials, issuer signing with EdDSA over Ed25519
+    or ES256 over P-256, and EdDSA `did:jwk` holder binding. The retired product
+    also rejected pre-rename format aliases such as `application/vc+sd-jwt` in
+    operator configuration. Full SD-JWT VC conformance is not claimed, and
+    OID4VCI is implemented in no part.
 - id: verifiable-credentials
   name: Verifiable Credentials Data Model
   standards_body: W3C

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-08"
 doc_type: how-to
 persona:
   - assertion provider
@@ -129,6 +129,25 @@ The verifier opens no network connection. `trusted-issuer-keys.json` is the comp
 trust set for the run, and `verification-policy.json` comes from the consumer's request and
 governance records, not from the credential.
 
+`evidence verify` reads a stored credential, which ends in a trailing tilde and offers no proof of
+possession. A holder-bound presentation, which carries the holder's key-binding JWT after its last
+tilde, is verified by a separate command against its own closed policy document:
+
+```sh
+evidence verify-presentation \
+  --sd-jwt-vc-presentation presentation.sd-jwt \
+  --jwks trusted-issuer-keys.json \
+  --policy holder-bound-policy.yaml
+```
+
+Neither command accepts the other's document. Both open no network connection, and both accept
+`--at <rfc3339-utc>` to verify at a historical decision instant. `evidence verify-presentation`
+exits 0 when the presentation is authentic, possession is proven, and the assertion is currently
+valid; 3 when it is authentic and possession is proven but the assertion is not currently valid;
+and 1 for every other outcome. Comparing the expected challenge is not consuming it, so the same
+presentation verifies again under the same policy. Walk the whole path in
+[Request a holder-bound credential](../../tutorials/request-a-holder-bound-credential/).
+
 Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
 `/.well-known/evidence/jwks.json`. Both endpoints are discovery. Outside local mode, the service
 provider identifier must be a stable HTTPS origin. It becomes the signed `iss`, and issuer
@@ -138,20 +157,30 @@ Approve trust independently through [Manage Evidence Gateway verifier trust](../
 
 ## Keep the boundary explicit
 
-This response is not a credential lifecycle:
+This response is not a credential lifecycle, in either subject binding mode:
 
 - no OID4VCI offer, issuance session, token exchange, or wallet onboarding;
 - no status list, revocation, refresh, or reissuance;
-- no presentation exchange or key-binding JWT;
-- no general multi-verifier subject identifier.
+- no presentation exchange protocol, and no key-binding JWT appended at issuance;
+- no replay prevention for a presented credential.
 
-The subject binding remains scoped to the assertion's audience and purpose. An optional
-`holderKey` can place only a public P-256 JWK in `cnf`. Its inclusion alone proves no possession.
+By default the subject binding remains scoped to the assertion's audience and purpose, and the
+credential is usable only by the relying party it was issued to. `holderKeys` carries public P-256
+JWKs, each echoed into the `cnf` claim of the credential issued for it. Their inclusion alone
+proves no possession.
+
+A requirement the bundle declares as `holder-bound` scopes its subject bindings to the presented
+holder key instead, so the credential can be presented to a relying party that was not named at
+issuance. That mode is a deployment declaration, never a caller option, and it narrows the
+requirement to the SD-JWT VC serialization and its batch envelope. See
+[Request a holder-bound credential](../../tutorials/request-a-holder-bound-credential/).
 
 The profile emits `application/dc+sd-jwt`, `typ: dc+sd-jwt`, `vct`, SHA-256 disclosures, optional
 `cnf.jwk`, and a trailing tilde without a key-binding JWT. It is pinned to RFC 9901 and SD-JWT VC
-draft v18. Evidence Gateway's current verifier checks the complete stored credential. It does not
-verify a selectively disclosed presentation from a wallet.
+draft v18. `evidence verify` checks the complete stored credential. A selectively disclosed
+presentation carrying a holder-signed key-binding JWT is checked by `evidence verify-presentation`
+instead. Neither command implements a wallet protocol, and full SD-JWT VC conformance stays
+unclaimed.
 
 For deterministic source-tree proof of the format and tamper refusals, see the
 [maintained SD-JWT VC demo](https://github.com/registrystack/registry-stack/blob/main/products/evidence/SD-JWT-VC-DEMO.md).

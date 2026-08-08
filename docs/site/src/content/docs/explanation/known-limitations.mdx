@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-08"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -65,18 +65,13 @@ Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-eviden
 [Evidence Gateway security model](../../security/evidence/).
 
 - A serialization, not a credential lifecycle: enabling the SD-JWT VC response format adds an
-  encoding of the same assertion. There is no issuance session, holder binding ceremony, status
-  list, revocation, or presentation verification, and `/.well-known/jwt-vc-issuer` publishes no
+  encoding of the same assertion. There is no issuance session, status list, revocation, credential
+  offer, or OID4VCI endpoint of any kind, and `/.well-known/jwt-vc-issuer` publishes no
   per-requester or per-requirement information. A released assertion stays verifiable until its
   declared validity expires; nothing recalls it.
-- The holder key is unverified: a request may carry an optional `holderKey` that is echoed into the
-  `cnf` member. Evidence Gateway issues no holder key, binds none, and verifies none, so `cnf` is a
-  caller-supplied convenience for whatever presentation layer the operator runs elsewhere.
-- Assertions are audience-scoped, not multi-verifier: the subject identifier is an audience-scoped
-  pseudonym, so the same person requested for a different audience yields a different identifier.
-  Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
-  linkable across purposes. This is deliberate, and it means an Evidence Gateway assertion is not a
-  general-purpose credential a holder presents to several verifiers.
+- No expiry beyond `validUntil`: whoever holds a credential and, under the holder-bound mode, the
+  matching private key can use it until that instant passes. Evidence Gateway cannot learn that a
+  credential leaked and cannot withdraw one.
 - The request nonce is not replay protection: every request carries one canonical 32-byte random
   nonce that is echoed into the payload and never stored, uniqueness-checked, or exposed to
   authorization, rate limits, scripts, source requests, logs, metrics, traces, or audit. It is
@@ -121,6 +116,72 @@ Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-eviden
   production and evidence-grade assurance use Vault/OpenBao Transit through a workload-local
   Unix-socket proxy. There is no PKCS#11 adapter, cloud-KMS abstraction, provider registry, or
   plugin system.
+
+### Two subject binding modes, two different limits
+
+A requirement in the immutable bundle declares which mode it issues under. The vocabulary is closed
+at two values and carries no default: a requirement that declares nothing issues audience-scoped
+assertions, and no caller input selects a mode.
+
+| Boundary | `audience-scoped` (absence of a declaration) | `holder-bound` (declared per requirement) |
+| --- | --- | --- |
+| Subject binding scope | The audience taken from the authenticated context | The RFC 7638 thumbprint of the holder key the caller supplied |
+| Cross-verifier use | None. The assertion is meaningful to the one relying party it names | Deliberate. One credential is presentable to several verifiers, and the holder decides which |
+| Holder key | Optional, echoed into `cnf`, verified by nothing | Required, and `cnf` is required in the credential |
+| Possession proof | None at any point | A key-binding JWT the relying party verifies at presentation |
+| Correlation across verifiers | Prevented by the service | Delegated to the holder, who chooses which key to reuse and where |
+| Response formats | Signed JWS, SD-JWT VC, or the unsigned envelope, as permitted | Narrowed to the SD-JWT VC serialization and its batch envelope |
+| Value forms | All eleven | The two entity-reference forms are refused, because both take the audience as a derivation input |
+| Contract status | Frozen Version 1 | Frozen, and every negative test the profile names resolves to an executable test |
+
+- The audience-scoped holder key is unverified: a request may carry an optional `holderKey` that is
+  echoed into the `cnf` member. Under this mode Evidence Gateway issues no holder key, binds none,
+  and verifies none, so `cnf` is a caller-supplied convenience for whatever presentation layer the
+  operator runs elsewhere.
+- Audience-scoped assertions are not multi-verifier: the subject identifier is an audience-scoped
+  pseudonym, so the same person requested for a different audience yields a different identifier.
+  Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
+  linkable across purposes. This is deliberate, and it means an audience-scoped assertion is not a
+  general-purpose credential a holder presents to several verifiers.
+- A holder-bound credential accepts cross-verifier correlation: the binding no longer takes the
+  audience as an input, so the same holder key, trust domain, purpose, subject role, selector
+  profile, and selector values yield the same binding for every caller and every verifier. Holder
+  key reuse is the correlator, and Evidence Gateway can neither prevent nor detect it. The declared
+  purpose is a low-cardinality attribute disclosed to every verifier the credential reaches, and the
+  binding is a persistent pseudonym for that whole tuple: repeating the same request with the same
+  key returns the same binding.
+- Batch issuance reduces linkability; it does not remove it: a holder-bound release may carry one
+  member per distinct holder key under a ceiling the bundle declares, so a holder presenting a
+  different member to each verifier hands them no shared subject binding. What it removes is the
+  deterministic key-based link, not linkability in general: the members still share an issuance
+  timestamp, purpose, requirement, Evidence Type, configuration revision, and disclosed values. The
+  issuer knows one requester submitted those keys together.
+- The holder-bound audit pseudonym is stable across issuances: it omits the audience, so repeated
+  issuance for the same subject records the same pseudonym. That is a deliberate accountability
+  property, stated rather than hidden.
+- Presentation-time audience is verifier-asserted: the relying party puts the audience and nonce in
+  its own challenge, and neither is issuer-signed. No issuance record names the verifier a
+  holder-bound credential later reached.
+
+### What verifying a presentation does and does not prove
+
+- A verified key-binding JWT proves the presenter held the private key of the credential's
+  confirmation key when that JWT was signed, over exactly the presented bytes, for the audience and
+  nonce the relying party chose. It proves nothing else.
+- A valid issuer signature alone does not prove possession. A presentation whose issuer signature
+  verifies and whose key binding does not is rejected, never reported as an issuer-only success.
+- Nonce equality is not nonce consumption: the same presentation bytes verify again, and again,
+  against the same stateless policy. RFC 9901 section 7.3 places the challenge lifecycle in the
+  surrounding protocol, so issuing a challenge, retaining it, and retiring it belong to the relying
+  party. This is not replay prevention, and no Evidence Gateway surface performs replay prevention.
+- The relying party cannot derive a subject binding under either mode: the derivation is keyed by a
+  deployment secret it does not hold. Expected subject bindings are pinned from independent trusted
+  state, exactly as they are for an audience-scoped assertion. An expected holder key thumbprint is
+  an optional extra expectation for a pre-established holder, not what proves possession.
+- Wallet compatibility is unclaimed: full SD-JWT VC and OID4VCI conformance are not claimed, and no
+  test in this repository covers a wallet holding or presenting an Evidence Gateway credential. The
+  opt-in compatibility harnesses in the source tree verify issuer signatures only and cover no key
+  binding.
 
 ## Registry Mint limits
 

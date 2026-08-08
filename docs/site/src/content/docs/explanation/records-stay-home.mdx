@@ -151,11 +151,12 @@ through what each form does and does not reveal.
 
 ## Why the answer is not the record
 
-A subject appears in an assertion only as a role-bound, audience-scoped opaque binding: a
-keyed derivation over the audience, purpose, role, profile, binding-key version, and the
-complete canonical selector bundle. The same person asked about by two relying parties, or
-under two purposes, produces two unrelated bindings, so an assertion is not a correlatable
-identifier (`products/evidence/contracts/evidence.schema.yaml`, invariant `V1-I17`).
+A subject appears in an assertion only as a role-bound opaque binding: a keyed derivation
+over one binding scope plus the purpose, role, profile, binding-key version, operator trust
+domain, and the complete canonical selector bundle. By default the scope is the audience, so
+the same person asked about by two relying parties, or under two purposes, produces two
+unrelated bindings and the assertion is not a correlatable identifier
+(`products/evidence/contracts/evidence.schema.yaml`, invariant `V1-I17`).
 
 The same assertion can also be serialized as an **SD-JWT VC** under a frozen local profile,
 selected by its own exact media type and released only when both the deployment's reviewed
@@ -163,8 +164,21 @@ configuration and the caller's matched grant permit it. That serialization carri
 disclosure per declared value and adds a second encoding of one answer, never a credential
 lifecycle: there is no offer, no status list, no revocation, and no persisted credential
 state (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
-Its subject binding stays audience-scoped, so it is meaningful to the relying party named
-in the assertion and to no other. It is not a general multi-verifier credential.
+By default its subject binding stays audience-scoped, so it is meaningful to the relying
+party named in the assertion and to no other, and it is not a general multi-verifier
+credential.
+
+A requirement can instead declare the **holder-bound** binding mode, which is where the
+boundary this page describes is deliberately relaxed. The binding then derives from the RFC
+7638 thumbprint of the holder key rather than the audience, so one credential is presentable
+to several verifiers and the holder decides which. The record still stays home: nothing about
+the source, the selectors, or the underlying values changes, and the credential carries the
+same declared answer. What changes is who can join two presentations together. Holder key
+reuse links a holder across every verifier that sees the same key, and the service can neither
+prevent nor detect it. Possession is proven at presentation by a key-binding JWT the relying
+party verifies, not by the audience at issuance, and verifying that JWT proves possession at
+signing time and nothing about freshness or replay
+(`products/evidence/contracts/holder-bound-profile.yaml`).
 
 Anyone can verify a signed assertion against the issuer's published public keys, served
 without authentication so a verifier needs no credential of its own. A signature

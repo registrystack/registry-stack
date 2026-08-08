@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 250,
+      "field_count": 254,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -578,7 +578,7 @@
           "constraints": [
             [
               "contains: signed-jws",
-              "maxItems: 3",
+              "maxItems: 4",
               "minItems: 1",
               "uniqueItems: true"
             ]
@@ -594,6 +594,7 @@
           "required": "no",
           "values": [
             "sd-jwt-vc",
+            "sd-jwt-vc-batch",
             "signed-jws",
             "unsigned-json"
           ],
@@ -601,6 +602,38 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "One permitted serialization of the same assertion, which introduces no separate issuance protocol and no credential state; a format reaches a response only when the bundle and the one matched grant both permit that format.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjectBindingModes",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 2",
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Subject-binding modes this path permits, defaulting to audience-scoped alone when omitted or empty. Permitting a serialization is not permitting a binding mode: a path widened to `sd-jwt-vc` gains no right to issue holder-bound assertions until that mode is named here. A path may name `holder-bound` alone, which permits nothing else.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "authorityProfiles.*.grants[].subjectBindingModes[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": [
+            "audience-scoped",
+            "holder-bound"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One binding mode this path permits, which is the operator half of a two-sided gate; a requirement declaring a mode no grant for it permits is unreachable and is rejected at startup.",
           "runtime_validation": null
         },
         {
@@ -764,6 +797,23 @@
           ],
           "conditional_constraints": [],
           "description": "One tag that must be present in the verified claim; differentiated requirements, purposes, or `valueClaims` are expressed by issuing different tags rather than by naming individual clients.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "holderBoundBatchMaxSize",
+          "kind": "property",
+          "type": "integer",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 16",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Ceiling on how many assertions one holder-bound release may carry. Omission means one, so a bundle written before batch release cannot serve a batch; declaring a ceiling this deployment never reaches enables nothing on its own, because each requirement still needs its own holder-bound declaration and a grant that permits the mode.",
           "runtime_validation": null
         },
         {
@@ -1975,6 +2025,21 @@
           "runtime_validation": null
         },
         {
+          "key_path": "requirements[].subjectBinding",
+          "kind": "property",
+          "type": "string",
+          "required": "no",
+          "values": [
+            "audience-scoped",
+            "holder-bound"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "What this requirement's subject bindings are derived under; omission means `audience-scoped`, which is what every requirement written before this key existed did. A `holder-bound` requirement is rejected at startup unless the bundle and at least one grant for it both permit a serialization the mode allows, which is `sd-jwt-vc` or `sd-jwt-vc-batch`, and unless none of its concepts uses an entity-reference value form, whose pointer only the audience it was scoped to could resolve.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "requirements[].subjectRoles",
           "kind": "property",
           "type": "array",
@@ -2094,7 +2159,7 @@
           "constraints": [
             [
               "contains: signed-jws",
-              "maxItems: 3",
+              "maxItems: 4",
               "minItems: 1",
               "uniqueItems: true"
             ]
@@ -2110,6 +2175,7 @@
           "required": "no",
           "values": [
             "sd-jwt-vc",
+            "sd-jwt-vc-batch",
             "signed-jws",
             "unsigned-json"
           ],
