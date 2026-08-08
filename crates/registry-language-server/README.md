@@ -2,8 +2,11 @@
 
 `registry-language-server` adds Registry Stack project semantics to YAML editors through the
 Language Server Protocol. It provides go to definition, find references, workspace symbols, document
-symbols, and errors for missing, duplicate, or ambiguous references. It deliberately leaves syntax,
-schemas, completion, hover, and formatting to the editor's YAML language server.
+symbols, completion and hover on the names one document writes and another spells back, and errors
+for missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, mapping-key
+completion, and formatting to the editor's YAML language server: the authoring form's JSON Schemas
+already complete the keys through the project-local `yaml.schemas` mapping `evidencectl` writes, and
+a second list of the same keys would be a second list to disagree with the first.
 
 ## Two document families
 
@@ -55,9 +58,30 @@ navigable in both directions and reported when the name has nothing behind it.
 A concept belongs to the question that answers it, because two questions may answer the same
 concept. One question's `disclosure.allow` never reaches another question's answer.
 
-`source.operation`, `source.facts[].path`, `subject.selector`, and `source.collectionBounds` are not
-indexed. They resolve against the project's OpenAPI description rather than against another
-authoring document.
+`source.operation`, `source.facts[].path`, `subject.selector`, and `source.collectionBounds` resolve
+against the project's OpenAPI description rather than against another authoring document.
+
+## Completion and hover
+
+Both answer from the index the navigation above answers from, so there is no second model of which
+field takes which kind. Completion on a value offers every name that reference could have held: the
+kind is the reference's own, and a scoped name such as `disclosure.allow[]` offers only the names of
+its own scope. A candidate replaces the whole value already written. `source.facts[].path` is the
+one field whose candidates are not names another document declares: those are the selectable leaves
+of the operation's `200 application/json` response, taken from the set the compiler selects against,
+and they are offered whether or not the path written there resolves yet.
+
+An author who invokes completion by hand gets the same list as one who typed a trigger character.
+The context is read from the document rather than from the request, because whether a client sends a
+trigger at all inside a YAML value depends on client settings this server has no say in.
+
+Hover on a reference names what it resolves to and the project-relative file it is defined in; hover
+on a declaration names the declaration. A reference that resolves to nothing describes nothing: the
+diagnostic that owns the mistake is already speaking for that field.
+
+A value slot that holds nothing yet holds no scalar for the index to find a reference in, so a list
+requested at a bare `key: ` is empty. The server marks every list incomplete, so the client asks
+again on the next keystroke and the list appears as soon as one character is there to place it on.
 
 Beyond those edges, the server deserializes each question with the same reader the compiler uses and
 runs `registry-evidence-authoring`'s own validation, placing each finding at the field it names. A

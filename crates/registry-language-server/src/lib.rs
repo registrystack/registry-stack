@@ -10,8 +10,8 @@ mod workspace;
 mod yaml;
 
 pub use refs::{
-    EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex, RelayKind,
-    SymbolKind,
+    CompletionCandidate, EvidenceKind, HoverText, IndexedDiagnostic, IndexedLocation,
+    IndexedSymbol, ProjectIndex, RelayKind, SymbolKind,
 };
 pub use server::Backend;
 

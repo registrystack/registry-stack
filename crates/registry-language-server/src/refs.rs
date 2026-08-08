@@ -4,11 +4,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
 use tower_lsp_server::ls_types::{
-    DiagnosticSeverity, Position, Range, SymbolKind as LspSymbolKind,
+    CompletionItemKind, DiagnosticSeverity, Position, Range, SymbolKind as LspSymbolKind,
 };
 
 use crate::{relay, workspace::ProjectFamily};
@@ -34,6 +35,33 @@ impl SymbolKind {
         match self {
             Self::Relay(kind) => kind.lsp_kind(),
             Self::Evidence(kind) => kind.lsp_kind(),
+        }
+    }
+
+    /// The icon an editor draws beside this kind in a completion list.
+    ///
+    /// It is the completion vocabulary's nearest word for [`Self::lsp_kind`], which is the icon the
+    /// same name already carries in the outline, so one name looks like itself wherever it is drawn.
+    /// The completion vocabulary is the narrower of the two: it has no namespace, no package and no
+    /// array, and the kinds that would have used one fall back to the word beside it.
+    pub fn lsp_completion_kind(self) -> CompletionItemKind {
+        match self {
+            Self::Relay(RelayKind::Registry | RelayKind::Integration | RelayKind::Entity)
+            | Self::Relay(RelayKind::Environment) => CompletionItemKind::MODULE,
+            Self::Relay(RelayKind::Service) => CompletionItemKind::INTERFACE,
+            Self::Relay(RelayKind::Consultation) => CompletionItemKind::FUNCTION,
+            Self::Relay(RelayKind::Fixture) => CompletionItemKind::EVENT,
+            Self::Evidence(EvidenceKind::Question) => CompletionItemKind::FUNCTION,
+            Self::Evidence(EvidenceKind::Concept) => CompletionItemKind::FIELD,
+            Self::Evidence(EvidenceKind::Source | EvidenceKind::AccessPolicy) => {
+                CompletionItemKind::MODULE
+            }
+            Self::Evidence(EvidenceKind::SelectorProfile) => CompletionItemKind::INTERFACE,
+            Self::Evidence(
+                EvidenceKind::DerivationFile | EvidenceKind::SchemaFile | EvidenceKind::FixtureFile,
+            ) => CompletionItemKind::FILE,
+            Self::Evidence(EvidenceKind::Operation) => CompletionItemKind::METHOD,
+            Self::Evidence(EvidenceKind::Collection) => CompletionItemKind::VALUE,
         }
     }
 
@@ -318,12 +346,56 @@ pub(crate) struct IndexedReference {
     pub(crate) reports_unresolved: bool,
 }
 
+/// One place whose candidates come from somewhere other than the symbol table, and what they are.
+///
+/// A fact path names a leaf of an operation's response rather than a name another document
+/// declares, so there is nothing for the reference machinery to hold: no definition to jump to, and
+/// nothing that could be reported unresolved. What an author still needs there is the list, which is
+/// this. A family with no such field records none of these and loses nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IndexedChoices {
+    pub(crate) location: IndexedLocation,
+    pub(crate) kind: CompletionItemKind,
+    /// The form's own word for what these are, drawn beside each one.
+    pub(crate) detail: &'static str,
+    pub(crate) values: Arc<BTreeSet<String>>,
+}
+
+/// What one family's walk of a project yields.
+#[derive(Debug, Default)]
+pub(crate) struct IndexedProject {
+    pub(crate) symbols: Vec<IndexedSymbol>,
+    pub(crate) references: Vec<IndexedReference>,
+    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+    pub(crate) choices: Vec<IndexedChoices>,
+}
+
+/// One name offered where a name is being written, and the text it replaces.
+///
+/// The range is the value the author already wrote, whole, so picking a candidate leaves the field
+/// holding that candidate and nothing of what was there before.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletionCandidate {
+    pub label: String,
+    pub kind: CompletionItemKind,
+    pub detail: String,
+    pub range: Range,
+}
+
+/// What the name under the cursor turns out to be, and the text the card belongs to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HoverText {
+    pub markdown: String,
+    pub range: Range,
+}
+
 #[derive(Debug, Default)]
 pub struct ProjectIndex {
     root: PathBuf,
     symbols: Vec<IndexedSymbol>,
     references: Vec<IndexedReference>,
     diagnostics: Vec<IndexedDiagnostic>,
+    choices: Vec<IndexedChoices>,
     document_paths: BTreeSet<PathBuf>,
 }
 
@@ -398,17 +470,17 @@ impl ProjectIndex {
             .cloned()
             .collect::<BTreeSet<_>>();
 
-        let (symbols, references, semantic_diagnostics) =
-            family.build_index(&root, documents, &parsed, &dropped);
+        let walked = family.build_index(&root, documents, &parsed, &dropped);
 
         let mut index = Self {
             root,
-            symbols,
-            references,
+            symbols: walked.symbols,
+            references: walked.references,
             diagnostics: Vec::new(),
+            choices: walked.choices,
             document_paths: documents.keys().cloned().collect(),
         };
-        diagnostics.extend(semantic_diagnostics);
+        diagnostics.extend(walked.diagnostics);
         diagnostics.extend(index.build_diagnostics());
         // A document that does not parse cleanly reports where it stops parsing and nothing else.
         // The symbols it still yields stay in the index and keep satisfying other documents, but
@@ -521,6 +593,94 @@ impl ProjectIndex {
         locations
     }
 
+    /// The names that could stand where one is being written. `path` is canonical.
+    ///
+    /// The list is derived from the same reference navigation answers from, so there is no second
+    /// model of which field takes which kind. A reference already knows the kind it holds and the
+    /// scope it holds it in; dropping the name from that query and keeping the rest turns "what does
+    /// this resolve to" into "what could this have been", which is the question a list answers.
+    ///
+    /// Nothing here reports anything, and nothing here reads a file. A position holding neither a
+    /// reference nor a recorded set of choices is offered nothing, which includes every position in
+    /// a document the loader kept out of the project.
+    pub fn completions_at(&self, path: &Path, position: Position) -> Vec<CompletionCandidate> {
+        if let Some(reference) = self.reference_at(path, position) {
+            let mut candidates = self
+                .symbols
+                .iter()
+                .filter(|symbol| {
+                    symbol.resolvable && self.query_can_offer(&reference.target, &symbol.key)
+                })
+                .map(|symbol| CompletionCandidate {
+                    label: symbol.name.clone(),
+                    kind: symbol.kind.lsp_completion_kind(),
+                    detail: symbol.kind.label().to_owned(),
+                    range: reference.location.range,
+                })
+                .collect::<Vec<_>>();
+            // One entry per name, however many places define it. A name two documents declare is
+            // one thing the author may write, and the duplicate that makes it ambiguous is a
+            // finding rather than a second menu entry.
+            candidates.sort_by(|left, right| left.label.cmp(&right.label));
+            candidates.dedup_by(|left, right| left.label == right.label);
+            return candidates;
+        }
+
+        self.choices_at(path, position)
+            .map(|choices| {
+                choices
+                    .values
+                    .iter()
+                    .map(|value| CompletionCandidate {
+                        label: value.clone(),
+                        kind: choices.kind,
+                        detail: choices.detail.to_owned(),
+                        range: choices.location.range,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// What the name under a position turns out to be. `path` is canonical.
+    ///
+    /// A reference describes what it resolves to and where that is; a declaration describes itself.
+    /// A reference that resolves to nothing describes nothing: the author is already being told
+    /// about it by the diagnostic that owns the mistake, and a card restating it would be a second
+    /// voice on one field.
+    pub fn hover_at(&self, path: &Path, position: Position) -> Option<HoverText> {
+        if let Some(reference) = self.reference_at(path, position) {
+            let definitions = self.definitions_for(&reference.target);
+            if definitions.is_empty() {
+                return None;
+            }
+            let mut markdown = headline(
+                reference.target.kind,
+                &reference.target.name,
+                reference.target.scope.as_deref(),
+            );
+            for symbol in definitions {
+                markdown.push_str("\n\nDefined in `");
+                markdown.push_str(&bounded_value(&self.relative(&symbol.location.path)));
+                markdown.push('`');
+            }
+            return Some(HoverText {
+                markdown: bounded_hover(&markdown),
+                range: reference.location.range,
+            });
+        }
+
+        let symbol = self.symbol_at(path, position)?;
+        Some(HoverText {
+            markdown: bounded_hover(&headline(
+                symbol.kind,
+                &symbol.name,
+                symbol.key.scope.as_deref(),
+            )),
+            range: symbol.location.range,
+        })
+    }
+
     pub fn diagnostics(&self) -> &[IndexedDiagnostic] {
         &self.diagnostics
     }
@@ -548,6 +708,12 @@ impl ProjectIndex {
             .collect()
     }
 
+    fn choices_at(&self, path: &Path, position: Position) -> Option<&IndexedChoices> {
+        self.choices.iter().find(|choices| {
+            choices.location.path == path && range_contains(choices.location.range, position)
+        })
+    }
+
     fn query_can_resolve_to(&self, query: &SymbolQuery, key: &SymbolKey) -> bool {
         query.kind == key.kind
             && query.name == key.name
@@ -555,6 +721,25 @@ impl ProjectIndex {
                 .scope
                 .as_ref()
                 .is_none_or(|scope| key.scope.as_ref() == Some(scope))
+    }
+
+    /// [`Self::query_can_resolve_to`] without the name: everything a reference of this shape is
+    /// allowed to hold, rather than the one thing it does hold.
+    fn query_can_offer(&self, query: &SymbolQuery, key: &SymbolKey) -> bool {
+        query.kind == key.kind
+            && query
+                .scope
+                .as_ref()
+                .is_none_or(|scope| key.scope.as_ref() == Some(scope))
+    }
+
+    /// One project path as an author names it, which is from the root of the project rather than
+    /// from the root of the machine.
+    fn relative(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
     }
 
     fn build_diagnostics(&self) -> Vec<IndexedDiagnostic> {
@@ -683,6 +868,38 @@ fn scope_suffix(kind: SymbolKind, scope: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// The first line of a card: what this is, what it is called, and the scope it is called that in.
+fn headline(kind: SymbolKind, name: &str, scope: Option<&str>) -> String {
+    format!(
+        "**{}** `{}`{}",
+        kind.label(),
+        bounded_value(name),
+        scope_suffix(kind, scope)
+    )
+}
+
+/// The ceiling on a whole card, in characters.
+///
+/// Nothing composed here comes near it: a card is a kind, a name already cut to the width a name is
+/// quoted at, and one line per place that name is defined, each of those a path cut the same way.
+/// What it bounds is the number of places, so a name a thousand documents declare renders a card
+/// rather than a document of its own. A card is rendered UI rather than a message or a log, which is
+/// why it has a ceiling of its own rather than either of the two above.
+const MAX_HOVER_CHARS: usize = 4096;
+
+/// One card cut to that ceiling.
+///
+/// Unlike [`bounded`], this leaves control characters alone, because the newlines separating the
+/// lines of a card are its own. Every piece of author-written text inside one has already been
+/// through [`bounded_value`], which replaced the control characters that came from the author.
+fn bounded_hover(markdown: &str) -> String {
+    let mut bounded = markdown.chars().take(MAX_HOVER_CHARS).collect::<String>();
+    if markdown.chars().count() > MAX_HOVER_CHARS {
+        bounded.push('…');
+    }
+    bounded
+}
+
 /// One name an author wrote, made safe to quote inside a message and cut to the width of a name.
 pub(crate) fn bounded_value(value: &str) -> String {
     bounded(value, 120)
@@ -804,5 +1021,20 @@ mod tests {
 
         assert_eq!(bounded_value("one\u{1b}[2Jtwo"), "one�[2Jtwo");
         assert_eq!(bounded_message("one\u{1b}[2Jtwo"), "one�[2Jtwo");
+    }
+
+    /// A card is cut at its own ceiling and keeps the newlines that lay it out. Nothing an author
+    /// writes reaches one without going through [`bounded_value`] first, so the only control
+    /// characters a card can hold are the ones this crate put there.
+    #[test]
+    fn a_card_is_cut_at_its_ceiling_and_keeps_the_lines_it_is_written_in() {
+        let card = format!("**source** `x`{}", "\n\nDefined in `y`".repeat(500));
+        assert!(card.chars().count() > MAX_HOVER_CHARS);
+
+        let bounded = bounded_hover(&card);
+        assert_eq!(bounded.chars().count(), MAX_HOVER_CHARS + 1);
+        assert!(bounded.ends_with('…'));
+        assert!(bounded.contains('\n'));
+        assert_eq!(bounded_hover("**source** `x`"), "**source** `x`");
     }
 }

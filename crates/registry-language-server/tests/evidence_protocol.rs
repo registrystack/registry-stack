@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 use support::{
     adult_status_project,
     lsp::{uri, LspSession},
-    replacing, without, EvidenceProject, ACCESS_POLICY_PATH, QUESTION, QUESTION_PATH, SOURCE_PATH,
+    replacing, without, EvidenceProject, ACCESS_POLICY_PATH, QUESTION, QUESTION_PATH, SOURCE,
+    SOURCE_PATH,
 };
 
 /// The text a client sends for one project file, which is what the file says on disk.
@@ -34,6 +35,17 @@ async fn the_handshake_offers_the_navigation_an_evidence_author_uses() {
     assert_eq!(capabilities["definitionProvider"], json!(true));
     assert_eq!(capabilities["referencesProvider"], json!(true));
     assert_eq!(capabilities["workspaceSymbolProvider"], json!(true));
+    assert_eq!(capabilities["hoverProvider"], json!(true));
+    assert_eq!(
+        capabilities["completionProvider"]["triggerCharacters"],
+        json!([":", ".", "/"])
+    );
+    // Every candidate is complete when it is offered, so there is nothing for the client to ask a
+    // second round trip about.
+    assert_eq!(
+        capabilities["completionProvider"]["resolveProvider"],
+        json!(false)
+    );
     assert_eq!(capabilities["positionEncoding"], json!("utf-16"));
     assert_eq!(
         result["serverInfo"]["name"],
@@ -117,6 +129,98 @@ async fn definition_on_the_source_a_question_reads_opens_that_source_document() 
     let locations = locations.as_array().expect("definition answers an array");
     assert_eq!(locations.len(), 1, "{locations:?}");
     assert_eq!(locations[0]["uri"], uri(&project.path(SOURCE_PATH)));
+}
+
+/// The same list however the client asked for it.
+///
+/// An editor sends `Invoked` for Ctrl-Space and `TriggerCharacter` for the `:` the author just
+/// typed, and which of the two arrives depends on client settings this server has no say in: a
+/// client with `editor.quickSuggestions.strings` off inside a string sends only the invoked kind.
+/// The context comes from the document, so the trigger is not read at all and both must answer the
+/// same thing.
+#[tokio::test]
+async fn a_list_is_the_same_however_the_client_asked_for_it() {
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        "sources/ledger.yaml",
+        SOURCE,
+    ));
+    let mut session = LspSession::start();
+    session.initialize(project.root()).await;
+    let question = project.path(QUESTION_PATH);
+    session
+        .open(&question, &text_of(&project, QUESTION_PATH), 1)
+        .await;
+    let cursor = project.cursor(QUESTION_PATH, "source-ref");
+
+    let mut answers = Vec::new();
+    // Completion trigger kind 1 is Invoked and 2 is TriggerCharacter.
+    for context in [
+        json!({"triggerKind": 1}),
+        json!({"triggerKind": 2, "triggerCharacter": ":"}),
+    ] {
+        answers.push(
+            session
+                .request(
+                    "textDocument/completion",
+                    json!({
+                        "textDocument": {"uri": uri(&question)},
+                        "position": {"line": cursor.line, "character": cursor.character},
+                        "context": context,
+                    }),
+                )
+                .await,
+        );
+    }
+
+    let labels = answers[0]["items"]
+        .as_array()
+        .expect("completion answers a list of items")
+        .iter()
+        .map(|item| item["label"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec![json!("ledger"), json!("people")]);
+    assert_eq!(answers[0], answers[1], "the trigger changed the answer");
+    // The list is reoffered on the next keystroke, because a value slot that holds nothing yet
+    // holds no scalar for the index to find a reference in.
+    assert_eq!(answers[0]["isIncomplete"], json!(true));
+    assert_eq!(
+        answers[0]["items"][0]["textEdit"]["range"]["start"],
+        json!({"line": cursor.line, "character": cursor.character})
+    );
+}
+
+#[tokio::test]
+async fn hover_over_a_source_a_question_reads_describes_that_source() {
+    let project = EvidenceProject::new(&adult_status_project());
+    let mut session = LspSession::start();
+    session.initialize(project.root()).await;
+    let question = project.path(QUESTION_PATH);
+    session
+        .open(&question, &text_of(&project, QUESTION_PATH), 1)
+        .await;
+    let cursor = project.cursor(QUESTION_PATH, "source-ref");
+
+    let hover = session
+        .request(
+            "textDocument/hover",
+            json!({
+                "textDocument": {"uri": uri(&question)},
+                "position": {"line": cursor.line, "character": cursor.character},
+            }),
+        )
+        .await;
+
+    assert_eq!(hover["contents"]["kind"], json!("markdown"));
+    let rendered = hover["contents"]["value"]
+        .as_str()
+        .expect("a hover carries markdown");
+    assert!(rendered.contains("**source**"), "{rendered}");
+    assert!(rendered.contains("`people`"), "{rendered}");
+    assert_eq!(
+        hover["range"]["start"],
+        json!({"line": cursor.line, "character": cursor.character})
+    );
 }
 
 #[tokio::test]

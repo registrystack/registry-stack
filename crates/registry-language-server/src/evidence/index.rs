@@ -56,7 +56,7 @@ use std::{
 use registry_evidence_authoring::{
     layout::SCHEMAS_DIRECTORY, model::Question, validate::collection_pointers,
 };
-use tower_lsp_server::ls_types::{DiagnosticSeverity, Range};
+use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 
 use crate::{
     evidence::{
@@ -65,8 +65,8 @@ use crate::{
         openapi::Description,
     },
     refs::{
-        bounded_value, EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedReference,
-        IndexedSymbol, SymbolKey, SymbolQuery, DOCUMENT_START,
+        bounded_value, EvidenceKind, IndexedChoices, IndexedDiagnostic, IndexedLocation,
+        IndexedProject, IndexedReference, IndexedSymbol, SymbolKey, SymbolQuery, DOCUMENT_START,
     },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
@@ -82,16 +82,13 @@ pub(crate) fn build_index(
     documents: &BTreeMap<PathBuf, String>,
     parsed: &BTreeMap<PathBuf, ParsedDocument>,
     dropped: &BTreeSet<PathBuf>,
-) -> (
-    Vec<IndexedSymbol>,
-    Vec<IndexedReference>,
-    Vec<IndexedDiagnostic>,
-) {
+) -> IndexedProject {
     let mut builder = IndexBuilder {
         root,
         symbols: Vec::new(),
         references: Vec::new(),
         diagnostics: Vec::new(),
+        choices: Vec::new(),
         referenced_files: BTreeSet::new(),
     };
     let read_sources = sources_questions_read(root, parsed);
@@ -164,7 +161,12 @@ pub(crate) fn build_index(
         builder.define_by_its_place(path);
     }
 
-    (builder.symbols, builder.references, builder.diagnostics)
+    IndexedProject {
+        symbols: builder.symbols,
+        references: builder.references,
+        diagnostics: builder.diagnostics,
+        choices: builder.choices,
+    }
 }
 
 struct IndexBuilder<'a> {
@@ -172,6 +174,9 @@ struct IndexBuilder<'a> {
     symbols: Vec<IndexedSymbol>,
     references: Vec<IndexedReference>,
     diagnostics: Vec<IndexedDiagnostic>,
+    /// The places an author picks from a set the description holds rather than from a name another
+    /// document declares. Only fact paths are such a place today.
+    choices: Vec<IndexedChoices>,
     /// The files already defined by a pointer at them, so two documents pointing at one schema
     /// define it once rather than reporting each other as duplicates.
     referenced_files: BTreeSet<SymbolKey>,
@@ -371,6 +376,22 @@ impl IndexBuilder<'_> {
             .iter()
             .filter_map(|fact| fact.get_scalar("path"))
             .collect::<Vec<_>>();
+        // The list an author reads at each fact path, recorded before the rung below can stop on a
+        // path that is not a leaf: a path this response does not offer is exactly the moment the
+        // list is worth having. This is a set of choices rather than a reference, so it defines
+        // nothing, resolves to nothing, and cannot be reported unresolved. The set itself is the
+        // compiler's own, so a path offered here is a path the build accepts.
+        for written in &written_paths {
+            self.choices.push(IndexedChoices {
+                location: IndexedLocation {
+                    path: path.to_path_buf(),
+                    range: written.range,
+                },
+                kind: CompletionItemKind::VALUE,
+                detail: "selectable leaf",
+                values: leaves.clone(),
+            });
+        }
         let mut reported = false;
         for written in &written_paths {
             if leaves.contains(written.value.as_str()) {

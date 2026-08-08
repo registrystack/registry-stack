@@ -10,21 +10,23 @@ use tokio::sync::{Mutex, RwLock};
 use tower_lsp_server::{
     jsonrpc::Result,
     ls_types::{
-        Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+        CompletionItem, CompletionList, CompletionOptions, CompletionParams, CompletionResponse,
+        CompletionTextEdit, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
         DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
         DocumentSymbolResponse, FileSystemWatcher, GlobPattern, GotoDefinitionParams,
-        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, Location,
+        GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+        InitializeParams, InitializeResult, InitializedParams, Location, MarkupContent, MarkupKind,
         MessageType, NumberOrString, OneOf, PositionEncodingKind, ReferenceParams, Registration,
         SaveOptions, ServerCapabilities, ServerInfo, SymbolInformation, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TextDocumentSyncOptions, Uri, WorkspaceSymbolParams,
+        TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceSymbolParams,
         WorkspaceSymbolResponse,
     },
     Client, LanguageServer,
 };
 
 use crate::{
-    refs::{IndexedLocation, IndexedSymbol},
+    refs::{CompletionCandidate, IndexedLocation, IndexedSymbol},
     workspace::Workspace,
 };
 
@@ -203,6 +205,19 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    // The three characters after which an author is one keystroke into a value:
+                    // the `:` that opens a field, the `.` inside a file name, and the `/` that
+                    // opens a path or a JSON pointer. A client that sends none of them and
+                    // invokes completion by hand gets the same list, because the list is read
+                    // from the document rather than from the trigger.
+                    trigger_characters: Some(vec![":".to_owned(), ".".to_owned(), "/".to_owned()]),
+                    // Every candidate is whole when it is offered, so there is nothing for a
+                    // client to spend a second round trip resolving.
+                    resolve_provider: Some(false),
+                    ..CompletionOptions::default()
+                }),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -354,6 +369,58 @@ impl LanguageServer for Backend {
         Ok((!locations.is_empty()).then_some(GotoDefinitionResponse::Array(locations)))
     }
 
+    /// The names that could stand where the author is writing one.
+    ///
+    /// The request's context is deliberately not read. A client sends `Invoked` for a list the
+    /// author asked for and `TriggerCharacter` for one the typing opened, and which of the two
+    /// arrives is decided by client settings this server has no say in: an editor configured not to
+    /// suggest inside strings sends only the invoked kind, over the very fields this server
+    /// completes. The document says everything needed, so both are answered identically.
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let document = params.text_document_position;
+        let Some(path) = document_path(&document.text_document.uri) else {
+            return Ok(None);
+        };
+        let candidates = {
+            let workspace = self.workspace.read().await;
+            let path = workspace.resolve(&path);
+            workspace
+                .root_for(&path)
+                .map(|root| root.index().completions_at(&path, document.position))
+                .unwrap_or_default()
+        };
+        Ok(Some(CompletionResponse::List(CompletionList {
+            // The list is always reoffered on the next keystroke. A value slot holding nothing yet
+            // holds no scalar for the index to find a reference in, which is the state a `:`
+            // trigger fires in, so a client that cached this answer as complete would show nothing
+            // for the rest of the word. Saying it is incomplete costs one rebuildless lookup per
+            // character and makes the list appear as soon as there is one character to place it on.
+            is_incomplete: true,
+            items: candidates.into_iter().map(completion_item).collect(),
+        })))
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let document = params.text_document_position_params;
+        let Some(path) = document_path(&document.text_document.uri) else {
+            return Ok(None);
+        };
+        let hover = {
+            let workspace = self.workspace.read().await;
+            let path = workspace.resolve(&path);
+            workspace
+                .root_for(&path)
+                .and_then(|root| root.index().hover_at(&path, document.position))
+        };
+        Ok(hover.map(|hover| Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: hover.markdown,
+            }),
+            range: Some(hover.range),
+        }))
+    }
+
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let document = params.text_document_position;
         let Some(path) = document_path(&document.text_document.uri) else {
@@ -479,6 +546,24 @@ fn to_lsp_location(location: IndexedLocation) -> Option<Location> {
         Uri::from_file_path(location.path)?,
         location.range,
     ))
+}
+
+/// One candidate as a client draws and applies it.
+///
+/// The edit is explicit rather than left to the client's own idea of the word under the cursor: a
+/// fact path and a file name both hold characters an editor treats as word boundaries, so a client
+/// guessing the replaced range would leave half of the old value beside the new one.
+fn completion_item(candidate: CompletionCandidate) -> CompletionItem {
+    CompletionItem {
+        label: candidate.label.clone(),
+        kind: Some(candidate.kind),
+        detail: Some(candidate.detail),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: candidate.range,
+            new_text: candidate.label,
+        })),
+        ..CompletionItem::default()
+    }
 }
 
 #[allow(deprecated)]

@@ -13,8 +13,8 @@ use anyhow::Result;
 use crate::{
     evidence,
     refs::{
-        document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedReference,
-        IndexedSymbol, ProjectIndex, DOCUMENT_CEILING_RULE,
+        document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
+        ProjectIndex, DOCUMENT_CEILING_RULE,
     },
     relay,
     yaml::ParsedDocument,
@@ -179,13 +179,19 @@ impl ProjectFamily {
         documents: &BTreeMap<PathBuf, String>,
         parsed: &BTreeMap<PathBuf, ParsedDocument>,
         dropped: &BTreeSet<PathBuf>,
-    ) -> (
-        Vec<IndexedSymbol>,
-        Vec<IndexedReference>,
-        Vec<IndexedDiagnostic>,
-    ) {
+    ) -> IndexedProject {
         match self {
-            Self::Relay => relay::build_index(root, parsed),
+            // Relay records no choices: every name it offers is a name some document declares, so
+            // the symbol table is the whole of what a list there could hold.
+            Self::Relay => {
+                let (symbols, references, diagnostics) = relay::build_index(root, parsed);
+                IndexedProject {
+                    symbols,
+                    references,
+                    diagnostics,
+                    choices: Vec::new(),
+                }
+            }
             Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
         }
     }
