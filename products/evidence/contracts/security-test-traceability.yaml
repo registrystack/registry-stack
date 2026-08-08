@@ -51,6 +51,10 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_frozen_source_shape_executes_through_production_materialization_and_projection}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: every_acquisition_posture_fixture_executes_with_one_bounded_request}
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_oauth_source_without_exactly_one_credential_form}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_authorization_scheme_that_is_not_an_http_token}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_signs_the_configured_assertion_audience}
   - id: sec-candidate-material-rejected
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
   - id: sec-rhai-output-shape-closed
@@ -161,6 +165,9 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: get_body_is_rejected_before_static_or_oauth_credential_acquisition}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: an_unreadable_client_assertion_key_fails_before_the_token_request}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: client_assertion_key_material_the_jwk_parser_refuses_never_signs}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_client_secret_that_is_not_utf8_is_refused_in_either_placement}
   - id: sec-runtime-cannot-override-governed-bundle
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: runtime_document_is_closed_and_contains_no_governed_override_surface}
