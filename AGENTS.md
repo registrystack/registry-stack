@@ -35,6 +35,7 @@ client against a real authorization server.
 | `crates/registry-evidence-client-node` | Node.js binding for `registry-evidence-client`, via napi-rs |
 | `crates/registry-evidence-client-py` | Python binding for `registry-evidence-client`, via PyO3 |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
+| `crates/registry-evidence-authoring` | The authoring form: the single implementation of the model an adopter writes and the checks it must satisfy, shared by adopter tooling |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
@@ -85,6 +86,15 @@ fixture evaluation to the `evidence` binary, and reuses
 request preparation and offline response verification. It adds no Evidence
 semantics of its own. Its source is covered by the same source-product and
 domain neutrality checks as the runtime.
+
+`registry-evidence-authoring` is the library beside `evidencectl` holding the
+single implementation of the authoring form: the model an adopter writes and
+the checks that shape must satisfy. It sits outside the frozen Version 1
+runtime contract, is not a second runtime, and adds no Evidence semantics of
+its own; the sentences it reports are the ones adopter tooling already
+reported. It performs no input or output, so a caller may run the same checks
+against a file or an unsaved buffer, and its source is covered by the same
+source-product and domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,

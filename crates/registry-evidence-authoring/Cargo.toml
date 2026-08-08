@@ -1,0 +1,25 @@
+[package]
+name = "registry-evidence-authoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Evidence authoring form: the model an adopter writes and the checks it must satisfy."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Off by default: only a caller that publishes a machine-readable description
+# of the authoring form pays for `schemars`.
+schema = ["dep:schemars"]
+
+[dependencies]
+rhai.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

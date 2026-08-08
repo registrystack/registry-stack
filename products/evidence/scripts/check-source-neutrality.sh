@@ -29,6 +29,7 @@ production_text="$temporary_root/production-rust.txt"
 
 source_roots=(
   "$repository_root/crates/registry-evidence/src"
+  "$repository_root/crates/registry-evidence-authoring/src"
   "$repository_root/crates/registry-evidence-client/src"
   "$repository_root/crates/registry-evidence-client-node/src"
   "$repository_root/crates/registry-evidence-client-py/src"
@@ -59,6 +60,7 @@ shipped_package_manifests=(
 
 cargo_manifests=(
   "$repository_root/crates/registry-evidence/Cargo.toml"
+  "$repository_root/crates/registry-evidence-authoring/Cargo.toml"
   "$repository_root/crates/registry-evidence-client/Cargo.toml"
   "$repository_root/crates/registry-evidence-client-node/Cargo.toml"
   "$repository_root/crates/registry-evidence-client-py/Cargo.toml"

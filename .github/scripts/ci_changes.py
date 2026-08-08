@@ -34,6 +34,7 @@ SHARDS = {
     "relay": ("registry-relay",),
     "evidence": (
         "registry-evidence",
+        "registry-evidence-authoring",
         "registry-evidence-client",
         "registry-evidence-client-node",
         "registry-evidence-client-py",

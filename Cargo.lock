@@ -5603,6 +5603,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidence-authoring"
+version = "0.17.0"
+dependencies = [
+ "rhai",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "registry-evidence-client"
 version = "0.17.0"
 dependencies = [
@@ -5707,6 +5717,7 @@ dependencies = [
  "getrandom 0.4.3",
  "inquire",
  "p256",
+ "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-platform-buildinfo",
  "registry-platform-crypto",

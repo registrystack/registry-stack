@@ -2,6 +2,7 @@
 members = [
     "crates/registry-config-report",
     "crates/registry-evidence",
+    "crates/registry-evidence-authoring",
     "crates/registry-evidence-client",
     "crates/registry-evidence-client-node",
     "crates/registry-evidence-client-py",
@@ -47,6 +48,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 registry-config-report = { path = "crates/registry-config-report", version = "0.17.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.17.0" }
+registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.17.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.17.0" }
 registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.17.0" }
 registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.17.0" }

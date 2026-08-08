@@ -25,31 +25,31 @@ use crate::suggest::{
     types::{BoundKind, BoundValues, OperationKey},
 };
 
-const OPENAPI_FILE: &str = "source.openapi.yaml";
-const QUESTIONS_DIRECTORY: &str = "questions";
-const SOURCES_DIRECTORY: &str = "sources";
-const SELECTORS_DIRECTORY: &str = "selectors";
-const DERIVATIONS_DIRECTORY: &str = "derivations";
-const SCHEMAS_DIRECTORY: &str = "schemas";
-const FIXTURES_DIRECTORY: &str = "fixtures";
-const SECRETS_DIRECTORY: &str = "secrets";
-const ACCESS_DIRECTORY: &str = "access";
-const ACCESS_POLICIES_DIRECTORY: &str = "policies";
+// The authoring form itself: what an adopter may write, and the checks that
+// shape must satisfy. It lives in a library so that this compiler and an editor
+// reach the same verdict from the same code; the reading of files below stays
+// here, because that library performs no input or output.
+pub(crate) use registry_evidence_authoring::{
+    layout::{
+        ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
+        MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_QUESTIONS,
+        MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY,
+        SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
+    },
+    model::{
+        AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
+        QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
+    },
+    validate::{question_subjects, valid_local_identifier, validate_question},
+    validate_authored_answer, Finding,
+};
+
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
 const LOCAL_AUDIENCE: &str = "registry-evidence-local";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
-const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_QUESTION_BYTES: u64 = 64 * 1024;
-const MAX_ACCESS_POLICY_BYTES: u64 = 64 * 1024;
-const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
-const MAX_SOURCE_ARTIFACT_BYTES: u64 = 1024 * 1024;
-const MAX_QUESTIONS: usize = 128;
-const MAX_CONCEPTS: usize = 16;
-const MAX_CATEGORIES: usize = 32;
-const MAX_CATEGORY_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
@@ -245,163 +245,6 @@ pub(crate) fn compile_production_project(
     })
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Question {
-    id: String,
-    question: String,
-    purpose: String,
-    #[serde(default)]
-    subject: Option<QuestionSubject>,
-    #[serde(default)]
-    subjects: Vec<QuestionSubject>,
-    source: QuestionSource,
-    answers: Vec<QuestionAnswer>,
-    derivation: String,
-    disclosure: QuestionDisclosure,
-    #[serde(rename = "responseFormats", default = "default_response_formats")]
-    response_formats: Vec<QuestionResponseFormat>,
-    #[serde(default)]
-    governance: Option<QuestionGovernance>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(rename_all = "kebab-case")]
-enum QuestionResponseFormat {
-    SignedJws,
-    SdJwtVc,
-}
-
-impl QuestionResponseFormat {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SignedJws => "signed-jws",
-            Self::SdJwtVc => "sd-jwt-vc",
-        }
-    }
-}
-
-fn default_response_formats() -> Vec<QuestionResponseFormat> {
-    vec![QuestionResponseFormat::SignedJws]
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct QuestionGovernance {
-    requirement: String,
-    kind: RequirementKind,
-    reference_frameworks: Vec<String>,
-    evidence_type: String,
-    validity_seconds: u64,
-    observation_timezone: String,
-    fixtures: String,
-    disclosure_families: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum RequirementKind {
-    Criterion,
-    InformationRequirement,
-    Constraint,
-}
-
-impl RequirementKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Criterion => "criterion",
-            Self::InformationRequirement => "information-requirement",
-            Self::Constraint => "constraint",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuestionSubject {
-    role: String,
-    selector: String,
-    #[serde(default)]
-    profile: Option<String>,
-    #[serde(default)]
-    derivation: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuestionSource {
-    #[serde(rename = "ref")]
-    source_ref: Option<String>,
-    #[serde(default)]
-    operation: Option<String>,
-    #[serde(default)]
-    facts: Vec<QuestionFact>,
-    #[serde(rename = "collectionBounds", default)]
-    collection_bounds: BTreeMap<String, u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuestionFact {
-    name: String,
-    path: String,
-    combine: FactCombination,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-enum FactCombination {
-    ExactlyOne,
-    Collect,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuestionAnswer {
-    concept: String,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(rename = "type")]
-    answer_type: AnswerType,
-    #[serde(default)]
-    values: Vec<String>,
-    minimum: Option<i64>,
-    maximum: Option<i64>,
-    schema: Option<String>,
-    #[serde(rename = "maximumSerializedBytes")]
-    maximum_serialized_bytes: Option<u64>,
-    #[serde(rename = "sdJwtVc")]
-    sd_jwt_vc: Option<QuestionSdJwtVc>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum AnswerType {
-    Boolean,
-    ControlledCategory,
-    BoundedInteger,
-    ReviewedStructuredValue,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct QuestionSdJwtVc {
-    claim: String,
-    disclosure: QuestionSdJwtVcDisclosure,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum QuestionSdJwtVcDisclosure {
-    TopLevel,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct QuestionDisclosure {
-    allow: Vec<String>,
-}
-
 struct Inputs {
     openapi: Value,
     selectors: BTreeMap<String, Value>,
@@ -593,7 +436,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         let question_bytes = read_regular_file(&question_path, MAX_QUESTION_BYTES, "question")?;
         let question: Question = serde_norway::from_slice(&question_bytes)
             .with_context(|| format!("parsing question {}", question_path.display()))?;
-        validate_question(&question)?;
+        first_finding(validate_question(&question))?;
         if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             bail!("question id must match its questions/<id>.yaml filename");
         }
@@ -612,7 +455,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         )?;
         let derivation =
             String::from_utf8(derivation_bytes).context("authored derivation must be UTF-8")?;
-        validate_authored_answer(&derivation)?;
+        first_finding(validate_authored_answer(&derivation))?;
         questions.push(AuthoredQuestion {
             question,
             derivation,
@@ -922,31 +765,14 @@ fn read_named_objects(
     Ok(objects)
 }
 
-/// Parse the authored program as Rhai and reserve `derive` exclusively for
-/// the generated binding wrapper. Function discovery comes from the AST, so
-/// strings, comments, and whitespace cannot masquerade as entry points.
-fn validate_authored_answer(source: &str) -> Result<()> {
-    let ast = rhai::Engine::new()
-        .compile(source)
-        .map_err(|_| anyhow!("authored derivation does not compile as Rhai"))?;
-    let mut names = BTreeSet::new();
-    let mut answers = 0;
-    for function in ast.iter_functions() {
-        if !names.insert(function.name) {
-            bail!("authored derivation function names must be unique");
-        }
-        if function.name == "derive" {
-            bail!("the `derive` entry point is reserved for the generated concept binding");
-        }
-        if function.name == "answer" {
-            if function.params.len() != 3 {
-                bail!("authored derivation must declare answer(facts, selectors, context)");
-            }
-            answers += 1;
-        }
-    }
-    if answers != 1 {
-        bail!("authored derivation must declare exactly one answer(facts, selectors, context)");
+/// Raise the first way an authored document departs from the authoring form.
+///
+/// The checks report departures as values, so that a caller with a place to
+/// show them can show all of them. A compiler has no such place: it stops at
+/// the first one, with the sentence adopters have always read.
+fn first_finding(findings: Vec<Finding>) -> Result<()> {
+    if let Some(finding) = findings.into_iter().next() {
+        bail!("{}", finding.message);
     }
     Ok(())
 }
@@ -1026,295 +852,6 @@ fn project_relative_derivation(project_root: &Path, value: &str) -> Result<PathB
         bail!("derivations must be held in a plain directory");
     }
     Ok(project_root.join(relative))
-}
-
-fn validate_question(question: &Question) -> Result<()> {
-    for (label, value) in [
-        ("id", question.id.as_str()),
-        ("purpose", question.purpose.as_str()),
-    ] {
-        if !valid_local_identifier(value) {
-            bail!("question {label} must be a lowercase local identifier");
-        }
-    }
-    let subjects = question_subjects(question)?;
-    let mut roles = BTreeSet::new();
-    for subject in &subjects {
-        if !valid_local_identifier(&subject.role)
-            || !valid_local_identifier(&subject.selector)
-            || subject
-                .profile
-                .as_deref()
-                .is_some_and(|profile| !valid_local_identifier(profile))
-        {
-            bail!("question subjects must use lowercase local role, selector, and profile identifiers");
-        }
-        if !roles.insert(subject.role.as_str()) {
-            bail!("question subject roles must be unique");
-        }
-    }
-    if question.question.is_empty()
-        || question.question.len() > 512
-        || question.question.chars().any(char::is_control)
-    {
-        bail!("question text must be a non-empty bounded line of text");
-    }
-    if !(1..=MAX_CONCEPTS).contains(&question.answers.len()) {
-        bail!("answers must contain 1..={MAX_CONCEPTS} governed concepts");
-    }
-    let response_formats = question
-        .response_formats
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    if response_formats.len() != question.response_formats.len()
-        || !response_formats.contains(&QuestionResponseFormat::SignedJws)
-    {
-        bail!("responseFormats must contain signed-jws exactly once and may add sd-jwt-vc once");
-    }
-    let mut concepts = BTreeSet::new();
-    let mut sd_jwt_claims = BTreeSet::new();
-    for answer in &question.answers {
-        if !valid_local_identifier(&answer.concept) {
-            bail!("answer concept must be a lowercase local identifier");
-        }
-        if !concepts.insert(answer.concept.as_str()) {
-            bail!("answer concepts must be unique");
-        }
-        validate_answer(answer)?;
-        if let Some(projection) = &answer.sd_jwt_vc {
-            if !response_formats.contains(&QuestionResponseFormat::SdJwtVc) {
-                bail!("an sdJwtVc projection requires responseFormats to include sd-jwt-vc");
-            }
-            if !sd_jwt_claims.insert(projection.claim.as_str()) {
-                bail!("sdJwtVc.claim names must be unique within a question");
-            }
-        }
-    }
-    match (&question.source.source_ref, &question.source.operation) {
-        (Some(source_ref), None) => {
-            if !valid_local_identifier(source_ref)
-                || !question.source.facts.is_empty()
-                || !question.source.collection_bounds.is_empty()
-            {
-                bail!("a source reference must contain only one valid ref");
-            }
-        }
-        (None, Some(operation)) => {
-            if question.source.facts.is_empty() || question.source.facts.len() > 16 {
-                bail!("source.facts must contain 1..=16 authored fact selections");
-            }
-            let mut names = BTreeSet::new();
-            let mut paths = BTreeSet::new();
-            for fact in &question.source.facts {
-                if !valid_field_name(&fact.name) || !names.insert(fact.name.as_str()) {
-                    bail!("source fact names must be unique lowercase local identifiers");
-                }
-                if fact.path.is_empty()
-                    || fact.path.len() > 256
-                    || !fact.path.starts_with('/')
-                    || fact.path.chars().any(char::is_control)
-                    || !paths.insert(fact.path.as_str())
-                {
-                    bail!("source fact paths must be unique bounded extended JSON Pointers");
-                }
-                let repeated = fact.path.split('/').any(|segment| segment == "*");
-                match (repeated, fact.combine) {
-                    (false, FactCombination::ExactlyOne) | (true, FactCombination::Collect) => {}
-                    (false, FactCombination::Collect) => bail!(
-                        "source fact `{}` uses `collect` but its path visits no collection",
-                        fact.name
-                    ),
-                    (true, FactCombination::ExactlyOne) => bail!(
-                        "source fact `{}` visits a collection and must explicitly use `combine: collect`",
-                        fact.name
-                    ),
-                }
-            }
-            if question.source.collection_bounds.len() > 16
-                || question
-                    .source
-                    .collection_bounds
-                    .iter()
-                    .any(|(pointer, maximum)| {
-                        pointer.is_empty()
-                            || pointer.len() > 256
-                            || !pointer.starts_with('/')
-                            || pointer.chars().any(char::is_control)
-                            || !(1..=256).contains(maximum)
-                    })
-            {
-                bail!("source.collectionBounds must contain bounded array pointers with values in 1..=256");
-            }
-            if operation.is_empty()
-                || operation.len() > 256
-                || operation.chars().any(char::is_control)
-            {
-                bail!("source.operation must name one bounded OpenAPI operationId");
-            }
-        }
-        _ => bail!("source must declare either ref or operation with facts"),
-    }
-    let allowed = question
-        .disclosure
-        .allow
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if allowed != concepts || allowed.len() != question.disclosure.allow.len() {
-        bail!("disclosure.allow must contain exactly the declared answer concepts");
-    }
-    Ok(())
-}
-
-fn question_subjects(question: &Question) -> Result<Vec<&QuestionSubject>> {
-    match (&question.subject, question.subjects.as_slice()) {
-        (Some(subject), []) => Ok(vec![subject]),
-        (None, subjects) if (1..=8).contains(&subjects.len()) => Ok(subjects.iter().collect()),
-        (Some(_), _) => bail!("question must declare either subject or subjects, not both"),
-        (None, _) => bail!("question must declare 1..=8 subjects"),
-    }
-}
-
-fn validate_answer(answer: &QuestionAnswer) -> Result<()> {
-    match answer.answer_type {
-        AnswerType::Boolean => {
-            if !answer.values.is_empty()
-                || answer.minimum.is_some()
-                || answer.maximum.is_some()
-                || answer.schema.is_some()
-                || answer.maximum_serialized_bytes.is_some()
-                || answer.sd_jwt_vc.is_some()
-            {
-                bail!("a boolean answer must not declare values or numeric bounds");
-            }
-        }
-        AnswerType::ControlledCategory => {
-            if answer.minimum.is_some()
-                || answer.maximum.is_some()
-                || answer.schema.is_some()
-                || answer.maximum_serialized_bytes.is_some()
-                || answer.sd_jwt_vc.is_some()
-            {
-                bail!("a controlled-category answer must not declare numeric bounds");
-            }
-            if !(2..=MAX_CATEGORIES).contains(&answer.values.len())
-                || answer.values.iter().collect::<BTreeSet<_>>().len() != answer.values.len()
-                || answer.values.iter().any(|value| {
-                    value.is_empty()
-                        || value.len() > MAX_CATEGORY_BYTES
-                        || value.chars().any(char::is_control)
-                })
-            {
-                bail!(
-                    "a controlled-category answer needs 2..={MAX_CATEGORIES} unique bounded values"
-                );
-            }
-        }
-        AnswerType::BoundedInteger => {
-            if !answer.values.is_empty()
-                || answer.schema.is_some()
-                || answer.maximum_serialized_bytes.is_some()
-                || answer.sd_jwt_vc.is_some()
-            {
-                bail!("a bounded-integer answer must not declare category values");
-            }
-            let (Some(minimum), Some(maximum)) = (answer.minimum, answer.maximum) else {
-                bail!("a bounded-integer answer requires minimum and maximum");
-            };
-            const JSON_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-            if !(-JSON_SAFE_INTEGER..=JSON_SAFE_INTEGER).contains(&minimum)
-                || !(-JSON_SAFE_INTEGER..=JSON_SAFE_INTEGER).contains(&maximum)
-                || minimum > maximum
-            {
-                bail!("a bounded-integer answer needs consistent JSON-safe bounds");
-            }
-        }
-        AnswerType::ReviewedStructuredValue => {
-            if !answer.values.is_empty() || answer.minimum.is_some() || answer.maximum.is_some() {
-                bail!("a reviewed structured answer must not declare scalar constraints");
-            }
-            let schema = answer
-                .schema
-                .as_deref()
-                .ok_or_else(|| anyhow!("a reviewed structured answer requires schema"))?;
-            validate_answer_schema_path(schema)?;
-            if !matches!(answer.maximum_serialized_bytes, Some(1..=65_536)) {
-                bail!("a reviewed structured answer requires maximumSerializedBytes in 1..=65536");
-            }
-            if let Some(projection) = &answer.sd_jwt_vc {
-                validate_sd_jwt_claim_name(&projection.claim)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_answer_schema_path(value: &str) -> Result<()> {
-    let path = Path::new(value);
-    let components = path.components().collect::<Vec<_>>();
-    if components.len() != 2
-        || components.first() != Some(&Component::Normal(SCHEMAS_DIRECTORY.as_ref()))
-        || !matches!(components.get(1), Some(Component::Normal(_)))
-        || path.extension().and_then(|extension| extension.to_str()) != Some("yaml")
-    {
-        bail!("answer schema must be one schemas/<name>.yaml file");
-    }
-    Ok(())
-}
-
-fn validate_sd_jwt_claim_name(value: &str) -> Result<()> {
-    const RESERVED: [&str; 24] = [
-        "iss",
-        "sub",
-        "aud",
-        "iat",
-        "nbf",
-        "exp",
-        "vct",
-        "id",
-        "jti",
-        "_sd",
-        "_sd_alg",
-        "cnf",
-        "status",
-        "issuedBy",
-        "providedBy",
-        "supportsRequirement",
-        "purpose",
-        "audience",
-        "assuranceProfile",
-        "observedAt",
-        "configurationRevision",
-        "requestNonce",
-        "subjects",
-        "structuredValues",
-    ];
-    let bytes = value.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 64
-        || !matches!(bytes.first(), Some(b'A'..=b'Z' | b'a'..=b'z'))
-        || !bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-        || RESERVED.contains(&value)
-    {
-        bail!("sdJwtVc.claim must be a bounded JSON claim name");
-    }
-    Ok(())
-}
-
-fn valid_local_identifier(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 64
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
-}
-
-fn valid_field_name(value: &str) -> bool {
-    valid_local_identifier(value)
 }
 
 fn validate_openapi_version(document: &Value) -> Result<()> {
@@ -1408,7 +945,8 @@ fn compile_question_plan(
     if question.source.source_ref.is_some() {
         return compile_referenced_question(selectors, sources, schemas, authored);
     }
-    let authored_subjects = question_subjects(question)?;
+    let authored_subjects =
+        question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     if authored_subjects
         .iter()
         .any(|subject| subject.profile.is_some())
@@ -1642,7 +1180,7 @@ fn compile_referenced_subjects(
     source: &Value,
     selectors: &BTreeMap<String, Value>,
 ) -> Result<Vec<SubjectPlan>> {
-    let authored = question_subjects(question)?;
+    let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
     for subject in authored {
         let selector_profile = match &subject.profile {
