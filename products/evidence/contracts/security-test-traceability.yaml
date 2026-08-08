@@ -396,3 +396,45 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value}
       - {file: crates/registry-evidence/src/selector.rs, name: a_resolved_holder_scope_debug_never_exposes_the_thumbprint}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
+  - id: sec-oid4vci-offer-requires-authorization
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_offer_without_authorization_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_unauthorized_offer_refusal_describes_nothing_this_deployment_offers}
+      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_authorizes_an_offer}
+      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_for_another_resource_server_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_this_issuer_did_not_sign_is_refused}
+  - id: sec-oid4vci-code-single-use
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_pre_authorized_code_is_redeemable_once}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_access_token_is_claimed_once}
+      - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_redeemed_pre_authorized_code_is_refused_on_reuse}
+      - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_claimed_access_token_is_refused_on_reuse}
+  - id: sec-oid4vci-tx-code-bounded
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_wrong_transaction_code_is_refused_and_bounded}
+      - {file: crates/registry-evidence-oid4vci/src/store.rs, name: failed_transaction_codes_lock_the_offer_out_for_the_rest_of_its_life}
+      - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_locked_out_offer_no_longer_holds_the_request_it_was_protecting}
+  - id: sec-oid4vci-proof-closed
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_proof_the_refusal_cases_vary_is_otherwise_accepted}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_typed_with_the_registered_media_type_prefix_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_nominating_its_key_by_kid_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_nominating_its_key_by_x5c_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_carrying_no_signature_under_alg_none_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_claiming_an_issuer_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_for_another_audience_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_issued_outside_the_accepted_window_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_payload_naming_a_claim_twice_is_refused_rather_than_resolved}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_this_service_did_not_mint_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_minted_for_another_token_is_refused}
+  - id: sec-oid4vci-no-audience-scoped-laundering
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_audience_scoped_requirement_cannot_be_offered_to_a_wallet}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_published_metadata_is_derived_from_the_evidence_bundle}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_credential_request_for_another_configuration_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/metadata.rs, name: an_audience_scoped_requirement_is_never_published_to_a_wallet}
+  - id: sec-oid4vci-service-holds-no-key
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_service_holds_no_credential_signing_key_and_signs_nothing}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_presenting_a_private_key_member_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_loaded_client_key_never_reaches_debug_output}

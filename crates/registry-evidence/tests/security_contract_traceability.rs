@@ -323,6 +323,7 @@ fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
         "registry.evidence.jws-profile/v1",
         "registry.evidence.sd-jwt-vc-profile/v1",
         "registry.evidence.holder-bound-profile/v1",
+        "registry.evidence.oid4vci-profile/v1",
     ] {
         assert!(
             checked.contains(required),
@@ -335,10 +336,16 @@ fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
 /// renamed, moved, or deleted test fails the traceability checker.
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
     // Evidence security invariants may be implemented by the runtime, the
-    // portable verifier, or the narrowly shared platform primitives it uses.
+    // portable verifier, the narrowly shared platform primitives they use, or
+    // the OpenID4VCI delivery front end, which owns the wallet-facing
+    // boundary the runtime deliberately does not speak. The front end is a
+    // permitted implementer of its own delivery negatives only; a delivery
+    // negative proven in a shared primitive rather than at the endpoint would
+    // not be traceable here, which is the point.
     let permitted_crate = [
         "crates/registry-evidence/",
         "crates/registry-evidence-verifier/",
+        "crates/registry-evidence-oid4vci/",
         "crates/registry-platform-audit/",
         "crates/registry-platform-config/",
         "crates/registry-platform-crypto/",
