@@ -176,6 +176,30 @@ item carries only `get` and `parameters`, and the operation itself only
 `description` beside them is refused, and so are an operation-level `security`,
 a request body, and `servers` on either the path item or the operation.
 
+The question's subjects and that operation's parameters are then required to be
+the same set, one parameter per subject. `exact_path_selectors` in
+`crates/registry-evidencectl/src/authoring.rs` reads the path item's
+`parameters` and the operation's own as one list and compares its length to the
+number of subjects before it reads any of them, so an extra parameter of any
+kind, a query filter beside the selector included, is refused for the count
+alone. Each parameter is closed to `name`, `in`, `required`, and `schema`, so
+an ordinary `description` beside them, and a `$ref` to a shared parameter
+component, are unsupported keys; its `schema` is closed to `type`, so a
+`format`, a `pattern`, or a `minLength` is refused the same way. What is left
+must read `in: path`, `required: true`, and `schema.type: string`, and the
+parameter names must equal the subject selector names exactly, each named once.
+`subject.derivation` is no exception: every subject is compared, so a question
+naming an `operation` cannot carry a party the operation's path does not.
+
+The path that operation is written under is held to the same shape. It starts
+with `/` and not `//`, holds no `?`, `#`, or `\`, and no segment of it is
+empty, `.`, or `..`. Each selector appears as `{selector}` occupying one
+complete segment exactly once, and the path's own count of `{` and of `}` each
+equal the number of selectors, so `/people/{person_id}` is accepted and
+`/people/id-{person_id}` is not. A question that names a `source.ref` is held
+to none of this: its selectors are read against that source's declared selector
+inputs instead.
+
 ### Facts
 
 One fact names a value and the place it is read from.
@@ -334,12 +358,12 @@ becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
 |---|---|---|
 | `governance.requirement` | with `governance` | The requirement URI this question answers. |
 | `governance.kind` | with `governance` | `criterion`, `information-requirement`, or `constraint`. Without `governance`, a question with one boolean concept compiles as `criterion` and anything else as `information-requirement`. |
-| `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. |
+| `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. The form itself accepts any list, an empty one included; `RequirementConfig::validate` in `crates/registry-evidence/src/config.rs` requires 1 to 16 unique entries, each an absolute URI of at most 512 bytes, so an empty list, a repeated framework, and a seventeenth entry are refused by the bundle check instead. |
 | `governance.evidenceType` | with `governance` | The exact Evidence Type URI. |
 | `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. The form itself accepts any whole number; the bundle grammar bounds it to 1 through 31536000, and a deployment caps it again at its own `signing.maximumAssertionValiditySeconds`. |
 | `governance.observationTimezone` | with `governance` | The IANA timezone the derivation's legal local date and time are computed in. |
 | `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. |
-| `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. |
+| `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. `DisclosureGuard::validate` bounds this list exactly as `RequirementConfig::validate` bounds `referenceFrameworks`. |
 
 A production compile also requires a stable `id` on every answer, and refuses a
 disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
@@ -352,8 +376,13 @@ identifiers, Evidence Type identifiers, and answer concept identifiers each be
 unique across the whole bundle, and that no two requirements share a disclosure
 family. Two questions that each satisfy every rule on this page therefore
 compile, and the `evidence` binary's bundle check refuses what they produced.
-Without `governance` there is nothing to collide: `evidencectl` derives
-`requirement:{id}`, `evidence-type:{id}`, `disclosure-family:{id}`, and
+That check is reached either way, and this is where the bundle grammar's bounds
+on an authored list are applied as well: a local compile asks the `evidence`
+binary to check the staged generation, and a deployment build asks it to check
+the staged bundle, each before anything is published, so neither path publishes
+what the grammar refuses. Without `governance` there is nothing to collide:
+`evidencectl` derives `requirement:{id}`, `evidence-type:{id}`,
+`disclosure-family:{id}`, and
 `concept:{question_id}:{concept}` from the question's own id.
 
 ## Bounds at a glance
