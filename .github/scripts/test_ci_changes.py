@@ -656,6 +656,47 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
 
+    def test_evidence_authoring_schema_change_runs_docs(self) -> None:
+        """The same page publishes the authoring form beside the frozen ones."""
+        for path in (
+            "crates/registry-evidencectl/schemas/authoring/question.schema.json",
+            "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["evidence_contracts"])
+
+    def test_evidence_configuration_reference_change_runs_docs(self) -> None:
+        """Docs tests read the reference that explains each published schema."""
+        for path in (
+            "products/evidence/reference/authoring-projects/CONFIG.md",
+            "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["evidence_contracts"])
+
+    def test_every_published_evidence_schema_and_reference_runs_docs(self) -> None:
+        """Whatever the generator publishes, a change to it rebuilds the docs."""
+        generator = Path(
+            "docs/site/scripts/generate-evidence-configuration.mjs"
+        ).read_text(encoding="utf-8")
+        published = set(re.findall(r"^\s+file: '([^']+)',$", generator, re.MULTILINE))
+        references = set(
+            re.findall(
+                r"^const \w+_REFERENCE =\s*'([^']+)';$", generator, re.MULTILINE
+            )
+        )
+        self.assertTrue(published)
+        self.assertTrue(references)
+
+        for path in sorted(published | references):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
     def test_first_country_docs_and_journey_routing_matrix(self) -> None:
         cases = (
             (

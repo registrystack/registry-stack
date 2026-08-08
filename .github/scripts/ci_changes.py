@@ -445,9 +445,14 @@ def classify(
             "docs/site/*",
             "products/manifest/docs/*",
             # The Evidence configuration reference page is generated from the
-            # frozen contracts, so a contract change goes stale without a
-            # docs rebuild.
+            # frozen contracts and from the authoring-form schemas beside
+            # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
+            "crates/registry-evidencectl/schemas/authoring/*",
+            # The same page names the product reference that explains each
+            # schema, and the docs tests read those references to prove the
+            # published key paths and the documented ones agree.
+            "products/evidence/reference/*/CONFIG.md",
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
