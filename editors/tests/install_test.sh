@@ -79,7 +79,14 @@ command_name="$(basename -- "$0")"
 case "${command_name}" in
   registryctl)
     if [[ "${1:-}" == "--version" ]]; then
-      printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.16.3}"
+      if [[ "${FAKE_REGISTRYCTL_VERSION_EXIT:-0}" != "0" ]]; then
+        exit "${FAKE_REGISTRYCTL_VERSION_EXIT}"
+      fi
+      if [[ -n "${FAKE_REGISTRYCTL_VERSION_OUTPUT:-}" ]]; then
+        printf '%s\n' "${FAKE_REGISTRYCTL_VERSION_OUTPUT}"
+      else
+        printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.16.3}"
+      fi
     fi
     ;;
   evidencectl)
@@ -249,6 +256,32 @@ if FAKE_REGISTRYCTL_VERSION=0.10.0-dev "${INSTALLER}" vscode \
 fi
 assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0-dev' \
   "${development_mismatch_output}"
+assert_not_contains 'npm <' "${COMMAND_LOG}"
+
+# The version probe runs registryctl --version itself, a step distinct from
+# the version-mismatch cases above (which get a version back and reject it).
+# Both failure shapes below must still name the reason on stderr. PATH is
+# narrowed to FAKE_BIN plus REAL_TOOLS_PATH, as in the evidencectl fallback
+# case above, so registryctl is genuinely the only Registry Stack CLI found
+# rather than falling through to a real evidencectl elsewhere on this machine.
+reset_log
+version_probe_exit_output="${TEST_ROOT}/version-probe-exit-output"
+if FAKE_REGISTRYCTL_VERSION_EXIT=7 PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
+  "${INSTALLER}" vscode > "${version_probe_exit_output}" 2>&1; then
+  fail 'a CLI whose --version exits nonzero should fail the installer'
+fi
+assert_contains 'could not run registryctl --version' "${version_probe_exit_output}"
+assert_not_contains 'npm <' "${COMMAND_LOG}"
+
+reset_log
+version_probe_format_output="${TEST_ROOT}/version-probe-format-output"
+if FAKE_REGISTRYCTL_VERSION_OUTPUT='not a version line' \
+  PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
+  "${INSTALLER}" vscode > "${version_probe_format_output}" 2>&1; then
+  fail 'a CLI whose --version output does not match the expected format should fail the installer'
+fi
+assert_contains 'unexpected registryctl version output: not a version line' \
+  "${version_probe_format_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 reset_log

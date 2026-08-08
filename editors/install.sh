@@ -11,6 +11,7 @@ readonly EXTENSION_ID="registrystack.registry-stack"
 REGISTRY_STACK_CLI_NAME=''
 REGISTRY_STACK_CLI_PATH=''
 REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
+REGISTRY_STACK_CLI_VERSION=''
 
 usage() {
   cat <<'EOF'
@@ -77,7 +78,14 @@ workspace_version() {
   ' "${REPO_ROOT}/Cargo.toml"
 }
 
+# Publishes its result through REGISTRY_STACK_CLI_VERSION (success) or
+# REGISTRY_STACK_CLI_CANDIDATE_ERROR (failure) rather than stdout, so callers
+# must invoke it as a plain statement, not inside a $(...) command
+# substitution: bash runs a substitution in a subshell, and a subshell's
+# variable assignments do not survive it.
 registry_stack_cli_version() {
+  REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
+  REGISTRY_STACK_CLI_VERSION=''
   local version_output
   version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" || {
     REGISTRY_STACK_CLI_CANDIDATE_ERROR="could not run ${REGISTRY_STACK_CLI_NAME} --version"
@@ -86,7 +94,7 @@ registry_stack_cli_version() {
   case "${version_output}" in
     "${REGISTRY_STACK_CLI_NAME} "*)
       version_output="${version_output#* }"
-      printf '%s\n' "${version_output%% *}"
+      REGISTRY_STACK_CLI_VERSION="${version_output%% *}"
       ;;
     *)
       REGISTRY_STACK_CLI_CANDIDATE_ERROR="unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
@@ -120,11 +128,11 @@ verify_registry_stack_cli() {
     REGISTRY_STACK_CLI_NAME="${candidate_name}"
     REGISTRY_STACK_CLI_PATH="$(external_command_path "${candidate_name}")"
 
-    local installed_version
-    if ! installed_version="$(registry_stack_cli_version)"; then
+    if ! registry_stack_cli_version; then
       candidate_errors+=("${REGISTRY_STACK_CLI_CANDIDATE_ERROR}")
       continue
     fi
+    local installed_version="${REGISTRY_STACK_CLI_VERSION}"
 
     # registryctl and evidencectl ship from this same workspace and share its
     # version. A CLI built from a source checkout reports a development version
