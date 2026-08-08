@@ -9,6 +9,7 @@
 pub(crate) mod diagnostics;
 pub(crate) mod index;
 pub(crate) mod layout;
+pub(crate) mod openapi;
 
 use std::{
     collections::{BTreeMap, BTreeSet},

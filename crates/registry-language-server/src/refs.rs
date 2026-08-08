@@ -67,12 +67,23 @@ impl SymbolKind {
 
     /// Whether a name of this kind written twice is reported here.
     ///
-    /// `registry_evidence_authoring::validate` already refuses a question that answers one concept
-    /// twice, at the answer that repeats, and its sentence is the one the compiler prints. A
-    /// duplicate reported here would be a second error on one mistake, and one per occurrence at
-    /// that, which is what the `disclosure.allow` reference refuses for the same reason.
+    /// A concept is excluded because `registry_evidence_authoring::validate` already refuses a
+    /// question that answers one concept twice, at the answer that repeats, and its sentence is the
+    /// one the compiler prints. A duplicate reported here would be a second error on one mistake,
+    /// and one per occurrence at that, which is what the `disclosure.allow` reference refuses for
+    /// the same reason.
+    ///
+    /// An operation is excluded for the opposite reason: nothing refuses it. `unique_operation`
+    /// (`crates/registry-evidencectl/src/authoring.rs:1532-1573`) is asked about one identifier, the
+    /// one a question wrote, so a description publishing two operations under an identifier no
+    /// question names builds. The sentence for the identifier a question does name belongs at that
+    /// question, where the ambiguous reference is, and not at two places in a description the author
+    /// may not even own.
     fn reports_duplicates(self) -> bool {
-        !matches!(self, Self::Evidence(EvidenceKind::Concept))
+        !matches!(
+            self,
+            Self::Evidence(EvidenceKind::Concept | EvidenceKind::Operation)
+        )
     }
 }
 
@@ -131,6 +142,10 @@ impl RelayKind {
 /// the selector profile it picks a subject with, the schema its output is checked against, the
 /// derivation file that computes it, and the fixtures that exercise it, and an access policy names
 /// the questions it admits.
+///
+/// The last two are the names of the compact form, where a question reads the project's own OpenAPI
+/// description instead of a source document: it names an operation that description publishes, and
+/// it bounds each collection its facts visit.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum EvidenceKind {
     Question,
@@ -141,6 +156,8 @@ pub enum EvidenceKind {
     SchemaFile,
     FixtureFile,
     AccessPolicy,
+    Operation,
+    Collection,
 }
 
 impl EvidenceKind {
@@ -156,13 +173,16 @@ impl EvidenceKind {
             Self::SchemaFile => "schema file",
             Self::FixtureFile => "fixture file",
             Self::AccessPolicy => "access policy",
+            Self::Operation => "operation",
+            Self::Collection => "collection",
         }
     }
 
     /// The icon an editor draws beside the name. A question is asked and answered like a call, a
     /// concept is a property of the subject the assertion is about, a source is a unit the project
     /// reads from, a selector profile is the contract for picking one subject, the three file kinds
-    /// are files, and an access policy collects the questions one caller may ask.
+    /// are files, and an access policy collects the questions one caller may ask. An operation is
+    /// invoked, and a collection is the array a fact path walks through.
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
             Self::Question => LspSymbolKind::FUNCTION,
@@ -171,6 +191,8 @@ impl EvidenceKind {
             Self::SelectorProfile => LspSymbolKind::INTERFACE,
             Self::DerivationFile | Self::SchemaFile | Self::FixtureFile => LspSymbolKind::FILE,
             Self::AccessPolicy => LspSymbolKind::PACKAGE,
+            Self::Operation => LspSymbolKind::METHOD,
+            Self::Collection => LspSymbolKind::ARRAY,
         }
     }
 
@@ -187,6 +209,8 @@ impl EvidenceKind {
             Self::SchemaFile => "schema-file",
             Self::FixtureFile => "fixture-file",
             Self::AccessPolicy => "access-policy",
+            Self::Operation => "operation",
+            Self::Collection => "collection",
         }
     }
 }

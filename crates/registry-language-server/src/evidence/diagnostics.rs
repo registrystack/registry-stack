@@ -22,32 +22,50 @@ use crate::{
     yaml::{ParsedDocument, YamlPair, YamlValue},
 };
 
-/// Every way one question departs from the authoring form, at the field that holds each departure.
+/// What one reading of a question document found.
+///
+/// `validated` is the question itself, and it is `Some` only when `diagnostics` is empty. That is
+/// the condition `registry-evidencectl` compiles under: `compile_question_plan`
+/// (`crates/registry-evidencectl/src/authoring.rs:989`) writes
+/// `.expect("inline source was validated")`, so every cross-file check the compiler performs runs on
+/// a question the form has already accepted. A caller that reads the two fields as the compiler does
+/// says nothing about the operation, the selectors, or the facts of a question that is malformed,
+/// which is where the author is already being told what to fix.
+pub(crate) struct QuestionReading {
+    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+    pub(crate) validated: Option<Question>,
+}
+
+/// Every way one question departs from the authoring form, at the field that holds each departure,
+/// and the question itself when it departs from it nowhere.
 ///
 /// A question the deserializer cannot read is reported once and not validated: the checks take a
 /// `Question`, and a document that is not one has a single problem worth saying out loud.
-pub(crate) fn question_shape_diagnostics(
+pub(crate) fn read_question(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
-) -> Vec<IndexedDiagnostic> {
+) -> QuestionReading {
     let question = match serde_norway::from_str::<Question>(source) {
         Ok(question) => question,
         Err(error) => {
-            return vec![IndexedDiagnostic {
-                path: path.to_path_buf(),
-                range: deserializer_range(source, &error),
-                severity: DiagnosticSeverity::ERROR,
-                code: Some("evidence/question-shape".to_owned()),
-                message: format!(
-                    "This is not the shape of a question: {}",
-                    bounded_message(&error.to_string())
-                ),
-            }]
+            return QuestionReading {
+                diagnostics: vec![IndexedDiagnostic {
+                    path: path.to_path_buf(),
+                    range: deserializer_range(source, &error),
+                    severity: DiagnosticSeverity::ERROR,
+                    code: Some("evidence/question-shape".to_owned()),
+                    message: format!(
+                        "This is not the shape of a question: {}",
+                        bounded_message(&error.to_string())
+                    ),
+                }],
+                validated: None,
+            }
         }
     };
 
-    validate_question(&question)
+    let diagnostics = validate_question(&question)
         .into_iter()
         .map(|finding| IndexedDiagnostic {
             path: path.to_path_buf(),
@@ -60,7 +78,12 @@ pub(crate) fn question_shape_diagnostics(
             // a sentence rather than as a name so the instruction that follows the name survives.
             message: bounded_message(&finding.message),
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    QuestionReading {
+        validated: diagnostics.is_empty().then_some(question),
+        diagnostics,
+    }
 }
 
 /// Where in a document a field path points, as far as the document goes.
@@ -251,12 +274,13 @@ mod tests {
     fn a_question_the_deserializer_cannot_read_is_reported_on_the_line_it_stopped_at() {
         let source = "id: adult-status\nquestion: [1, 2]\n";
 
-        let diagnostics = question_shape_diagnostics(
+        let reading = read_question(
             Path::new("/questions/adult-status.yaml"),
             source,
             &parse_yaml(source).unwrap(),
         );
 
+        let diagnostics = reading.diagnostics;
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_eq!(
             diagnostics[0].code.as_deref(),
@@ -270,5 +294,46 @@ mod tests {
             "{}",
             diagnostics[0].message
         );
+        assert!(
+            reading.validated.is_none(),
+            "a document that is not a question hands nothing on"
+        );
+    }
+
+    /// The other half of the reading: a question the form accepts is handed on, and one it does not
+    /// is not, so the checks that read it against the project's description run on exactly the
+    /// questions the compiler would compile.
+    #[test]
+    fn only_a_question_the_form_accepts_is_handed_on() {
+        let accepted = "id: adult-status\n\
+                        question: Is the person an adult?\n\
+                        purpose: age-gating\n\
+                        subject: {role: person, selector: person_id}\n\
+                        source:\n  \
+                        operation: readPerson\n  \
+                        facts:\n    \
+                        - {name: born, path: /date_of_birth, combine: exactly-one}\n\
+                        answers:\n  \
+                        - concept: is_adult\n    \
+                        type: boolean\n\
+                        derivation: derivations/adult-status.rhai\n\
+                        disclosure: {allow: [is_adult]}\n";
+        let refused = accepted.replace("operation: readPerson", "operation: ''");
+
+        let path = Path::new("/questions/adult-status.yaml");
+        let reading = read_question(path, accepted, &parse_yaml(accepted).unwrap());
+        assert!(reading.diagnostics.is_empty(), "{:?}", reading.diagnostics);
+        assert!(reading.validated.is_some());
+
+        let reading = read_question(path, &refused, &parse_yaml(&refused).unwrap());
+        assert_eq!(
+            reading
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("evidence/operation-identifier")]
+        );
+        assert!(reading.validated.is_none());
     }
 }

@@ -11,12 +11,17 @@
 //! is missing, and a source no question reads has its names resolved for navigation and reported to
 //! nobody, because nothing in the build looks inside it either.
 //!
-//! Two families of edge are deliberately absent, and belong to the phase that reads the project's
-//! OpenAPI description: `source.operation` with `source.facts[].path`, and `subject.selector` with
-//! `source.collectionBounds`. Their targets are leaves of a published operation rather than names
-//! another authored document declares, so nothing here could resolve them honestly.
+//! Four of those edges are drawn against the project's own OpenAPI description rather than against
+//! another authored document: `source.operation` names an operation it publishes,
+//! `subject.selector` names one of that operation's path parameters, each `source.facts[].path`
+//! selects a leaf of its response, and each key of `source.collectionBounds` names a collection some
+//! fact path visits. They are walked in [`IndexBuilder::walk_openapi_edges`], in the order
+//! `compile_question_plan` (`crates/registry-evidencectl/src/authoring.rs:964-1023`) reaches them,
+//! and a rung that reports stops the ones below it: the compiler stops at its first refusal, and an
+//! author whose operation name has a typo needs one sentence about the typo rather than a sentence
+//! about every field that reads the operation it did not find.
 //!
-//! A third is absent for a different reason. A source names the scripts that prepare its request
+//! One family of edge is absent. A source names the scripts that prepare its request
 //! and extract its facts, `request.prepareScript` and `extractScript`, and the compiler reads both
 //! files. The reference vocabulary has no kind for an authored script, and calling one a schema or
 //! a derivation would put a word in front of the author that means another part of the form, so the
@@ -48,13 +53,16 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use registry_evidence_authoring::layout::SCHEMAS_DIRECTORY;
+use registry_evidence_authoring::{
+    layout::SCHEMAS_DIRECTORY, model::Question, validate::collection_pointers,
+};
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Range};
 
 use crate::{
     evidence::{
-        diagnostics::question_shape_diagnostics,
+        diagnostics::read_question,
         layout::{document_role, DocumentRole},
+        openapi::Description,
     },
     refs::{
         bounded_value, EvidenceKind, IndexedDiagnostic, IndexedLocation, IndexedReference,
@@ -87,6 +95,20 @@ pub(crate) fn build_index(
         referenced_files: BTreeSet::new(),
     };
     let read_sources = sources_questions_read(root, parsed);
+    // The one project file the loader leaves on disk, read once for the whole build. Every operation
+    // it publishes is defined here, whether or not a question names it, so that `Find references` on
+    // an operation answers from the description an author is looking at.
+    let mut description = Description::read(root);
+    if let Some(description) = &description {
+        for (operation_id, operation) in description.published() {
+            builder.define(
+                SymbolKey::global(EvidenceKind::Operation, operation_id),
+                None,
+                description.path(),
+                operation.range,
+            );
+        }
+    }
 
     for (path, document) in parsed {
         let Some(relative) = path.strip_prefix(root).ok() else {
@@ -102,9 +124,18 @@ pub(crate) fn build_index(
             DocumentRole::Question => {
                 builder.walk_question(path, name, &document.value);
                 if let Some(source) = documents.get(path) {
-                    builder
-                        .diagnostics
-                        .extend(question_shape_diagnostics(path, source, document));
+                    let reading = read_question(path, source, document);
+                    let validated = reading.validated;
+                    builder.diagnostics.extend(reading.diagnostics);
+                    if let Some(question) = validated {
+                        builder.walk_openapi_edges(
+                            path,
+                            name,
+                            &document.value,
+                            &question,
+                            description.as_mut(),
+                        );
+                    }
                 }
             }
             DocumentRole::Source => {
@@ -234,6 +265,192 @@ impl IndexBuilder<'_> {
             // reads the same file while it writes the bundle, and the `evidence` binary refuses a
             // fixtures artifact whose path is not under `fixtures/` when it reads that bundle back.
             self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile);
+        }
+    }
+
+    /// The edges a question written in the compact form draws into the project's own OpenAPI
+    /// description.
+    ///
+    /// `question` has already been accepted by `registry_evidence_authoring::validate`, which is the
+    /// state `compile_question_plan` reads it in: it takes the inline source out with
+    /// `.expect("inline source was validated")`
+    /// (`crates/registry-evidencectl/src/authoring.rs:989`). So a question that is malformed reaches
+    /// nothing here, and the malformed field is reported once, by the check that owns it.
+    ///
+    /// The rungs below run in the compiler's own order and each one stops the rest. That is not
+    /// tidiness: an operation name with a typo makes every selector, every fact path and every
+    /// collection bound unresolvable against an operation that was never found, and answering one
+    /// mistake with four sentences puts the author's attention on three fields that are correct.
+    fn walk_openapi_edges(
+        &mut self,
+        path: &Path,
+        name: &str,
+        value: &YamlValue,
+        question: &Question,
+        description: Option<&mut Description>,
+    ) {
+        // The referenced form: this question reads a source document, so its source names nothing in
+        // the description. A question writing both is refused under `source-declaration` before it
+        // gets here.
+        if question.source.source_ref.is_some() {
+            return;
+        }
+        let (Some(operation_id), Some(description)) =
+            (question.source.operation.as_deref(), description)
+        else {
+            return;
+        };
+        let source = value.get("source");
+        let Some(written) = source.and_then(|source| source.get_scalar("operation")) else {
+            return;
+        };
+
+        // Edge 1. Resolution, and the sentence for an identifier that resolves to none or to two,
+        // both come from the reference machinery: `unique_operation`
+        // (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses those two cases with one
+        // sentence, and it is the same condition.
+        self.refer(
+            SymbolQuery::global(EvidenceKind::Operation, operation_id),
+            path,
+            written.range,
+        );
+        // What the rungs below need, taken now: reading the response leaves needs the description
+        // itself, and holding on to the resolved operation would keep it borrowed.
+        let Some((key, selectors)) = description
+            .resolved(operation_id)
+            .map(|operation| (operation.key.clone(), operation.selectors.clone()))
+        else {
+            return;
+        };
+
+        // Edge 2. `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs:1575-1646`)
+        // requires the question's selectors to be exactly the operation's required string path
+        // parameters, so a selector outside that set refuses the project: at the count check when
+        // there are as many selectors as parameters, and at the comparison otherwise.
+        //
+        // Only that one case is reported. Selectors that are all parameters but too few of them, a
+        // selector written twice, and a parameter no selector names are refusals stated in terms of
+        // the whole set rather than of one field, and so is the rule that a selector occupies a
+        // complete path segment (:1623-1644). The compiler gives the author those sentences; an
+        // editor picking a field to underline for them would be picking one.
+        let Some(selectors) = selectors else {
+            return;
+        };
+        let mut reported = false;
+        for subject in subjects(value) {
+            let Some(written) = subject.get_scalar("selector") else {
+                continue;
+            };
+            if selectors.contains(written.value.as_str()) {
+                continue;
+            }
+            reported = true;
+            self.report(
+                path,
+                written.range,
+                "evidence/subject-selector",
+                format!(
+                    "Subject selector '{}' is not a required string path parameter of operation '{}'",
+                    bounded_value(&written.value),
+                    bounded_value(operation_id)
+                ),
+            );
+        }
+        if reported {
+            return;
+        }
+
+        // Edge 3. The set is the compiler's own: `compile_facts` asks `selectable_leaves` for it at
+        // `crates/registry-evidencectl/src/authoring.rs:1661` and refuses a fact whose path is not in
+        // it at :1666-1674. A response that cannot be read or flattened answers `None`, and every
+        // fact path is then left alone rather than measured against an empty set.
+        let Some(leaves) = description.selectable(&key) else {
+            return;
+        };
+        let written_paths = sequence(source.and_then(|source| source.get("facts")))
+            .iter()
+            .filter_map(|fact| fact.get_scalar("path"))
+            .collect::<Vec<_>>();
+        let mut reported = false;
+        for written in &written_paths {
+            if leaves.contains(written.value.as_str()) {
+                continue;
+            }
+            reported = true;
+            self.report(
+                path,
+                written.range,
+                "evidence/unselectable-fact-path",
+                format!(
+                    "Fact path '{}' is not a selectable leaf of the 200 application/json response of operation '{}'",
+                    bounded_value(&written.value),
+                    bounded_value(operation_id)
+                ),
+            );
+        }
+        if reported {
+            return;
+        }
+
+        // Edge 4. `compile_facts` settles `source.collectionBounds` against the collections the fact
+        // paths visit and refuses a project where either side names something the other does not
+        // (`crates/registry-evidencectl/src/authoring.rs:1681-1705`).
+        //
+        // Both directions rest on knowing every visited collection, so they are only drawn when the
+        // paths found in the text are the paths the accepted question holds. A path this reading
+        // missed would hide a collection, and the author's correct bound on it would be reported as
+        // naming nothing.
+        if written_paths.len() != question.source.facts.len()
+            || written_paths
+                .iter()
+                .zip(&question.source.facts)
+                .any(|(written, fact)| written.value != fact.path)
+        {
+            return;
+        }
+        // One collection however many facts visit it: the author writes one bound for it, and a
+        // collection defined once per fact would answer that bound with "ambiguous reference" over a
+        // project that builds. It belongs to the question, because another question's facts walk
+        // another operation's response.
+        let mut visited: BTreeMap<String, Range> = BTreeMap::new();
+        for written in &written_paths {
+            for pointer in collection_pointers(&written.value) {
+                visited.entry(pointer).or_insert(written.range);
+            }
+        }
+        for (pointer, range) in &visited {
+            self.define(
+                SymbolKey::scoped(EvidenceKind::Collection, name, pointer.as_str()),
+                Some(name.to_owned()),
+                path,
+                *range,
+            );
+            if question.source.collection_bounds.contains_key(pointer) {
+                continue;
+            }
+            self.report(
+                path,
+                *range,
+                "evidence/undeclared-collection",
+                format!(
+                    "This path visits the collection '{}', which source.collectionBounds does not bound",
+                    bounded_value(pointer)
+                ),
+            );
+        }
+        // The other direction is the reference machinery's: a bound naming a collection no fact
+        // visits is a name with no definition, which is the same condition and the same sentence
+        // shape as every other unresolved reference in the form.
+        for bound in source
+            .and_then(|source| source.get("collectionBounds"))
+            .and_then(YamlValue::as_mapping)
+            .unwrap_or_default()
+        {
+            self.refer(
+                SymbolQuery::scoped(EvidenceKind::Collection, name, bound.key.value.as_str()),
+                path,
+                bound.key.range,
+            );
         }
     }
 
@@ -558,7 +775,9 @@ fn referenced_file_role(kind: EvidenceKind) -> Option<DocumentRole> {
         | EvidenceKind::Concept
         | EvidenceKind::Source
         | EvidenceKind::SelectorProfile
-        | EvidenceKind::AccessPolicy => None,
+        | EvidenceKind::AccessPolicy
+        | EvidenceKind::Operation
+        | EvidenceKind::Collection => None,
     }
 }
 

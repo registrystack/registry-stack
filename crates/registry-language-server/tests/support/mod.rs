@@ -21,7 +21,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use registry_evidence_authoring::testing::{referenced_form_project, ProjectFile};
+use registry_evidence_authoring::testing::{
+    compact_form_project, referenced_form_project, ProjectFile,
+};
 use registry_language_server::ProjectIndex;
 use tempfile::TempDir;
 use tower_lsp_server::ls_types::Position;
@@ -172,7 +174,31 @@ pub fn adult_status_project() -> Vec<ProjectFile> {
     )
 }
 
+/// The worked compact-form project the OpenAPI edges start from: one question that answers an
+/// operation of the project's own description directly, with no source, selector, or schema file of
+/// its own.
+///
+/// This is the other half of the authoring form. [`adult_status_project`] writes a question that
+/// names a source document, so its description publishes nothing and the four edges that read one
+/// have nothing to resolve against. Here the description publishes one operation, the question
+/// selects a subject by its path parameter and projects one fact out of its response, and the
+/// bound it declares names the collection that fact visits.
+///
+/// It is written down to a project `registry-evidencectl` really compiles, which is why the
+/// description carries a loopback `servers` entry and closes its one selected string with a
+/// `format`: without either, the build refuses the project for a reason none of these tests is
+/// about, and every test asserting the editor is quiet over it would be asserting nothing.
+pub fn operation_question_project() -> Vec<ProjectFile> {
+    compact_form_project(
+        OPERATION_OPENAPI,
+        "adult-status",
+        OPERATION_QUESTION,
+        DERIVATION,
+    )
+}
+
 pub const QUESTION_PATH: &str = "questions/adult-status.yaml";
+pub const OPENAPI_PATH: &str = "source.openapi.yaml";
 pub const SOURCE_PATH: &str = "sources/people.yaml";
 pub const SELECTOR_PATH: &str = "selectors/person-reference-v1.yaml";
 pub const FIXTURE_PATH: &str = "fixtures/adult-status.yaml";
@@ -181,6 +207,61 @@ pub const ACCESS_POLICY_PATH: &str = "access/policies/adult-checks.yaml";
 
 pub const OPENAPI: &str =
     "openapi: 3.1.0\ninfo: {title: Example source, version: 1.0.0}\npaths: {}\n";
+
+/// The description [`operation_question_project`] publishes one operation from, written down to the
+/// keys `registry-evidencectl` allows a selected path item, operation, and path selector to carry.
+pub const OPERATION_OPENAPI: &str = r#"openapi: 3.1.0
+info: {title: Example source, version: 1.0.0}
+servers: [{url: 'http://127.0.0.1:8000'}]
+paths:
+  /people/{person_id}:
+    get:
+      operationId: <|operation-id|>readPerson
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: The records held for one person
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  records:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date_of_birth: {type: string, format: date}
+"#;
+
+/// The question [`operation_question_project`] holds: the same adult-status question written in the
+/// compact form, so it names an operation instead of a source and projects its own facts.
+pub const OPERATION_QUESTION: &str = r#"id: adult-status
+question: Is the person at least 18 years old?
+purpose: fixture-eligibility
+subject:
+  role: subject
+  selector: <|selector|>person_id
+source:
+  operation: <|operation|>readPerson
+  facts:
+    - name: date_of_birth
+      path: <|fact-path|>/records/*/date_of_birth
+      combine: collect
+  collectionBounds:
+    <|collection-bound|>/records: 16
+answers:
+  - concept: <|concept|>is_adult
+    id: urn:example:concepts:is-adult
+    type: boolean
+derivation: <|derivation|>derivations/adult-status.rhai
+disclosure:
+  allow: [<|allow|>is_adult]
+"#;
 
 pub const QUESTION: &str = r#"id: <|id|>adult-status
 question: Is the person at least 18 years old?
