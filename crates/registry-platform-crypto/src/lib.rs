@@ -2,11 +2,17 @@
 //! Crypto primitives shared by Registry Platform consumers.
 
 use async_trait::async_trait;
+use aws_lc_rs::encoding::{AsBigEndian as _, AsDer as _, EcPrivateKeyBin, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
-use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
+use aws_lc_rs::rsa::{
+    KeyPair as AwsRsaKeyPair, KeySize as AwsRsaKeySize,
+    PublicKeyComponents as AwsRsaPublicKeyComponents,
+};
 use aws_lc_rs::signature::{
-    EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING,
-    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_SHA256,
+    EcdsaKeyPair, KeyPair as _, RsaParameters, RsaSignatureEncoding, UnparsedPublicKey,
+    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED,
+    ECDSA_P384_SHA384_FIXED_SIGNING, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
+    RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
 };
 #[cfg(feature = "transit")]
 use base64::engine::general_purpose::STANDARD;
@@ -26,7 +32,10 @@ use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use p256::pkcs8::DecodePublicKey as _;
 #[cfg(feature = "transit")]
 use p256::PublicKey as P256PublicKey;
-use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
+use pkcs1::{
+    der::asn1::UintRef, der::Decode as _, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey,
+};
+use pkcs8::PrivateKeyInfo as Pkcs8PrivateKeyInfo;
 pub use registry_platform_canonical_json::{
     canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
 };
@@ -72,6 +81,24 @@ pub enum SigningAlgorithm {
     Es256,
     /// RSASSA-PKCS1-v1_5 with SHA-256 (RS256) signatures using RSA JWKs.
     Rs256,
+    /// ECDSA over P-384 with SHA-384 (ES384) signatures using EC/P-384 JWKs.
+    Es384,
+    /// RSASSA-PKCS1-v1_5 with SHA-384 (RS384) signatures using RSA JWKs.
+    Rs384,
+}
+
+impl SigningAlgorithm {
+    /// The JWS `alg` header value naming this algorithm.
+    #[must_use]
+    pub const fn jwa_name(self) -> &'static str {
+        match self {
+            Self::EdDsa => "EdDSA",
+            Self::Es256 => "ES256",
+            Self::Rs256 => "RS256",
+            Self::Es384 => "ES384",
+            Self::Rs384 => "RS384",
+        }
+    }
 }
 
 /// Define a closed string vocabulary once for its Rust enum, parser labels,
@@ -402,8 +429,8 @@ pub struct LocalJwkSigner {
 }
 
 impl LocalJwkSigner {
-    /// Build a local signer from an EdDSA (Ed25519), ES256 (P-256), or RS256
-    /// (RSA) private JWK with a non-empty `kid`.
+    /// Build a local signer from an EdDSA (Ed25519), ES256 (P-256), ES384
+    /// (P-384), RS256 (RSA), or RS384 (RSA) private JWK with a non-empty `kid`.
     pub fn new(jwk: PrivateJwk) -> Result<Self, SigningError> {
         jwk.validate_private().map_err(SigningError::InvalidKey)?;
         let algorithm = jwk.algorithm().map_err(SigningError::InvalidKey)?;
@@ -886,25 +913,47 @@ impl PrivateJwk {
                 decode_fixed(self.x.as_deref(), 32, "x")?;
                 decode_fixed(self.y.as_deref(), 32, "y")?;
             }
+            Ok(SigningAlgorithm::Es384) => {
+                if self.kty != "EC" || self.crv.as_deref() != Some("P-384") {
+                    return Err(JwkError::Invalid("ES384 keys must be EC/P-384"));
+                }
+                let d = decode_nonempty(self.d.as_deref(), "d")?;
+                if d.len() != 48 {
+                    return Err(JwkError::Invalid("d"));
+                }
+                decode_fixed(self.x.as_deref(), 48, "x")?;
+                decode_fixed(self.y.as_deref(), 48, "y")?;
+            }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
                     return Err(JwkError::Invalid("RS256 keys must be RSA"));
                 }
-                // RSA parameters are variable width, so only require non-empty
-                // base64url. AWS-LC validates the imported PKCS#1 private key.
-                decode_nonempty(self.n.as_deref(), "n")?;
-                decode_nonempty(self.e.as_deref(), "e")?;
-                decode_nonempty(self.d.as_deref(), "d")?;
-                decode_nonempty(self.p.as_deref(), "p")?;
-                decode_nonempty(self.q.as_deref(), "q")?;
-                decode_nonempty(self.dp.as_deref(), "dp")?;
-                decode_nonempty(self.dq.as_deref(), "dq")?;
-                decode_nonempty(self.qi.as_deref(), "qi")?;
+                validate_private_rsa_members(self)?;
+            }
+            Ok(SigningAlgorithm::Rs384) => {
+                if self.kty != "RSA" {
+                    return Err(JwkError::Invalid("RS384 keys must be RSA"));
+                }
+                validate_private_rsa_members(self)?;
             }
             Err(err) => return Err(err),
         }
         Ok(())
     }
+}
+
+/// RSA parameters are variable width, so only require non-empty base64url.
+/// AWS-LC validates the imported PKCS#1 private key.
+fn validate_private_rsa_members(jwk: &PrivateJwk) -> Result<(), JwkError> {
+    decode_nonempty(jwk.n.as_deref(), "n")?;
+    decode_nonempty(jwk.e.as_deref(), "e")?;
+    decode_nonempty(jwk.d.as_deref(), "d")?;
+    decode_nonempty(jwk.p.as_deref(), "p")?;
+    decode_nonempty(jwk.q.as_deref(), "q")?;
+    decode_nonempty(jwk.dp.as_deref(), "dp")?;
+    decode_nonempty(jwk.dq.as_deref(), "dq")?;
+    decode_nonempty(jwk.qi.as_deref(), "qi")?;
+    Ok(())
 }
 
 impl PublicJwk {
@@ -968,13 +1017,30 @@ impl PublicJwk {
                 }
                 let x = decode_coordinate(self.x.as_deref(), "x")?;
                 let y = decode_coordinate(self.y.as_deref(), "y")?;
-                UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, es256_uncompressed_point(&x, &y))
+                UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, p256_uncompressed_point(&x, &y))
                     .parse()
                     .map_err(|_| JwkError::Invalid("ES256 public point"))?;
+            }
+            Ok(SigningAlgorithm::Es384) => {
+                if self.kty != "EC" || self.crv.as_deref() != Some("P-384") {
+                    return Err(JwkError::Invalid("ES384 keys must be EC/P-384"));
+                }
+                let x = decode_coordinate(self.x.as_deref(), "x")?;
+                let y = decode_coordinate(self.y.as_deref(), "y")?;
+                UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, p384_uncompressed_point(&x, &y))
+                    .parse()
+                    .map_err(|_| JwkError::Invalid("ES384 public point"))?;
             }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
                     return Err(JwkError::Invalid("RS256 keys must be RSA"));
+                }
+                decode_nonempty(self.n.as_deref(), "n")?;
+                decode_nonempty(self.e.as_deref(), "e")?;
+            }
+            Ok(SigningAlgorithm::Rs384) => {
+                if self.kty != "RSA" {
+                    return Err(JwkError::Invalid("RS384 keys must be RSA"));
                 }
                 decode_nonempty(self.n.as_deref(), "n")?;
                 decode_nonempty(self.e.as_deref(), "e")?;
@@ -1225,12 +1291,152 @@ pub fn pairwise_subject_ref_hash(
     ))
 }
 
+/// The algorithms this crate can generate a private JWK for.
+///
+/// Deliberately narrower than [`SigningAlgorithm`], which also names algorithms
+/// only [`sign`] and [`verify`] handle: asking for one of those is
+/// unrepresentable here rather than a runtime failure.
+///
+/// The pair is the one SMART on FHIR Backend Services settles on (SMART App
+/// Launch v2.2.0, the `client-confidential-asymmetric` profile): an
+/// authorization server there has to validate only one of RS384 and ES384, so a
+/// generator offering only one of them would leave adopters unable to
+/// authenticate against a conformant server that chose the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedKeyAlgorithm {
+    /// ECDSA over P-384 with SHA-384, written as an EC/P-384 JWK.
+    Es384,
+    /// RSASSA-PKCS1-v1_5 with SHA-384 over a 2048-bit modulus, written as an
+    /// RSA JWK.
+    Rs384,
+}
+
+impl GeneratedKeyAlgorithm {
+    /// The signing algorithm a key generated for this variant carries.
+    #[must_use]
+    pub const fn signing_algorithm(self) -> SigningAlgorithm {
+        match self {
+            Self::Es384 => SigningAlgorithm::Es384,
+            Self::Rs384 => SigningAlgorithm::Rs384,
+        }
+    }
+}
+
+/// Modulus width for a generated RSA key. RFC 7518 section 3.3 requires at
+/// least 2048 bits, every relying party accepts that width, and a wider modulus
+/// costs generation time on every call for no interoperability gain.
+const GENERATED_RSA_KEY_SIZE: AwsRsaKeySize = AwsRsaKeySize::Rsa2048;
+
+/// Width in bytes of a P-384 scalar and of each of its point coordinates.
+const P384_COORDINATE_BYTES: usize = 48;
+
+/// Generate a fresh private JWK carrying its `alg` and a `kid` that is the RFC
+/// 7638 thumbprint of its public half.
+///
+/// Generation runs on aws-lc-rs, the same backend [`sign`] uses, so one
+/// implementation both produces a key and consumes it. Runs synchronously on
+/// the calling thread; RSA generation is the slow path because it searches for
+/// primes, so its cost varies from call to call and belongs off a request path.
+pub fn generate_private_jwk(algorithm: GeneratedKeyAlgorithm) -> Result<PrivateJwk, CryptoError> {
+    let mut jwk = match algorithm {
+        GeneratedKeyAlgorithm::Es384 => generate_es384_jwk(),
+        GeneratedKeyAlgorithm::Rs384 => generate_rs384_jwk(),
+    }?;
+    jwk.alg = Some(algorithm.signing_algorithm().jwa_name().to_owned());
+    // Validate before deriving the kid, so no thumbprint is ever published for
+    // members this crate would refuse to sign with.
+    jwk.validate_private()?;
+    jwk.kid = Some(jwk.public().jkt()?);
+    Ok(jwk)
+}
+
+fn generate_es384_jwk() -> Result<PrivateJwk, CryptoError> {
+    let key_pair = EcdsaKeyPair::generate(&ECDSA_P384_SHA384_FIXED_SIGNING)
+        .map_err(|_| CryptoError::Crypto("ES384 key generation failed"))?;
+    // aws-lc-rs zeroizes this buffer on drop, and the base64url encoding below
+    // lands straight in the JWK member `PrivateJwk::drop` zeroizes, so the
+    // scalar exists in exactly those two places.
+    let scalar: EcPrivateKeyBin<'_> = key_pair
+        .private_key()
+        .as_be_bytes()
+        .map_err(|_| CryptoError::Crypto("ES384 private key export failed"))?;
+    let point = key_pair.public_key().as_ref();
+    // The SEC 1 uncompressed point `0x04 || x || y` that
+    // `p384_uncompressed_point` assembles for signing, taken apart again into
+    // the JWK's two coordinates.
+    if point.len() != 1 + 2 * P384_COORDINATE_BYTES || point[0] != 0x04 {
+        return Err(CryptoError::Crypto(
+            "ES384 public point is not uncompressed",
+        ));
+    }
+    let (x, y) = point[1..].split_at(P384_COORDINATE_BYTES);
+
+    Ok(PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: None,
+        crv: Some("P-384".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(scalar.as_ref())),
+        x: Some(URL_SAFE_NO_PAD.encode(x)),
+        y: Some(URL_SAFE_NO_PAD.encode(y)),
+        n: None,
+        e: None,
+        p: None,
+        q: None,
+        dp: None,
+        dq: None,
+        qi: None,
+    })
+}
+
+fn generate_rs384_jwk() -> Result<PrivateJwk, CryptoError> {
+    let key_pair = AwsRsaKeyPair::generate(GENERATED_RSA_KEY_SIZE)
+        .map_err(|_| CryptoError::Crypto("RS384 key generation failed"))?;
+    // aws-lc-rs exports an RSA private key as PKCS#8 only, while a JWK carries
+    // the eight PKCS#1 members, so the PKCS#8 wrapper comes off here. This is
+    // the inverse of `rsa_private_key_der`, which reassembles the same PKCS#1
+    // structure to hand a JWK back to aws-lc-rs. The exported buffer zeroizes
+    // on drop and every member below borrows from it rather than copying.
+    let pkcs8: Pkcs8V1Der<'_> = key_pair
+        .as_der()
+        .map_err(|_| CryptoError::Crypto("RSA private key export failed"))?;
+    let info = Pkcs8PrivateKeyInfo::try_from(pkcs8.as_ref())
+        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#8"))?;
+    let key = Pkcs1RsaPrivateKey::from_der(info.private_key)
+        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#1"))?;
+
+    Ok(PrivateJwk {
+        kty: "RSA".to_owned(),
+        kid: None,
+        alg: None,
+        crv: None,
+        d: Some(encode_rsa_uint(key.private_exponent)),
+        x: None,
+        y: None,
+        n: Some(encode_rsa_uint(key.modulus)),
+        e: Some(encode_rsa_uint(key.public_exponent)),
+        p: Some(encode_rsa_uint(key.prime1)),
+        q: Some(encode_rsa_uint(key.prime2)),
+        dp: Some(encode_rsa_uint(key.exponent1)),
+        dq: Some(encode_rsa_uint(key.exponent2)),
+        qi: Some(encode_rsa_uint(key.coefficient)),
+    })
+}
+
+/// A JWK carries an RSA member as its unsigned big-endian bytes with leading
+/// zeros stripped, which is exactly what `UintRef` holds. `rsa_uint` reads the
+/// same encoding back.
+fn encode_rsa_uint(value: UintRef<'_>) -> String {
+    URL_SAFE_NO_PAD.encode(value.as_bytes())
+}
+
 /// Sign `payload` using the private key in `jwk`.
 ///
-/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 (ECDSA P-256 with
-/// SHA-256), or RS256 (RSASSA-PKCS1-v1_5 with SHA-256). Runs synchronously on
-/// the calling thread. EdDSA is measured ~15 µs/op (release, Apple M5 Max);
-/// ES256 and RS256 are slower. Callers on a Tokio
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 or ES384 (ECDSA
+/// P-256 with SHA-256, P-384 with SHA-384), or RS256 or RS384 (RSASSA-PKCS1-v1_5
+/// with SHA-256 or SHA-384). Runs synchronously on the calling thread. EdDSA is
+/// measured ~15 µs/op (release, Apple M5 Max); the ECDSA and RSA algorithms are
+/// slower. Callers on a Tokio
 /// runtime that process many concurrent issuances should offload to
 /// `tokio::task::spawn_blocking` if latency becomes a concern. Run the ignored
 /// `eddsa_sign_microbench` test to re-measure on your hardware.
@@ -1239,7 +1445,13 @@ pub fn sign(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
     match jwk.algorithm()? {
         SigningAlgorithm::EdDsa => sign_eddsa(payload, jwk),
         SigningAlgorithm::Es256 => sign_es256(payload, jwk),
-        SigningAlgorithm::Rs256 => sign_rs256(payload, jwk),
+        SigningAlgorithm::Es384 => sign_es384(payload, jwk),
+        SigningAlgorithm::Rs256 => {
+            sign_rsa(payload, jwk, &RSA_PKCS1_SHA256, "RS256 signing failed")
+        }
+        SigningAlgorithm::Rs384 => {
+            sign_rsa(payload, jwk, &RSA_PKCS1_SHA384, "RS384 signing failed")
+        }
     }
 }
 
@@ -1272,7 +1484,7 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
     let key_pair = EcdsaKeyPair::from_private_key_and_public_key(
         &ECDSA_P256_SHA256_FIXED_SIGNING,
         &d,
-        &es256_uncompressed_point(&x, &y),
+        &p256_uncompressed_point(&x, &y),
     )
     .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
     // FIXED is the raw r || s encoding JWS carries. The ASN.1 signing
@@ -1288,7 +1500,7 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
 ///
 /// Taking arrays rather than slices keeps the encoding total: there is no
 /// coordinate width that reaches the curve library as a malformed point.
-fn es256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
+fn p256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
     let mut encoded = [0u8; 65];
     encoded[0] = 0x04;
     encoded[1..33].copy_from_slice(x);
@@ -1296,23 +1508,56 @@ fn es256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
     encoded
 }
 
-/// Decode a JWK coordinate into the fixed 32-byte width P-256 requires.
-fn decode_coordinate(value: Option<&str>, field: &'static str) -> Result<[u8; 32], JwkError> {
-    decode_fixed(value, 32, field)?
+/// The P-384 counterpart of `p256_uncompressed_point`, with the same totality
+/// argument. Each curve keeps its own assembler because stable Rust cannot
+/// express the `2N + 1` output width a single const-generic one would need.
+fn p384_uncompressed_point(x: &[u8; 48], y: &[u8; 48]) -> [u8; 97] {
+    let mut encoded = [0u8; 97];
+    encoded[0] = 0x04;
+    encoded[1..49].copy_from_slice(x);
+    encoded[49..97].copy_from_slice(y);
+    encoded
+}
+
+/// Decode a JWK coordinate into the fixed width its curve requires.
+fn decode_coordinate<const N: usize>(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<[u8; N], JwkError> {
+    decode_fixed(value, N, field)?
         .try_into()
         .map_err(|_| JwkError::Invalid(field))
 }
 
-fn sign_rs256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
+fn sign_es384(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> {
+    let d = decode_nonempty(jwk.d.as_deref(), "d")?;
+    if d.len() != 48 {
+        return Err(JwkError::Invalid("d length").into());
+    }
+    let x = decode_coordinate(jwk.x.as_deref(), "x")?;
+    let y = decode_coordinate(jwk.y.as_deref(), "y")?;
+    let key = EcdsaKeyPair::from_private_key_and_public_key(
+        &ECDSA_P384_SHA384_FIXED_SIGNING,
+        &d,
+        &p384_uncompressed_point(&x, &y),
+    )
+    .map_err(|_| CryptoError::Crypto("invalid ES384 private key"))?;
+    let signature = key
+        .sign(&SystemRandom::new(), payload)
+        .map_err(|_| CryptoError::Crypto("ES384 signing failed"))?;
+    Ok(signature.as_ref().to_vec())
+}
+
+fn sign_rsa(
+    payload: &[u8],
+    jwk: &PrivateJwk,
+    encoding: &'static RsaSignatureEncoding,
+    failure: &'static str,
+) -> Result<Vec<u8>, CryptoError> {
     let key = rsa_private_key(jwk)?;
     let mut signature = vec![0u8; key.public_modulus_len()];
-    key.sign(
-        &RSA_PKCS1_SHA256,
-        &SystemRandom::new(),
-        payload,
-        &mut signature,
-    )
-    .map_err(|_| CryptoError::Crypto("RS256 signing failed"))?;
+    key.sign(encoding, &SystemRandom::new(), payload, &mut signature)
+        .map_err(|_| CryptoError::Crypto(failure))?;
     Ok(signature)
 }
 
@@ -1353,16 +1598,19 @@ fn rsa_uint<'a>(bytes: &'a [u8], field: &'static str) -> Result<UintRef<'a>, Cry
 
 /// Verify `signature` over `payload` using the public key in `jwk`.
 ///
-/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 (ECDSA P-256 with
-/// SHA-256), or RS256 (RSASSA-PKCS1-v1_5 with SHA-256). Runs synchronously on
-/// the calling thread. EdDSA is measured ~22 µs/op (release, Apple M5 Max). Run
+/// Dispatches on the JWK algorithm: EdDSA (Ed25519), ES256 or ES384 (ECDSA
+/// P-256 with SHA-256, P-384 with SHA-384), or RS256 or RS384 (RSASSA-PKCS1-v1_5
+/// with SHA-256 or SHA-384). Runs synchronously on the calling thread. EdDSA is
+/// measured ~22 µs/op (release, Apple M5 Max). Run
 /// the ignored `eddsa_verify_microbench` test to re-measure on your hardware.
 pub fn verify(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
     jwk.validate_public()?;
     match jwk.algorithm()? {
         SigningAlgorithm::EdDsa => verify_eddsa(payload, signature, jwk),
         SigningAlgorithm::Es256 => verify_es256(payload, signature, jwk),
-        SigningAlgorithm::Rs256 => verify_rs256(payload, signature, jwk),
+        SigningAlgorithm::Es384 => verify_es384(payload, signature, jwk),
+        SigningAlgorithm::Rs256 => verify_rsa(payload, signature, jwk, &RSA_PKCS1_2048_8192_SHA256),
+        SigningAlgorithm::Rs384 => verify_rsa(payload, signature, jwk, &RSA_PKCS1_2048_8192_SHA384),
     }
 }
 
@@ -1397,14 +1645,27 @@ fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> 
     P256VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| CryptoError::InvalidSignature)
 }
 
-fn verify_rs256(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
+fn verify_es384(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
+    let x = decode_coordinate(jwk.x.as_deref(), "x")?;
+    let y = decode_coordinate(jwk.y.as_deref(), "y")?;
+    UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, p384_uncompressed_point(&x, &y))
+        .verify(payload, signature)
+        .map_err(|_| CryptoError::InvalidSignature)
+}
+
+fn verify_rsa(
+    payload: &[u8],
+    signature: &[u8],
+    jwk: &PublicJwk,
+    parameters: &RsaParameters,
+) -> Result<(), CryptoError> {
     let n = decode_nonempty(jwk.n.as_deref(), "n")?;
     let e = decode_nonempty(jwk.e.as_deref(), "e")?;
     let key = AwsRsaPublicKeyComponents {
         n: n.as_slice(),
         e: e.as_slice(),
     };
-    key.verify(&RSA_PKCS1_2048_8192_SHA256, payload, signature)
+    key.verify(parameters, payload, signature)
         .map_err(|_| CryptoError::InvalidSignature)
 }
 
@@ -1417,9 +1678,11 @@ fn algorithm_from_fields(
         Some("EdDSA") => Ok(SigningAlgorithm::EdDsa),
         Some("ES256") => Ok(SigningAlgorithm::Es256),
         Some("RS256") => Ok(SigningAlgorithm::Rs256),
+        Some("ES384") => Ok(SigningAlgorithm::Es384),
+        Some("RS384") => Ok(SigningAlgorithm::Rs384),
         Some(_) => Err(JwkError::UnsupportedAlgorithm),
         None if kty == "OKP" && crv == Some("Ed25519") => Ok(SigningAlgorithm::EdDsa),
-        // RSA keys must carry an explicit alg: "RS256"; never inferred from kty.
+        // RSA keys must carry an explicit RSA alg; never inferred from kty.
         None => Err(JwkError::UnsupportedAlgorithm),
     }
 }
@@ -1631,6 +1894,18 @@ mod tests {
     /// signature of exactly this shape, and must still verify after it.
     const ES256_PRE_MIGRATION_SIGNATURE: &str =
         "Rle6NzhA6z80JzmFr-GdJqUws2TlPoxXAtod7KVT9hPw6xfOdBHaD56f6NKxATy3b7bo8pL-Fq2mFiMyzeqy9w";
+    const P384_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"did:web:issuer.test#p384-key-1"}"#;
+
+    const ES384_OPENSSL_VECTOR_PAYLOAD: &[u8] =
+        b"registry-platform-crypto openssl 3.6.2 es384 known-answer vector";
+    /// The public half of a P-384 pair OpenSSL 3.6.2 generated, `x` and `y`
+    /// taken from the uncompressed point OpenSSL prints for that key.
+    const ES384_OPENSSL_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-384","x":"5DdfCWW37biY67BYT5RfqwwonZP6KVlTkmGD5REYpY3R1U0cDRCcerer26H1T3zc","y":"fIP0mOBgT2Py6DZelcG6BFvJROt8g43lX4g8XIeVujRy4H1ghKeUJh1WWk0XPBO1","alg":"ES384","kid":"openssl-es384-vector"}"#;
+    /// OpenSSL 3.6.2's ES384 signature over `ES384_OPENSSL_VECTOR_PAYLOAD` with
+    /// the pair above, rewritten from the ASN.1 DER SEQUENCE OpenSSL emits into
+    /// the raw `r || s` JWS carries: each of `r` and `s` left-padded to the
+    /// curve's 48-byte width.
+    const ES384_OPENSSL_SIGNATURE: &str = "MQ4axJZgmlYpKgUgXCxo1-9FHqhClByVu8PX9iK0BBuFD5RISplywLqpzUgd8o4uNXI8dYRxDbKaOMqKBCw0ofjUehrD7MUl1H8IGKi3km2XaTx62UrO8OH9A0lT8nmK";
 
     #[cfg(all(unix, feature = "transit"))]
     struct MockTransitReply {
@@ -1876,6 +2151,15 @@ mod tests {
     // `registry-notary-rs256-1024`. These pin the AWS-LC 2048-bit RSA floor.
     const RSA_1024_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-1024-test","alg":"RS256","n":"0XamHpbNC-FqjNCuvjTv3JlceEpQlZtsULPcCTy0CYnGxMNHNYUdcUuVXSFtIQCpHPWUwLL-GWu5PmF_svocDHHsbnlbPj3Eg9dVN2m1g-du7jK1IA3eeTmfWZAkZC9R_ITsULIr7QjrMrUm2GgejMLqnaeZpVxmCD6X6ER02Ik","e":"AQAB","d":"yOuWzSC57vt6yTgjZjBBJMm2-WvPgLJlY8Qi_HlN-Rg_od3vIFdftp1Z2MuHcnC_xxeKaI1JT_kU59F-PJ_M5iWqT5f4fXLgEcBMkBjXTgK-uK3hwHQUKz7F20p3_hJDZoG9v1bBxLhBtk1NPx2O1GggRsrAVpw1yy6ZwcwdRkE","p":"-Vee6DQ7Sam8Gr1BFda8bkY2RufiBmJ6rQvZiOD3kOU8Lm9lQYQ0l4_w2n3KBblsQ6qamCfw2_WLDxgBiyn94w","q":"1w5vxxGu66T1WEJo-yl8Xz109DrG9upv-YNuPUPHy9U6B4A8_2iaK1ony6jwwmEDmroepEw8CpX9M0IySA3bow","dp":"D3seNaKQj8lHEY3wjY-QkXQwiIR7JxRUM4xJzFLTbB6fdu6ZpdC0hzh7psUqluJlU2ozQQEx1iZPpPdDmUVZKw","dq":"TCmWuJ-wnU_cfBd46op0u54eT2iJkmTQp0M-xX-9wJiRZpqp_6JiBzx0n5IDQjPtfNyxgWpmUTFxbLfi6tXNlQ","qi":"qA3t0sbVQvSRcUYOZmh9re_Ln6B5qxfqUcgRG7naqe1HL_7pGpE9CaeVZ_koLmXSRrYZ8Y5m14vJjQd7aGta8w"}"#;
     const RSA_1024_SIGNATURE: &str = "AHSzPijESokHRJWCXV0Vc_n0Faee3y4fU1z4-f8qT5BbvHX8sM9BknCVTfg4AWCB6szaVJV5J3oeLlTM8qGIrLj1qMewYjhxbNymNoDkzXTiYDt_NJw28LooZiXAZYmy8HK7EJqwnbvyS4-0j4KpiXl1MkNHYIe_l3JuvG-af24";
+
+    const RS384_OPENSSL_VECTOR_PAYLOAD: &[u8] =
+        b"registry-platform-crypto openssl 3.6.2 rs384 known-answer vector";
+    /// A 2048-bit RSA private JWK carrying the CRT components OpenSSL 3.6.2
+    /// prints for a key it generated. Test-only material, not a production key.
+    const RS384_OPENSSL_PRIVATE_JWK: &str = r#"{"kty":"RSA","kid":"openssl-rs384-vector","alg":"RS384","n":"odXWNdjRAm54dJ0hOG_nKhW7oHn1sDvVRZYohv9yws51rUiMB_QS1n2J2MjOaCfM3Htp2jQHW4fZNGMOrjE1CuJuFInTKAAHrJtFRmQb54rY2kc7meLrN7PS4sxkjoh5vbcl3B9ZJ3dpqWw8fa7tg3priRhmj9eb67f7C0fOl2zRRez1kmq7bxm29jvEE4ZK3rYhm5ZvfYKhnK1bQFdm5X0FjbxUcZtd1BREUdmqUQebEPQwlFvRv0Qupq5rrn3ZgDwn9Dbji40WXtbfISNuEocTIGOO7hfd-D42wCZlWrn8CJGuNd2bwXC-fEZBIfSk5pIB_b_cfubWOyvxnyz6bQ","e":"AQAB","d":"PScdIU7TN_x_hu1DOtzKOLRqqGq9hMEvR3LE0LJhbqxuejLSO0UnAyb_-kty95emiWAXMS185EDyuiF-UCNm_DxwxVEJWfGc9MPdiwpUIwvsApttMaq2IF_SngIHM3btrdsxsrqjyU6NvkgYmZOKy6ZsUStHwi4CjLGCaxJQxhXt9Wbqek5DDCS8G8Bzjy-oUBsInTpuxPWGMOWtpcu6w-dDj5wCALNzKJmAc7SVhUTNXY1V-kwZSkq_mjCZvKPH_6m2Xqzzr-UINnoq5hOI8Jp43MTjdHnS6tFegFqAiQe4SRJL83cTjVzSXAINNXpdNrexSwB_qCeY63Sx2F2Vjw","p":"1vz7HVe4XJNvFjxaq4KAebHjaFUE2uaKpYGWCRW2_FoanDnW7WmqRDpU_mb1elO3Su4kLYMzFCHiSOQie_8cgGoEyLE2Eg1MGnRyoW2pwt77RP5fchc4gkQEw6JguT-0IiPlip_NWi60p0n8zXmd_y_2SE0d4yyMYInOOoydP0s","q":"wLUdx51lQ_tbpc1ILAJ6ds2SKh715PVzBMo_vVmR5uGOduw00XZm_87tF8-JzN2sP0MARY-S-3BHsCvvIRxbUeMrC2FXDzAwWZ-zOEl0r5vbOPOhMSSzIX94RZPtqI3o6zHsPFYZxtU8g8WMiLGe5K1srLbs1zo5KYq_5s9VQic","dp":"k0R2S9JUEu5XkTbEsWnS0gn-CfD7Q2vbG6aZ_R0n3NNoGQ4x4S2ZmeUPZblnfGUuUKCynY6bBbZ0SJQl3ySRBJIbNtLVhCYhtJmCEHyLZlbSbp-FCCVJ60nmrZBki2FM5noKehwfUiBeVZ4EE0i05yKWpU5WI9DXVCXx4_-Ak-M","dq":"qn1SPHEuz0dJXNXSHUWQDR1wTB2aFJdmy_0XCTF-WJKDVQlC7XHgTD9JGYC-fGY95rYjPmd4dUVv1xf3dwa8cCUXxvi2ajSLAi-9AnZSaq7r82Xv3SeH54H76Sqn3zC1uacwRm0yXuv2nuoenCzw04XvGJq5zOyw9-TORKh32I8","qi":"e4kQt1SOxFswplA_tfw9Xz4qN7zmM8vdcAN3lyeDBvTRaKtumH6mtDSPmdu7_3XbvK5A8ARxlOiInTtFOF_NnMEsiQXtn3GnA9z3euJmY7zHT_bKYveQIk6tvHaOaXvtghWKBDDm8lPUNLjCj2uQISbE0Ai5To7fu7-AVV6n4cw"}"#;
+    /// OpenSSL 3.6.2's RS384 signature over `RS384_OPENSSL_VECTOR_PAYLOAD` with
+    /// the key above.
+    const RS384_OPENSSL_SIGNATURE: &str = "TyTgylxchYn-SuG-mYzIpsu7RUlans7MbxyAboqGbyVmejbLd8C_bYt9p13wotq_pgs0JnslQ6RmZTh0-rFaZ4E_ZFf1ZxwQbB7Hud2WMCTs0fSh33k-XaauTXxZfSXrecojQrxrB_U1XBQpvL9olz0fygRcBal59ZuGGkTLPMD7RNUwDkMpZ16fs2aNIjiubvT4zG9HS3_kshgi5ATmzjiLQYrS5uLsyCZI7Fqfcar5cH6yJTZScdJgXEiKGtM1pEKZ6leSAkW7OCfYvHPPHXONo2nHxM15I1BnEh5aTfeBHYLm8HBQrXm5NaOmYXX7PYqzu7AvdFs2zxLfY5F6SQ";
 
     #[test]
     fn private_jwk_parse_debug_redacts_and_public_strips_private_material() {
@@ -2659,6 +2943,350 @@ mod tests {
         verify(ES256_FIXED_VECTOR_PAYLOAD, &signature, &public).expect("signature verifies");
     }
 
+    #[test]
+    fn es384_private_and_public_jwks_parse() {
+        let private = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        assert_eq!(
+            private.algorithm().expect("algorithm"),
+            SigningAlgorithm::Es384
+        );
+        let public = private.public();
+        let public_json = serde_json::to_value(&public).expect("public jwk serializes");
+
+        assert_eq!(public.kty, "EC");
+        assert_eq!(public.crv.as_deref(), Some("P-384"));
+        assert_eq!(public.alg.as_deref(), Some("ES384"));
+        assert!(public_json.get("d").is_none());
+        assert!(matches!(public.algorithm(), Ok(SigningAlgorithm::Es384)));
+    }
+
+    #[test]
+    fn es384_public_jwk_rejects_length_correct_off_curve_coordinates() {
+        let zero_coordinate = URL_SAFE_NO_PAD.encode([0_u8; 48]);
+        let candidate = json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": zero_coordinate.clone(),
+            "y": zero_coordinate,
+            "alg": "ES384",
+            "kid": "invalid-point",
+        });
+
+        assert!(matches!(
+            PublicJwk::parse(&candidate.to_string()),
+            Err(JwkError::Invalid("ES384 public point"))
+        ));
+
+        let legitimate = serde_json::to_string(
+            &PrivateJwk::parse(P384_JWK)
+                .expect("p384 private jwk parses")
+                .public(),
+        )
+        .expect("p384 public jwk serializes");
+        PublicJwk::parse(&legitimate).expect("a point on P-384 is still accepted");
+    }
+
+    #[test]
+    fn es384_sign_then_verify_roundtrips() {
+        let private = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        let public = private.public();
+        let payload = b"registry-platform-es384";
+        let signature = sign(payload, &private).expect("payload signs");
+
+        assert_eq!(signature.len(), 96, "ES384 JWS signatures are raw r || s");
+        verify(payload, &signature, &public).expect("signature verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn es384_signing_uses_a_fresh_signature_each_call() {
+        let private = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        let public = private.public();
+        let payload = b"registry-platform-es384-repeat";
+        let first = sign(payload, &private).expect("payload signs");
+        let second = sign(payload, &private).expect("payload signs again");
+
+        assert_ne!(first, second, "ECDSA signatures carry a per-call nonce");
+        verify(payload, &first, &public).expect("first signature verifies");
+        verify(payload, &second, &public).expect("second signature verifies");
+    }
+
+    /// Independent known-answer check for ES384. Both halves of the vector, the
+    /// key and the signature, come from OpenSSL 3.6.2 rather than from this
+    /// crate.
+    ///
+    /// ES384 signs and verifies through aws-lc-rs on both sides, so a
+    /// round-trip proves only that the crate agrees with itself. It would still
+    /// pass if signing emitted an ASN.1 DER SEQUENCE where JWS wants raw
+    /// `r || s`. OpenSSL does emit DER, and the frozen constant is that DER pair
+    /// rewritten as raw `r || s`, so accepting it pins the JWS encoding against
+    /// an outside implementation.
+    ///
+    /// ECDSA is randomized, so only acceptance is pinned: this signature is one
+    /// of many valid ones over the payload.
+    #[test]
+    fn es384_accepts_an_openssl_signature_over_a_fixed_payload() {
+        let public = PublicJwk::parse(ES384_OPENSSL_PUBLIC_JWK).expect("openssl p384 jwk parses");
+        let signature = URL_SAFE_NO_PAD
+            .decode(ES384_OPENSSL_SIGNATURE)
+            .expect("the openssl vector decodes");
+
+        assert_eq!(signature.len(), 96, "ES384 JWS signatures are raw r || s");
+        verify(ES384_OPENSSL_VECTOR_PAYLOAD, &signature, &public)
+            .expect("an OpenSSL ES384 signature verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn es384_sign_rejects_an_out_of_range_private_scalar() {
+        let mut value: Value = serde_json::from_str(P384_JWK).expect("p384 jwk json");
+        value
+            .as_object_mut()
+            .expect("p384 jwk object")
+            .insert("d".to_string(), json!(URL_SAFE_NO_PAD.encode([0_u8; 48])));
+        let json = serde_json::to_string(&value).expect("p384 jwk serializes");
+        let private = PrivateJwk::parse(&json).expect("zero-scalar p384 jwk still parses");
+
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Es384)));
+        assert!(matches!(
+            sign(b"registry-platform-es384-zero", &private),
+            Err(CryptoError::Crypto(_))
+        ));
+    }
+
+    /// Importing the pair rather than the scalar alone means a `d` sitting
+    /// beside another pair's `x` and `y` does not sign, matching ES256. Such a
+    /// JWK would otherwise produce a valid signature over a public half it does
+    /// not describe, which no relying party holding the stated key can verify.
+    #[test]
+    fn es384_sign_rejects_a_private_key_whose_public_half_is_another_pair() {
+        let other = PublicJwk::parse(ES384_OPENSSL_PUBLIC_JWK).expect("openssl p384 jwk parses");
+        let mut key = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        key.x = other.x.clone();
+        key.y = other.y.clone();
+
+        assert!(matches!(
+            sign(b"registry-platform-es384-mismatch", &key),
+            Err(CryptoError::Crypto("invalid ES384 private key"))
+        ));
+    }
+
+    /// A P-256 scalar in a key that claims ES384 is refused at both boundaries a
+    /// caller can reach. The fields are public, so parsing the document is not
+    /// the only way in; `sign` validates again rather than trusting that the
+    /// value it holds is the one that was parsed.
+    #[test]
+    fn es384_refuses_a_scalar_that_is_not_a_p384_scalar() {
+        let p256_length_scalar = URL_SAFE_NO_PAD.encode([0x11u8; 32]);
+
+        let mut document: serde_json::Value =
+            serde_json::from_str(P384_JWK).expect("p384 jwk is json");
+        document["d"] = serde_json::Value::String(p256_length_scalar.clone());
+        assert!(matches!(
+            PrivateJwk::parse(&document.to_string()),
+            Err(JwkError::Invalid("d"))
+        ));
+
+        let mut key = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        key.d = Some(p256_length_scalar);
+        assert!(matches!(
+            sign(b"registry-platform-es384-short-scalar", &key),
+            Err(CryptoError::InvalidKey(JwkError::Invalid("d")))
+        ));
+    }
+
+    #[test]
+    fn ec_signing_algorithms_refuse_each_other_s_curve() {
+        let p256_claiming_es384 = P256_JWK.replace(r#""alg":"ES256""#, r#""alg":"ES384""#);
+        let p384_claiming_es256 = P384_JWK.replace(r#""alg":"ES384""#, r#""alg":"ES256""#);
+
+        assert!(matches!(
+            PrivateJwk::parse(&p256_claiming_es384),
+            Err(JwkError::Invalid("ES384 keys must be EC/P-384"))
+        ));
+        assert!(matches!(
+            PrivateJwk::parse(&p384_claiming_es256),
+            Err(JwkError::Invalid("ES256 keys must be EC/P-256"))
+        ));
+
+        let public_p256_claiming_es384 = serde_json::to_string(
+            &PrivateJwk::parse(P256_JWK)
+                .expect("p256 private jwk parses")
+                .public(),
+        )
+        .expect("p256 public jwk serializes")
+        .replace(r#""alg":"ES256""#, r#""alg":"ES384""#);
+        let public_p384_claiming_es256 = serde_json::to_string(
+            &PrivateJwk::parse(P384_JWK)
+                .expect("p384 private jwk parses")
+                .public(),
+        )
+        .expect("p384 public jwk serializes")
+        .replace(r#""alg":"ES384""#, r#""alg":"ES256""#);
+
+        assert!(matches!(
+            PublicJwk::parse(&public_p256_claiming_es384),
+            Err(JwkError::Invalid("ES384 keys must be EC/P-384"))
+        ));
+        assert!(matches!(
+            PublicJwk::parse(&public_p384_claiming_es256),
+            Err(JwkError::Invalid("ES256 keys must be EC/P-256"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_jwk_signer_es384() {
+        let private = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let payload = b"registry-platform-es384-provider";
+        let signature = signer.sign(payload).await.expect("payload signs");
+
+        assert_eq!(signer.algorithm(), SigningAlgorithm::Es384);
+        let public = signer.public_jwk();
+        assert_eq!(public.kty, "EC");
+        assert_eq!(public.crv.as_deref(), Some("P-384"));
+        verify(payload, &signature, &public).expect("signature verifies");
+    }
+
+    fn rsa_jwk_with_alg(jwk: &str, alg: &str) -> String {
+        let mut value: Value = serde_json::from_str(jwk).expect("rsa jwk json");
+        value
+            .as_object_mut()
+            .expect("rsa jwk object")
+            .insert("alg".to_string(), json!(alg));
+        serde_json::to_string(&value).expect("rsa jwk serializes")
+    }
+
+    #[test]
+    fn rs384_sign_then_verify_roundtrips() {
+        let private = PrivateJwk::parse(&rsa_jwk_with_alg(RSA_JWK, "RS384"))
+            .expect("rs384 private jwk parses");
+        let public = private.public();
+        let payload = b"registry-platform-rs384";
+        let signature = sign(payload, &private).expect("payload signs");
+
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Rs384)));
+        verify(payload, &signature, &public).expect("signature verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn rs384_and_rs256_signatures_do_not_cross_verify() {
+        let rs256 = PrivateJwk::parse(RSA_JWK).expect("rsa private jwk parses");
+        let rs384 = PrivateJwk::parse(&rsa_jwk_with_alg(RSA_JWK, "RS384"))
+            .expect("rs384 private jwk parses");
+        let payload = b"registry-platform-rs384-crossover";
+        let rs256_signature = sign(payload, &rs256).expect("rs256 payload signs");
+        let rs384_signature = sign(payload, &rs384).expect("rs384 payload signs");
+
+        assert!(matches!(
+            verify(payload, &rs256_signature, &rs384.public()),
+            Err(CryptoError::InvalidSignature)
+        ));
+        assert!(matches!(
+            verify(payload, &rs384_signature, &rs256.public()),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    /// Independent known-answer check for RS384. Both halves of the vector, the
+    /// key and the signature, come from OpenSSL 3.6.2 rather than from this
+    /// crate.
+    ///
+    /// RS384 signs and verifies through aws-lc-rs on both sides, so a
+    /// round-trip proves only that the crate agrees with itself. It would still
+    /// pass under the wrong digest or the wrong PKCS#1 padding. RSASSA-PKCS1-v1_5
+    /// is deterministic, so both directions are pinned: this crate must accept
+    /// OpenSSL's signature and must emit exactly those bytes for the same key
+    /// and payload.
+    #[test]
+    fn rs384_matches_an_openssl_signature_over_a_fixed_payload() {
+        let private = PrivateJwk::parse(RS384_OPENSSL_PRIVATE_JWK).expect("openssl rsa jwk parses");
+        let expected = URL_SAFE_NO_PAD
+            .decode(RS384_OPENSSL_SIGNATURE)
+            .expect("the openssl vector decodes");
+
+        verify(RS384_OPENSSL_VECTOR_PAYLOAD, &expected, &private.public())
+            .expect("an OpenSSL RS384 signature verifies");
+        assert_eq!(
+            sign(RS384_OPENSSL_VECTOR_PAYLOAD, &private).expect("payload signs"),
+            expected,
+            "RS384 is deterministic, so this crate must emit OpenSSL's bytes"
+        );
+    }
+
+    #[test]
+    fn rs384_sign_rejects_sub_2048_bit_private_key() {
+        let private = PrivateJwk::parse(&rsa_jwk_with_alg(RSA_1024_JWK, "RS384"))
+            .expect("1024-bit rs384 jwk parses");
+
+        assert!(matches!(
+            sign(b"registry-platform-rs384-1024", &private),
+            Err(CryptoError::Crypto(_))
+        ));
+    }
+
+    #[test]
+    fn rs384_keys_must_be_rsa() {
+        let ec_claiming_rs384 = P384_JWK.replace(r#""alg":"ES384""#, r#""alg":"RS384""#);
+
+        assert!(matches!(
+            PrivateJwk::parse(&ec_claiming_rs384),
+            Err(JwkError::Invalid("RS384 keys must be RSA"))
+        ));
+
+        // A relying party parses the public half alone, so that path carries the
+        // same refusal rather than trusting the private one to have run.
+        let public_ec_claiming_rs384 = serde_json::to_string(
+            &PrivateJwk::parse(P384_JWK)
+                .expect("p384 private jwk parses")
+                .public(),
+        )
+        .expect("p384 public jwk serializes")
+        .replace(r#""alg":"ES384""#, r#""alg":"RS384""#);
+
+        assert!(matches!(
+            PublicJwk::parse(&public_ec_claiming_rs384),
+            Err(JwkError::Invalid("RS384 keys must be RSA"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_jwk_signer_rs384() {
+        let private = PrivateJwk::parse(&rsa_jwk_with_alg(RSA_JWK, "RS384"))
+            .expect("rs384 private jwk parses");
+        let signer = LocalJwkSigner::new(private).expect("local signer builds");
+        let payload = b"registry-platform-rs384-provider";
+        let signature = signer.sign(payload).await.expect("payload signs");
+
+        assert_eq!(signer.algorithm(), SigningAlgorithm::Rs384);
+        let public = signer.public_jwk();
+        assert_eq!(public.kty, "RSA");
+        verify(payload, &signature, &public).expect("signature verifies");
+    }
+
+    #[test]
+    fn every_signing_algorithm_reports_its_jws_alg_name() {
+        for (algorithm, name) in [
+            (SigningAlgorithm::EdDsa, "EdDSA"),
+            (SigningAlgorithm::Es256, "ES256"),
+            (SigningAlgorithm::Rs256, "RS256"),
+            (SigningAlgorithm::Es384, "ES384"),
+            (SigningAlgorithm::Rs384, "RS384"),
+        ] {
+            assert_eq!(algorithm.jwa_name(), name);
+        }
+    }
+
     fn rsa_public_json() -> String {
         let public = PrivateJwk::parse(RSA_JWK)
             .expect("rsa private jwk parses")
@@ -3257,5 +3885,185 @@ mod tests {
         use subtle::ConstantTimeEq;
 
         assert_eq!(b"a".ct_eq(b"a").unwrap_u8(), 1);
+    }
+
+    #[test]
+    fn generated_es384_key_passes_this_crates_own_validation() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("ES384 generates");
+
+        assert_eq!(private.kty, "EC");
+        assert_eq!(private.crv.as_deref(), Some("P-384"));
+        assert_eq!(private.alg.as_deref(), Some("ES384"));
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Es384)));
+
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str()),
+            "the generated kid is the RFC 7638 thumbprint of the public half"
+        );
+
+        // Re-parsing through the public entry points is the real check: it runs
+        // the same validation an adopter's key file goes through.
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(private.d.as_deref().expect("generated key carries d"))
+                .expect("d is base64url")
+                .len(),
+            48,
+            "a P-384 scalar is 48 bytes wide"
+        );
+    }
+
+    /// The round trip is what proves the JWK members are ordered and encoded
+    /// correctly. A generated key whose `x` and `y` were swapped, or whose `d`
+    /// carried a stray leading zero, still parses; it does not verify.
+    #[test]
+    fn generated_es384_key_signs_and_verifies_under_its_public_half() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("ES384 generates");
+        let public = private.public();
+        let payload = b"registry-platform-crypto generated es384 round trip";
+
+        let signature = sign(payload, &private).expect("generated key signs");
+        assert_eq!(signature.len(), 96, "ES384 JWS signatures are raw r || s");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn generated_rs384_key_signs_and_verifies_under_its_public_half() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+        let public = private.public();
+        let payload = b"registry-platform-crypto generated rs384 round trip";
+
+        let signature = sign(payload, &private).expect("generated key signs");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn generated_rs384_key_is_a_2048_bit_rsa_key() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+
+        assert_eq!(private.kty, "RSA");
+        assert_eq!(private.alg.as_deref(), Some("RS384"));
+        assert_eq!(private.crv, None, "an RSA JWK carries no curve");
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Rs384)));
+
+        let modulus = URL_SAFE_NO_PAD
+            .decode(private.n.as_deref().expect("generated key carries n"))
+            .expect("n is base64url");
+        assert_eq!(modulus.len(), 256, "RFC 7518 requires at least 2048 bits");
+        assert_ne!(modulus[0] & 0x80, 0, "the modulus has no leading zero byte");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(private.e.as_deref().expect("generated key carries e"))
+                .expect("e is base64url"),
+            [0x01, 0x00, 0x01],
+            "the public exponent is 65537"
+        );
+
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str())
+        );
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+    }
+
+    /// Every CRT member has to belong to the same key. Recomputing the modulus
+    /// from the two primes catches a pair assembled from mismatched components,
+    /// which signing alone would not: aws-lc-rs can fall back to the plain
+    /// private exponent.
+    #[test]
+    fn generated_rs384_primes_multiply_back_to_the_modulus() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+        let decode = |member: Option<&str>| {
+            URL_SAFE_NO_PAD
+                .decode(member.expect("generated key carries the member"))
+                .expect("member is base64url")
+        };
+        let modulus = decode(private.n.as_deref());
+        let p = decode(private.p.as_deref());
+        let q = decode(private.q.as_deref());
+
+        assert_eq!(p.len(), 128, "a 2048-bit key has two 1024-bit primes");
+        assert_eq!(q.len(), 128);
+        assert_eq!(
+            multiply_big_endian(&p, &q),
+            modulus,
+            "p * q must reproduce n"
+        );
+        for member in [private.dp.as_deref(), private.dq.as_deref()] {
+            assert!(
+                !decode(member).is_empty(),
+                "the CRT exponents must be present"
+            );
+        }
+        assert!(!decode(private.qi.as_deref()).is_empty());
+    }
+
+    /// Schoolbook multiplication of two big-endian integers, with the leading
+    /// zero bytes trimmed so the result compares against a JWK modulus.
+    fn multiply_big_endian(left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut product = vec![0_u32; left.len() + right.len()];
+        for (left_index, left_byte) in left.iter().rev().enumerate() {
+            let mut carry = 0_u32;
+            for (right_index, right_byte) in right.iter().rev().enumerate() {
+                let slot = left_index + right_index;
+                let total = product[slot] + u32::from(*left_byte) * u32::from(*right_byte) + carry;
+                product[slot] = total & 0xff;
+                carry = total >> 8;
+            }
+            product[left_index + right.len()] += carry;
+        }
+        let mut bytes: Vec<u8> = product
+            .into_iter()
+            .rev()
+            .map(|value| u8::try_from(value).expect("each slot holds one byte"))
+            .collect();
+        let first_significant = bytes.iter().position(|byte| *byte != 0).unwrap_or(0);
+        bytes.drain(..first_significant);
+        bytes
+    }
+
+    #[test]
+    fn two_generations_produce_different_keys() {
+        for algorithm in [GeneratedKeyAlgorithm::Es384, GeneratedKeyAlgorithm::Rs384] {
+            let first = generate_private_jwk(algorithm).expect("first key generates");
+            let second = generate_private_jwk(algorithm).expect("second key generates");
+
+            assert_ne!(first.d, second.d, "{algorithm:?} reused a private scalar");
+            assert_ne!(first.kid, second.kid, "{algorithm:?} reused a kid");
+        }
+    }
+
+    #[test]
+    fn generated_key_algorithm_names_its_signing_algorithm() {
+        assert_eq!(
+            GeneratedKeyAlgorithm::Es384.signing_algorithm(),
+            SigningAlgorithm::Es384
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Rs384.signing_algorithm(),
+            SigningAlgorithm::Rs384
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Es384.signing_algorithm().jwa_name(),
+            "ES384"
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Rs384.signing_algorithm().jwa_name(),
+            "RS384"
+        );
     }
 }

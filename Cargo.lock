@@ -5570,6 +5570,7 @@ dependencies = [
  "rcgen",
  "registry-evidence-verifier",
  "registry-platform-audit",
+ "registry-platform-authcommon",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",
@@ -5614,6 +5615,7 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-verifier",
  "registry-mint",
+ "registry-platform-authcommon",
  "registry-platform-crypto",
  "registry-platform-httputil",
  "registry-platform-sdjwt",
@@ -5623,7 +5625,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "ulid",
  "url",
  "wiremock",
  "zeroize",
@@ -5823,13 +5824,16 @@ dependencies = [
 name = "registry-platform-authcommon"
 version = "0.17.0"
 dependencies = [
+ "base64",
  "proptest",
+ "registry-platform-crypto",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
+ "ulid",
  "zeroize",
 ]
 
@@ -5874,6 +5878,7 @@ dependencies = [
  "hmac 0.13.0",
  "p256",
  "pkcs1",
+ "pkcs8",
  "proptest",
  "registry-platform-canonical-json",
  "reqwest 0.12.28",

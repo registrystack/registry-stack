@@ -21,10 +21,10 @@ correct.
 
 | Profile | Request | Response | Authentication | Generality pressure |
 |---|---|---|---|---|
-| `flat-rest` | Reviewed JSON preparation with identifier or compound selectors | Flat JSON object | Static Bearer | Closed selector inputs and direct fact extraction |
+| `flat-rest` | Reviewed JSON preparation with identifier or compound selectors | Flat JSON object | Static Authorization header | Closed selector inputs and direct fact extraction |
 | `dhis2-tracker` | `GET` with prepared filters, fixed `fields`, and `pageSize` | Pager, `trackedEntities` collection, nested attributes | HTTP Basic | Query rendering, encoding, cardinality, collection handling, and controlled codes |
 | `opencrvs-event-search` | Prepared bounded JSON `POST` for one tracking ID | Nested event index and country-configured declaration | OAuth 2.0 client credentials, then Bearer | Credential bootstrap, exact event lookup, nested extraction, and relational derivation |
-| `search-chain` | One fixed JSON `POST` search, then two declared members in declared order: one path-bound dereference, one filtered search in a JSON body | Flat dotted response keys, a provider count, and a bounded result page per stage | Static Bearer per stage, and per-source OAuth 2.0 client credentials for the dereference member | Ordered multi-stage acquisition, per-member allowlisted projection, a provider count consumed as a value, and silently widened queries |
+| `search-chain` | One fixed JSON `POST` search, then two declared members in declared order: one path-bound dereference, one filtered search in a JSON body | Flat dotted response keys, a provider count, and a bounded result page per stage | Static Authorization header per stage, and per-source OAuth 2.0 client credentials for the dereference member | Ordered multi-stage acquisition, per-member allowlisted projection, a provider count consumed as a value, and silently widened queries |
 
 A single-stage row and a multi-stage row are different claims about the same
 product. The first says one bounded request shape still works. The second says
@@ -74,7 +74,7 @@ than a matrix that reads as complete.
 | Search fact kind | reference (covered), count (not covered), completeness attestation (not covered) |
 | Member fact kind | reference (not covered), count (covered), attested boolean (covered) |
 | Negative capability | attested set completeness (covered), or none, in which case zero stays `no_match` (covered at the search stage only, never as a whole chain) |
-| Credential | static bearer (covered) / per-source OAuth client credentials (covered) |
+| Credential | static Authorization header (covered) / per-source OAuth client credentials (covered) |
 
 The uncovered cells are deliberate. No profile yet carries a search whose own
 fact is a count or a completeness attestation, a member whose fact is a
@@ -167,8 +167,9 @@ Profile-specific cases include:
   before any member request, a counted zero staying a `match`, and proof that a
   search fact a member did not declare reaches neither its path, its query, nor
   the body its preparation built.
-- fixed and tagged selector/prior-fact-bound path expansion, fixed headers, Basic, static Bearer,
-  static API-key, OAuth client credentials, system-root and private-CA TLS,
+- fixed and tagged selector/prior-fact-bound path expansion, fixed headers, Basic,
+  static Authorization header, static API-key, OAuth client credentials in both
+  its client-secret and private-key JWT forms, system-root and private-CA TLS,
   projection conflicts, and proof that ambient proxy variables are ignored.
 - the explicit local credential-free boundary, including exact numeric-
   loopback origin validation and absence of an authentication header.

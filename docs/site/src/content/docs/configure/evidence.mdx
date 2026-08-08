@@ -221,6 +221,73 @@ Evidence Gateway uses this random secret to derive audience-scoped subject refer
 selector values. The references let an assertion identify its subject without disclosing the
 selector values or creating one identifier that every audience can reuse.
 
+### Client assertion keys
+
+A source that names `authentication.kind: oauth2-client-credentials` authenticates to its token
+endpoint with either a client secret or a private key. The private-key form is RFC 7523 section 2.2
+`private_key_jwt`: Evidence Gateway signs a short-lived assertion with the key that
+`clientAssertionKeyRef` names and sends that assertion in place of a secret, so no shared secret
+reaches the token endpoint. SMART on FHIR Backend Services sources authenticate this way.
+
+Generate the pair with:
+
+```sh
+evidencectl keygen client-assertion --out-dir "<secrets-dir>"
+```
+
+The default writes `client-assertion-p384-private-jwk` and `client-assertion-p384-public.jwk.json`.
+Passing `--algorithm rs384` writes `client-assertion-rsa2048-private-jwk` and
+`client-assertion-rsa2048-public.jwk.json` instead. SMART App Launch v2.2.0 requires a token endpoint
+to validate only one of ES384 and RS384, so the source's authorization server decides which key you
+need. The two pairs use different filenames, so a deployment facing two sources that disagree keeps
+both in one secret root.
+
+A deployment reaching two authorization servers needs a key for each, and both live in the same
+secret root, so name them:
+
+```sh
+evidencectl keygen client-assertion --out-dir "<secrets-dir>" --private-name records-authority-key
+```
+
+`--private-name` names the private file itself, so the name you pass is the one
+`clientAssertionKeyRef` points at, as `secret:file/records-authority-key`. The public half is written
+beside it as `records-authority-key-public.jwk.json`. A name follows the `secret:file/` grammar: a
+lowercase ASCII letter, then lowercase letters, digits, `.`, `_`, or `-`. `evidencectl` refuses
+anything else rather than write key material no bundle could reference.
+
+Point `clientAssertionKeyRef` at the private file and register the public file with the source's
+authorization server. The `kid` is the RFC 7638 thumbprint of the public half, and Evidence Gateway
+sends it in the assertion header so the authorization server selects the registered key without an
+operator-chosen identifier. Each assertion carries a fresh `jti` and expires within five minutes, so
+an authorization server that refuses replays has an identifier to record
+(`crates/registry-platform-authcommon/src/client_assertion.rs`).
+
+Evidence Gateway sets the assertion's `aud` to `tokenEndpoint` exactly as the bundle spells it, which
+is the value SMART App Launch requires. RFC 7523 section 3 asks only that the audience identify the
+authorization server and says the token endpoint URL MAY be used, so a server that expects a
+different identifier states it in `clientAssertionAudience`:
+
+```yaml
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://gateway.example.gov/oauth2/token
+  clientIdRef: secret:file/source-client-id
+  clientAssertionKeyRef: secret:file/source-client-key
+  clientAssertionAudience: https://auth.example.gov/realms/main
+  maximumCacheSeconds: 300
+```
+
+Two kinds of server need it: one reached through a proxy or load balancer, where the URL Evidence
+Gateway dials is not the one the authorization server knows itself by, and one that expects its
+issuer identifier. RFC 8414 does not require an issuer identifier to share an origin with the token
+endpoint, so Evidence Gateway imposes no relationship between the two. RFC 7523 section 3 has the
+authorization server compare the value by Simple String Comparison, so what you write is signed byte
+for byte: a default port or a trailing slash survives into the claim rather than being normalized
+away. The key is accepted only beside `clientAssertionKeyRef`, since a client secret carries no
+assertion to hold the claim, and it changes only who may accept the assertion, never where the token
+request goes. Register one assertion key per authorization server: a key registered at two servers is
+what would let an assertion audienced for one be presented to the other.
+
 ## Immutability
 
 Evidence Gateway refuses to start from a deployment input it could write to, and reports a

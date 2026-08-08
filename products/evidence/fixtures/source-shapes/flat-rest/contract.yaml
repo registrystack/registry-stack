@@ -6,7 +6,7 @@ validated_source_definition:
   transport: http-json
   baseUrl: http://127.0.0.1:18081
   posture: source-derived
-  authentication: {kind: static-bearer, tokenRef: secret:file/fixture-flat-rest-token}
+  authentication: {kind: static-authorization, tokenRef: secret:file/fixture-flat-rest-token}
   request:
     method: POST
     path: /v1/lookup
@@ -39,7 +39,7 @@ request:
   query: {}
   headers:
     content-type: application/json
-    authorization: static-bearer injected from secret reference; exact value never snapshotted
+    authorization: static-authorization injected from secret reference; exact value never snapshotted
   body:
     selector: {alpha: synthetic-alpha, delta: 42}
     fields: [fact_code]
@@ -75,4 +75,4 @@ failures:
   - {case: error-envelope, public: dependency_unavailable}
 redaction_canaries:
   committed_source_and_selector: [synthetic-alpha, SOURCE-FACT-CANARY-DO-NOT-LOG]
-  runtime_generated_secret_classes: [static-bearer]
+  runtime_generated_secret_classes: [static-authorization]

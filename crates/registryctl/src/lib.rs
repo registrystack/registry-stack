@@ -16,7 +16,7 @@ use registry_platform_config::{
 };
 use registry_platform_crypto::{
     canonicalize_json, parse_json_strict, sign as sign_payload, PrivateJwk, PublicJwk,
-    SigningAlgorithm, MAX_JWK_JSON_BYTES,
+    MAX_JWK_JSON_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -405,7 +405,10 @@ pub fn sign_config_bundle(options: BundleSignOptions) -> Result<BundleSignReport
     let kid = public_jwk
         .jkt()
         .context("failed to compute JWK thumbprint for signing key")?;
-    let alg = signing_algorithm_label(private_jwk.algorithm().context("invalid signing key alg")?);
+    let alg = private_jwk
+        .algorithm()
+        .context("invalid signing key alg")?
+        .jwa_name();
     let canonical_manifest =
         canonicalize_json(&manifest_value).context("failed to canonicalize manifest JSON")?;
     let signature = sign_payload(&canonical_manifest, &private_jwk)
@@ -898,12 +901,4 @@ fn validate_relay_acceptance_identity(identity: &ProductAcceptanceIdentityV1) ->
         bail!("registryctl trust supports only Registry Relay acceptance lanes");
     }
     Ok(())
-}
-
-fn signing_algorithm_label(algorithm: SigningAlgorithm) -> &'static str {
-    match algorithm {
-        SigningAlgorithm::EdDsa => "EdDSA",
-        SigningAlgorithm::Es256 => "ES256",
-        SigningAlgorithm::Rs256 => "RS256",
-    }
 }

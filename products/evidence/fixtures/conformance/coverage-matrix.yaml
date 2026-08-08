@@ -109,7 +109,7 @@ source_shapes:
   profiles:
   - profile: flat-rest
     request: fixed JSON POST
-    authentication: static-bearer
+    authentication: static-authorization
     outcomes: [no-match, match, ambiguous, missing-fact]
   - profile: nested-paged-rest
     request: fixed GET query, fields, pageSize two
@@ -122,7 +122,7 @@ source_shapes:
     outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality]
   - profile: search-chain-json
     request: fixed JSON POST search, then one path-bound fetch and one JSON POST fetch, in declared order
-    authentication: static-bearer per stage, one stage after an oauth2-client-credentials bootstrap
+    authentication: static-authorization per stage, one stage after an oauth2-client-credentials bootstrap
     posture: record-transformed
     outcomes: [no-match, match, ambiguous, missing-fact, inconsistent-cardinality, counted-zero]
     note: >-

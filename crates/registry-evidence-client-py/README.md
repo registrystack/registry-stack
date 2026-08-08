@@ -109,7 +109,7 @@ upstream and left unguarded on purpose: the private-key-JWT token provider's
 `jti` claim, generated with `Ulid::new()`, reaches `rand::rng()` and panics if
 OS entropy is unavailable. It is reachable only in a deployment configured for
 private-key-JWT; short of that same allocation-failure-only path, a
-static-bearer deployment has no reachable panic at all. This crate adds no
+static-authorization deployment has no reachable panic at all. This crate adds no
 guard of its own for it: the trampoline above already turns any such panic
 into an ordinary Python exception rather than a process abort.
 

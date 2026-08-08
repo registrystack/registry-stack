@@ -11,13 +11,16 @@ publish = false
 workspace = true
 
 [dependencies]
+base64.workspace = true
+registry-platform-crypto.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+ulid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true

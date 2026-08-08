@@ -4089,7 +4089,7 @@ values: [under-18, adult]
             r#"transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
-authentication: {kind: static-bearer, tokenRef: 'secret:file/records-token'}
+authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
 request:
   method: GET
   pathTemplate: /people/{person_id}
@@ -4120,7 +4120,7 @@ factSchema: schemas/source-facts.schema.yaml
             r#"transport: http-json
 baseUrl: https://relationships.example.test
 posture: field-projected
-authentication: {kind: static-bearer, tokenRef: 'secret:file/relationships-token'}
+authentication: {kind: static-authorization, tokenRef: 'secret:file/relationships-token'}
 request:
   method: GET
   pathTemplate: /children/{child_id}/candidates/{candidate_id}
@@ -4716,7 +4716,7 @@ disclosure:
             r#"transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
-authentication: {kind: static-bearer, tokenRef: 'secret:file/records-token'}
+authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
 request:
   method: GET
   pathTemplate: /children/{child_reference}/relationships

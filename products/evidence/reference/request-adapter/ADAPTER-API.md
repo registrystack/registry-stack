@@ -87,7 +87,7 @@ sources:
     transport: http-json
     baseUrl: https://source.example
     posture: record-transformed
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/search
@@ -327,9 +327,9 @@ headers. Rust adds `Content-Type: application/json` for a JSON body and owns all
 authentication and framing headers. Header names and values are bounded and
 reject controls, CR, and LF. Scripts cannot observe or modify headers.
 
-The governed bundle and operator runtime split, Basic/static-Bearer/static-
-API-key/OAuth profiles, the local-only credential-free loopback boundary, and
-logical private-CA bindings are defined in
+The governed bundle and operator runtime split, the Basic, static-Authorization,
+static-API-key, and OAuth profiles, the local-only credential-free loopback
+boundary, and logical private-CA bindings are defined in
 [`deployment-projects/CONFIG.md`](deployment-projects/CONFIG.md). They are
 transport contracts, not script capabilities.
 

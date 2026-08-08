@@ -42,7 +42,7 @@ sources:
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/facts

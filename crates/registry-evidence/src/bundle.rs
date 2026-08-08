@@ -3218,7 +3218,7 @@ mod tests {
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-e-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-e-token}
     request:
       method: GET
       pathTemplate: /v1/first/{record_id}
@@ -3244,7 +3244,7 @@ mod tests {
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-f-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-f-token}
     request:
       method: GET
       pathTemplate: /v1/second/{record_id}

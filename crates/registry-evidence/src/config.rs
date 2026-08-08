@@ -1842,9 +1842,17 @@ pub enum SourceAuthentication {
         #[serde(rename = "passwordRef")]
         password_ref: SecretRef,
     },
-    StaticBearer {
+    StaticAuthorization {
         #[serde(rename = "tokenRef")]
         token_ref: SecretRef,
+        /// Authentication scheme the resolved token is presented under.
+        ///
+        /// RFC 9110 section 11.1 lets the origin choose the scheme, and
+        /// `static-api-key` cannot reach the Authorization header because its
+        /// header name is refused by the collision denylist. Absent, the
+        /// runtime sends `Bearer`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
     },
     StaticApiKey {
         #[serde(rename = "headerName")]
@@ -1857,12 +1865,59 @@ pub enum SourceAuthentication {
         token_endpoint: String,
         #[serde(rename = "clientIdRef")]
         client_id_ref: SecretRef,
-        #[serde(rename = "clientSecretRef")]
-        client_secret_ref: SecretRef,
+        /// Shared client secret, for the RFC 6749 section 2.3.1 form.
+        ///
+        /// Present with `credentialPlacement` and without
+        /// `clientAssertionKeyRef`, or absent with both.
+        #[serde(
+            rename = "clientSecretRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        client_secret_ref: Option<SecretRef>,
+        /// Private JWK the client assertion is signed with, for the RFC 7523
+        /// section 2.2 form.
+        ///
+        /// Its presence selects assertion authentication, which is the form
+        /// SMART on FHIR Backend Services requires.
+        #[serde(
+            rename = "clientAssertionKeyRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        client_assertion_key_ref: Option<SecretRef>,
+        /// Audience claim of the signed assertion; set only with
+        /// `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`.
+        ///
+        /// RFC 7523 section 3 asks only that the value identify the
+        /// authorization server and leaves the exact string to out-of-band
+        /// agreement, so a server reached through a proxy, or one naming its
+        /// issuer identifier, expects a value the client never dials. The
+        /// server compares it by Simple String Comparison, so it is an opaque
+        /// identifier rather than a URL and travels to the claim byte for byte.
+        #[serde(
+            rename = "clientAssertionAudience",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        client_assertion_audience: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
-        #[serde(rename = "credentialPlacement")]
-        credential_placement: CredentialPlacement,
+        /// Fixed `audience` form parameter.
+        ///
+        /// An authorization server may key the issued token to an audience the
+        /// scope cannot express and return a token usable against nothing when
+        /// it is absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<String>,
+        /// Where the shared client secret travels; set only with
+        /// `clientSecretRef`.
+        #[serde(
+            rename = "credentialPlacement",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        credential_placement: Option<CredentialPlacement>,
         #[serde(rename = "maximumCacheSeconds")]
         maximum_cache_seconds: u64,
         /// Lifetime assumed when the provider omits `expires_in`.
@@ -1888,15 +1943,28 @@ impl SourceAuthentication {
             Self::Basic {
                 username_ref: _,
                 password_ref: _,
+            } => Ok(()),
+            Self::StaticAuthorization {
+                token_ref: _,
+                scheme,
+            } => {
+                if let Some(scheme) = scheme {
+                    validate_authorization_scheme(scheme)?;
+                }
+                Ok(())
             }
-            | Self::StaticBearer { token_ref: _ } => Ok(()),
             Self::StaticApiKey {
                 header_name,
                 value_ref: _,
             } => validate_configurable_header_name(header_name),
             Self::Oauth2ClientCredentials {
                 token_endpoint,
+                client_secret_ref,
+                client_assertion_key_ref,
+                client_assertion_audience,
                 scope,
+                audience,
+                credential_placement,
                 maximum_cache_seconds,
                 assumed_lifetime_seconds,
                 ..
@@ -1905,8 +1973,49 @@ impl SourceAuthentication {
                 if token_endpoint.query().is_some() {
                     return invalid("OAuth token endpoint must not contain a query");
                 }
+                if client_secret_ref.is_some() == client_assertion_key_ref.is_some() {
+                    return invalid(
+                        "OAuth client authentication must declare either a client secret or a client assertion key",
+                    );
+                }
+                if credential_placement.is_some() != client_secret_ref.is_some() {
+                    return invalid(
+                        "OAuth credential placement is required with a client secret and forbidden without one",
+                    );
+                }
+                if client_assertion_audience.is_some() && client_assertion_key_ref.is_none() {
+                    return invalid(
+                        "OAuth client assertion audience is set without a client assertion key",
+                    );
+                }
+                if let Some(client_assertion_audience) = client_assertion_audience {
+                    validate_string(
+                        client_assertion_audience,
+                        1,
+                        512,
+                        "OAuth client assertion audience",
+                    )?;
+                    // Signing refuses a whitespace-only audience, so a bundle
+                    // that carried one would satisfy its own contract and then
+                    // fail at the first token request as a credential error
+                    // naming nothing the operator can act on.
+                    if client_assertion_audience.trim().is_empty() {
+                        return invalid("OAuth client assertion audience is blank");
+                    }
+                }
                 if let Some(scope) = scope {
                     validate_string(scope, 1, 512, "OAuth scope")?;
+                }
+                if let Some(audience) = audience {
+                    validate_string(audience, 1, 512, "OAuth audience")?;
+                    // The token request sends this value as it stands, with no
+                    // fallback, so a blank one asks the authorization server
+                    // for an audience named by spaces. Refusing it here names
+                    // the key the operator must correct; the server's refusal
+                    // arrives at readiness and names nothing.
+                    if audience.trim().is_empty() {
+                        return invalid("OAuth audience is blank");
+                    }
                 }
                 if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
                     validate_range(
@@ -1933,15 +2042,37 @@ impl SourceAuthentication {
                 username_ref,
                 password_ref,
             } => vec![username_ref, password_ref],
-            Self::StaticBearer { token_ref } => vec![token_ref],
+            Self::StaticAuthorization { token_ref, .. } => vec![token_ref],
             Self::StaticApiKey { value_ref, .. } => vec![value_ref],
             Self::Oauth2ClientCredentials {
                 client_id_ref,
                 client_secret_ref,
+                client_assertion_key_ref,
                 ..
-            } => vec![client_id_ref, client_secret_ref],
+            } => [
+                Some(client_id_ref),
+                client_secret_ref.as_ref(),
+                client_assertion_key_ref.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         }
     }
+}
+
+/// Accept an authentication scheme the runtime may prefix to a static token.
+///
+/// RFC 9110 section 11.1 defines the scheme as a token, so the byte set is the
+/// same one field names use. Holding to it keeps a configured value from
+/// carrying a space, a separator, or a line break into the header the runtime
+/// writes.
+fn validate_authorization_scheme(scheme: &str) -> Result<(), ConfigError> {
+    validate_string(scheme, 1, 32, "authentication scheme")?;
+    if !scheme.bytes().all(is_http_token_byte) {
+        return invalid("authentication scheme must be an HTTP token");
+    }
+    Ok(())
 }
 
 /// Where the token request carries the client credentials.
@@ -3075,7 +3206,7 @@ fn validate_configurable_header_name(name: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn is_http_token_byte(byte: u8) -> bool {
+pub(crate) fn is_http_token_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
         || matches!(
             byte,
@@ -3387,6 +3518,9 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
 }
 
 fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
+    if !value.bytes().all(is_uri_byte) {
+        return invalid("source URL contains characters a URI cannot carry");
+    }
     let url = Url::parse(value).map_err(|_| ConfigError::Invalid("source URL is invalid"))?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return invalid("source URL contains prohibited authority or fragment data");
@@ -3409,6 +3543,47 @@ fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigErro
         _ => return invalid("source URL scheme is not permitted"),
     }
     Ok(url)
+}
+
+/// The characters RFC 3986 admits in a URI without percent-encoding.
+///
+/// `Url::parse` accepts a wider input and rewrites the difference: it strips
+/// tab, newline, and carriage return from anywhere in the string, strips
+/// leading and trailing C0 controls and spaces, and percent-encodes or
+/// punycodes most of what is left that it does not recognize. A source URL is
+/// read twice, once parsed to address the request and once as configured to
+/// stand in for a client assertion audience the bundle does not state, so a
+/// character the parser rewrites leaves those two naming different strings and
+/// signs an audience no authorization server published. Refusing the character
+/// keeps them one URL, and costs no deployment that could have worked, because
+/// a URI carrying any of these has to percent-encode it anyway.
+pub(crate) fn is_uri_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b':'
+                | b'/'
+                | b'?'
+                | b'#'
+                | b'['
+                | b']'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b'%'
+        )
 }
 
 fn has_canonical_loopback_authority(value: &str) -> bool {
@@ -5002,6 +5177,56 @@ mod tests {
         }
     }
 
+    /// `Url::parse` is forgiving in ways a deployment contract cannot be. It
+    /// strips tab, newline, and carriage return from anywhere in the string,
+    /// strips leading and trailing C0 controls and spaces, and percent-encodes
+    /// or punycodes most of what is left that it does not recognize. Requests
+    /// are sent to the parsed form while a client assertion audience that the
+    /// bundle does not state is signed as the configured form, so any character
+    /// the parser rewrites leaves those two naming different strings, and the
+    /// audience names one no authorization server ever published. RFC 3986
+    /// admits none of these characters in a URI unencoded, so refusing them
+    /// costs no deployment that could have worked.
+    #[test]
+    fn source_urls_reject_characters_a_uri_cannot_carry() {
+        let origins = [
+            "https://source.invalid ",
+            " https://source.invalid",
+            "https://source.invalid\u{9}",
+            "https://source.invalid\u{a}",
+            "https://source.invalid\u{d}",
+            "https://source.invalid\u{0}",
+            "https://source.invalid\u{7f}",
+            "https://sourcé.invalid",
+        ];
+        let accepted = origins
+            .iter()
+            .filter(|value| validate_source_origin(value).is_ok())
+            .collect::<Vec<_>>();
+        assert!(
+            accepted.is_empty(),
+            "baseUrl accepted characters a URI cannot carry: {accepted:?}"
+        );
+
+        let endpoints = [
+            "https://source.invalid/token ",
+            "https://source.invalid/to\u{9}ken",
+            "https://source.invalid/to\u{a}ken",
+            "https://source.invalid/to\u{d}ken",
+            "https://source.invalid/token\u{0}",
+            "https://source.invalid/token\u{7f}",
+            "https://source.invalid/tokén",
+        ];
+        let accepted = endpoints
+            .iter()
+            .filter(|value| validate_source_url(value, false).is_ok())
+            .collect::<Vec<_>>();
+        assert!(
+            accepted.is_empty(),
+            "tokenEndpoint accepted characters a URI cannot carry: {accepted:?}"
+        );
+    }
+
     #[test]
     fn source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query() {
         let valid = std::str::from_utf8(include_bytes!(
@@ -5030,10 +5255,14 @@ mod tests {
             oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: format!("https://source.invalid/token{query}"),
                 client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
-                client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
-                    .expect("secret ref"),
+                client_secret_ref: Some(
+                    SecretRef::parse("secret:file/oauth-client-secret").expect("secret ref"),
+                ),
+                client_assertion_key_ref: None,
+                client_assertion_audience: None,
                 scope: None,
-                credential_placement: CredentialPlacement::FormBody,
+                audience: None,
+                credential_placement: Some(CredentialPlacement::FormBody),
                 maximum_cache_seconds: 60,
                 assumed_lifetime_seconds: None,
             };
@@ -5078,10 +5307,14 @@ mod tests {
             oauth.sources.0[0].1.authentication = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: "https://source.invalid/token".to_owned(),
                 client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
-                client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
-                    .expect("secret ref"),
+                client_secret_ref: Some(
+                    SecretRef::parse("secret:file/oauth-client-secret").expect("secret ref"),
+                ),
+                client_assertion_key_ref: None,
+                client_assertion_audience: None,
                 scope: None,
-                credential_placement: CredentialPlacement::FormBody,
+                audience: None,
+                credential_placement: Some(CredentialPlacement::FormBody),
                 maximum_cache_seconds: 60,
                 assumed_lifetime_seconds,
             };
@@ -5126,6 +5359,300 @@ mod tests {
                 "{placement} bundle contract"
             );
         }
+    }
+
+    /// The kind writes the Authorization header, and RFC 9110 section 11.1
+    /// makes the scheme a token the origin chooses. Deployed sources ask for
+    /// schemes other than Bearer, and `static-api-key` cannot serve them
+    /// because it refuses the Authorization header by name, so the scheme has
+    /// to be statable here. It stays a token so no configured value can inject
+    /// a second header field.
+    #[test]
+    fn static_authorization_scheme_is_an_optional_http_token() {
+        let validator = bundle_contract_validator();
+        for (scheme, accepted) in [
+            (Some("Bearer"), true),
+            (Some("Token"), true),
+            (Some("SSWS"), true),
+            (Some("A"), true),
+            (Some("x".repeat(32).as_str()), true),
+            (Some(""), false),
+            (Some("x".repeat(33).as_str()), false),
+            (Some("Bearer token"), false),
+            (Some("Bear\ner"), false),
+            (Some("Bearer:"), false),
+            (None, true),
+        ] {
+            let mut authentication = serde_json::json!({
+                "kind": "static-authorization",
+                "tokenRef": "secret:file/source-a-token",
+            });
+            if let Some(scheme) = scheme {
+                authentication["scheme"] = serde_json::json!(scheme);
+            }
+
+            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
+                .expect("the member set is closed but every scheme string parses");
+            assert_eq!(parsed.validate().is_ok(), accepted, "{scheme:?} validation");
+
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "{scheme:?} bundle contract"
+            );
+        }
+    }
+
+    /// RFC 7523 section 2.2 authenticates the client with a signed assertion
+    /// instead of a shared secret, and SMART on FHIR Backend Services requires
+    /// that form. The two forms are alternatives, not a spectrum: a bundle that
+    /// declares both leaves the runtime to guess which credential the operator
+    /// meant, and one that declares neither cannot authenticate at all. Both
+    /// fail closed at startup rather than at the first token request.
+    #[test]
+    fn oauth_client_authentication_declares_exactly_one_credential_form() {
+        let validator = bundle_contract_validator();
+        for (secret_ref, placement, key_ref, accepted) in [
+            (
+                Some("secret:file/oauth-client-secret"),
+                Some("basic-header"),
+                None,
+                true,
+            ),
+            (
+                Some("secret:file/oauth-client-secret"),
+                Some("form-body"),
+                None,
+                true,
+            ),
+            (None, None, Some("secret:file/oauth-client-key"), true),
+            // A secret with no placement leaves the runtime to pick where the
+            // credential travels, which RFC 6749 section 2.3.1 makes the
+            // operator's decision.
+            (Some("secret:file/oauth-client-secret"), None, None, false),
+            // A placement with no secret names a channel for a credential that
+            // does not exist.
+            (
+                None,
+                Some("basic-header"),
+                Some("secret:file/oauth-client-key"),
+                false,
+            ),
+            (None, Some("basic-header"), None, false),
+            // Both forms at once, with and without a placement for the secret.
+            // The placement is what makes these two distinct presence shapes
+            // rather than one: dropping it must not turn a two-credential
+            // bundle into an accepted assertion-only one.
+            (
+                Some("secret:file/oauth-client-secret"),
+                Some("basic-header"),
+                Some("secret:file/oauth-client-key"),
+                false,
+            ),
+            (
+                Some("secret:file/oauth-client-secret"),
+                None,
+                Some("secret:file/oauth-client-key"),
+                false,
+            ),
+            // Neither form.
+            (None, None, None, false),
+        ] {
+            let mut authentication = serde_json::json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://source.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "maximumCacheSeconds": 60,
+            });
+            if let Some(secret_ref) = secret_ref {
+                authentication["clientSecretRef"] = serde_json::json!(secret_ref);
+            }
+            if let Some(placement) = placement {
+                authentication["credentialPlacement"] = serde_json::json!(placement);
+            }
+            if let Some(key_ref) = key_ref {
+                authentication["clientAssertionKeyRef"] = serde_json::json!(key_ref);
+            }
+            let label = format!("{secret_ref:?}/{placement:?}/{key_ref:?}");
+
+            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
+                .expect("every combination is inside the closed member set");
+            assert_eq!(parsed.validate().is_ok(), accepted, "{label} validation");
+
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "{label} bundle contract"
+            );
+        }
+    }
+
+    /// The assertion key is a credential like any other, so bundle validation
+    /// has to see it. `secret_refs` is what reports the set a bundle depends
+    /// on, and a form whose only credential is invisible there would look
+    /// credential-free.
+    #[test]
+    fn the_client_assertion_key_is_reported_as_a_bundle_secret() {
+        let key_form = serde_json::from_value::<SourceAuthentication>(serde_json::json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": "https://source.invalid/token",
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "maximumCacheSeconds": 60,
+        }))
+        .expect("the key form parses");
+        assert_eq!(
+            key_form
+                .secret_refs()
+                .iter()
+                .map(|reference| reference.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "secret:file/oauth-client-id",
+                "secret:file/oauth-client-key"
+            ]
+        );
+    }
+
+    /// Some authorization servers key the issued token to an audience the
+    /// scope cannot express, and return a token usable against nothing when it
+    /// is absent. The value is a fixed bundle string, never derived per
+    /// request.
+    #[test]
+    fn oauth_audience_is_a_bounded_optional_string() {
+        let validator = bundle_contract_validator();
+        for (audience, accepted) in [
+            (Some("https://api.invalid/"), true),
+            (Some("a"), true),
+            (Some("a".repeat(512).as_str()), true),
+            (Some(""), false),
+            // The token request sends this value as it stands, so a blank one
+            // asks the authorization server for an audience named by spaces.
+            // Refusing it here names the key; the server's refusal would not.
+            (Some("   "), false),
+            (Some("a".repeat(513).as_str()), false),
+            (None, true),
+        ] {
+            let mut authentication = serde_json::json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://source.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientSecretRef": "secret:file/oauth-client-secret",
+                "credentialPlacement": "basic-header",
+                "maximumCacheSeconds": 60,
+            });
+            if let Some(audience) = audience {
+                authentication["audience"] = serde_json::json!(audience);
+            }
+            let label = audience.map(str::len);
+
+            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
+                .expect("the member set is closed but every audience string parses");
+            assert_eq!(parsed.validate().is_ok(), accepted, "{label:?} validation");
+
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "{label:?} bundle contract"
+            );
+        }
+    }
+
+    /// RFC 7523 section 3 asks only that the audience identify the
+    /// authorization server and leaves the exact string to out-of-band
+    /// agreement, so this is an opaque identifier rather than a URL. It is
+    /// bounded like the sibling `audience` and validated by the same rule.
+    #[test]
+    fn the_client_assertion_audience_is_a_bounded_optional_string() {
+        let validator = bundle_contract_validator();
+        for (audience, accepted) in [
+            (Some("https://issuer.invalid/"), true),
+            // An issuer identifier that shares no origin with the token
+            // endpoint is the case the key exists for, so it has to pass.
+            (Some("https://elsewhere.invalid/oauth2"), true),
+            (Some("a"), true),
+            (Some("a".repeat(512).as_str()), true),
+            (Some(""), false),
+            // Blank is refused here rather than at the first token request,
+            // where signing rejects a whitespace-only audience as empty. A
+            // bundle that passes its own contract and then fails as a
+            // credential error names nothing the operator can act on.
+            (Some("   "), false),
+            (Some("a".repeat(513).as_str()), false),
+            (None, true),
+        ] {
+            let mut authentication = serde_json::json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://source.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientAssertionKeyRef": "secret:file/oauth-client-key",
+                "maximumCacheSeconds": 60,
+            });
+            if let Some(audience) = audience {
+                authentication["clientAssertionAudience"] = serde_json::json!(audience);
+            }
+            let label = audience.map(str::len);
+
+            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
+                .expect("the member set is closed but every audience string parses");
+            assert_eq!(parsed.validate().is_ok(), accepted, "{label:?} validation");
+
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "{label:?} bundle contract"
+            );
+        }
+    }
+
+    /// Only a signed assertion carries an `aud` claim. Beside a shared secret
+    /// the key names an audience nothing will ever send, so accepting it would
+    /// leave an operator believing an authorization server was addressed that
+    /// never was.
+    #[test]
+    fn a_client_assertion_audience_without_an_assertion_key_is_refused() {
+        let validator = bundle_contract_validator();
+        let authentication = serde_json::json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": "https://source.invalid/token",
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientSecretRef": "secret:file/oauth-client-secret",
+            "credentialPlacement": "basic-header",
+            "clientAssertionAudience": "https://issuer.invalid/",
+            "maximumCacheSeconds": 60,
+        });
+
+        let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
+            .expect("the combination is inside the closed member set");
+        assert!(
+            parsed.validate().is_err(),
+            "an assertion audience was accepted beside a client secret"
+        );
+
+        let mut instance = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ));
+        instance["sources"]["source-a"]["authentication"] = authentication;
+        assert!(
+            !validator.is_valid(&instance),
+            "the bundle contract accepted an assertion audience beside a client secret"
+        );
     }
 
     #[test]
@@ -5617,7 +6144,7 @@ outboundTls:
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-e-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-e-token}
     request:
       method: GET
       pathTemplate: /v1/first/{record_id}
@@ -5641,7 +6168,7 @@ outboundTls:
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-f-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-f-token}
     request:
       method: GET
       pathTemplate: /v1/second/{record_id}

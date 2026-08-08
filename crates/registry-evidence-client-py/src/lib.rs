@@ -556,7 +556,7 @@ mod tests {
     /// `Ulid::new()`, which reaches `rand::rng()` and panics when OS entropy
     /// is unavailable, a case that provider deliberately leaves unguarded. It
     /// is reachable only in a deployment configured for private-key-JWT: a
-    /// static-bearer deployment never calls that provider, so short of that
+    /// static-authorization deployment never calls that provider, so short of that
     /// same allocation-failure-only path it has no reachable panic at all. No extra guard is added here for it: this test
     /// proves the boundary already turns any such panic into an ordinary
     /// Python exception instead of a process abort.

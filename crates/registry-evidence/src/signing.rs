@@ -280,6 +280,12 @@ mod tests {
     const PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
     const FIXTURE_PRIVATE_JWK: &str = PRIVATE_JWK;
     const SAME_KID_DIFFERENT_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+    /// ES384 key material, so a test provider can present a real, valid but
+    /// disallowed algorithm rather than a malformed one. Evidence pins ES256
+    /// on both wire formats; ES384 is the algorithm most likely to be
+    /// mistaken for acceptable later, since it is a real SMART on FHIR
+    /// signing algorithm.
+    const P384_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"did:web:issuer.test#p384-key-1"}"#;
 
     struct RecoveringSigner {
         delegate: LocalJwkSigner,
@@ -405,6 +411,44 @@ mod tests {
             .await
             .expect_err("mismatched key id is rejected");
         assert!(matches!(error, EvidenceSigningError::ActiveKeyId));
+    }
+
+    #[tokio::test]
+    async fn initialize_refuses_a_non_es256_provider_with_the_algorithm_variant() {
+        let private = PrivateJwk::parse(P384_PRIVATE_JWK).expect("test ES384 key parses");
+        let provider: Arc<dyn SigningProvider> =
+            Arc::new(LocalJwkSigner::new(private).expect("ES384 test signer builds"));
+        let key_id = provider.key_id().to_owned();
+        let error = EvidenceSigner::initialize(provider, &key_id)
+            .await
+            .expect_err("an ES384 provider is refused");
+        assert!(matches!(error, EvidenceSigningError::Algorithm));
+    }
+
+    #[test]
+    fn validate_provider_refuses_a_non_es256_provider_with_the_algorithm_variant() {
+        let private = PrivateJwk::parse(P384_PRIVATE_JWK).expect("test ES384 key parses");
+        let provider = LocalJwkSigner::new(private).expect("ES384 test signer builds");
+        let key_id = provider.key_id().to_owned();
+        let error = validate_provider(&provider, &key_id).expect_err("ES384 is refused");
+        assert!(matches!(error, EvidenceSigningError::Algorithm));
+    }
+
+    #[test]
+    fn jwks_document_refuses_a_non_es256_published_key_with_the_algorithm_variant() {
+        let signer_private = PrivateJwk::parse(PRIVATE_JWK).expect("test key parses");
+        let active = LocalJwkSigner::new(signer_private)
+            .expect("test signer builds")
+            .public_jwk();
+
+        let es384_private = PrivateJwk::parse(P384_PRIVATE_JWK).expect("test ES384 key parses");
+        let es384_public = LocalJwkSigner::new(es384_private)
+            .expect("ES384 test signer builds")
+            .public_jwk();
+
+        let error =
+            jwks_document(active, [es384_public]).expect_err("an ES384 published key is refused");
+        assert!(matches!(error, EvidenceSigningError::Algorithm));
     }
 
     #[tokio::test]

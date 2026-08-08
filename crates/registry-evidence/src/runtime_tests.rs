@@ -6101,8 +6101,8 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
     );
     replace_exact(
         &mut configuration,
-        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
-        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
         1,
     );
     replace_exact(
@@ -6124,7 +6124,7 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: GET
       pathTemplate: /v1/records/{record_id}
@@ -6276,8 +6276,8 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
     );
     replace_exact(
         &mut configuration,
-        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
-        "    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/facts",
+        "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n    request:\n      method: POST\n      path: /v1/search",
         1,
     );
     replace_exact(
@@ -6299,7 +6299,7 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       pathTemplate: /v1/records/{record_id}
@@ -6323,7 +6323,7 @@ fn configure_fetch_set(bundle_root: &Path, source_origin: &str) {
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/partners
@@ -6507,7 +6507,7 @@ fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str)
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/third
@@ -6529,7 +6529,7 @@ fn widen_fetch_set_to_four_bulk_members(bundle_root: &Path, source_origin: &str)
     transport: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-bearer, tokenRef: secret:file/source-a-token}
+    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/fourth

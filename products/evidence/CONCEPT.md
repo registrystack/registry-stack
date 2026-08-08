@@ -499,7 +499,7 @@ sources:
     posture: field-projected
     tls_trust_profile: government-internal-pki
     authentication:
-      kind: static-bearer
+      kind: static-authorization
       token_ref: secret:file/civil-registry-token
     request:
       method: POST
@@ -601,14 +601,19 @@ do that safely, a governed intermediary such as an existing integration layer
 may expose the bounded lookup. Evidence does not download a registry or a broad
 candidate set to compensate.
 
-The initial generic source-authentication profiles are HTTP Basic, static
-Bearer, static API-key header, and OAuth 2.0 client credentials. All values come
-from secret references. API-key header names are bundle-fixed and cannot
-override authorization, routing, framing, cookie, forwarding, proxy, or tracing
-headers. For OAuth, token acquisition is credential bootstrap rather than an
-evidence-data source call. Rust owns the fixed token endpoint, grant,
-credential placement, token lifetime handling, bounds, and redaction. Rhai sees
-neither the credential flow nor the resulting token.
+The initial generic source-authentication profiles are HTTP Basic, a static
+Authorization header, a static API-key header, and OAuth 2.0 client
+credentials. All values come from secret references. The static Authorization
+header carries the scheme the source names, defaulting to Bearer, because the
+scheme is the origin's to choose. API-key header names are bundle-fixed and
+cannot override authorization, routing, framing, cookie, forwarding, proxy, or
+tracing headers. For OAuth, token acquisition is credential bootstrap rather
+than an evidence-data source call, and a source authenticates either with a
+client secret or with a private-key JWT assertion, the asymmetric form health
+profiles require. Rust owns the fixed token endpoint, grant, client
+authentication form, credential placement, audience, token lifetime handling,
+bounds, and redaction. Rhai sees neither the credential flow, the signing key,
+nor the resulting token.
 
 The explicit local assurance profile may additionally use `kind: none` for a
 source at one canonical numeric-loopback HTTP origin with an explicit non-zero
@@ -1600,8 +1605,9 @@ mandatory default and includes:
 - conformance fixtures for every Version 1 Supported Value form;
 - multiple enabled evidence definitions in one process;
 - one generic fixed HTTP JSON evidence-data request executor;
-- generic Basic, static Bearer, static API-key header, and OAuth 2.0
-  client-credentials source authentication using secret references;
+- generic Basic, static Authorization header, static API-key header, and OAuth
+  2.0 client-credentials source authentication using secret references, the
+  OAuth client authenticating by secret or by private-key JWT assertion;
 - credential-free source access only for explicit local authoring at a
   canonical numeric-loopback HTTP origin;
 - fixed non-secret request headers, Rust-owned tagged selector/prior-fact path templates,
@@ -1712,8 +1718,9 @@ The complete Version 1 sequence is:
 ### Phase 2: generic source boundary
 
 - Add fixed HTTP JSON source execution, fixed headers, tagged selector/prior-
-  fact path templates, private-CA trust profiles, and generic Basic, static Bearer,
-  static API-key header, and OAuth 2.0 client-credentials authentication.
+  fact path templates, private-CA trust profiles, and generic Basic, static
+  Authorization header, static API-key header, and OAuth 2.0 client-credentials
+  authentication in both its client-secret and private-key JWT forms.
 - Run flat REST, paged nested REST, and OpenCRVS Event Search-shaped contracts
   through one source executor.
 - Prove the selector matrix, zero, one, and multiple lookup outcomes, and no

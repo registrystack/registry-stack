@@ -18,7 +18,7 @@ use registry_platform_config::{
 };
 use registry_platform_crypto::{
     canonicalize_json, parse_json_strict, sign as sign_payload, PrivateJwk, PublicJwk,
-    SigningAlgorithm, MAX_JWK_JSON_BYTES,
+    MAX_JWK_JSON_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -256,8 +256,10 @@ fn rotate_trust_anchor_with_resolver(
         if signatures.contains_key(&kid) {
             bail!("anchor rotation key locators resolved to a duplicate signer");
         }
-        let alg =
-            signing_algorithm_label(private_jwk.algorithm().context("resolved key is invalid")?);
+        let alg = private_jwk
+            .algorithm()
+            .context("resolved key is invalid")?
+            .jwa_name();
         let signature =
             sign_payload(&payload, &private_jwk).context("failed to sign anchor transition")?;
         signatures.insert(
@@ -475,12 +477,11 @@ fn sign_product_bundle_with_resolver(
             kid.clone(),
             ConfigBundleSignature {
                 kid,
-                alg: signing_algorithm_label(
-                    private_jwk
-                        .algorithm()
-                        .context("resolved signing key is invalid")?,
-                )
-                .to_string(),
+                alg: private_jwk
+                    .algorithm()
+                    .context("resolved signing key is invalid")?
+                    .jwa_name()
+                    .to_string(),
                 sig: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
             },
         );
@@ -1172,14 +1173,6 @@ fn canonical_json_line<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn signing_algorithm_label(algorithm: SigningAlgorithm) -> &'static str {
-    match algorithm {
-        SigningAlgorithm::EdDsa => "EdDSA",
-        SigningAlgorithm::Es256 => "ES256",
-        SigningAlgorithm::Rs256 => "RS256",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -1601,7 +1594,7 @@ mod tests {
             schema: CONFIG_BUNDLE_SIGNATURE_SCHEMA.to_string(),
             signatures: vec![ConfigBundleSignature {
                 kid,
-                alg: signing_algorithm_label(private.algorithm().unwrap()).to_string(),
+                alg: private.algorithm().unwrap().jwa_name().to_string(),
                 sig: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
             }],
         };

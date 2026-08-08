@@ -5,9 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::{
-    canonicalize_json, parse_json_strict, verify, PublicJwk, SigningAlgorithm,
-};
+use registry_platform_crypto::{canonicalize_json, parse_json_strict, verify, PublicJwk};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
@@ -814,15 +812,20 @@ fn verify_transition_signatures(
     Ok(verified.into_iter().collect())
 }
 
+/// Resolves the JWA `alg` label a trust-anchor signer's JWK verifies under.
+/// Every `SigningAlgorithm` the crypto crate implements is accepted, so an
+/// operator may enroll any supported anchor key. Accepting the wider set
+/// grants no forgery capability: `verify_manifest_signatures` and
+/// `verify_transition_signatures` only count a signature toward the anchor
+/// threshold after `verify` succeeds against the anchor's own public key, so
+/// a signer still needs that key's private half whichever supported algorithm
+/// it uses. A JWK whose `alg` this crate does not implement fails closed here
+/// with `ConfigBundleError::InvalidTrustAnchor`.
 fn signing_alg_label(jwk: &PublicJwk) -> Result<&'static str, ConfigBundleError> {
-    match jwk
+    Ok(jwk
         .algorithm()
         .map_err(|_| ConfigBundleError::InvalidTrustAnchor("enabled_signers[].jwk"))?
-    {
-        SigningAlgorithm::EdDsa => Ok("EdDSA"),
-        SigningAlgorithm::Es256 => Ok("ES256"),
-        SigningAlgorithm::Rs256 => Ok("RS256"),
-    }
+        .jwa_name())
 }
 
 fn verify_file_closure(
@@ -1311,6 +1314,10 @@ mod tests {
 
     const ED25519_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registry-platform-testing-ed25519-1"}"#;
     const ED25519_ROTATED_PRIVATE_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA","kid":"registry-platform-testing-ed25519-2"}"#;
+    /// An ES384 (P-384) anchor key. ES384 signers verify and count toward an
+    /// anchor threshold alongside EdDSA, and gain no forgery capability from
+    /// it, since a signature still requires the anchor's own private key.
+    const ES384_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"did:web:issuer.test#p384-key-1"}"#;
 
     struct BundleFixture {
         tmp: TempDir,
@@ -1333,6 +1340,13 @@ mod tests {
     }
 
     fn fixture() -> BundleFixture {
+        fixture_with_key(PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk"))
+    }
+
+    /// Builds the bundle fixture with the given signer key, so trust-anchor
+    /// algorithm coverage (ES384, and so on) can reuse the same manifest and
+    /// file layout as the default Ed25519 fixture.
+    fn fixture_with_key(private: PrivateJwk) -> BundleFixture {
         let tmp = TempDir::new().expect("tempdir");
         let bundle_dir = tmp.path().join("bundle");
         fs::create_dir_all(bundle_dir.join("config")).expect("bundle dir");
@@ -1352,7 +1366,6 @@ mod tests {
             }],
             created_at: "2026-07-07T10:00:00Z".to_string(),
         };
-        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("private jwk");
         write_manifest_and_signature(&bundle_dir, &manifest, &private);
         let public = private.public();
         let kid = public.jkt().expect("jkt");
@@ -1387,11 +1400,17 @@ mod tests {
         let canonical = canonicalize_json(&manifest_value).expect("canonical manifest");
         let signature = sign(&canonical, private).expect("sign");
         let kid = private.public().jkt().expect("jkt");
+        let alg = private
+            .public()
+            .algorithm()
+            .expect("signer algorithm")
+            .jwa_name()
+            .to_string();
         let envelope = ConfigBundleSignatureEnvelope {
             schema: SIGNATURE_SCHEMA.to_string(),
             signatures: vec![ConfigBundleSignature {
                 kid,
-                alg: "EdDSA".to_string(),
+                alg,
                 sig: URL_SAFE_NO_PAD.encode(signature),
             }],
         };
@@ -1440,7 +1459,12 @@ mod tests {
             .iter()
             .map(|private| ConfigBundleSignature {
                 kid: private.public().jkt().expect("signer kid"),
-                alg: "EdDSA".to_string(),
+                alg: private
+                    .public()
+                    .algorithm()
+                    .expect("signer algorithm")
+                    .jwa_name()
+                    .to_string(),
                 sig: URL_SAFE_NO_PAD.encode(sign(&payload, private).expect("transition signature")),
             })
             .collect();
@@ -1483,6 +1507,58 @@ mod tests {
             fixture.manifest.config_hash
         );
         assert!(fixture.tmp.path().exists());
+    }
+
+    #[test]
+    fn verifies_bundle_signed_by_es384_trust_anchor() {
+        // ES384 is a widened, stronger option beside the original anchor
+        // algorithm set: verifying it does not add forgery capability,
+        // because the signer must still hold the anchor's own private key.
+        let private = PrivateJwk::parse(ES384_PRIVATE_JWK).expect("es384 private jwk");
+        let expected_kid = private.public().jkt().expect("es384 jkt");
+        let fixture = fixture_with_key(private);
+
+        let verified = verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path)
+            .expect("es384-signed bundle verified against its trust anchor");
+
+        assert_eq!(verified.signer_kids, vec![expected_kid]);
+    }
+
+    #[test]
+    fn rejects_trust_anchor_signer_with_unsupported_algorithm() {
+        // The signature itself is genuine ES384, but the anchor entry for
+        // that signer omits the JWA algorithm label, so the label lookup
+        // cannot resolve a signing algorithm and the bundle must fail
+        // closed instead of silently accepting the signer.
+        let private = PrivateJwk::parse(ES384_PRIVATE_JWK).expect("es384 private jwk");
+        let fixture = fixture_with_key(private.clone());
+
+        let mut unsupported = private.public();
+        unsupported.alg = None;
+        let kid = unsupported.jkt().expect("jkt is independent of alg");
+        let anchor = ConfigTrustAnchor {
+            schema: TRUST_ANCHOR_SCHEMA.to_string(),
+            acceptance_identity: notary_identity(),
+            version: 1,
+            threshold: 1,
+            enabled_signers: vec![ConfigTrustAnchorSigner {
+                kid,
+                jwk: unsupported,
+            }],
+        };
+        let anchor_path = fixture.tmp.path().join("unsupported_trust_anchor.json");
+        fs::write(
+            &anchor_path,
+            serde_json::to_vec_pretty(&anchor).expect("anchor json"),
+        )
+        .expect("anchor");
+
+        assert_eq!(
+            verify_config_bundle(&fixture.bundle_dir, &anchor_path),
+            Err(ConfigBundleError::InvalidTrustAnchor(
+                "enabled_signers[].jwk"
+            ))
+        );
     }
 
     #[test]
@@ -1707,6 +1783,25 @@ mod tests {
             transition.payload.next_anchor_digest,
             trust_anchor_digest(&next).expect("next digest")
         );
+    }
+
+    #[test]
+    fn verifies_anchor_transition_signed_by_es384_signer() {
+        // The rotated-in anchor signature reaching threshold through ES384
+        // mirrors the widened bundle-signature acceptance: forging it still
+        // requires the anchor's own private key, only the label lookup
+        // changed to resolve stronger keys instead of rejecting them.
+        let es384 = PrivateJwk::parse(ES384_PRIVATE_JWK).expect("es384 private key");
+        let current = anchor_from_keys(notary_identity(), 1, 1, &[&es384]);
+        let next = anchor_from_keys(notary_identity(), 2, 1, &[&es384]);
+        let mut transition =
+            AnchorTransitionV1::unsigned(&current, &next).expect("unsigned transition");
+        sign_anchor_transition(&mut transition, &[&es384]);
+
+        let verified = verify_anchor_transition(&current, &next, &transition)
+            .expect("es384-signed rotation verified against its current anchor");
+
+        assert_eq!(verified, vec![es384.public().jkt().expect("es384 jkt")]);
     }
 
     #[test]
