@@ -83,16 +83,95 @@ fn no_source_file_performs_input_or_output() {
     );
 }
 
-#[test]
-fn no_dependency_can_perform_input_or_output_on_this_crate_s_behalf() {
-    let manifest = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
-        .expect("the manifest is readable");
+/// What a manifest section header means to the dependency sweep.
+enum Table {
+    /// Not a table that adds a crate to a normal build.
+    Unrelated,
+    /// A table whose key lines each name a dependency.
+    Keys,
+    /// A sub-table whose header names the one dependency it configures.
+    Named(String),
+}
+
+/// Read a section header as the dependency table it is, if it is one.
+///
+/// Cargo gives a dependency table two placements, `[dependencies]` and
+/// `[target.<cfg>.dependencies]`, and either may be followed by the name of the
+/// one crate a sub-table configures. All four spellings link a crate into this
+/// library, so all four are swept. `dev-dependencies` and `build-dependencies`
+/// are not: the invariant is about what this crate links into a caller, and
+/// neither a test binary nor a build script is that.
+///
+/// A header that mentions dependencies in some other shape stops the sweep
+/// rather than being skipped, because a sweep that passes over what it cannot
+/// read is how a dependency gets in unnoticed.
+fn dependency_table(header: &str) -> Table {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let unreadable = format!(
+        "`[{header}]` names a dependency table in a shape this sweep does not read: \
+         teach it the shape rather than letting the table through unswept"
+    );
+    let segments = header_segments(header);
+    let Some(kind) = segments
+        .iter()
+        .position(|segment| KINDS.contains(&segment.as_str()))
+    else {
+        assert!(!header.contains("dependencies"), "{unreadable}");
+        return Table::Unrelated;
+    };
+    assert!(
+        (kind == 0 || (kind == 2 && segments[0] == "target")) && segments.len() - kind <= 2,
+        "{unreadable}"
+    );
+    if segments[kind] != "dependencies" {
+        return Table::Unrelated;
+    }
+    match segments.get(kind + 1) {
+        None => Table::Keys,
+        Some(name) => Table::Named(name.trim_matches(['\'', '"']).to_owned()),
+    }
+}
+
+/// A dotted manifest header split on its separators, leaving a quoted segment
+/// such as `'cfg(target_os = "wasi")'` whole even where it holds a dot.
+fn header_segments(header: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for character in header.chars() {
+        if let Some(open) = quote {
+            current.push(character);
+            if character == open {
+                quote = None;
+            }
+        } else if character == '\'' || character == '"' {
+            current.push(character);
+            quote = Some(character);
+        } else if character == '.' {
+            segments.push(current.trim().to_owned());
+            current.clear();
+        } else {
+            current.push(character);
+        }
+    }
+    segments.push(current.trim().to_owned());
+    segments
+}
+
+/// The crates a manifest adds to a normal build of this package.
+fn declared_dependencies(manifest: &str) -> Vec<String> {
     let mut declared = Vec::new();
     let mut inside = false;
     for line in manifest.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            inside = line == "[dependencies]";
+            let header = line.trim_matches(['[', ']']);
+            inside = false;
+            match dependency_table(header) {
+                Table::Unrelated => {}
+                Table::Keys => inside = true,
+                Table::Named(name) => declared.push(name),
+            }
             continue;
         }
         if !inside || line.is_empty() || line.starts_with('#') {
@@ -109,6 +188,66 @@ fn no_dependency_can_perform_input_or_output_on_this_crate_s_behalf() {
             .expect("a non-empty dependency name");
         declared.push(name.to_owned());
     }
+    declared
+}
+
+#[test]
+fn the_dependency_sweep_reads_a_platform_specific_table() {
+    assert_eq!(
+        declared_dependencies(
+            "[dependencies]\nserde.workspace = true\n\
+             \n[target.'cfg(unix)'.dependencies]\nrustix = { workspace = true }\n"
+        ),
+        vec!["serde".to_owned(), "rustix".to_owned()]
+    );
+}
+
+#[test]
+fn the_dependency_sweep_reads_a_sub_table_header_as_a_declaration() {
+    assert_eq!(
+        declared_dependencies("[dependencies.reqwest]\nversion = \"0.12\"\n"),
+        vec!["reqwest".to_owned()]
+    );
+}
+
+#[test]
+fn the_dependency_sweep_leaves_test_and_build_only_tables_alone() {
+    // The invariant is about what this crate links into a caller. A test binary
+    // and a build script are neither, so a dependency of one does not break it.
+    let manifest = "[dev-dependencies]\njsonschema.workspace = true\n\
+                    \n[dev-dependencies.tokio]\nversion = \"1\"\n\
+                    \n[build-dependencies]\ncc = \"1\"\n\
+                    \n[target.'cfg(unix)'.dev-dependencies]\nrustix = \"1\"\n";
+    assert!(declared_dependencies(manifest).is_empty());
+}
+
+#[test]
+#[should_panic(expected = "a shape this sweep does not read")]
+fn the_dependency_sweep_refuses_a_dependency_table_in_an_unfamiliar_place() {
+    declared_dependencies("[workspace.dependencies]\nserde = \"1\"\n");
+}
+
+#[test]
+#[should_panic(expected = "a shape this sweep does not read")]
+fn the_dependency_sweep_refuses_a_header_it_cannot_split_into_segments() {
+    // Legal TOML the sweep has not been taught, so it stops rather than reading
+    // the table as unrelated and letting every key line under it through.
+    declared_dependencies("[dependencies] # the crates this library links\nurl = \"2\"\n");
+}
+
+#[test]
+fn the_dependency_sweep_ignores_tables_that_declare_nothing() {
+    let manifest = "[package]\nname = \"registry-evidence-authoring\"\n\
+                    \n[[example]]\nname = \"authoring-schema\"\n\
+                    \n[features]\nschema = [\"dep:schemars\"]\n";
+    assert!(declared_dependencies(manifest).is_empty());
+}
+
+#[test]
+fn no_dependency_can_perform_input_or_output_on_this_crate_s_behalf() {
+    let manifest = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .expect("the manifest is readable");
+    let declared = declared_dependencies(&manifest);
     assert!(
         !declared.is_empty(),
         "the sweep read no dependencies, so it is not reading the manifest"
