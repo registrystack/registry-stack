@@ -61,6 +61,22 @@ const EDITOR_MANIFEST_VERSION: u8 = 1;
 const MAX_EDITOR_FILE_BYTES: u64 = 1024 * 1024;
 /// The report's own format name, so a script reading it can tell versions apart.
 const EDITOR_REPORT_SCHEMA_VERSION: &str = "evidencectl.editor.v1";
+/// The mode a published file carries. This is generated, non-secret
+/// configuration meant to be read and committed beside the rest of a project,
+/// so it matches what `evidencectl new` writes rather than the owner-only
+/// discipline key material is held to. Publication hard links the staged file,
+/// which shares its inode, so the staged name carries the same mode inside a
+/// transaction directory only its owner can enter.
+#[cfg(unix)]
+const EDITOR_FILE_MODE: u32 = 0o644;
+/// The mode a directory published inside the project carries, for the same
+/// reason: an editor that cannot enter `.vscode` reads no mapping from it.
+#[cfg(unix)]
+const EDITOR_DIRECTORY_MODE: u32 = 0o755;
+/// The mode of the transaction directory and its staging tree. A half-written
+/// set of files is nobody's business but this run's.
+#[cfg(unix)]
+const EDITOR_TRANSACTION_MODE: u32 = 0o700;
 
 /// One authored document kind an editor can be pointed at, the schema that
 /// describes it, and the files it applies to.
@@ -171,6 +187,9 @@ std::thread_local! {
     };
     static EDITOR_TEST_ROLLBACK_FAILURE: std::cell::Cell<bool> = const {
         std::cell::Cell::new(false)
+    };
+    static EDITOR_TEST_TARGET_CHANGE: std::cell::RefCell<Option<(PathBuf, Vec<u8>)>> = const {
+        std::cell::RefCell::new(None)
     };
 }
 
@@ -380,8 +399,30 @@ fn managed_prior_editor(
     }
 
     validate_managed_prior_editor(root, current_files, manifest_bytes)
-        .context("existing editor manifest cannot authorize a managed refresh")
+        .with_context(|| {
+            format!(
+                "existing editor manifest cannot authorize a managed refresh; {}",
+                managed_editor_recovery(current_files)
+            )
+        })
         .map(Some)
+}
+
+/// The way out of a manifest this command cannot read. Everything it writes is
+/// generated, so removing the managed set returns the project to one a fresh
+/// run configures; naming that set is what keeps the way out from being a
+/// guess.
+fn managed_editor_recovery(current_files: &[EditorFile]) -> String {
+    let mut configuration = current_files
+        .iter()
+        .filter(|file| !file.relative_path.starts_with(EDITOR_ROOT))
+        .map(|file| file.relative_path.display().to_string())
+        .collect::<Vec<_>>();
+    configuration.sort();
+    format!(
+        "to configure the project again from scratch, remove {EDITOR_ROOT} and the editor configuration this command writes ({}), then rerun",
+        configuration.join(", ")
+    )
 }
 
 fn validate_managed_prior_editor(
@@ -402,19 +443,25 @@ fn validate_managed_prior_editor(
     {
         bail!("prior editor manifest has an invalid evidencectl version");
     }
-    if manifest.schemas.len() != EDITOR_SCHEMA_CATALOG.len() {
-        bail!(
-            "prior editor manifest must contain the exact {}-schema catalog",
-            EDITOR_SCHEMA_CATALOG.len()
-        );
-    }
-    for (schema, expected) in manifest.schemas.iter().zip(&EDITOR_SCHEMA_CATALOG) {
-        if schema.kind != expected.name
-            || schema.path != format!("schemas/{}", expected.filename)
-            || schema.file_glob != expected.file_glob
-            || !is_schema_hash(&schema.sha256)
-        {
-            bail!("prior editor manifest schema catalog is not the expected closed catalog");
+    // A prior manifest may list fewer schemas than the current catalogue, and
+    // the entries it lists may be in any order: the catalogue grows as more of
+    // the authoring form gains a Rust type behind it, and a project scaffolded
+    // by an earlier release is refreshed by a later one rather than left with
+    // no run that can ever succeed. Every entry it does list must still be one
+    // this command writes, so that the bytes it authorizes replacing are bytes
+    // this command put there, and a catalogue entry it omits is a new file to
+    // stage rather than a prior file to recognize.
+    let mut listed = BTreeSet::new();
+    for schema in &manifest.schemas {
+        let known = EDITOR_SCHEMA_CATALOG.iter().any(|entry| {
+            schema.kind == entry.name
+                && schema.path == format!("schemas/{}", entry.filename)
+                && schema.file_glob == entry.file_glob
+        });
+        if !known || !is_schema_hash(&schema.sha256) || !listed.insert(schema.kind.as_str()) {
+            bail!(
+                "prior editor manifest schema catalog is not part of the expected closed catalog"
+            );
         }
     }
 
@@ -566,7 +613,7 @@ fn publish_editor_files(
     let mut created_directories = Vec::new();
     let result = (|| -> Result<()> {
         for (file, _) in &changes {
-            write_private_file(
+            write_staged_file(
                 &transaction_root.join("new").join(&file.relative_path),
                 &file.bytes,
             )?;
@@ -593,6 +640,7 @@ fn publish_editor_files(
                     file.relative_path.display()
                 );
             }
+            maybe_inject_editor_target_change(root, &target)?;
             let parent = target
                 .parent()
                 .ok_or_else(|| anyhow!("generated editor file has no parent"))?;
@@ -692,7 +740,7 @@ fn create_editor_transaction_root(root: &Path) -> Result<PathBuf> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt as _;
-            builder.mode(0o700);
+            builder.mode(EDITOR_TRANSACTION_MODE);
         }
         match builder.create(&path) {
             Ok(()) => return Ok(path),
@@ -736,7 +784,7 @@ fn ensure_editor_directory(
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::DirBuilderExt as _;
-                    builder.mode(0o700);
+                    builder.mode(EDITOR_DIRECTORY_MODE);
                 }
                 match builder.create(&current) {
                     Ok(()) => created.push(current.clone()),
@@ -842,7 +890,9 @@ fn read_editor_transaction_file(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).with_context(|| format!("failed to read transaction file {}", path.display()))
 }
 
-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+/// Write one file of the staging tree, in the mode it will carry once a hard
+/// link publishes it into the project.
+fn write_staged_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("generated editor file has no parent"))?;
@@ -852,7 +902,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        options.mode(EDITOR_FILE_MODE);
     }
     let mut file = options
         .open(path)
@@ -863,13 +913,15 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("failed to sync {}", path.display()))
 }
 
+/// Create a directory of the transaction tree, which never leaves the private
+/// transaction root and so never carries a published mode.
 fn create_dir_owner_only(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
+        builder.mode(EDITOR_TRANSACTION_MODE);
     }
     builder
         .create(path)
@@ -921,6 +973,35 @@ fn maybe_inject_editor_rollback_failure() -> Result<()> {
 
 #[cfg(not(test))]
 fn maybe_inject_editor_rollback_failure() -> Result<()> {
+    Ok(())
+}
+
+/// Stand in for another process writing a destination in the window between
+/// the re-inspection that clears it and the hard link that claims it. Only a
+/// test can open that window on purpose, and the two guards on either side of
+/// it are unprovable without one.
+#[cfg(test)]
+fn maybe_inject_editor_target_change(root: &Path, target: &Path) -> Result<()> {
+    let relative = target
+        .strip_prefix(root)
+        .map_err(|_| anyhow!("injected editor target escapes the project root"))?;
+    EDITOR_TEST_TARGET_CHANGE.with(|change| {
+        let mut change = change.borrow_mut();
+        if change
+            .as_ref()
+            .is_some_and(|(expected, _)| expected == relative)
+        {
+            let (_, bytes) = change.take().expect("matching target change exists");
+            fs::write(target, bytes).with_context(|| {
+                format!("failed to inject target change at {}", target.display())
+            })?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(not(test))]
+fn maybe_inject_editor_target_change(_root: &Path, _target: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -1098,6 +1179,130 @@ mod tests {
         assert_eq!(managed_bytes(&project), before);
     }
 
+    /// The catalogue grows as more of the authoring form gains a Rust type
+    /// behind it, so a project scaffolded by an earlier release lists fewer
+    /// schemas than the release refreshing it. Picking up the new mapping is
+    /// exactly what a manifest exists to authorize.
+    #[test]
+    fn a_prior_manifest_from_a_smaller_catalog_is_refreshed() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = project(&temporary);
+        setup_project_editor(&project).expect("initial editor setup passes");
+
+        // Age the installation down to a single-schema catalogue: a manifest
+        // listing only the question schema, settings mapping only it, and no
+        // file where the schema that release never wrote now belongs.
+        let manifest_path = project.join(EDITOR_MANIFEST_PATH);
+        let mut prior_manifest: EditorManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        prior_manifest.evidencectl_version = "0.9.0".to_string();
+        prior_manifest
+            .schemas
+            .retain(|schema| schema.kind == "question");
+        for file in editor_configuration_files(&prior_manifest.schemas)
+            .expect("prior configuration renders")
+        {
+            fs::write(project.join(&file.relative_path), &file.bytes)
+                .expect("prior configuration writes");
+        }
+        fs::write(
+            &manifest_path,
+            pretty_json(&prior_manifest).expect("manifest serializes"),
+        )
+        .expect("prior manifest writes");
+        fs::remove_file(
+            project
+                .join(EDITOR_ROOT)
+                .join("schemas/project-marker.schema.json"),
+        )
+        .expect("the aged installation drops the schema it never had");
+
+        let report = setup_project_editor(&project).expect("a smaller prior catalog refreshes");
+        assert_eq!(report.status, "configured");
+        let mut written = report.files.clone();
+        written.sort();
+        assert_eq!(written, MANAGED_FILES);
+        for file in editor_files().expect("current editor files") {
+            assert_eq!(
+                fs::read(project.join(&file.relative_path)).expect("refreshed file reads"),
+                file.bytes,
+                "{} is not the file this release writes",
+                file.relative_path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_prior_manifest_this_command_cannot_read_names_the_way_out() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = project(&temporary);
+        setup_project_editor(&project).expect("initial editor setup passes");
+
+        let manifest_path = project.join(EDITOR_MANIFEST_PATH);
+        let mut prior_manifest: EditorManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        prior_manifest.schemas[0].kind = "selector".to_string();
+        fs::write(
+            &manifest_path,
+            pretty_json(&prior_manifest).expect("manifest serializes"),
+        )
+        .expect("unreadable manifest writes");
+
+        let error = setup_project_editor(&project)
+            .expect_err("a manifest naming a document kind this release has no schema for stops");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains(EDITOR_ROOT), "{diagnostic}");
+        assert!(diagnostic.contains(".vscode/settings.json"), "{diagnostic}");
+        assert!(diagnostic.contains(".zed/settings.json"), "{diagnostic}");
+        assert!(diagnostic.contains("rerun"), "{diagnostic}");
+    }
+
+    /// The generated configuration is read by whoever opens the project, which
+    /// is not always the account that scaffolded it.
+    #[cfg(unix)]
+    #[test]
+    fn what_is_published_is_readable_like_the_rest_of_the_project() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = project(&temporary);
+        setup_project_editor(&project).expect("editor setup passes");
+
+        let mode = |path: &Path| {
+            fs::symlink_metadata(path)
+                .unwrap_or_else(|error| panic!("stat {}: {error}", path.display()))
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        // Take the expected modes from a plain file and directory created in
+        // the same process rather than from fixed numbers, so the assertion
+        // holds whatever umask the run carries.
+        let reference_file = temporary.path().join("reference-file");
+        fs::write(&reference_file, b"").expect("reference file writes");
+        let reference_directory = temporary.path().join("reference-directory");
+        fs::create_dir(&reference_directory).expect("reference directory creates");
+        let expected_file_mode = mode(&reference_file) & 0o644;
+        let expected_directory_mode = mode(&reference_directory) & 0o755;
+
+        for relative in MANAGED_FILES {
+            assert_eq!(
+                mode(&project.join(relative)),
+                expected_file_mode,
+                "{relative} is not readable by a reader of the project"
+            );
+        }
+        for relative in [EDITOR_ROOT, ".evidence-editor/schemas", ".vscode", ".zed"] {
+            assert_eq!(
+                mode(&project.join(relative)),
+                expected_directory_mode,
+                "{relative} is not enterable by a reader of the project"
+            );
+        }
+    }
+
     #[test]
     fn a_directory_without_the_marker_is_refused_before_anything_is_written() {
         let temporary = tempfile::tempdir().expect("temporary directory");
@@ -1205,6 +1410,92 @@ mod tests {
                     .to_string_lossy()
                     .starts_with(".evidence-editor.transaction-")),
             "a completed rollback cleans its transaction staging"
+        );
+    }
+
+    /// A destination preflight found missing, written by someone else while
+    /// this run was staging, belongs to whoever wrote it.
+    #[test]
+    fn a_destination_appearing_after_preflight_is_preserved() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = project(&temporary);
+        setup_project_editor(&project).expect("initial editor setup passes");
+
+        let relative = PathBuf::from(".zed/settings.json");
+        let target = project.join(&relative);
+        fs::remove_file(&target).expect("managed target removes");
+        let concurrent = b"{\n  \"concurrent\": true\n}\n".to_vec();
+        EDITOR_TEST_TARGET_CHANGE.with(|change| {
+            *change.borrow_mut() = Some((relative, concurrent.clone()));
+        });
+
+        let error = setup_project_editor(&project)
+            .expect_err("a destination that appeared during publication must not be replaced");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("rolled back"), "{diagnostic}");
+        assert_eq!(
+            fs::read(&target).expect("concurrent destination reads"),
+            concurrent
+        );
+        assert!(
+            fs::read_dir(&project)
+                .expect("project directory reads")
+                .all(|entry| !entry
+                    .expect("project entry reads")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".evidence-editor.transaction-")),
+            "a completed rollback cleans its transaction staging"
+        );
+    }
+
+    /// A managed file changed between the re-inspection that cleared it and
+    /// the hard link that would have claimed it goes back the way it was found,
+    /// changed bytes and all.
+    #[test]
+    fn an_existing_target_changed_after_reinspection_is_restored() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = project(&temporary);
+        setup_project_editor(&project).expect("initial editor setup passes");
+
+        let relative = PathBuf::from(EDITOR_ROOT).join("schemas/question.schema.json");
+        let schema_path = project.join(&relative);
+        let mut prior_schema = fs::read(&schema_path).expect("question schema reads");
+        prior_schema.extend_from_slice(b"\n");
+        fs::write(&schema_path, &prior_schema).expect("prior schema writes");
+        let manifest_path = project.join(EDITOR_MANIFEST_PATH);
+        let mut prior_manifest: EditorManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest reads"))
+                .expect("manifest parses");
+        prior_manifest.evidencectl_version = "0.9.0".to_string();
+        let aged = prior_manifest
+            .schemas
+            .iter_mut()
+            .find(|schema| schema.kind == "question")
+            .expect("the catalog holds the question schema");
+        aged.sha256 = schema_hash(&prior_schema);
+        let prior_manifest_bytes = pretty_json(&prior_manifest).expect("manifest serializes");
+        fs::write(&manifest_path, &prior_manifest_bytes).expect("prior manifest writes");
+
+        let concurrent = b"concurrent schema bytes\n".to_vec();
+        EDITOR_TEST_TARGET_CHANGE.with(|change| {
+            *change.borrow_mut() = Some((relative, concurrent.clone()));
+        });
+        let error = setup_project_editor(&project)
+            .expect_err("a target changed after reinspection must not be replaced");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("rolled back"), "{diagnostic}");
+        assert!(
+            diagnostic.contains("changed while being staged"),
+            "{diagnostic}"
+        );
+        assert_eq!(
+            fs::read(&schema_path).expect("concurrent schema reads"),
+            concurrent
+        );
+        assert_eq!(
+            fs::read(&manifest_path).expect("prior manifest reads"),
+            prior_manifest_bytes
         );
     }
 
