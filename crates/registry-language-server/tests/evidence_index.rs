@@ -93,6 +93,34 @@ fn a_question_defines_the_identifier_it_writes() {
     );
 }
 
+/// A name the author wrote as a block scalar is still the name the compiler reads, so the project
+/// is one it accepts and the editor has nothing to say about it. The claim is settled in the test:
+/// the document goes through the deserializer and the checks `registry-evidencectl` reads a
+/// question with before any diagnostic is asked for.
+#[test]
+fn names_written_as_block_scalars_are_read_as_the_compiler_reads_them() {
+    let document = without_cursors(QUESTION)
+        .replace("id: adult-status", "id: |-\n  adult-status")
+        .replace("  ref: people", "  ref: |-\n    people");
+    let question = serde_norway::from_str::<Question>(&document)
+        .expect("a question may write its names as block scalars");
+    assert_eq!(question.id, "adult-status");
+    assert!(validate_question(&question).is_empty());
+
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &document,
+    ));
+    let index = project.index();
+
+    assert!(
+        index.diagnostics().is_empty(),
+        "the compiler accepts this question: {:?}",
+        index.diagnostics()
+    );
+}
+
 #[test]
 fn a_question_identifier_that_is_not_the_file_name_is_reported() {
     let project = EvidenceProject::new(&replacing(

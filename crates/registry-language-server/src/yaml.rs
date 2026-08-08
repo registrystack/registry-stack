@@ -204,6 +204,23 @@ fn scalar_from_node(
     }
 
     let raw = source.get(node.byte_range())?;
+    // Two forms whose source text is not their value, and neither is decoded here.
+    //
+    // A block scalar's text opens with the indicator that decides how it ends and how much of each
+    // line's indentation belongs to the value, so `|-`, the newline, and the indentation are all in
+    // `raw` and in none of what the document means. A scalar of any other form written over more
+    // than one line is folded, plainly and inside quotes alike, so its line breaks and the
+    // indentation that continues it are not in the value either.
+    //
+    // What is stored has to be what `serde_norway` reads, because that is the deserializer the
+    // authoring form reads the same document with. A name stored as its source text resolves to
+    // nothing on screen while the compiler resolves it, which reports a project the compiler
+    // accepts. Storing nothing costs the navigation on that one field and reports nothing at all,
+    // so it is what a form no cheap rule decodes faithfully is worth.
+    if node.kind() == "block_scalar" || raw.contains('\n') {
+        return None;
+    }
+
     let (value, start_byte, end_byte) = match node.kind() {
         "double_quote_scalar" => {
             let value = serde_json::from_str::<String>(raw)
@@ -271,6 +288,8 @@ impl<'a> SourceMap<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn value_depth(value: &YamlValue) -> usize {
@@ -284,6 +303,86 @@ mod tests {
             }
             YamlValue::Sequence(entries) => 1 + entries.iter().map(value_depth).max().unwrap_or(0),
             YamlValue::Scalar(_) | YamlValue::Other => 1,
+        }
+    }
+
+    /// Every form a scalar can be written in, against the reading the compiler will do of it.
+    ///
+    /// `serde_norway` is the deserializer `registry_evidence_authoring` reads a document with, so a
+    /// value stored here that differs from the one it reads is a name resolved against a document
+    /// the compiler reads differently: the editor would report a project it accepts, which is the
+    /// one thing an editor beside a compiler may not do. A form left out of the index is allowed,
+    /// and is what this asks for wherever a cheap rule cannot decode the form faithfully.
+    #[test]
+    fn a_scalar_is_read_as_the_compiler_reads_it_or_left_out_of_the_index() {
+        for source in [
+            "concept: is_adult\n",
+            "concept: \"is_adult\"\n",
+            "concept: 'is_adult'\n",
+            "concept: \"is: adult\"\n",
+            "concept: 'it''s'\n",
+            "concept: \"\\u00e9t\\u00e9\"\n",
+            "concept: |-\n  is_adult\n",
+            "concept: |\n  is_adult\n",
+            "concept: >-\n  is_adult\n",
+            "concept: >\n  is_adult\n",
+            "concept: |-\n  is_adult\n  and_more\n",
+            "concept: is\n  adult\n",
+            "concept: \"is\n  adult\"\n",
+            "concept: 'is\n  adult'\n",
+        ] {
+            let parsed = parse_yaml(source).expect("the fragment parses");
+            let Some(indexed) = parsed.value.get_scalar("concept") else {
+                continue;
+            };
+            let read = serde_norway::from_str::<BTreeMap<String, String>>(source)
+                .expect("the fragment is a mapping of strings");
+            assert_eq!(indexed.value, read["concept"], "{source:?}");
+        }
+    }
+
+    /// The forms the authoring form's own names are written in are all read, so the rule above
+    /// cannot be satisfied by indexing nothing.
+    #[test]
+    fn the_forms_a_name_is_written_in_are_all_read() {
+        for (source, value) in [
+            ("concept: is_adult\n", "is_adult"),
+            ("concept: \"is_adult\"\n", "is_adult"),
+            ("concept: 'is_adult'\n", "is_adult"),
+        ] {
+            assert_eq!(
+                parse_yaml(source)
+                    .unwrap()
+                    .value
+                    .get_scalar("concept")
+                    .map(|scalar| scalar.value.as_str()),
+                Some(value),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// The forms that are left out, named so that a change of mind about one of them is a change to
+    /// this list. Each one is folded by a rule of its own, and the source text is not the value in
+    /// any of them.
+    #[test]
+    fn a_scalar_written_over_more_than_one_line_is_left_out_of_the_index() {
+        for source in [
+            "concept: |-\n  is_adult\n",
+            "concept: |\n  is_adult\n",
+            "concept: >-\n  is_adult\n",
+            "concept: is\n  adult\n",
+            "concept: \"is\n  adult\"\n",
+            "concept: 'is\n  adult'\n",
+        ] {
+            assert!(
+                parse_yaml(source)
+                    .unwrap()
+                    .value
+                    .get_scalar("concept")
+                    .is_none(),
+                "{source:?}"
+            );
         }
     }
 
