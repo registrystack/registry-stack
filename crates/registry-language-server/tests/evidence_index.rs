@@ -740,6 +740,44 @@ fn a_source_artifact_resolves_from_either_directory_the_compiler_reads() {
     }
 }
 
+/// The same rule down to the leading dot, which is the one place the editor's own layout rule and
+/// the compiler's disagree.
+///
+/// The loader refuses a dot-prefixed name because a project keeps generated tooling state under one,
+/// and the editor must not read a file an author never wrote. That is a rule about reading, and this
+/// pointer reads nothing: `validate_bundle_relative_artifact` asks only for `adapters/<file>` or
+/// `schemas/<file>`, says nothing about how the file is named, and the bundle writer copies whatever
+/// sits there. Applying the loader's rule to the pointer would put `Unknown schema file reference`
+/// over a project the build accepts, so the pointer is resolved by the compiler's rule and the
+/// containment walk stays the thing that decides which files the server may point at.
+#[test]
+fn a_dot_named_source_artifact_resolves_because_the_compiler_copies_it() {
+    let files = replacing(
+        &adult_status_project(),
+        SOURCE_PATH,
+        &SOURCE.replace(
+            "factSchema: <|fact-schema|>schemas/people-facts.schema.yaml",
+            "factSchema: <|fact-schema|>adapters/.people-facts.json",
+        ),
+    );
+    let project = EvidenceProject::new(&replacing(
+        &files,
+        "adapters/.people-facts.json",
+        SCHEMA_JSON,
+    ));
+    let index = project.index();
+
+    assert!(
+        index.diagnostics().is_empty(),
+        "the build copies the file the pointer names: {:?}",
+        index.diagnostics()
+    );
+    assert_eq!(
+        definition_paths(&index, &project, SOURCE_PATH, "fact-schema"),
+        vec![project.path("adapters/.people-facts.json")]
+    );
+}
+
 /// The same rule from the other side: a two-component path is not enough, the first component has
 /// to be one of the two directories the compiler reads a source's artifacts from. A file really
 /// sits at this one and the build still refuses it.
