@@ -371,6 +371,153 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
     );
 }
 
+/// The documented adopter path has to reach the trace the runtime can print.
+///
+/// The driver decides nothing about the trace: it asks for one on each
+/// evaluation and relays what `evidence` printed. The check step is left alone,
+/// because a bundle check has no case to explain.
+#[test]
+fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml", "fixtures/b.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--explain")
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "7")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("stub ok for evaluate:fixtures/a.yaml"),
+        "the trace never reached the operator: {stdout}"
+    );
+    // Relaying the trace must not cost the count, which is read from the
+    // summary line the runtime prints beside it.
+    assert!(
+        stdout.contains("3 passed, 0 failed (14 cases evaluated)"),
+        "{stdout}"
+    );
+
+    let runtime_path = project.join("runtime.yaml");
+    let runtime_path = runtime_path.to_str().expect("runtime path is utf8");
+    let invocations = read_argv_log(&argv_log);
+    assert_eq!(
+        invocations,
+        vec![
+            vec!["--runtime", runtime_path, "check"],
+            vec![
+                "--runtime",
+                runtime_path,
+                "evaluate",
+                "--fixture",
+                "fixtures/a.yaml",
+                "--explain"
+            ],
+            vec![
+                "--runtime",
+                runtime_path,
+                "evaluate",
+                "--fixture",
+                "fixtures/b.yaml",
+                "--explain"
+            ],
+        ],
+        "unexpected evidence invocations"
+    );
+}
+
+/// A run nobody asked to explain carries no trace, in either output mode.
+///
+/// The trace is the one thing in this report that can name what a source
+/// returned, so it is present only where it was asked for.
+#[test]
+fn an_unexplained_run_relays_no_trace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert!(
+        fixtures[0].get("trace").is_none(),
+        "an unexplained run reported a trace: {}",
+        fixtures[0]
+    );
+    assert!(
+        !stderr_of(&output).contains("stub ok for evaluate:fixtures/a.yaml"),
+        "an unexplained run printed the runtime's output"
+    );
+}
+
+/// An explained JSON run carries each trace in the document it promises.
+///
+/// The whole point of `--json` is that one document is the report. A trace
+/// printed beside it, on a stream the caller is not parsing, is a trace the
+/// caller asked for and did not get.
+#[test]
+fn an_explained_json_run_carries_each_trace_in_its_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .arg("--explain")
+        .env("ARGV_LOG", &argv_log)
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    let stdout_lines: Vec<&str> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        stdout_lines.len(),
+        1,
+        "stdout must carry exactly one JSON document: {stdout}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_lines[0]).expect("parse JSON report");
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert!(
+        fixtures[0]["trace"]
+            .as_str()
+            .expect("an explained fixture carries its trace")
+            .contains("stub ok for evaluate:fixtures/a.yaml"),
+        "{}",
+        fixtures[0]
+    );
+}
+
 #[test]
 fn missing_runtime_yaml_errors_clearly_without_invoking_evidence() {
     let dir = tempfile::tempdir().expect("tempdir");
