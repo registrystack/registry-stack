@@ -602,13 +602,32 @@ impl ProjectIndex {
     }
 }
 
+/// The rule a document larger than the ceiling its family holds it to is refused under.
+pub(crate) const DOCUMENT_CEILING_RULE: &str = "document-ceiling";
+
+/// The rule a directory holding more documents than the editor indexes is reported under.
+pub(crate) const DIRECTORY_CEILING_RULE: &str = "directory-ceiling";
+
 /// A problem with a whole document rather than a place in it, reported at its start.
 pub(crate) fn document_diagnostic(path: &Path, message: &str) -> IndexedDiagnostic {
+    document_rule_diagnostic(path, None, message)
+}
+
+/// The same, for a document the editor refused under a rule of its own.
+///
+/// The two ceilings are rules of the authoring form that the editor restates, so an author reads
+/// them beside the rules the compiler prints and filters them the same way: by name, rather than by
+/// silencing everything the server says.
+pub(crate) fn document_rule_diagnostic(
+    path: &Path,
+    code: Option<String>,
+    message: &str,
+) -> IndexedDiagnostic {
     IndexedDiagnostic {
         path: path.to_path_buf(),
         range: DOCUMENT_START,
         severity: DiagnosticSeverity::ERROR,
-        code: None,
+        code,
         message: message.to_owned(),
     }
 }

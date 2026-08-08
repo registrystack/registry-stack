@@ -12,7 +12,10 @@ use anyhow::Result;
 
 use crate::{
     evidence,
-    refs::{document_diagnostic, IndexedDiagnostic, IndexedReference, IndexedSymbol, ProjectIndex},
+    refs::{
+        document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedReference,
+        IndexedSymbol, ProjectIndex, DOCUMENT_CEILING_RULE,
+    },
     relay,
     yaml::ParsedDocument,
 };
@@ -279,8 +282,11 @@ impl RootState {
             // last text that fitted would answer every later request from a revision the author can
             // no longer see, and silently: nothing else in the session would report the change.
             self.documents.remove(&path);
-            self.disk_diagnostics
-                .push(document_diagnostic(&path, &ceiling.message));
+            self.disk_diagnostics.push(document_rule_diagnostic(
+                &path,
+                self.family.diagnostic_code(DOCUMENT_CEILING_RULE),
+                &ceiling.message,
+            ));
         }
         self.rebuild();
     }
@@ -431,8 +437,11 @@ impl RootState {
         match fs::read(path) {
             Ok(bytes) if !ceiling.admits(bytes.len()) => {
                 self.documents.remove(path);
-                self.disk_diagnostics
-                    .push(document_diagnostic(path, &ceiling.message));
+                self.disk_diagnostics.push(document_rule_diagnostic(
+                    path,
+                    self.family.diagnostic_code(DOCUMENT_CEILING_RULE),
+                    &ceiling.message,
+                ));
             }
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => {
@@ -1254,6 +1263,17 @@ mod tests {
             .collect()
     }
 
+    /// Every ceiling this root reports, as the rule it names and the sentence an author reads.
+    fn ceiling_rules(state: &RootState) -> Vec<(Option<&str>, &str)> {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("the editor indexes"))
+            .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
+            .collect()
+    }
+
     #[test]
     fn an_open_buffer_past_its_role_s_ceiling_is_dropped_and_reported() {
         let temp = TempDir::new().unwrap();
@@ -1517,6 +1537,71 @@ mod tests {
             .workspace_symbols("profile-999")
             .iter()
             .any(|symbol| symbol.name == "profile-999"));
+    }
+
+    /// Both ceilings the editor applies name the rule they report under.
+    ///
+    /// The code is how an author silences one rule instead of everything the server says, and these
+    /// two are the rules a finished project meets: a question that grew, a directory that filled.
+    /// A sentence published without a code leaves that author nothing to name. The sentences
+    /// themselves are pinned here beside the codes, because they are what an author reads.
+    #[test]
+    fn the_ceilings_the_editor_applies_name_the_rules_they_report_under() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        state.update(questions.join("filler-000.yaml"), oversized_question(), 2);
+
+        let extra = questions.join("zzz-extra.yaml");
+        write_question(&questions, "zzz-extra");
+        state
+            .reload_watched_batch(std::slice::from_ref(&extra))
+            .unwrap();
+
+        assert_eq!(
+            ceiling_rules(&state),
+            vec![
+                (
+                    Some("evidence/document-ceiling"),
+                    "This question exceeds the 65536-byte limit the editor indexes"
+                ),
+                (
+                    Some("evidence/directory-ceiling"),
+                    "This project directory holds more than the 128 documents the editor indexes; this file and the ones after it are not indexed"
+                ),
+            ]
+        );
+    }
+
+    /// Relay's ceiling keeps reporting without a code, which is how every Relay diagnostic reports.
+    ///
+    /// A client filtering Relay's diagnostics today filters on the message. Naming this one rule
+    /// would be the only named rule in that family, and which codes Relay publishes is a decision
+    /// about the Relay surface rather than a side effect of naming Evidence's.
+    #[test]
+    fn a_relay_document_past_the_ceiling_is_reported_without_a_code() {
+        let temp = TempDir::new().unwrap();
+        project_in(temp.path());
+        let manifest = temp
+            .path()
+            .join("registry-stack.yaml")
+            .canonicalize()
+            .unwrap();
+        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
+
+        let mut oversized = String::from("version: 1\nregistry: { id: current }\nservices: {}\n#");
+        oversized.push_str(&" ".repeat(MAX_DOCUMENT_BYTES as usize));
+        state.update(manifest, oversized, 2);
+
+        let reported = state
+            .index
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reported,
+            vec![(None, "Project document exceeds the 1 MiB indexing limit")]
+        );
     }
 
     /// A buffer left open over a file the project no longer holds says nothing about the project.

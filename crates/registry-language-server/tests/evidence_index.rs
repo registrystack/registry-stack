@@ -965,6 +965,11 @@ fn a_question_the_loader_could_not_read_still_answers_for_its_name() {
         diagnostic.message,
         format!("This question exceeds the {MAX_QUESTION_BYTES}-byte limit the editor indexes")
     );
+    assert_eq!(
+        diagnostic.code.as_deref(),
+        Some("evidence/document-ceiling"),
+        "the sentence the author acts on names its rule, like every other sentence here"
+    );
     assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
     assert_eq!(
         definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),

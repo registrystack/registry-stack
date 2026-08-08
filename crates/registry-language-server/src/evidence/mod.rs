@@ -23,9 +23,12 @@ use registry_evidence_authoring::{
 };
 
 use crate::{
-    refs::document_diagnostic,
+    refs::{
+        document_diagnostic, document_rule_diagnostic, DIRECTORY_CEILING_RULE,
+        DOCUMENT_CEILING_RULE,
+    },
     safety::{plain_directory, plain_file, secure_directory, secure_regular_file},
-    workspace::{DocumentCeiling, LoadedProjectDocuments},
+    workspace::{DocumentCeiling, LoadedProjectDocuments, ProjectFamily},
 };
 
 pub(crate) use index::build_index;
@@ -161,7 +164,11 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
         };
         let ceiling = role_ceiling(role);
         if metadata.len() > ceiling.max_bytes {
-            diagnostics.push(document_diagnostic(&path, &ceiling.message));
+            diagnostics.push(document_rule_diagnostic(
+                &path,
+                ProjectFamily::Evidence.diagnostic_code(DOCUMENT_CEILING_RULE),
+                &ceiling.message,
+            ));
             continue;
         }
         match fs::read(&path) {
@@ -232,8 +239,9 @@ fn add_documents(
     let mut paths = named.into_iter().collect::<Vec<_>>();
     if let Some(ceiling) = ceiling {
         if let Some(first_unread) = paths.get(ceiling) {
-            diagnostics.push(document_diagnostic(
+            diagnostics.push(document_rule_diagnostic(
                 first_unread,
+                ProjectFamily::Evidence.diagnostic_code(DIRECTORY_CEILING_RULE),
                 &format!(
                     "This project directory holds more than the {ceiling} documents the editor indexes; this file and the ones after it are not indexed"
                 ),
