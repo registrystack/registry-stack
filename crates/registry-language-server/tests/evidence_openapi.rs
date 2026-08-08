@@ -4,8 +4,9 @@
 //! A question written in the compact form names an operation of `source.openapi.yaml` instead of a
 //! source document, and everything else it writes is read against that operation: the subject is
 //! selected by one of the operation's path parameters, each fact projects a leaf of its response,
-//! and each collection bound names a collection some fact visits. These four are the edges
-//! `tests/evidence_index.rs` records as belonging to this phase.
+//! and each collection bound names a collection some fact visits. `tests/evidence_index.rs` covers
+//! the edges a project draws between two authored documents; these four are the ones drawn into the
+//! description instead.
 //!
 //! Every diagnostic here is paired with the exact sentence `registry-evidencectl` refuses the same
 //! project with, cited beside the test. The editor is allowed to be earlier than the compiler and
