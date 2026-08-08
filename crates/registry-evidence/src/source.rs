@@ -22,9 +22,10 @@ use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{
-    is_http_token_byte, validate_local_unauthenticated_source_origin, AcquisitionPosture,
-    CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig,
-    PreparationChannelPolicy, SecretRef, SourceAuthentication, SourceConfig, SourceSelectorSet,
+    is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
+    AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
+    PathBindingConfig, PreparationChannelPolicy, SecretRef, SourceAuthentication, SourceConfig,
+    SourceSelectorSet,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::RequestParts;
@@ -1598,6 +1599,9 @@ fn map_bounded_read_error(error: BoundedReadError) -> SourceError {
 }
 
 fn validate_url(value: &str, origin_only: bool) -> Result<Url, SourceError> {
+    if !value.bytes().all(is_uri_byte) {
+        return Err(SourceError::InvalidPlan);
+    }
     let url = Url::parse(value).map_err(|_| SourceError::InvalidPlan)?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return Err(SourceError::InvalidPlan);

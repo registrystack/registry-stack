@@ -3220,6 +3220,47 @@ async fn a_private_key_jwt_source_signs_the_configured_assertion_audience() {
     );
 }
 
+/// Signing the configured bytes is only safe for bytes that are a URL. The
+/// bundle contract refuses a source URL carrying a character RFC 3986 does not
+/// admit, and the runtime holds the same rule on the plan it is handed, because
+/// `Url::parse` strips tab, newline, and carriage return anywhere and strips a
+/// leading or trailing space or C0 control. Without it the request goes to the
+/// stripped endpoint while the default audience is signed with the character
+/// still in it, so no authorization server comparing by Simple String
+/// Comparison could ever accept the assertion.
+#[tokio::test]
+async fn a_token_endpoint_carrying_a_stripped_character_is_refused() {
+    let (_root, secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", CLIENT_ASSERTION_PRIVATE_JWK),
+    ]);
+    for endpoint in [
+        "https://issuer.invalid/token ",
+        " https://issuer.invalid/token",
+        "https://issuer.invalid/to\tken",
+        "https://issuer.invalid/to\nken",
+        "https://issuer.invalid/to\rken",
+        "https://issuer.invalid/token\u{0}",
+        "https://issuer.invalid/tokén",
+    ] {
+        let source = fixed_source(
+            "https://source.invalid",
+            json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": endpoint,
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientAssertionKeyRef": "secret:file/oauth-client-key",
+                "maximumCacheSeconds": 60
+            }),
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, secrets.clone()).err(),
+            Some(SourceError::InvalidPlan),
+            "{endpoint:?} was accepted as a token endpoint"
+        );
+    }
+}
+
 /// The default audience is the token endpoint, and it is subject to the same
 /// Simple String Comparison as a configured one: what the server compares
 /// against is the endpoint it published, which is the spelling the operator

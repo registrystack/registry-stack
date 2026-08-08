@@ -3518,6 +3518,9 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
 }
 
 fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
+    if !value.bytes().all(is_uri_byte) {
+        return invalid("source URL contains characters a URI cannot carry");
+    }
     let url = Url::parse(value).map_err(|_| ConfigError::Invalid("source URL is invalid"))?;
     if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return invalid("source URL contains prohibited authority or fragment data");
@@ -3540,6 +3543,47 @@ fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigErro
         _ => return invalid("source URL scheme is not permitted"),
     }
     Ok(url)
+}
+
+/// The characters RFC 3986 admits in a URI without percent-encoding.
+///
+/// `Url::parse` accepts a wider input and rewrites the difference: it strips
+/// tab, newline, and carriage return from anywhere in the string, strips
+/// leading and trailing C0 controls and spaces, and percent-encodes or
+/// punycodes most of what is left that it does not recognize. A source URL is
+/// read twice, once parsed to address the request and once as configured to
+/// stand in for a client assertion audience the bundle does not state, so a
+/// character the parser rewrites leaves those two naming different strings and
+/// signs an audience no authorization server published. Refusing the character
+/// keeps them one URL, and costs no deployment that could have worked, because
+/// a URI carrying any of these has to percent-encode it anyway.
+pub(crate) fn is_uri_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b':'
+                | b'/'
+                | b'?'
+                | b'#'
+                | b'['
+                | b']'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b'%'
+        )
 }
 
 fn has_canonical_loopback_authority(value: &str) -> bool {
@@ -5131,6 +5175,56 @@ mod tests {
         ] {
             assert!(validate_source_origin(invalid).is_err(), "{invalid}");
         }
+    }
+
+    /// `Url::parse` is forgiving in ways a deployment contract cannot be. It
+    /// strips tab, newline, and carriage return from anywhere in the string,
+    /// strips leading and trailing C0 controls and spaces, and percent-encodes
+    /// or punycodes most of what is left that it does not recognize. Requests
+    /// are sent to the parsed form while a client assertion audience that the
+    /// bundle does not state is signed as the configured form, so any character
+    /// the parser rewrites leaves those two naming different strings, and the
+    /// audience names one no authorization server ever published. RFC 3986
+    /// admits none of these characters in a URI unencoded, so refusing them
+    /// costs no deployment that could have worked.
+    #[test]
+    fn source_urls_reject_characters_a_uri_cannot_carry() {
+        let origins = [
+            "https://source.invalid ",
+            " https://source.invalid",
+            "https://source.invalid\u{9}",
+            "https://source.invalid\u{a}",
+            "https://source.invalid\u{d}",
+            "https://source.invalid\u{0}",
+            "https://source.invalid\u{7f}",
+            "https://sourcé.invalid",
+        ];
+        let accepted = origins
+            .iter()
+            .filter(|value| validate_source_origin(value).is_ok())
+            .collect::<Vec<_>>();
+        assert!(
+            accepted.is_empty(),
+            "baseUrl accepted characters a URI cannot carry: {accepted:?}"
+        );
+
+        let endpoints = [
+            "https://source.invalid/token ",
+            "https://source.invalid/to\u{9}ken",
+            "https://source.invalid/to\u{a}ken",
+            "https://source.invalid/to\u{d}ken",
+            "https://source.invalid/token\u{0}",
+            "https://source.invalid/token\u{7f}",
+            "https://source.invalid/tokén",
+        ];
+        let accepted = endpoints
+            .iter()
+            .filter(|value| validate_source_url(value, false).is_ok())
+            .collect::<Vec<_>>();
+        assert!(
+            accepted.is_empty(),
+            "tokenEndpoint accepted characters a URI cannot carry: {accepted:?}"
+        );
     }
 
     #[test]
