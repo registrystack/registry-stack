@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use registry_language_server::Backend;
 use serde_json::{json, Value};
 use tower::{Service, ServiceExt};
@@ -98,19 +98,25 @@ impl LspSession {
         );
     }
 
-    /// The diagnostics the server last published for one document. An editor keeps the latest
-    /// publication and forgets the ones before it, so this reads the same list an author sees.
-    pub fn published_diagnostics(&self, path: &Path) -> Vec<Value> {
+    /// The diagnostics the server last published for one document, or `None` if it never
+    /// published for that document at all. An editor keeps the latest publication and forgets the
+    /// ones before it, so `Some` reads the same list an author sees; `None` is kept distinct from
+    /// `Some(vec![])` because a server that published nothing and a server that published a clean
+    /// result are different states, and only one of them proves the document was checked.
+    pub fn published_diagnostics(&self, path: &Path) -> Option<Vec<Value>> {
         let uri = uri(path);
         self.received
             .iter()
             .filter(|request| request.method() == "textDocument/publishDiagnostics")
             .filter_map(Request::params)
             .rfind(|params| params.get("uri") == Some(&uri))
-            .and_then(|params| params.get("diagnostics"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
+            .map(|params| {
+                params
+                    .get("diagnostics")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .expect("a publishDiagnostics notification carries a diagnostics array")
+            })
     }
 
     /// Every method the server sent the client, in order.
@@ -118,11 +124,17 @@ impl LspSession {
         self.received.iter().map(Request::method).collect()
     }
 
-    /// Calls the server, draining what it sends the client meanwhile.
+    /// Calls the server, draining what it sends the client meanwhile and once more immediately
+    /// after the call answers.
     ///
     /// The server-to-client channel holds one message. A handler publishing diagnostics while
     /// nothing reads them would wait forever on the very call that is waiting for the handler, so
-    /// the two run together.
+    /// the two run together while the call is outstanding. That is not enough on its own: a
+    /// handler's publish and its own answer can both be ready on the same poll, and `select!`
+    /// picks whichever branch it happens to check first, not whichever happened first. A handler
+    /// cannot answer before every message it sent has been accepted onto the channel, so
+    /// anything still queued once the answer arrives belongs to this call; draining once more,
+    /// without waiting for anything new, picks it up regardless of which way `select!` broke.
     async fn call(&mut self, request: Request) -> Option<Response> {
         let Self {
             service,
@@ -136,12 +148,16 @@ impl LspSession {
             .expect("the server is still serving")
             .call(request);
         tokio::pin!(call);
-        loop {
+        let answered = loop {
             tokio::select! {
-                answered = &mut call => return answered.expect("the server is still serving"),
+                answered = &mut call => break answered.expect("the server is still serving"),
                 Some(sent) = socket.next() => received.push(sent),
             }
+        };
+        while let Some(Some(sent)) = socket.next().now_or_never() {
+            received.push(sent);
         }
+        answered
     }
 }
 

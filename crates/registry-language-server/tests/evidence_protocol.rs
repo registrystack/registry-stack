@@ -54,18 +54,42 @@ async fn an_opened_question_is_indexed_and_reported_clean() {
         )
         .await;
 
-    assert!(
-        session
-            .received_methods()
-            .contains(&"textDocument/publishDiagnostics"),
-        "the server publishes for the document the client opened: {:?}",
-        session.received_methods()
-    );
     assert_eq!(
         session.published_diagnostics(&project.path(QUESTION_PATH)),
-        Vec::<Value>::new(),
+        Some(Vec::<Value>::new()),
         "the worked project holds nothing to report"
     );
+}
+
+/// `LspSession::call` races a `tokio::select!` against the server's notification burst: the
+/// answer and the publish the handler triggered can both be ready on the same poll, and which one
+/// the loop sees first is decided by `select!`'s internal ordering, not by which happened first.
+/// Opening a document is exactly the kind of call that triggers a publish, so this repeats the
+/// open many times over fresh sessions and insists the harness drained the opened document's own
+/// notification every time, not just on the runs where `select!` happened to favor the socket.
+#[tokio::test]
+async fn opening_a_document_reliably_drains_its_publish_notification() {
+    let project = EvidenceProject::new(&adult_status_project());
+
+    for attempt in 0..50 {
+        let mut session = LspSession::start();
+        session.initialize(project.root()).await;
+        session
+            .open(
+                &project.path(QUESTION_PATH),
+                &text_of(&project, QUESTION_PATH),
+                1,
+            )
+            .await;
+
+        assert!(
+            session
+                .published_diagnostics(&project.path(QUESTION_PATH))
+                .is_some(),
+            "attempt {attempt}: the server published for the opened document, but the harness \
+             did not drain it before the call returned"
+        );
+    }
 }
 
 #[tokio::test]
@@ -110,7 +134,9 @@ async fn a_source_that_is_not_there_reaches_the_author_as_an_evidence_error() {
         .open(&path, &text_of(&project, QUESTION_PATH), 1)
         .await;
 
-    let published = session.published_diagnostics(&path);
+    let published = session
+        .published_diagnostics(&path)
+        .expect("the server published for the opened document");
     assert_eq!(published.len(), 1, "{published:?}");
     let diagnostic = &published[0];
     assert_eq!(diagnostic["source"], json!("evidence"));
