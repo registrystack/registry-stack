@@ -30,6 +30,20 @@ from run_cargo_packages import command_args, package_args
 # everything else in the result arrives through the dependency closure.
 AUTHORING_FORM_CHANGE = ("crates/registry-evidence-authoring/src/lib.rs",)
 
+# The docs generator that turns each Evidence configuration schema into a
+# published page, and the directory the authoring-form schemas are committed to.
+EVIDENCE_CONFIGURATION_GENERATOR = Path(
+    "docs/site/scripts/generate-evidence-configuration.mjs"
+)
+AUTHORING_SCHEMA_DIRECTORY = Path("crates/registry-evidencectl/schemas/authoring")
+
+
+def published_evidence_configuration_schemas() -> set[str]:
+    """The schema paths the docs generator's own contract list names."""
+
+    generator = EVIDENCE_CONFIGURATION_GENERATOR.read_text(encoding="utf-8")
+    return set(re.findall(r"^\s+file: '([^']+)',$", generator, re.MULTILINE))
+
 
 def normal_dependency_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Rebuild cargo metadata keeping only the edges a package links against.
@@ -680,10 +694,8 @@ on:
 
     def test_every_published_evidence_schema_and_reference_runs_docs(self) -> None:
         """Whatever the generator publishes, a change to it rebuilds the docs."""
-        generator = Path(
-            "docs/site/scripts/generate-evidence-configuration.mjs"
-        ).read_text(encoding="utf-8")
-        published = set(re.findall(r"^\s+file: '([^']+)',$", generator, re.MULTILINE))
+        generator = EVIDENCE_CONFIGURATION_GENERATOR.read_text(encoding="utf-8")
+        published = published_evidence_configuration_schemas()
         references = set(
             re.findall(
                 r"^const \w+_REFERENCE =\s*'([^']+)';$", generator, re.MULTILINE
@@ -696,6 +708,39 @@ on:
             with self.subTest(path=path):
                 self.assertTrue(Path(path).is_file())
                 self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_every_committed_authoring_schema_is_published(self) -> None:
+        """A schema committed here that no page publishes documents nothing.
+
+        The routing test above reads the generator's contract list, so it can
+        only prove that what the list names reaches docs CI. It cannot see a
+        schema committed under this directory that the list leaves out, and
+        nothing else can either: `check-authoring-schema.sh` diffs the
+        generator's output against this directory, so a third generated file
+        diffs clean, and both key-path tools walk their own contract lists
+        rather than the directory. Reading the directory is what makes the
+        omission visible, and reading it is also why this test cannot itself
+        grow the stale list it exists to catch.
+        """
+        committed = {
+            path.as_posix()
+            for path in AUTHORING_SCHEMA_DIRECTORY.rglob("*.json")
+            if path.is_file()
+        }
+        self.assertTrue(committed)
+        prefix = f"{AUTHORING_SCHEMA_DIRECTORY.as_posix()}/"
+        self.assertEqual(
+            committed,
+            {
+                path
+                for path in published_evidence_configuration_schemas()
+                if path.startswith(prefix)
+            },
+            "every committed authoring schema needs an entry in CONTRACTS in "
+            f"{EVIDENCE_CONFIGURATION_GENERATOR}, in the CONTRACTS dict in "
+            "products/evidence/scripts/evidence_config_key_paths.py, and a "
+            "key-path block in the reference those two name",
+        )
 
     def test_first_country_docs_and_journey_routing_matrix(self) -> None:
         cases = (
