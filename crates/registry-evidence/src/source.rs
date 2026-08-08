@@ -40,6 +40,9 @@ const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
 const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
 /// RFC 7523 section 2.2 fixes this identifier for a JWT client assertion.
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+/// Proves a client assertion key can sign and that its two halves belong
+/// together, without producing anything a server would accept as an assertion.
+const CLIENT_KEY_PROBE: &[u8] = b"registry-evidence source client key usability probe";
 
 /// A role-bound selector that has already passed authentication,
 /// authorization, exact-field, type, and size validation.
@@ -1222,6 +1225,22 @@ impl OauthPlan {
             // The parse error names JWK members, so it is never surfaced.
             SourceError::Credential
         })?;
+        // Parsing each half does not make the two belong together. EdDSA
+        // derives the public key from the seed and never reads `x`, and RSA
+        // imports the private half alone, so a document pairing one pair's
+        // private half with another's public half signs a valid assertion that
+        // verifies under nothing the authorization server holds: what an
+        // adopter registers is the public half. Signing a probe and verifying
+        // it against this key's own public half is what proves the two belong
+        // together, and it costs one operation per token acquisition instead
+        // of a request to an authorization server that can only refuse it.
+        //
+        // The probe is deliberately not shaped like a JWS signing input, so
+        // the signature discarded here could not be presented as an assertion.
+        let probe = registry_platform_crypto::sign(CLIENT_KEY_PROBE, &key)
+            .map_err(|_| SourceError::Credential)?;
+        registry_platform_crypto::verify(CLIENT_KEY_PROBE, &probe, &key.public())
+            .map_err(|_| SourceError::Credential)?;
         let issued_at = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| SourceError::Credential)?

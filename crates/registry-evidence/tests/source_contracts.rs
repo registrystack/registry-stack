@@ -52,6 +52,17 @@ const SHAPE_EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq8
 /// them rather than on the runtime's own ES256 signing key.
 const CLIENT_ASSERTION_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"client-key-es384-2026-01"}"#;
 
+/// Synthetic Ed25519 client key. EdDSA is what makes a JWK's two halves
+/// separable: signing derives the public key from the seed and never reads `x`,
+/// so `x` can name a different key without anything downstream noticing.
+/// Importing an EC pair compares the two, which is why the P-384 key above
+/// cannot show this.
+const CLIENT_ASSERTION_ED25519_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"cjQHkqxwdgsH3B7jFYHvb_xfY3mGcJ8kkoyjc8u0_2U","x":"rdBTcf1MqWmf6DylIFpreqD5uupNPjxIU8ZegABgpHA","alg":"EdDSA","kid":"client-key-ed25519-2026-01"}"#;
+
+/// The public half of a second synthetic Ed25519 pair, so a key can be built
+/// whose members are each well formed and simply do not belong together.
+const SECOND_ED25519_PUBLIC_HALF: &str = "xxarJ5Sh0NKfZuRrwxwdml-ce7zcxnejxgszHDYXZuo";
+
 fn source_config(
     base_url: &str,
     authentication: Value,
@@ -3323,6 +3334,81 @@ async fn client_assertion_key_material_the_jwk_parser_refuses_never_signs() {
             "a key with {label} signed an assertion onto the wire"
         );
     }
+}
+
+/// A JWK's two halves are independent members, and parsing each one does not
+/// make them belong together. An assertion signed under a seed whose `x` names
+/// a different key is valid, and verifies under nothing the authorization
+/// server was ever given, because what an adopter registers is the public half.
+/// The relying-party client refuses such a key where it is built; this path had
+/// no equivalent and would have spent a request on an authorization server to
+/// be told what it could decide locally.
+#[tokio::test]
+async fn a_client_assertion_key_whose_halves_disagree_never_reaches_the_token_endpoint() {
+    let authentication = |server_uri: &str| {
+        json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": format!("{server_uri}/token"),
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "maximumCacheSeconds": 60
+        })
+    };
+
+    // The matching pair first, so the refusal below is known to come from the
+    // mismatch rather than from EdDSA being unusable on this path at all.
+    let matched = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "synthetic-access-token",
+            "token_type": "Bearer",
+            "expires_in": 300
+        })))
+        .expect(1)
+        .mount(&matched)
+        .await;
+    let (_matched_root, matched_secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", CLIENT_ASSERTION_ED25519_PRIVATE_JWK),
+    ]);
+    SourceExecutor::new(
+        &fixed_source(&matched.uri(), authentication(&matched.uri())),
+        matched_secrets,
+    )
+    .expect("assertion executor builds")
+    .credentials_ready()
+    .await
+    .expect("a matching Ed25519 pair acquires a token");
+
+    let mut halves: Value =
+        serde_json::from_str(CLIENT_ASSERTION_ED25519_PRIVATE_JWK).expect("the test key is JSON");
+    halves["x"] = json!(SECOND_ED25519_PUBLIC_HALF);
+    let mismatched_key = halves.to_string();
+    let mismatched = MockServer::start().await;
+    let (_mismatched_root, mismatched_secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", mismatched_key.as_str()),
+    ]);
+    assert_eq!(
+        SourceExecutor::new(
+            &fixed_source(&mismatched.uri(), authentication(&mismatched.uri())),
+            mismatched_secrets,
+        )
+        .expect("assertion executor builds")
+        .credentials_ready()
+        .await,
+        Err(SourceError::Credential),
+        "a key whose halves belong to different pairs was accepted"
+    );
+    assert!(
+        mismatched
+            .received_requests()
+            .await
+            .expect("request journal")
+            .is_empty(),
+        "a key whose halves disagree signed an assertion onto the wire"
+    );
 }
 
 /// A secret file that is not UTF-8 is a misconfigured deployment rather than a
