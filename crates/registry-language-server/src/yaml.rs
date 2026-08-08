@@ -295,23 +295,30 @@ fn scalar_from_node(
         return None;
     }
 
+    // A quoted scalar's escapes are decoded by handing its own source text to `serde_norway`, rather
+    // than by a hand-written unescaper, because `raw` is already a complete, valid YAML document on
+    // its own: a quoted scalar's meaning does not depend on the block or flow context around it. A
+    // double-quoted scalar accepts escapes `serde_json` does not (`\x41`, `\_`, `\e`, and more), and a
+    // hand-written single-quote rule that trims every leading and trailing quote mishandles a value
+    // whose content itself starts or ends with an escaped quote, such as `'''a'''`. Both are the same
+    // mistake `written_as` warns against for the double-quoted case above: a decoder that is not the
+    // one the compiler reads with. An escape `serde_norway` refuses is refused here too, by the same
+    // precedent that leaves a folded scalar out of the index rather than store its raw spelling.
     let (value, style, start_byte, end_byte) = match node.kind() {
-        "double_quote_scalar" => {
-            let value = serde_json::from_str::<String>(raw)
-                .unwrap_or_else(|_| raw.trim_matches('"').to_owned());
+        "double_quote_scalar" | "single_quote_scalar" => {
+            let value = serde_norway::from_str::<String>(raw).ok()?;
+            let style = if node.kind() == "double_quote_scalar" {
+                ScalarStyle::DoubleQuoted
+            } else {
+                ScalarStyle::SingleQuoted
+            };
             (
                 value,
-                ScalarStyle::DoubleQuoted,
+                style,
                 node.start_byte() + 1,
                 node.end_byte().saturating_sub(1),
             )
         }
-        "single_quote_scalar" => (
-            raw.trim_matches('\'').replace("''", "'"),
-            ScalarStyle::SingleQuoted,
-            node.start_byte() + 1,
-            node.end_byte().saturating_sub(1),
-        ),
         _ => (
             raw.to_owned(),
             ScalarStyle::Plain,
@@ -523,6 +530,91 @@ mod tests {
         ] {
             assert_eq!(written_as("two\nlines", style), None, "{style:?}");
         }
+    }
+
+    /// A double-quoted scalar accepts escapes JSON does not, such as `\x` and `\_`. Decoding it any
+    /// other way than `serde_norway` itself stores a name the compiler reads differently, which is
+    /// exactly the report the governing rule above forbids.
+    #[test]
+    fn a_double_quoted_scalar_decodes_escapes_serde_json_does_not_accept() {
+        let source = "concept: \"is\\x5fadult\"\n";
+        let read = serde_norway::from_str::<BTreeMap<String, String>>(source)
+            .expect("the fragment is a mapping of strings");
+        assert_eq!(read["concept"], "is_adult");
+
+        let indexed = parse_yaml(source)
+            .unwrap()
+            .value
+            .get_scalar("concept")
+            .cloned()
+            .expect("the scalar decodes");
+        assert_eq!(indexed.value, read["concept"]);
+    }
+
+    /// An escape `serde_norway` itself refuses is left out of the index rather than stored as its raw
+    /// spelling, the same precedent a block scalar sets above.
+    #[test]
+    fn a_double_quoted_scalar_with_an_invalid_escape_is_left_out_of_the_index() {
+        let source = "concept: \"bad\\q\"\n";
+        assert!(parse_yaml(source)
+            .unwrap()
+            .value
+            .get_scalar("concept")
+            .is_none());
+    }
+
+    #[test]
+    fn an_ordinary_double_quoted_scalar_is_unchanged() {
+        let source = "concept: \"is_adult\"\n";
+        assert_eq!(
+            parse_yaml(source)
+                .unwrap()
+                .value
+                .get_scalar("concept")
+                .map(|scalar| scalar.value.as_str()),
+            Some("is_adult")
+        );
+    }
+
+    /// `trim_matches` strips every leading and trailing quote rather than only the one pair YAML
+    /// treats as delimiters, so a doubled quote at either edge of the content used to disappear along
+    /// with the real delimiters. `'''a'''` is YAML for `'a'`: the outer quotes delimit the scalar and
+    /// the inner `''` is an escaped quote, not a second delimiter.
+    #[test]
+    fn single_quoted_scalars_decode_doubled_quotes_at_any_position() {
+        for (source, value) in [
+            ("concept: 'it''s'\n", "it's"),
+            ("concept: '''a'''\n", "'a'"),
+        ] {
+            assert_eq!(
+                parse_yaml(source)
+                    .unwrap()
+                    .value
+                    .get_scalar("concept")
+                    .map(|scalar| scalar.value.as_str()),
+                Some(value),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// Decoding the scalar through `serde_norway` changes what `value` holds but must not change what
+    /// `range` covers: completion still has to replace exactly the text between the quotes, not the
+    /// (possibly shorter) decoded value.
+    #[test]
+    fn a_decoded_scalars_range_still_covers_only_the_quoted_content() {
+        let source = "concept: \"is\\x5fadult\"\n";
+        let parsed = parse_yaml(source).unwrap();
+        let scalar = parsed.value.get_scalar("concept").unwrap();
+        assert_eq!(scalar.value, "is_adult");
+
+        let opening_quote = source.find('"').unwrap();
+        let closing_quote = source.rfind('"').unwrap();
+        assert_eq!(
+            scalar.range.start,
+            Position::new(0, (opening_quote + 1) as u32)
+        );
+        assert_eq!(scalar.range.end, Position::new(0, closing_quote as u32));
     }
 
     #[test]
