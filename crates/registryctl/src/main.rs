@@ -76,7 +76,7 @@ type CliResult<T = ExitCode> = std::result::Result<T, CliFailure>;
 
 #[derive(Debug, Parser)]
 #[command(name = "registryctl")]
-#[command(version)]
+#[command(version = registry_platform_buildinfo::DISPLAY_VERSION)]
 #[command(disable_help_subcommand = true)]
 #[command(
     about = "Create, test, run, and prepare a Registry Stack project",

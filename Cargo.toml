@@ -9,6 +9,7 @@ members = [
     "crates/registry-evidencectl",
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
+    "crates/registry-platform-buildinfo",
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
@@ -56,6 +57,7 @@ registry-mint = { path = "crates/registry-mint", version = "0.17.0" }
 registry-relay = { path = "crates/registry-relay", version = "0.17.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.17.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.17.0" }
+registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.17.0" }
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.17.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.17.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.17.0" }

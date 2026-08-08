@@ -30,7 +30,11 @@ use registry_platform_audit::OptionalHashHex;
 use serde_json::Value;
 
 #[derive(Debug, Parser)]
-#[command(name = "mint", about = "Registry Stack token issuer", version)]
+#[command(
+    name = "mint",
+    about = "Registry Stack token issuer",
+    version = registry_platform_buildinfo::DISPLAY_VERSION
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

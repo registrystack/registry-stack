@@ -411,7 +411,11 @@ async fn async_main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_cli_command_from(env::args().collect())? {
         CliCommand::Version => {
-            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            println!(
+                "{} {}",
+                env!("CARGO_PKG_NAME"),
+                registry_platform_buildinfo::DISPLAY_VERSION
+            );
             Ok(())
         }
         CliCommand::Serve {

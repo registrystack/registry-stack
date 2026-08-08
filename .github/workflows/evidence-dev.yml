@@ -183,7 +183,7 @@ jobs:
               "development-platform/${asset}"
             chmod 0755 "development-platform/${asset}"
             observed="$("development-platform/${asset}" --version)"
-            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}-dev"
           done
 
       - name: Upload native Evidence development binaries
@@ -572,7 +572,7 @@ jobs:
             bash development-assets/evidencectl-install.sh
           for binary in evidence evidencectl mint; do
             observed="$("${install_dir}/${binary}" --version)"
-            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}"
+            test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}-dev"
           done
 
       - name: Upload exact Evidence development assets

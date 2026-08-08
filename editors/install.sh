@@ -107,7 +107,11 @@ verify_registryctl() {
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
   installed_version="$(registryctl_version)"
 
-  if [[ "${installed_version}" != "${expected_version}" ]]; then
+  # A registryctl built from a source checkout reports a development version of
+  # the workspace version it was built from, so both spellings match this
+  # checkout. Only the version itself has to agree.
+  if [[ "${installed_version}" != "${expected_version}" &&
+    "${installed_version}" != "${expected_version}-dev" ]]; then
     fail "this checkout is ${expected_version} but registryctl is ${installed_version}; install the matching registryctl"
   fi
 

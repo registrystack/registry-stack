@@ -2733,6 +2733,27 @@ class RegistryReleaseTest(TestCase):
             mismatch.stderr,
         )
 
+    def test_verify_registryctl_binary_version_rejects_a_development_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "registryctl"
+            binary.write_text(
+                "#!/bin/sh\nprintf 'registryctl 0.17.0-dev\\n'\n", encoding="utf-8"
+            )
+            binary.chmod(0o755)
+
+            result = run_tool(
+                "verify-registryctl-binary-version",
+                str(binary),
+                "--version",
+                "0.17.0",
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "registryctl binary version must be exactly 'registryctl 0.17.0'",
+            result.stderr,
+        )
+
     def test_verify_registryctl_binary_version_does_not_require_pyyaml(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "registryctl"

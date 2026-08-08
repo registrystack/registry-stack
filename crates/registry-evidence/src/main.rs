@@ -70,7 +70,11 @@ const ANTI_RECONSTRUCTION_FIXTURE: &[u8] =
     include_bytes!("../../../products/evidence/fixtures/conformance/anti-reconstruction.yaml");
 
 #[derive(Debug, Parser)]
-#[command(name = "evidence", version, about = "Registry Evidence Version 1")]
+#[command(
+    name = "evidence",
+    version = registry_platform_buildinfo::DISPLAY_VERSION,
+    about = "Registry Evidence Version 1"
+)]
 struct Cli {
     /// One closed operator runtime file that binds the governed bundle.
     #[arg(

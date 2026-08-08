@@ -27,6 +27,7 @@ jsonschema.workspace = true
 registry-config-report = { workspace = true }
 registry-language-server.workspace = true
 registry-platform-authcommon = { workspace = true }
+registry-platform-buildinfo = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-ops = { workspace = true }

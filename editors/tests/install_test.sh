@@ -180,6 +180,25 @@ fi
 assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0' "${mismatch_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
+# A registryctl built from this checkout reports a development version, which
+# is the ordinary case for anyone running this installer from source.
+reset_log
+development_output="${TEST_ROOT}/development-output"
+FAKE_REGISTRYCTL_VERSION=0.16.3-dev "${INSTALLER}" vscode \
+  > "${development_output}"
+assert_contains 'Using registryctl 0.16.3-dev' "${development_output}"
+assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMMAND_LOG}"
+
+reset_log
+development_mismatch_output="${TEST_ROOT}/development-mismatch-output"
+if FAKE_REGISTRYCTL_VERSION=0.10.0-dev "${INSTALLER}" vscode \
+  > "${development_mismatch_output}" 2>&1; then
+  fail 'development build of another version should fail'
+fi
+assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0-dev' \
+  "${development_mismatch_output}"
+assert_not_contains 'npm <' "${COMMAND_LOG}"
+
 reset_log
 old_node_output="${TEST_ROOT}/old-node-output"
 if FAKE_NODE_VERSION=v20.19.0 "${INSTALLER}" vscode \
