@@ -65,10 +65,50 @@ const FORBIDDEN: &[(&str, &str)] = &[
     // naming a socket: resolving a name asks a resolver, over the network.
     ("ToSocketAddrs", "resolves a host name over the network"),
     ("to_socket_addrs", "resolves a host name over the network"),
+    // The standard streams. A language server's protocol runs over them, so a
+    // line that writes one breaks the conversation this crate is answering
+    // inside and a line that reads one takes the questions away.
+    ("std::io", "reads or writes a standard stream"),
+    ("io::", "reads or writes a standard stream"),
+    ("println!", "writes to standard output"),
+    ("print!", "writes to standard output"),
+    ("eprintln!", "writes to standard error"),
+    ("eprint!", "writes to standard error"),
+    ("dbg!", "writes to standard error"),
+    ("stdin()", "reads standard input"),
+    ("stdout()", "writes to standard output"),
+    ("stderr()", "writes to standard error"),
+    ("read_line", "reads from a stream"),
+    ("read_to_end", "reads a stream to its end"),
+    ("write_all", "writes to a stream"),
     ("read_to_string", "reads a file"),
     ("read_dir", "lists a directory"),
+    // The file system reached through `std::path` rather than `std::fs`. Each
+    // of these asks the operating system about a path instead of reading the
+    // characters in it, and each is written as a method, so each is written
+    // down as one: a bare `exists` is a word that belongs to prose as well.
+    (".exists()", "asks whether a path is there"),
+    (".try_exists()", "asks whether a path is there"),
+    (".is_file()", "asks what a path is"),
+    (".is_dir()", "asks what a path is"),
+    (".is_symlink()", "asks what a path is"),
+    (".metadata()", "stats a file"),
+    (".symlink_metadata()", "stats a file without following it"),
+    (".canonicalize()", "resolves a path against the file system"),
+    (".read_link()", "reads where a link points"),
     ("include_str!", "reads a file at build time"),
     ("include_bytes!", "reads a file at build time"),
+    // Code the sweep would otherwise never read. It walks `src`, so a splice
+    // and an out-of-tree module are both ways of compiling source it never
+    // opens; refusing the two spellings keeps every line it judges the crate's.
+    (
+        "include!",
+        "splices code from a file this sweep never reads",
+    ),
+    (
+        "#[path",
+        "compiles a module from a file this sweep never reads",
+    ),
     ("eval_file", "runs a program from a file"),
     ("run_file", "runs a program from a file"),
     ("compile_file", "reads a program from a file"),
@@ -358,6 +398,18 @@ fn no_source_file_performs_input_or_output() {
 /// and every one of them is spelled the way an ordinary refactor spells it:
 /// grouped imports, call sites rather than import paths, and the Unix socket
 /// types that live outside `std::net`.
+///
+/// The standard streams are here for a reason of their own. This crate is
+/// linked into a language server that speaks JSON-RPC over them, so a line that
+/// prints corrupts the protocol its host is holding a conversation on and a
+/// line that reads takes the request stream away from it. Neither shows up as
+/// an editor reading a file; both show up as an editor that has stopped
+/// answering.
+///
+/// The path lines are the file system reached without naming `std::fs`. Asking
+/// whether a path is there is a system call, not string work, and the first of
+/// them is the likeliest refactor there is: walking up from a document to find
+/// the project root, in a crate whose point is working without one.
 const HOSTILE_SOURCE: &str = r#"use std::{fs, path::Path};
 let bytes = fs::read(Path::new("/etc/passwd")).unwrap();
 fs::write("/tmp/exfil", bytes).unwrap();
@@ -373,6 +425,29 @@ let peers = "registry.internal:443".to_socket_addrs().unwrap();
 let stream = std::net::TcpStream::connect(peers.last().unwrap()).unwrap();
 use std::env::{consts, var};
 let child = std::process::Command::new("sh").spawn().unwrap();
+println!("{question:?}");
+print!("{answer}");
+eprintln!("authoring: {message}");
+eprint!("{answer}");
+dbg!(&question);
+use std::io::{BufRead, Read, Write};
+let handle = stdin();
+handle.read_line(&mut line).unwrap();
+stdout().write_all(line.as_bytes()).unwrap();
+writeln!(stderr().lock(), "{line}").unwrap();
+io::copy(&mut source, &mut sink).unwrap();
+reader.read_to_end(&mut bytes).unwrap();
+let root = path.ancestors().find(|step| step.join(".evidence").exists());
+if !path.try_exists().unwrap_or(false) { return; }
+if path.is_file() { return; }
+if path.is_dir() { return; }
+if path.is_symlink() { return; }
+let stamp = path.metadata().unwrap().modified().unwrap();
+let link = path.symlink_metadata().unwrap();
+let real = path.canonicalize().unwrap();
+let target = path.read_link().unwrap();
+include!("../../shared/io_helpers.rs");
+#[path = "../../shared/io_helpers.rs"]
 "#;
 
 /// Ordinary lines lifted from this crate's own sources, so that the sweep is
@@ -450,13 +525,17 @@ fn the_source_sweep_refuses_nothing_in_an_ordinary_corpus() {
 #[test]
 fn the_source_sweep_reads_an_import_however_it_is_wrapped() {
     // What rustfmt does to a group once it is long enough: the import is
-    // still `std::fs`, but no single line of it says so.
+    // still `std::fs` and `std::io`, but no single line of it says either.
     let wrapped = "use std::{\n    io::Write,\n    fs,\n};\n";
     let refused = refusals(wrapped)
         .iter()
         .map(|refusal| refusal.spelling)
-        .collect::<Vec<_>>();
-    assert_eq!(refused, ["std::fs"], "the sweep read {wrapped:?} as clean");
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        refused,
+        BTreeSet::from(["std::fs", "std::io", "io::"]),
+        "the sweep read {wrapped:?} as clean"
+    );
 }
 
 /// `rhai::Engine::new()` installs a module resolver that reads files: with the
