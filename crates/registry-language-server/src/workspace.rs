@@ -1021,6 +1021,36 @@ mod tests {
         assert_eq!(workspace.resolve(&as_the_client_sends_it), canonical);
     }
 
+    /// The interned map stops growing, and a session that has filled it keeps answering.
+    ///
+    /// A client that watches a large repository can deliver an unbounded number of distinct paths
+    /// over one session, and every one of them is interned. The map is a cache and not a record, so
+    /// past the bound a path is resolved and not stored, and the size is the whole of the behaviour:
+    /// nothing an author sees changes, which is why it is read here directly.
+    #[test]
+    fn the_interned_paths_stop_at_the_cap_and_the_session_keeps_answering() {
+        let temp = TempDir::new().unwrap();
+        project_in(temp.path());
+        let entities = temp.path().join("entities");
+        fs::create_dir(&entities).unwrap();
+        let mut workspace = workspace_over(&[temp.path()]);
+
+        for index in 0..MAX_INTERNED_PATHS + 8 {
+            workspace.intern(&entities.join(format!("person-{index:05}.yaml")));
+        }
+
+        assert_eq!(workspace.canonical_paths.len(), MAX_INTERNED_PATHS);
+        let past_the_cap = entities.join(format!("person-{:05}.yaml", MAX_INTERNED_PATHS + 7));
+        assert_eq!(
+            workspace.resolve(&past_the_cap),
+            entities
+                .canonicalize()
+                .unwrap()
+                .join(past_the_cap.file_name().unwrap()),
+            "a path the map has no room for is still resolved, from the filesystem"
+        );
+    }
+
     #[test]
     fn invalid_edits_index_what_still_parses_and_report_one_syntax_error() {
         let temp = TempDir::new().unwrap();

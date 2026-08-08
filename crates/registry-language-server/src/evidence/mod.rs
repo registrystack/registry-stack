@@ -463,6 +463,45 @@ mod tests {
             .contains("more than the 128 documents"));
     }
 
+    /// The names of a bounded directory are gathered under a bound of their own.
+    ///
+    /// The test above proves which documents are read; this one proves that a directory holding far
+    /// more entries than the form allows is never held in memory whole on the way to that answer. A
+    /// project directory is an author's directory and its size is theirs to choose, so the set is
+    /// checked at every step rather than at the end.
+    #[test]
+    fn a_bounded_directory_is_never_gathered_whole() {
+        let ceiling = DocumentRole::Question
+            .max_documents()
+            .expect("the authoring form bounds a project's questions");
+        let mut named = BTreeSet::new();
+        for index in (0..10_000).rev() {
+            keep_bounded(
+                &mut named,
+                PathBuf::from(format!("questions/question-{index:05}.yaml")),
+                Some(ceiling),
+            );
+            assert!(named.len() <= ceiling + 1, "{index}");
+        }
+        assert_eq!(
+            named.iter().next_back().unwrap(),
+            &PathBuf::from(format!("questions/question-{ceiling:05}.yaml")),
+            "the one name kept past the ceiling is the first file the reader stops at"
+        );
+
+        // The other half of the rule: a directory the authoring form does not bound is gathered
+        // whole, because the compiler reads all of it.
+        let mut every = BTreeSet::new();
+        for index in 0..1_000 {
+            keep_bounded(
+                &mut every,
+                PathBuf::from(format!("selectors/profile-{index:05}.yaml")),
+                None,
+            );
+        }
+        assert_eq!(every.len(), 1_000);
+    }
+
     /// `evidencectl` reads every selector and source a project holds, so the editor does too. A
     /// ceiling only the editor has would leave every question naming the file past it reporting an
     /// unknown selector profile against a project the compiler builds.
