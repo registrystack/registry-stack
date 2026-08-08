@@ -176,10 +176,16 @@ products/evidence/scripts/check-verifier-portability.sh
 products/evidence/scripts/check-config-key-paths.sh
 ```
 
-The last check holds the configuration reference in exact parity with the
-frozen `bundle.schema.yaml` and `runtime.schema.yaml` grammars. After changing
-a contract, run it with `--write` to regenerate the key-path blocks in
-`CONFIG.md`, then document each new key in the prose above them.
+The last check holds every Evidence configuration reference in exact parity
+with the schema it explains: the frozen `bundle.schema.yaml` and
+`runtime.schema.yaml` grammars against
+`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`,
+and the authoring-form schemas below against
+`products/evidence/reference/authoring-projects/CONFIG.md`. Parity is the same
+rule in both places and not the same promise: only the two grammars are frozen.
+After changing any of them, run the check with `--write` to regenerate the
+key-path blocks in the reference that carries them, then document each new key
+in the prose above them.
 
 The authoring-form JSON Schemas under
 `crates/registry-evidencectl/schemas/authoring/` are adopter tooling, not part
