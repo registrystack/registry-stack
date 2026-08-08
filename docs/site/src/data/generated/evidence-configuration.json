@@ -3239,7 +3239,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Caps one returned value, so a single oversized cell fails the request rather than being read.",
+          "description": "Caps one returned value, so a single oversized cell fails the request rather than entering the response. A cell far past this bound is refused by the engine, on the length recorded beside it, before its content is read at all.",
           "runtime_validation": null
         },
         {
