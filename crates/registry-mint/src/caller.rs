@@ -20,10 +20,10 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, SigningAlgorithm};
 use serde_json::{json, Map, Value};
 
-use crate::ON_BEHALF_OF_CLAIM;
+use crate::{config::Algorithm, ON_BEHALF_OF_CLAIM};
 
 /// Refusals that happen before anything is signed.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
@@ -48,6 +48,25 @@ pub struct AssertionRequest<'a> {
     pub lifetime_seconds: i64,
     pub actor: Option<&'a str>,
     pub subject: Option<BTreeMap<String, Value>>,
+}
+
+/// Name the caller's algorithm in Mint's own vocabulary.
+///
+/// The crypto crate signs with more algorithms than `clientAssertion.algorithms`
+/// can name, and Mint's token endpoint verifies against nothing else, so an
+/// assertion signed with one of the others is unverifiable at every deployment.
+/// Returning [`Algorithm`] rather than a header string keeps the two
+/// vocabularies coupled, and the match stays exhaustive so widening either one
+/// is a decision made here rather than a silent consequence.
+fn assertion_algorithm(algorithm: SigningAlgorithm) -> Result<Algorithm, AssertionError> {
+    match algorithm {
+        SigningAlgorithm::EdDsa => Ok(Algorithm::EdDSA),
+        SigningAlgorithm::Es256 => Ok(Algorithm::ES256),
+        SigningAlgorithm::Rs256 => Ok(Algorithm::RS256),
+        SigningAlgorithm::Es384 | SigningAlgorithm::Rs384 => Err(AssertionError::Invalid(
+            "the signing key must state EdDSA, ES256, or RS256",
+        )),
+    }
 }
 
 /// Build and sign one client assertion.
@@ -106,12 +125,12 @@ pub fn sign_client_assertion(
         }
     }
 
-    let algorithm = key
-        .algorithm()
-        .map_err(|error| AssertionError::Signing(error.to_string()))?
-        .jwa_name();
+    let algorithm = assertion_algorithm(
+        key.algorithm()
+            .map_err(|error| AssertionError::Signing(error.to_string()))?,
+    )?;
     let header = json!({
-        "alg": algorithm,
+        "alg": algorithm.as_header_value(),
         "typ": "JWT",
         "kid": key
             .kid
@@ -154,6 +173,10 @@ mod tests {
         )
         .expect("the test key parses")
     }
+
+    /// A P-384 key the crypto crate signs with and Mint's token endpoint has no
+    /// way to accept.
+    const P384_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"caller-key-p384"}"#;
 
     fn request<'a>(client_id: &'a str, audience: &'a str) -> AssertionRequest<'a> {
         AssertionRequest {
@@ -269,6 +292,51 @@ mod tests {
             ),
             Err(expected())
         );
+    }
+
+    /// The crypto crate signs with more algorithms than `clientAssertion` can
+    /// name, and an assertion carrying one of the others is unverifiable at
+    /// every Mint deployment. Refusing here is the whole point of the builder:
+    /// the alternative is a well-formed assertion and an opaque `invalid_client`
+    /// from a remote token endpoint.
+    #[test]
+    fn a_key_no_deployment_could_verify_is_refused_before_anything_is_signed() {
+        let key = PrivateJwk::parse(P384_JWK).expect("the P-384 test key parses");
+        assert_eq!(
+            key.algorithm().expect("the P-384 key states its algorithm"),
+            SigningAlgorithm::Es384,
+            "the crypto crate must sign ES384 for this test to prove anything"
+        );
+
+        assert_eq!(
+            sign_client_assertion(
+                &key,
+                &request("scheduler", "https://mint.example.org/token"),
+                NOW,
+            ),
+            Err(AssertionError::Invalid(
+                "the signing key must state EdDSA, ES256, or RS256"
+            ))
+        );
+    }
+
+    /// Narrowing to what Mint accepts must not rename anything: the header the
+    /// caller writes has to be the name the crypto crate gives the key it
+    /// signed with, or the signature is verified under the wrong algorithm.
+    #[test]
+    fn narrowing_to_mints_vocabulary_keeps_each_algorithms_own_name() {
+        for algorithm in [
+            SigningAlgorithm::EdDsa,
+            SigningAlgorithm::Es256,
+            SigningAlgorithm::Rs256,
+        ] {
+            assert_eq!(
+                assertion_algorithm(algorithm)
+                    .expect("the builder accepts this algorithm")
+                    .as_header_value(),
+                algorithm.jwa_name()
+            );
+        }
     }
 
     #[test]
