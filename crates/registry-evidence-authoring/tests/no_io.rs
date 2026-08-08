@@ -33,15 +33,19 @@ use registry_evidence_authoring::validate_authored_answer;
 /// and code that does the second without the first is a plain refactor rather
 /// than an evasion.
 ///
-/// `std::path` is deliberately absent: parsing a path is string work, and the
-/// authoring form describes files it never opens.
+/// `std::path` is on the list only where it leaves the string. Joining,
+/// splitting and printing a path is string work, and the authoring form
+/// describes files it never opens; the methods below are the ones that ask the
+/// operating system about a path instead of reading the characters in it.
+///
+/// The socket types are named one by one rather than by their modules. Both
+/// `std::net` and `std::os::unix::net` hold pure value types next to the types
+/// that open something, an address is ordinary data this workspace passes
+/// around, and a module named whole would refuse the data along with the
+/// capability. What opens a socket is a short closed list, so it is written out.
 const FORBIDDEN: &[(&str, &str)] = &[
     ("std::fs", "reads or writes a file"),
     ("fs::", "reads or writes a file"),
-    ("std::net", "opens a socket"),
-    // Not every socket lives under `std::net`: `std::os::unix::net` is where
-    // the Unix domain socket types are, and the Docker socket is a file path.
-    ("::net", "opens a socket"),
     ("std::process", "starts a process"),
     ("process::", "starts a process"),
     ("std::env", "reads the process environment"),
@@ -52,9 +56,15 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("TcpStream", "opens a socket"),
     ("TcpListener", "opens a socket"),
     ("UdpSocket", "opens a socket"),
+    // Not every socket lives under `std::net`: `std::os::unix::net` is where
+    // the Unix domain socket types are, and the Docker socket is a file path.
     ("UnixStream", "opens a socket"),
     ("UnixListener", "opens a socket"),
     ("UnixDatagram", "opens a socket"),
+    // The one entry point in `std::net` that reaches the network without
+    // naming a socket: resolving a name asks a resolver, over the network.
+    ("ToSocketAddrs", "resolves a host name over the network"),
+    ("to_socket_addrs", "resolves a host name over the network"),
     ("read_to_string", "reads a file"),
     ("read_dir", "lists a directory"),
     ("include_str!", "reads a file at build time"),
@@ -91,6 +101,30 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "url",
 ];
 
+/// Longer spellings that hold a forbidden one inside them and reach nothing,
+/// each with what it actually names.
+///
+/// The forbidden list is written short on purpose, so that a module is refused
+/// whatever is taken out of it. Three of those modules also hold a name that
+/// the compiler resolves or that never leaves the process, and each of them is
+/// ordinary in the crates next door. Naming the exceptions costs three lines
+/// and keeps the module entries; dropping the module entries to make room for
+/// them would cost `env::var` and `process::Command`, which is the wrong trade.
+///
+/// An exception is a spelling, not a prefix: it is read as a whole segment on
+/// both sides, so a longer name that merely starts the same way stays refused.
+const NOT_ENTRY_POINTS: &[(&str, &str)] = &[
+    (
+        "env::consts",
+        "compile-time constants, resolved without asking anything",
+    ),
+    ("process::ExitCode", "a return type, which starts nothing"),
+    (
+        "clap::Command",
+        "a command line, which is parsed rather than run",
+    ),
+];
+
 /// One spelling the source sweep refuses, and the line it was found on.
 struct Refusal {
     line: usize,
@@ -98,7 +132,12 @@ struct Refusal {
     reason: &'static str,
 }
 
-/// Whether a stretch of text names a forbidden spelling as a segment of its
+/// Whether a character belongs to a name rather than separating two of them.
+fn inside_a_name(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+/// Every offset at which a stretch of text names a spelling as a segment of its
 /// own rather than as the tail of a longer name.
 ///
 /// The boundary earns its place on one collision: this crate has a
@@ -106,13 +145,47 @@ struct Refusal {
 /// ordinary `ProjectFile::` call, and a sweep that cries wolf gets widened
 /// until it means nothing. A spelling that already begins on a separator, such
 /// as `::net`, carries its own left boundary and is searched for as written.
-fn names(text: &str, spelling: &str) -> bool {
-    let inside_a_name = |character: char| character.is_alphanumeric() || character == '_';
-    if !spelling.starts_with(inside_a_name) {
-        return text.contains(spelling);
-    }
+///
+/// Only the left side is bounded. A forbidden spelling is written as the head
+/// of the path it forbids, so `std::fs` has to go on matching `std::fs::read`
+/// and `fs::` has to go on matching `fs::write`.
+fn named_at(text: &str, spelling: &str) -> Vec<usize> {
     text.match_indices(spelling)
-        .any(|(at, _)| !text[..at].ends_with(inside_a_name))
+        .filter(|(at, _)| {
+            !spelling.starts_with(inside_a_name) || !text[..*at].ends_with(inside_a_name)
+        })
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// Whether a stretch of text names a spelling as a segment of its own.
+fn names(text: &str, spelling: &str) -> bool {
+    !named_at(text, spelling).is_empty()
+}
+
+/// The same stretch of text with every name that opens nothing blanked out.
+///
+/// Blanking rather than exempting the whole line is what keeps an exception
+/// local: `use std::env::{consts, var};` loses neither `std::env` nor its
+/// refusal, because the text it holds is not the text `env::consts`. The blank
+/// is written as spaces so that the characters either side of it stay apart
+/// and cannot be read as one name.
+///
+/// An exception is bounded on both sides. Unlike a forbidden spelling it stands
+/// for the whole name and not for the head of a longer one, so
+/// `process::ExitCoder` is left alone for the forbidden list to refuse.
+fn without_the_names_that_open_nothing(text: &str) -> String {
+    let mut readable = text.to_owned();
+    for &(spelling, _) in NOT_ENTRY_POINTS {
+        let found = named_at(&readable, spelling)
+            .into_iter()
+            .filter(|at| !readable[at + spelling.len()..].starts_with(inside_a_name))
+            .collect::<Vec<_>>();
+        for at in found {
+            readable.replace_range(at..at + spelling.len(), &" ".repeat(spelling.len()));
+        }
+    }
+    readable
 }
 
 /// Every refusal a stretch of Rust earns.
@@ -133,6 +206,7 @@ fn refusals(text: &str) -> Vec<Refusal> {
     candidates.extend(imported_paths(text));
     let mut found = Vec::new();
     for (line, candidate) in candidates {
+        let candidate = without_the_names_that_open_nothing(&candidate);
         for &(spelling, reason) in FORBIDDEN {
             if names(&candidate, spelling) {
                 found.push(Refusal {
@@ -294,12 +368,25 @@ use std::os::unix::net::UnixStream;
 let sock = UnixStream::connect("/var/run/docker.sock").unwrap();
 use std::{process};
 process::exit(1);
+use std::net::ToSocketAddrs;
+let peers = "registry.internal:443".to_socket_addrs().unwrap();
+let stream = std::net::TcpStream::connect(peers.last().unwrap()).unwrap();
+use std::env::{consts, var};
+let child = std::process::Command::new("sh").spawn().unwrap();
 "#;
 
 /// Ordinary lines lifted from this crate's own sources, so that the sweep is
 /// measured against real work as well as against hostile work. A sweep that
 /// refuses everything says as little as one that refuses nothing, and this
 /// corpus is what keeps the first from being mistaken for rigour.
+///
+/// The last five lines come from elsewhere in this workspace rather than from
+/// this crate, because the spellings that cost a sweep its readers are the ones
+/// a neighbouring crate writes every day: an IP address is a value type, the
+/// platform constants are resolved by the compiler, an exit code is a return
+/// type, and `clap` names its builder after the thing this crate must not
+/// start. None of them opens anything, and a sweep that refused them would be
+/// argued down to nothing the first time somebody moved code in here.
 const ORDINARY_SOURCE: &str = r#"use std::{
     collections::BTreeSet,
     path::{Component, Path},
@@ -316,6 +403,11 @@ assert!(files.contains(&ProjectFile {
 use rhai::module_resolvers::DummyModuleResolver;
 engine.set_module_resolver(DummyModuleResolver::new());
 let Ok(ast) = parser().compile(source) else {
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {}
+match (std::env::consts::OS, std::env::consts::ARCH) {
+use std::process::ExitCode;
+let command = clap::Command::new("evidencectl");
 "#;
 
 #[test]
@@ -470,6 +562,21 @@ fn the_source_sweep_reads_a_forbidden_spelling_as_a_whole_segment() {
     // The collision the boundary rule exists for. `ProjectFile` is this
     // crate's own type and ends in the name of the one it must not open.
     assert!(refusals("let first = ProjectFile::from(&files[0]);").is_empty());
+}
+
+/// The exceptions are the only place this sweep says yes, so where they stop is
+/// worth pinning next to what they cover.
+#[test]
+fn the_source_sweep_lets_a_name_that_opens_nothing_through_without_its_module() {
+    // Resolved by the compiler, and the reason the exception is written down.
+    assert!(refusals("match (std::env::consts::OS, std::env::consts::ARCH) {").is_empty());
+    // Standing beside an exempt name saves nothing: this import is still the
+    // one that brings `env::var` into scope.
+    assert!(!refusals("use std::env::{consts, var};").is_empty());
+    // An exception is a whole name rather than a prefix. No such type exists;
+    // what is pinned is that the sweep does not stop at the characters it
+    // recognises and call the rest of the name exempt.
+    assert!(!refusals("let code = process::ExitCoder::from(status);").is_empty());
 }
 
 /// What a manifest section header means to the dependency sweep.
