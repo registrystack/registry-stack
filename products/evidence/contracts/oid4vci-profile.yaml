@@ -1,0 +1,168 @@
+contract: registry.evidence.oid4vci-profile/v1
+status: frozen
+status_rule: >-
+  This was draft until every negative test named below existed, because a frozen
+  contract whose tests do not exist is an aspiration rather than a guarantee.
+  Each identifier under negative_tests now resolves through
+  security-test-traceability.yaml to executable tests, and the traceability
+  checker proves each of those names a real test item, so freezing states what
+  is enforced rather than what is intended. Frozen means the statements here may
+  be relied on and changed only by the review the security invariant matrix
+  requires; it does not mean the delivery surface is finished, and the
+  prohibitions below stay prohibitions.
+summary: >-
+  A wallet-facing OpenID for Verifiable Credential Issuance delivery front end
+  for holder-bound Evidence assertions. It is a supporting service and a
+  protocol adapter, not a third pattern and not part of the Evidence runtime:
+  it never signs a credential, never holds a holder private key, and adds no
+  Evidence semantics. It translates a pre-authorized code flow into exactly one
+  holder-bound Evidence batch request, so N wallet proofs cost one
+  authorization decision and one source acquisition. Every Evidence guarantee
+  a delivered credential carries is the holder-bound profile's guarantee,
+  unchanged and unmediated by this service.
+standards_profile:
+  oid4vci: OpenID for Verifiable Credential Issuance 1.0, Final, published 2025-09-16
+  credential_format: dc+sd-jwt
+  proof_type: jwt, with the bare header type openid4vci-proof+jwt
+  evolution_rule: A later revision is a reviewed profile change, never an implicit library upgrade.
+  draft_compatibility: >-
+    None. Only 1.0 Final is spoken. Draft 13's vc+sd-jwt format identifier and
+    its token-response c_nonce are not accepted and not emitted. Supporting two
+    wire shapes would double the protocol surface to chase an ecosystem that is
+    mid-migration, and the Final identifier is the one the frozen SD-JWT VC
+    profile already emits.
+service_boundary:
+  rule: >-
+    Each of the following is a property the service must not have. The first
+    three and the fifth are held by named negative tests below; source-product
+    and domain neutrality are held by the same repository-wide neutrality sweep
+    that covers the Evidence runtime; the one-way dependency is held by the
+    workspace manifests, which no Evidence crate may amend without the review
+    this profile requires.
+  items:
+    - It holds no Evidence signing key and signs no credential. Evidence signs; this service transports.
+    - It holds no holder private key. It receives holder public keys inside wallet-signed proof JWTs and passes them to Evidence unchanged.
+    - It adds no Evidence semantics: no requirement, no selector, no derivation, no acceptance rule, and no binding of its own.
+    - It is source-product neutral and domain neutral, under the same sweeps as the Evidence runtime.
+    - No Evidence crate depends on it at runtime. The dependency runs one way only.
+  consequence: >-
+    A credential delivered through this service is bit-for-bit the credential
+    Evidence would have issued to the same holder keys under the same
+    requirement and purpose. A relying party verifies it against the
+    holder-bound profile without knowing this service exists, and nothing here
+    is part of the trust chain it checks.
+endpoints:
+  - path: GET /.well-known/openid-credential-issuer
+    authorization: none
+    rule: >-
+      Publishes credential_issuer, credential_endpoint, nonce_endpoint,
+      authorization_servers and credential_configurations_supported. The token
+      endpoint is not published here; it is published by the authorization
+      server metadata below, which is what authorization_servers points a wallet
+      at. Every credential_configurations_supported entry is derived from the
+      Evidence bundle rather than hand-written, so published metadata cannot
+      drift from what Evidence will actually issue.
+  - path: GET /.well-known/oauth-authorization-server
+    authorization: none
+    rule: >-
+      The RFC 8414 document for the authorization server this service is, for
+      the pre-authorized code grant alone. It publishes issuer, token_endpoint,
+      the one supported grant type, an empty response_types_supported, and
+      token_endpoint_auth_methods_supported of none, because a pre-authorized
+      flow authenticates the code rather than the client.
+  - path: POST /offers
+    authorization: Mint-issued bearer token, verified as a resource server through the shared OIDC primitive
+    rule: >-
+      Adopter-facing, never wallet-facing. It accepts a credential
+      configuration identifier, the subject selector values that identify who
+      the credential is about, and whether a transaction code is wanted; the
+      purpose and every other Evidence parameter come from the bundle-derived
+      catalog rather than from the caller. It returns the offer object, its
+      openid-credential-offer URI, and, when one was asked for, the transaction
+      code itself, once and only in that response. This is the authorization
+      boundary of the whole service: it accepts selector values and will cause a
+      credential to be issued for whoever those values identify, so it is
+      protected at least as strongly as calling Evidence directly.
+  - path: POST /token
+    authorization: pre-authorized code, and the transaction code when the offer declared one
+    rule: >-
+      Grant type urn:ietf:params:oauth:grant-type:pre-authorized_code only.
+      Returns access_token, token_type and expires_in, and never c_nonce, which
+      Final moved to its own endpoint.
+  - path: POST /nonce
+    authorization: none, as the specification requires
+    rule: >-
+      Empty request, a c_nonce response, and Cache-Control no-store. A bearer
+      token is read if one is presented, solely to bind the nonce to that
+      token's tag; presenting none is not an error and simply mints a nonce no
+      credential request can use. The nonce is a keyed tag over the token tag
+      and an expiry, verified by recomputation, so an unauthenticated endpoint
+      cannot be turned into a memory-exhaustion target by asking for nonces, and
+      nothing here looks anything up, so nothing here can be used as an oracle.
+  - path: POST /credential
+    authorization: bearer access token
+    rule: >-
+      Accepts credential_configuration_id and a proofs object keyed by proof
+      type whose value is a non-empty array. Returns credentials as an array of
+      objects even for a single credential, which is Final's shape and maps one
+      to one onto the holder-bound batch.
+  - path: GET /health and GET /ready
+    authorization: none
+    rule: >-
+      Operational probes, not protocol surface. They report that the process is
+      running and answering, and nothing else: readiness deliberately says
+      nothing about the two deployments this service calls outbound, because a
+      delivery front end that took itself out of service for a remote fault
+      would be reporting a fault it does not have. Neither discloses anything
+      about any offer, token, or credential, and both are named here so this
+      endpoint list is the complete set of routes the service answers.
+proof_rules:
+  - The header type is the bare openid4vci-proof+jwt. The registered media type carries an application prefix; the header value does not, and a value carrying the prefix is rejected.
+  - Exactly one of kid, jwk or x5c may be present. Only jwk is accepted; kid and x5c are rejected with a stated reason, because a pre-authorized flow has no prior key registration for either to resolve against.
+  - iss must be absent. Final requires its omission when the token came from the pre-authorized code flow, so its presence is a rejection rather than something ignored.
+  - aud is the credential issuer identifier, and iat and nonce are required.
+  - The signature is verified before the payload is parsed, the header allowlist is closed, the payload is closed, and a duplicate JSON member is rejected rather than last-wins.
+  - Every rejection happens before any Evidence call, so a malformed proof never reaches an authorization decision or a source.
+  - Each accepted proof yields one public JWK, and the set becomes the Evidence request's holder keys, so the holder-bound profile's duplicate-thumbprint rejection applies unchanged and a wallet cannot inflate a batch with one key wearing several kid values.
+state_model:
+  rule: >-
+    Everything the service remembers lives in one bounded in-memory store,
+    keyed by keyed tags and never by the secrets themselves, with values
+    zeroized on claim. The store prunes on write and fails closed on saturation
+    rather than evicting a live entry.
+  held:
+    - The prepared request and the transaction code tag, keyed by the pre-authorized code's tag, for minutes.
+    - The prepared request carried forward, keyed by the access token's tag, for minutes, so one credential request may be made per token.
+    - A ledger of the transaction code failure count and whether the offer was redeemed or locked out, keyed by the pre-authorized code's tag, for the offer's whole life whether or not the offer itself is still redeemable. A lockout drops the offer, so a counter that lived inside the offer would be forgotten by the very event it exists to record, and a counter a restart clears is a restart-to-reset lockout.
+  stateless_by_design: >-
+    The c_nonce is not stored. It is a keyed tag over the token tag and an
+    expiry, verified by recomputation. Nonce replay is harmless once the access
+    token is single use, because the proof binds the wallet's own key, so a
+    replay returns the same holder the same credential.
+  honest_limits:
+    - A restart invalidates every offer outstanding in a minutes-wide window. The resulting failure is a clean, value-free error rather than a panic.
+    - Single use is enforced per process. A second replica breaks it, which is why there is exactly one. Adding a replica means a shared store, and that decision is not taken here.
+    - Single use is mostly a detection property. It turns silent duplicate issuance from a stolen offer into one party receiving an error and complaining. The short lifetime and the transaction code are the primary defenses, not the marker.
+    - Selector values are held in the deployment's memory rather than encrypted into a client-held code, so they are never placed in a QR code that can be forwarded or photographed.
+prohibitions:
+  rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
+  items:
+    - the authorization code flow, deferred issuance, the notification endpoint, and credential offers by reference
+    - any second store backend, any database, and any persistence across a restart
+    - issuing, minting, or signing a credential, and holding any Evidence signing key
+    - generating, holding, escrowing, or recovering a holder key
+    - delivering a credential for a requirement that is not holder-bound, which would launder an audience-scoped credential into a wallet
+    - wallet attestation, trust-list membership, and any judgement about which wallet is asking
+    - draft-13 compatibility in either direction
+# Each identifier is a named security negative resolved through
+# security-test-traceability.yaml to executable tests, and each is the negative
+# of a row in security-invariant-matrix.yaml. The traceability checker requires
+# every one of them to be mapped while this profile is frozen, so a guarantee
+# above cannot outlive the test that enforces it.
+negative_tests:
+  - sec-oid4vci-offer-requires-authorization
+  - sec-oid4vci-code-single-use
+  - sec-oid4vci-tx-code-bounded
+  - sec-oid4vci-proof-closed
+  - sec-oid4vci-no-audience-scoped-laundering
+  - sec-oid4vci-service-holds-no-key
