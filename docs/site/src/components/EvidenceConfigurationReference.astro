@@ -31,6 +31,12 @@ if (contracts.length === 0) {
 }
 
 const slug = (id: string) => `evidence-${id}-configuration`;
+
+// Descriptions come from the contracts, which mark identifiers with backticks
+// the way a schema description is written for an editor tooltip. Split on the
+// pairs so the page renders them as code rather than as literal backticks.
+const segments = (text: string) =>
+  text.split('`').map((part, index) => ({ code: index % 2 === 1, text: part }));
 ---
 
 <nav aria-label="Configuration files" class="contract-index">
@@ -74,7 +80,13 @@ const slug = (id: string) => `evidence-${id}-configuration`;
                 <th scope="row">
                   <code>{field.key_path}</code>
                   {field.kind !== 'property' && <span class="kind">{kindLabels[field.kind]}</span>}
-                  {field.description && <span class="note">{field.description}</span>}
+                  {field.description && (
+                    <span class="note">
+                      {segments(field.description).map((part) =>
+                        part.code ? <code>{part.text}</code> : part.text,
+                      )}
+                    </span>
+                  )}
                   {field.runtime_validation && (
                     <span class="note">Runtime check: {field.runtime_validation}</span>
                   )}
