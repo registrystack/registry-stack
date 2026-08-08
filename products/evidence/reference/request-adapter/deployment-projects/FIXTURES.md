@@ -194,6 +194,16 @@ reads it, and are refused for a source that answers over a network. The
 remaining forms describe the bundle or the authorized request and read the same
 on either transport.
 
+A fixture executes the statement of the source its acquisition reaches first,
+against the single extract `common.extract` seeds, and replays every later stage
+from the case. So a requirement whose later stage reads from an extract has no
+reference fixture form, and is refused before its cases are read rather than
+passing on a recorded response its reviewed SQL never produced. The runtime
+places no such limit: an acquisition kind constrains no stage's transport, and a
+deployment mixing them is served normally. What the harness cannot yet do is
+prove that offline, because a single case would have to state a recorded
+response and an extract at the same time.
+
 The optional inputs shared by applicable forms are:
 
 - `observed_at`;
