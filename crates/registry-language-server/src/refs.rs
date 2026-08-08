@@ -188,18 +188,21 @@ impl ProjectIndex {
         let mut parsed = BTreeMap::new();
         for (path, source) in documents {
             match crate::yaml::parse_yaml(source) {
-                Ok(value) => {
-                    parsed.insert(path.clone(), value);
+                Ok(document) => {
+                    parsed.insert(path.clone(), document);
                 }
                 Err(_) => diagnostics.push(document_diagnostic(
                     path,
-                    "Invalid YAML syntax; fix this project document before it can be indexed",
+                    "Project document could not be parsed; the YAML parser is unavailable",
                 )),
             }
         }
+        let syntax_errors = parsed
+            .iter()
+            .filter_map(|(path, document)| document.syntax_error.map(|range| (path.clone(), range)))
+            .collect::<BTreeMap<_, _>>();
 
-        let (symbols, references, semantic_diagnostics) =
-            relay::build_index(&root, documents, &parsed);
+        let (symbols, references, semantic_diagnostics) = relay::build_index(&root, &parsed);
 
         let mut index = Self {
             root,
@@ -210,6 +213,22 @@ impl ProjectIndex {
         };
         diagnostics.extend(semantic_diagnostics);
         diagnostics.extend(index.build_diagnostics());
+        // A document that does not parse cleanly reports where it stops parsing and nothing else.
+        // The symbols it still yields stay in the index and keep satisfying other documents, but
+        // its own references and definitions are read from text the author has not finished.
+        diagnostics.retain(|diagnostic| !syntax_errors.contains_key(&diagnostic.path));
+        diagnostics.extend(
+            syntax_errors
+                .into_iter()
+                .map(|(path, range)| IndexedDiagnostic {
+                    path,
+                    range,
+                    severity: DiagnosticSeverity::ERROR,
+                    message:
+                        "Invalid YAML syntax; this document is indexed only as far as it parses"
+                            .to_owned(),
+                }),
+        );
         diagnostics.sort_by(diagnostic_cmp);
         diagnostics.dedup();
         index.diagnostics = diagnostics;

@@ -61,11 +61,22 @@ impl YamlValue {
     }
 }
 
-pub(crate) fn is_valid_yaml(source: &str) -> bool {
-    parse_yaml(source).is_ok()
+/// One parsed document: every value the parser could recover, and the range of the first syntax
+/// error when the source does not parse cleanly. A document that carries a syntax error still
+/// contributes the symbols it does yield, so an edit in one file never blinds the rest of the
+/// project.
+#[derive(Clone, Debug)]
+pub(crate) struct ParsedDocument {
+    pub(crate) value: YamlValue,
+    pub(crate) syntax_error: Option<Range>,
 }
 
-pub(crate) fn parse_yaml(source: &str) -> Result<YamlValue> {
+/// The nesting the value tree will follow before it stops descending. Deeper structure degrades to
+/// `YamlValue::Other`, which keeps both construction and drop off a stack that would otherwise grow
+/// with the input.
+pub(crate) const MAX_PARSE_DEPTH: usize = 128;
+
+pub(crate) fn parse_yaml(source: &str) -> Result<ParsedDocument> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_yaml::LANGUAGE.into())
@@ -73,14 +84,57 @@ pub(crate) fn parse_yaml(source: &str) -> Result<YamlValue> {
     let tree = parser
         .parse(source, None)
         .context("the YAML parser did not produce a syntax tree")?;
-    if tree.root_node().has_error() {
-        anyhow::bail!("invalid YAML syntax");
-    }
     let source_map = SourceMap::new(source);
-    Ok(value_from_node(tree.root_node(), source, &source_map))
+    let root = tree.root_node();
+    Ok(ParsedDocument {
+        value: value_from_node(root, source, &source_map, 0),
+        syntax_error: first_syntax_error(root, &source_map),
+    })
 }
 
-fn value_from_node(node: Node<'_>, source: &str, source_map: &SourceMap<'_>) -> YamlValue {
+/// Where a document stops parsing, as one range.
+///
+/// tree-sitter reports a YAML syntax error by wrapping the whole document in a single ERROR node
+/// whose children are the fragments it recovered, so that node's own range spans the entire file.
+/// Its last child is the debris the parser could not place, which is the position an author needs.
+fn first_syntax_error(root: Node<'_>, source_map: &SourceMap<'_>) -> Option<Range> {
+    if !root.has_error() {
+        return None;
+    }
+
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if node.is_error() || node.is_missing() {
+            let mut children = node.walk();
+            let anchor = node.children(&mut children).last().unwrap_or(node);
+            return Some(source_map.range(anchor.start_byte(), anchor.end_byte()));
+        }
+        if node.has_error() && cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                // A tree that reports an error always holds an ERROR or MISSING node; anchor at the
+                // document start rather than stay silent if a grammar ever says otherwise.
+                return Some(source_map.range(root.start_byte(), root.start_byte()));
+            }
+        }
+    }
+}
+
+fn value_from_node(
+    node: Node<'_>,
+    source: &str,
+    source_map: &SourceMap<'_>,
+    depth: usize,
+) -> YamlValue {
+    if depth >= MAX_PARSE_DEPTH {
+        return YamlValue::Other;
+    }
     match node.kind() {
         "stream"
         | "document"
@@ -90,9 +144,11 @@ fn value_from_node(node: Node<'_>, source: &str, source_map: &SourceMap<'_>) -> 
         | "block_sequence_item" => meaningful_named_children(node)
             .last()
             .copied()
-            .map(|child| value_from_node(child, source, source_map))
+            .map(|child| value_from_node(child, source, source_map, depth + 1))
             .unwrap_or(YamlValue::Other),
-        "block_mapping" | "flow_mapping" => {
+        // An ERROR node holds the pairs tree-sitter recovered either side of the break, so it reads
+        // as the mapping the author was writing.
+        "block_mapping" | "flow_mapping" | "ERROR" => {
             let mut entries = Vec::new();
             let mut cursor = node.walk();
             for pair in node
@@ -102,12 +158,12 @@ fn value_from_node(node: Node<'_>, source: &str, source_map: &SourceMap<'_>) -> 
                 let Some(key_node) = pair.child_by_field_name("key") else {
                     continue;
                 };
-                let Some(key) = scalar_from_node(key_node, source, source_map) else {
+                let Some(key) = scalar_from_node(key_node, source, source_map, depth + 1) else {
                     continue;
                 };
                 let value = pair
                     .child_by_field_name("value")
-                    .map(|value| value_from_node(value, source, source_map))
+                    .map(|value| value_from_node(value, source, source_map, depth + 1))
                     .unwrap_or(YamlValue::Other);
                 entries.push(YamlPair { key, value });
             }
@@ -116,11 +172,11 @@ fn value_from_node(node: Node<'_>, source: &str, source_map: &SourceMap<'_>) -> 
         "block_sequence" | "flow_sequence" => {
             let values = meaningful_named_children(node)
                 .into_iter()
-                .map(|child| value_from_node(child, source, source_map))
+                .map(|child| value_from_node(child, source, source_map, depth + 1))
                 .collect();
             YamlValue::Sequence(values)
         }
-        kind if kind.ends_with("_scalar") => scalar_from_node(node, source, source_map)
+        kind if kind.ends_with("_scalar") => scalar_from_node(node, source, source_map, depth + 1)
             .map(YamlValue::Scalar)
             .unwrap_or(YamlValue::Other),
         _ => YamlValue::Other,
@@ -131,7 +187,11 @@ fn scalar_from_node(
     node: Node<'_>,
     source: &str,
     source_map: &SourceMap<'_>,
+    depth: usize,
 ) -> Option<YamlScalar> {
+    if depth >= MAX_PARSE_DEPTH {
+        return None;
+    }
     if matches!(
         node.kind(),
         "stream" | "document" | "block_node" | "flow_node" | "plain_scalar" | "block_sequence_item"
@@ -139,7 +199,7 @@ fn scalar_from_node(
         return meaningful_named_children(node)
             .last()
             .copied()
-            .and_then(|child| scalar_from_node(child, source, source_map));
+            .and_then(|child| scalar_from_node(child, source, source_map, depth + 1));
     }
     if !node.kind().ends_with("_scalar") {
         return None;
@@ -215,14 +275,65 @@ impl<'a> SourceMap<'a> {
 mod tests {
     use super::*;
 
+    fn value_depth(value: &YamlValue) -> usize {
+        match value {
+            YamlValue::Mapping(entries) => {
+                1 + entries
+                    .iter()
+                    .map(|entry| value_depth(&entry.value))
+                    .max()
+                    .unwrap_or(0)
+            }
+            YamlValue::Sequence(entries) => 1 + entries.iter().map(value_depth).max().unwrap_or(0),
+            YamlValue::Scalar(_) | YamlValue::Other => 1,
+        }
+    }
+
     #[test]
     fn converts_byte_offsets_to_utf16_positions() {
-        let value = parse_yaml("registry: { id: \"😀demo\" }\n").unwrap();
-        let id = value
+        let parsed = parse_yaml("registry: { id: \"😀demo\" }\n").unwrap();
+        let id = parsed
+            .value
             .get("registry")
             .and_then(|registry| registry.get_scalar("id"))
             .unwrap();
         assert_eq!(id.range.start, Position::new(0, 17));
         assert_eq!(id.range.end, Position::new(0, 23));
+    }
+
+    #[test]
+    fn clean_documents_report_no_syntax_error() {
+        assert!(parse_yaml("registry: { id: demo }\n")
+            .unwrap()
+            .syntax_error
+            .is_none());
+    }
+
+    #[test]
+    fn a_syntax_error_is_reported_once_and_leaves_earlier_values_readable() {
+        let parsed = parse_yaml("registry:\n  id: demo\nservices:\n  a: [\n").unwrap();
+
+        let error = parsed.syntax_error.expect("the open sequence is reported");
+        assert_eq!(error.start, Position::new(3, 5));
+        assert_eq!(error.end, Position::new(3, 6));
+        assert_eq!(
+            parsed
+                .value
+                .get("registry")
+                .and_then(|registry| registry.get_scalar("id"))
+                .map(|id| id.value.as_str()),
+            Some("demo")
+        );
+    }
+
+    #[test]
+    fn nesting_deeper_than_the_parse_bound_cannot_exhaust_the_stack() {
+        let source = format!("value: {}{}\n", "[".repeat(200_000), "]".repeat(200_000));
+        assert!(source.len() < 1024 * 1024);
+
+        let parsed = parse_yaml(&source).unwrap();
+
+        assert!(parsed.syntax_error.is_none());
+        assert!(value_depth(&parsed.value) <= MAX_PARSE_DEPTH);
     }
 }

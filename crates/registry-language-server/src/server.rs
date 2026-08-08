@@ -27,7 +27,6 @@ use tower_lsp_server::{
 use crate::{
     refs::{document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex},
     relay::{is_project_document, is_safe_authored_file, load_project_documents},
-    yaml::is_valid_yaml,
 };
 
 const SERVER_NAME: &str = "Registry Stack Language Server";
@@ -460,7 +459,7 @@ impl WorkspaceState {
             return;
         }
         self.open_versions.insert(path.clone(), version);
-        if text.len() <= MAX_DOCUMENT_BYTES && is_valid_yaml(&text) {
+        if text.len() <= MAX_DOCUMENT_BYTES {
             self.disk_diagnostics
                 .retain(|diagnostic| diagnostic.path != path);
             self.documents.insert(path, text);
@@ -496,15 +495,8 @@ impl WorkspaceState {
                 ));
             }
             Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) if is_valid_yaml(&text) => {
+                Ok(text) => {
                     self.documents.insert(path.to_path_buf(), text);
-                }
-                Ok(_) => {
-                    self.documents.remove(path);
-                    self.disk_diagnostics.push(document_diagnostic(
-                        path,
-                        "Invalid YAML syntax; fix this project document before it can be indexed",
-                    ));
                 }
                 Err(_) => {
                     self.documents.remove(path);
@@ -669,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_last_valid_index_during_invalid_edits() {
+    fn invalid_edits_index_what_still_parses_and_report_one_syntax_error() {
         let temp = project();
         let mut state = WorkspaceState::load(temp.path()).unwrap();
         let manifest = temp
@@ -688,13 +680,17 @@ mod tests {
             .iter()
             .any(|symbol| symbol.name == "current"));
 
-        state.update(manifest.clone(), "registry: [\n".to_owned(), 3);
+        state.update(
+            manifest.clone(),
+            "version: 1\nregistry: { id: current }\nservices: {}\nbroken: [\n".to_owned(),
+            3,
+        );
+        assert_eq!(state.open_versions.get(&manifest), Some(&3));
         assert!(state
             .index
             .workspace_symbols("current")
             .iter()
             .any(|symbol| symbol.name == "current"));
-        assert_eq!(state.open_versions.get(&manifest), Some(&3));
         assert_eq!(
             state
                 .index
@@ -702,6 +698,14 @@ mod tests {
                 .len(),
             1
         );
+        let diagnostics = state.index.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.starts_with("Invalid YAML syntax"));
+        assert_eq!(diagnostics[0].range.start, Position::new(3, 8));
+
+        state.update(manifest.clone(), "registry: [\n".to_owned(), 4);
+        assert!(state.index.workspace_symbols("current").is_empty());
+        assert_eq!(state.index.diagnostics().len(), 1);
     }
 
     #[test]

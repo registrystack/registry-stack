@@ -15,7 +15,7 @@ use crate::{
         bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
         IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
     },
-    yaml::YamlValue,
+    yaml::{ParsedDocument, YamlValue},
 };
 
 pub(crate) const PROJECT_FILE: &str = "registry-stack.yaml";
@@ -200,8 +200,7 @@ fn secure_path_metadata(root: &Path, path: &Path) -> Result<Option<fs::Metadata>
 /// diagnostics only the walker can report.
 pub(crate) fn build_index(
     root: &Path,
-    documents: &BTreeMap<PathBuf, String>,
-    parsed: &BTreeMap<PathBuf, YamlValue>,
+    parsed: &BTreeMap<PathBuf, ParsedDocument>,
 ) -> (
     Vec<IndexedSymbol>,
     Vec<IndexedReference>,
@@ -209,7 +208,6 @@ pub(crate) fn build_index(
 ) {
     let mut builder = IndexBuilder {
         root,
-        documents,
         parsed,
         symbols: Vec::new(),
         references: Vec::new(),
@@ -221,8 +219,7 @@ pub(crate) fn build_index(
 
 struct IndexBuilder<'a> {
     root: &'a Path,
-    documents: &'a BTreeMap<PathBuf, String>,
-    parsed: &'a BTreeMap<PathBuf, YamlValue>,
+    parsed: &'a BTreeMap<PathBuf, ParsedDocument>,
     symbols: Vec<IndexedSymbol>,
     references: Vec<IndexedReference>,
     diagnostics: Vec<IndexedDiagnostic>,
@@ -233,7 +230,11 @@ impl IndexBuilder<'_> {
         let manifest_path = self.root.join(PROJECT_FILE);
         let mut claimed_definition_files = BTreeSet::new();
         if let Some(manifest) = self.parsed.get(&manifest_path) {
-            self.extract_manifest(&manifest_path, manifest, &mut claimed_definition_files);
+            self.extract_manifest(
+                &manifest_path,
+                &manifest.value,
+                &mut claimed_definition_files,
+            );
         }
 
         for (path, document) in self.parsed {
@@ -244,14 +245,14 @@ impl IndexBuilder<'_> {
                 continue;
             };
             if is_fixture_path(relative) {
-                self.extract_fixture(path, document);
+                self.extract_fixture(path, &document.value);
             } else if is_environment_path(relative) {
-                self.extract_environment(path, relative, document);
+                self.extract_environment(path, relative, &document.value);
             } else if !claimed_definition_files.contains(path) {
                 if is_integration_path(relative) {
-                    self.extract_orphan_definition(path, document, RelayKind::Integration);
+                    self.extract_orphan_definition(path, &document.value, RelayKind::Integration);
                 } else if is_entity_path(relative) {
-                    self.extract_orphan_definition(path, document, RelayKind::Entity);
+                    self.extract_orphan_definition(path, &document.value, RelayKind::Entity);
                 }
             }
         }
@@ -357,7 +358,7 @@ impl IndexBuilder<'_> {
             let external_id = definition_path
                 .as_ref()
                 .and_then(|path| self.parsed.get(path).map(|document| (path, document)))
-                .and_then(|(path, document)| document.get_scalar("id").map(|id| (path, id)));
+                .and_then(|(path, document)| document.value.get_scalar("id").map(|id| (path, id)));
 
             if let Some((path, id)) = external_id {
                 claimed_definition_files.insert(path.clone());
@@ -373,11 +374,16 @@ impl IndexBuilder<'_> {
             let problem = match (file, definition_path.as_ref()) {
                 (None, _) => "does not declare a file",
                 (Some(_), None) => "declares a file outside the supported project layout",
+                (Some(_), Some(path))
+                    if self
+                        .parsed
+                        .get(path)
+                        .is_some_and(|document| document.syntax_error.is_some()) =>
+                {
+                    "targets invalid YAML"
+                }
                 (Some(_), Some(path)) if self.parsed.contains_key(path) => {
                     "targets a document without a scalar id"
-                }
-                (Some(_), Some(path)) if self.documents.contains_key(path) => {
-                    "targets invalid YAML"
                 }
                 (Some(_), Some(_)) => {
                     "targets a missing, unreadable, unsafe, oversized, or non-UTF-8 file"
@@ -743,6 +749,52 @@ services:
     }
 
     #[test]
+    fn a_document_that_stops_parsing_still_satisfies_other_documents() {
+        let temp = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            r#"version: 1
+registry: { id: demo }
+entities:
+  people: { file: entities/people.yaml }
+services:
+  records:
+    entity: people
+"#,
+        );
+        write(
+            temp.path(),
+            "entities/people.yaml",
+            "version: 1\nid: people\nfields: [\n",
+        );
+
+        let index = ProjectIndex::load(temp.path()).unwrap();
+        let entity = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("entities/people.yaml");
+
+        assert!(index
+            .symbols()
+            .iter()
+            .any(|symbol| symbol.name == "people" && symbol.location.path == entity));
+        assert!(!index
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message.starts_with("Unknown ")));
+        let own = index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.path == entity)
+            .collect::<Vec<_>>();
+        assert_eq!(own.len(), 1, "{own:?}");
+        assert!(own[0].message.starts_with("Invalid YAML syntax"));
+        assert_eq!(own[0].range.start, Position::new(2, 8));
+    }
+
+    #[test]
     fn declared_alias_targets_must_be_valid_indexable_documents() {
         let temp = TempDir::new().unwrap();
         write(
@@ -877,7 +929,9 @@ services:
         let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let catalog_path = repository_root
             .join("crates/registryctl/tests/fixtures/project-authoring-journeys.yaml");
-        let catalog = parse_yaml(&fs::read_to_string(catalog_path).unwrap()).unwrap();
+        let catalog = parse_yaml(&fs::read_to_string(catalog_path).unwrap())
+            .unwrap()
+            .value;
         let workspaces = catalog
             .get("workspaces")
             .and_then(YamlValue::as_sequence)
