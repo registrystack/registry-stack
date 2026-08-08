@@ -126,16 +126,29 @@ impl ProjectFamily {
         }
     }
 
-    /// The most documents this family indexes from the directory that holds this path, when it
-    /// bounds that directory at all.
+    /// The directory holding this path, when this family bounds how many documents it indexes from
+    /// it, and `None` for every other path.
     ///
-    /// Relay bounds none of its directories. Evidence bounds the two the authoring form bounds and
+    /// Relay bounds none of its directories. Evidence bounds the ones the authoring form bounds and
     /// no others, so a definition the compiler resolves cannot become an unresolved reference on
     /// screen.
-    fn max_documents_per_directory(self, root: &Path, path: &Path) -> Option<usize> {
+    fn bounded_directory_of(self, root: &Path, path: &Path) -> Option<PathBuf> {
         match self {
             Self::Relay => None,
-            Self::Evidence => evidence::max_documents_per_directory(root, path),
+            Self::Evidence => evidence::bounded_directory_of(root, path),
+        }
+    }
+
+    /// Reads a bounded directory of this family whole, for a caller settling it after a change
+    /// arrived from disk. A family that bounds nothing has nothing to settle.
+    fn scan_bounded_directory(
+        self,
+        root: &Path,
+        path: &Path,
+    ) -> Result<Option<evidence::ScannedDirectory>> {
+        match self {
+            Self::Relay => Ok(None),
+            Self::Evidence => evidence::scan_bounded_directory(root, path),
         }
     }
 
@@ -262,7 +275,70 @@ impl RootState {
         self.reload_from_disk(path);
     }
 
+    /// Applies one batch of watched changes together, as the client delivered it.
+    ///
+    /// A rename inside a directory the family bounds is the reason this is a batch and not a loop. A
+    /// client may deliver the arrival and the departure in one notification, in either order, or
+    /// spread over two, and a bounded directory cannot answer any of those a path at a time: an
+    /// arrival weighed against what the root holds at that instant is refused for room the departure
+    /// beside it is about to free, and the refusal is decided once and never revisited. So a bounded
+    /// directory is not changed a path at a time at all. Every one the batch touched is settled from
+    /// a fresh read of the directory, which holds the property an author can see for themselves:
+    /// after a batch is applied, a bounded directory holds what a first scan of the same tree would
+    /// hold.
+    fn reload_watched_batch(&mut self, paths: &[PathBuf]) -> Result<()> {
+        let mut bounded: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
+        for path in paths {
+            match self.family.bounded_directory_of(&self.root, path) {
+                Some(directory) => {
+                    bounded.entry(directory).or_insert_with(|| path.clone());
+                }
+                None => self.apply_from_disk(path),
+            }
+        }
+        let mut failure = None;
+        for path in bounded.into_values() {
+            if let Err(error) = self.settle_bounded_directory(&path) {
+                failure.get_or_insert(error);
+            }
+        }
+        self.rebuild();
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// Replaces what this root holds from one bounded directory with what a fresh read of it finds.
+    ///
+    /// A document the client has open is left alone, text and diagnostics both. The author is
+    /// looking at that buffer, and its text is the unsaved revision rather than whatever is on disk.
+    /// The read happens before anything is dropped, so a directory the server cannot enumerate
+    /// leaves the root exactly as it was and says why.
+    fn settle_bounded_directory(&mut self, path: &Path) -> Result<()> {
+        let Some(scan) = self.family.scan_bounded_directory(&self.root, path)? else {
+            return Ok(());
+        };
+        let Some(directory) = path.parent() else {
+            return Ok(());
+        };
+        let open_versions = &self.open_versions;
+        let settled =
+            |path: &Path| path.parent() == Some(directory) && !open_versions.contains_key(path);
+        self.documents.retain(|path, _| !settled(path));
+        self.disk_diagnostics
+            .retain(|diagnostic| !settled(&diagnostic.path));
+        for path in scan.admitted {
+            self.apply_from_disk(&path);
+        }
+        self.disk_diagnostics.extend(scan.diagnostics);
+        Ok(())
+    }
+
     fn reload_from_disk(&mut self, path: &Path) {
+        self.apply_from_disk(path);
+        self.rebuild();
+    }
+
+    /// Takes one document from disk, without rebuilding the index around it.
+    fn apply_from_disk(&mut self, path: &Path) {
         if !self.family.owns_document(&self.root, path) || self.open_versions.contains_key(path) {
             return;
         }
@@ -270,13 +346,6 @@ impl RootState {
             .retain(|diagnostic| diagnostic.path != path);
         if !self.family.is_safe_authored_file(&self.root, path) {
             self.documents.remove(path);
-            self.rebuild();
-            return;
-        }
-        if let Some(refusal) = self.refuse_for_a_full_directory(path) {
-            self.documents.remove(path);
-            self.disk_diagnostics.push(refusal);
-            self.rebuild();
             return;
         }
         let ceiling = self.family.document_ceiling(&self.root, path);
@@ -306,35 +375,6 @@ impl RootState {
                 ));
             }
         }
-        self.rebuild();
-    }
-
-    /// The refusal a document this root has no room for carries, or `None` when there is room.
-    ///
-    /// A directory a family bounds is bounded on every path that adds to it, not only on the first
-    /// scan. A client that watches the project delivers a whole branch switch here, one path at a
-    /// time, and a ceiling the scan applied and the watcher did not is a ceiling the editor does
-    /// not have. A document the root already holds is a refresh rather than an addition, so it is
-    /// always let through.
-    fn refuse_for_a_full_directory(&self, path: &Path) -> Option<IndexedDiagnostic> {
-        if self.documents.contains_key(path) {
-            return None;
-        }
-        let ceiling = self.family.max_documents_per_directory(&self.root, path)?;
-        let directory = path.parent()?;
-        let held = self
-            .documents
-            .keys()
-            .filter(|held| held.parent() == Some(directory))
-            .count();
-        (held >= ceiling).then(|| {
-            document_diagnostic(
-                path,
-                &format!(
-                    "This project directory already holds the {ceiling} documents the editor indexes; this file is not indexed"
-                ),
-            )
-        })
     }
 
     fn rebuild(&mut self) {
@@ -462,10 +502,29 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn reload_from_disk(&mut self, path: &Path) {
-        if let Some(state) = self.root_for_mut(path) {
-            state.reload_from_disk(path);
+    /// Applies one batch of watched changes, root by root.
+    ///
+    /// The batch is split by the root that owns each path and handed on whole, because a root that
+    /// sees half a batch answers a question the client did not ask. A root that cannot read one of
+    /// its own directories is reported once, and the roots after it are still applied: a session
+    /// that stopped at the first unreadable directory would leave every later root holding text its
+    /// files no longer have.
+    pub(crate) fn reload_watched(&mut self, paths: &[PathBuf]) -> Result<()> {
+        let mut batches: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+        for path in paths {
+            if let Some(root) = self.root_for(path).map(|state| state.root.clone()) {
+                batches.entry(root).or_default().push(path.clone());
+            }
         }
+        let mut failure = None;
+        for (root, batch) in batches {
+            if let Some(state) = self.roots.get_mut(&root) {
+                if let Err(error) = state.reload_watched_batch(&batch) {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Tests one directory against every family. This never walks anywhere: a workspace folder is
@@ -526,7 +585,10 @@ mod tests {
     use std::fs;
 
     use registry_evidence_authoring::{
-        layout::{MAX_QUESTIONS, MAX_QUESTION_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY},
+        layout::{
+            ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, MAX_QUESTIONS, MAX_QUESTION_BYTES,
+            OPENAPI_FILE, QUESTIONS_DIRECTORY,
+        },
         marker::{default_project_marker_document, PROJECT_MARKER_FILE},
     };
     use tempfile::TempDir;
@@ -1036,7 +1098,9 @@ mod tests {
         fs::write(&entity, "version: 1\nid: person\n").unwrap();
         let entity = entity.canonicalize().unwrap();
 
-        state.reload_from_disk(&entity);
+        state
+            .reload_watched_batch(std::slice::from_ref(&entity))
+            .unwrap();
         assert!(state
             .index
             .workspace_symbols("person")
@@ -1044,7 +1108,9 @@ mod tests {
             .any(|symbol| symbol.name == "person"));
 
         fs::remove_file(&entity).unwrap();
-        state.reload_from_disk(&entity);
+        state
+            .reload_watched_batch(std::slice::from_ref(&entity))
+            .unwrap();
         assert!(state.index.workspace_symbols("person").is_empty());
     }
 
@@ -1133,43 +1199,153 @@ mod tests {
         assert_eq!(ceiling_messages(&state).len(), 1, "closing it keeps it");
     }
 
-    #[test]
-    fn a_document_a_bounded_directory_has_no_room_for_is_refused_from_disk() {
-        let temp = TempDir::new().unwrap();
-        evidence_project_in(temp.path());
-        let questions = temp.path().join(QUESTIONS_DIRECTORY);
-        for index in 0..MAX_QUESTIONS {
-            fs::write(
-                questions.join(format!("question-{index:03}.yaml")),
-                QUESTION,
-            )
-            .unwrap();
+    /// An authoring project whose questions directory holds exactly the [`MAX_QUESTIONS`] documents
+    /// the authoring form allows, and one access policy admitting `admitted`.
+    ///
+    /// `admitted` need not exist yet: the tests below move it in and out of the directory, and the
+    /// policy is there so that a question the root fails to hold shows up twice, once as the
+    /// refusal and once as the unresolved name.
+    fn full_questions_project(directory: &Path, admitted: &str) -> (RootState, PathBuf) {
+        evidence_project_in(directory);
+        let questions = directory.join(QUESTIONS_DIRECTORY);
+        for index in 0..MAX_QUESTIONS - 1 {
+            write_question(&questions, &format!("filler-{index:03}"));
         }
-        fs::remove_file(questions.join("adult-status.yaml")).unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
-        assert_eq!(
-            state.documents.len(),
-            MAX_QUESTIONS + 1,
-            "the marker and the questions"
+        let policies = directory
+            .join(ACCESS_DIRECTORY)
+            .join(ACCESS_POLICIES_DIRECTORY);
+        fs::create_dir_all(&policies).unwrap();
+        fs::write(
+            policies.join("admissions.yaml"),
+            format!("version: 1\nid: admissions\nquestions: [{admitted}]\n"),
+        )
+        .unwrap();
+        let state = RootState::load(directory, ProjectFamily::Evidence).unwrap();
+        let questions = questions.canonicalize().unwrap();
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
+        (state, questions)
+    }
+
+    fn write_question(questions: &Path, name: &str) {
+        fs::write(
+            questions.join(format!("{name}.yaml")),
+            format!("version: 1\nid: {name}\n"),
+        )
+        .unwrap();
+    }
+
+    fn questions_held(state: &RootState, questions: &Path) -> usize {
+        state
+            .documents
+            .keys()
+            .filter(|path| path.parent() == Some(questions))
+            .count()
+    }
+
+    fn documents_not_indexed(state: &RootState) -> Vec<&str> {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("not indexed"))
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect()
+    }
+
+    fn unresolved_questions(state: &RootState) -> Vec<&str> {
+        state
+            .index
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code.as_deref() == Some("evidence/unknown-question"))
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect()
+    }
+
+    /// A rename inside a full bounded directory, delivered the way a client delivers one: a single
+    /// batch holding the arrival and the departure, in whatever order the client chose.
+    ///
+    /// The project holds exactly the documents the authoring form allows both before and after the
+    /// rename, so `evidencectl` builds it either way and the editor has nothing to report. Applying
+    /// the batch a path at a time cannot hold that: the arrival is refused for a directory the
+    /// departure is about to leave room in.
+    #[test]
+    fn a_rename_inside_a_full_bounded_directory_reports_nothing() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "aaa-renamed");
+        let arrived = questions.join("aaa-renamed.yaml");
+        let departed = questions.join("filler-126.yaml");
+        assert!(
+            arrived < departed,
+            "the arrival has to sort first for the order inside the batch to matter"
         );
 
-        let extra = questions.join("question-999.yaml");
-        fs::write(&extra, QUESTION).unwrap();
-        let extra = extra.canonicalize().unwrap();
-        state.reload_from_disk(&extra);
+        fs::remove_file(&departed).unwrap();
+        write_question(&questions, "aaa-renamed");
+        state
+            .reload_watched_batch(&[arrived.clone(), departed.clone()])
+            .unwrap();
+
+        assert!(state.documents.contains_key(&arrived));
+        assert!(!state.documents.contains_key(&departed));
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
+        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
+        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
+    }
+
+    /// The same rename spread over two batches, which a client is equally free to deliver: the
+    /// author writes a question the directory has no room for, and deletes another one afterwards.
+    /// The first batch is a project the authoring form refuses and the editor says so, and the
+    /// second one is a project it accepts, so the refusal has to lift on its own.
+    #[test]
+    fn a_document_a_full_directory_refused_is_taken_once_a_later_batch_frees_room() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "zzz-arrived");
+        let arrived = questions.join("zzz-arrived.yaml");
+        write_question(&questions, "zzz-arrived");
+        state
+            .reload_watched_batch(std::slice::from_ref(&arrived))
+            .unwrap();
+        assert!(
+            !state.documents.contains_key(&arrived),
+            "129 questions is a project the authoring form refuses"
+        );
+        assert_eq!(documents_not_indexed(&state).len(), 1);
+
+        let departed = questions.join("filler-000.yaml");
+        fs::remove_file(&departed).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&departed))
+            .unwrap();
+
+        assert!(state.documents.contains_key(&arrived));
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
+        assert_eq!(documents_not_indexed(&state), Vec::<&str>::new());
+        assert_eq!(unresolved_questions(&state), Vec::<&str>::new());
+    }
+
+    /// A directory that really does overflow keeps reporting it, and reports it about the first
+    /// document it stopped reading rather than about whichever one happened to arrive last.
+    #[test]
+    fn a_bounded_directory_that_overflows_reports_the_first_document_it_stopped_reading() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        let extra = questions.join("zzz-extra.yaml");
+        write_question(&questions, "zzz-extra");
+        state
+            .reload_watched_batch(std::slice::from_ref(&extra))
+            .unwrap();
 
         assert!(!state.documents.contains_key(&extra));
+        assert_eq!(questions_held(&state, &questions), MAX_QUESTIONS);
         assert!(
-            state
-                .index
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.path == extra
-                    && diagnostic
-                        .message
-                        .contains("already holds the 128 documents")),
+            state.index.diagnostics().iter().any(|diagnostic| {
+                diagnostic.path == extra
+                    && diagnostic.message
+                        == "This project directory holds more than the 128 documents the editor indexes; this file and the ones after it are not indexed"
+            }),
             "{:?}",
-            state.index.diagnostics()
+            documents_not_indexed(&state)
         );
     }
 
@@ -1191,7 +1367,9 @@ mod tests {
         let extra = selectors.join("profile-999.yaml");
         fs::write(&extra, "kind: exact\n").unwrap();
         let extra = extra.canonicalize().unwrap();
-        state.reload_from_disk(&extra);
+        state
+            .reload_watched_batch(std::slice::from_ref(&extra))
+            .unwrap();
 
         assert!(
             state.documents.contains_key(&extra),

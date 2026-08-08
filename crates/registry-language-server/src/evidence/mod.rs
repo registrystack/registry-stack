@@ -73,10 +73,41 @@ pub(crate) fn document_ceiling(root: &Path, path: &Path) -> DocumentCeiling {
     document_role(root, path).map_or_else(DocumentCeiling::project_document, role_ceiling)
 }
 
-/// The most documents the editor reads from the directory that holds this path, for the directories
-/// the authoring form bounds.
-pub(crate) fn max_documents_per_directory(root: &Path, path: &Path) -> Option<usize> {
-    document_role(root, path).and_then(DocumentRole::max_documents)
+/// The directory holding this path, when the authoring form bounds how many documents the editor
+/// reads from it, and `None` for every other path.
+pub(crate) fn bounded_directory_of(root: &Path, path: &Path) -> Option<PathBuf> {
+    document_role(root, path)
+        .and_then(DocumentRole::max_documents)
+        .and_then(|_| path.parent().map(Path::to_path_buf))
+}
+
+/// Reads the bounded directory that holds `path`, so a caller can settle it against what a first
+/// scan of the same tree would hold.
+///
+/// The role comes from the path, so the directory is read in the same pass, with the same ceiling
+/// and the same order, as the first scan of the project reads it. A path the authoring form does not
+/// bound is answered with `None`: there is nothing to settle where nothing is truncated.
+pub(crate) fn scan_bounded_directory(root: &Path, path: &Path) -> Result<Option<ScannedDirectory>> {
+    let Some(role) = document_role(root, path).filter(|role| role.max_documents().is_some()) else {
+        return Ok(None);
+    };
+    let Some(directory) = path.parent() else {
+        return Ok(None);
+    };
+    let mut candidates = Vec::new();
+    let mut diagnostics = Vec::new();
+    add_documents(root, directory, role, &mut candidates, &mut diagnostics)?;
+    Ok(Some(ScannedDirectory {
+        admitted: candidates.into_iter().map(|(path, _)| path).collect(),
+        diagnostics,
+    }))
+}
+
+/// What one read of a bounded project directory found: the documents the editor indexes from it, and
+/// what it has to say about the ones past the ceiling.
+pub(crate) struct ScannedDirectory {
+    pub(crate) admitted: Vec<PathBuf>,
+    pub(crate) diagnostics: Vec<crate::refs::IndexedDiagnostic>,
 }
 
 /// The ceiling one role carries, written once so that the first scan of a project, a buffer the
@@ -164,12 +195,8 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
 /// is read whole: a ceiling the editor applies where the compiler applies none turns a definition
 /// the build resolves into an unresolved reference on screen.
 ///
-/// The names of a bounded directory are collected into a set that never holds more than one name
-/// past its ceiling, because a ceiling on what is read is not a ceiling on what is enumerated. A
-/// directory holding a million entries would otherwise be gathered whole and thrown away, and the
-/// one name past the ceiling is kept so the first unread file can be named. Whether an entry is a
-/// file the server may open is settled once, by the reader, rather than by a second secure walk of
-/// every path here.
+/// Whether an entry is a file the server may open is settled once, by the reader, rather than by a
+/// second secure walk of every path here.
 fn add_documents(
     root: &Path,
     directory: &Path,
@@ -199,12 +226,7 @@ fn add_documents(
         if document_role(root, &path) != Some(role) {
             continue;
         }
-        named.insert(path);
-        if let Some(ceiling) = ceiling {
-            if named.len() > ceiling + 1 {
-                named.pop_last();
-            }
-        }
+        keep_bounded(&mut named, path, ceiling);
     }
 
     let mut paths = named.into_iter().collect::<Vec<_>>();
@@ -221,6 +243,21 @@ fn add_documents(
     }
     candidates.extend(paths.into_iter().map(|path| (path, role)));
     Ok(())
+}
+
+/// Adds one name to a set that never grows past one name beyond `ceiling`.
+///
+/// A ceiling on what is read is not a ceiling on what is enumerated. A directory holding a million
+/// entries would otherwise be gathered whole and thrown away, so the set drops its largest name as
+/// soon as it is one past the ceiling. The one name past the ceiling is kept because that is the
+/// first file the reader stops at, and it is the file the author is told about.
+fn keep_bounded(named: &mut BTreeSet<PathBuf>, path: PathBuf, ceiling: Option<usize>) {
+    named.insert(path);
+    if let Some(ceiling) = ceiling {
+        if named.len() > ceiling + 1 {
+            named.pop_last();
+        }
+    }
 }
 
 /// The role a path plays under `root`, for a path that is under it at all.

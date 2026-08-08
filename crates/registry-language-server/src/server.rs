@@ -152,11 +152,11 @@ impl Backend {
                     load_error.get_or_insert_with(|| bounded_load_error(&error));
                 }
             }
+            if let Err(error) = workspace.reload_watched(&paths) {
+                load_error.get_or_insert_with(|| bounded_load_error(&error));
+            }
             if load_error.is_none() {
                 *self.load_error.write().await = None;
-            }
-            for path in paths {
-                workspace.reload_from_disk(&path);
             }
             load_error
         };
