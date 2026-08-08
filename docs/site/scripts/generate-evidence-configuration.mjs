@@ -20,7 +20,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-export const FORMAT_VERSION = '1.0';
+export const FORMAT_VERSION = '1.1';
 
 export const CONTRACTS = [
   {
@@ -70,22 +70,83 @@ function resolveReference(document, reference) {
   return node;
 }
 
+// The contracts are parsed with `intAsBigInt`, because the signed 64-bit
+// adapter parameter bounds do not survive a double.
 function describeValue(value) {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  return JSON.stringify(value);
 }
 
-function occurrenceOf(schema, keyPath, kind, required) {
-  const values = [];
+// A `const` or `enum` fixes the type of every value it permits, so a schema
+// stating one and omitting `type` still proves what a deployment may write.
+// Nothing else is inferred: `properties` without `type` asserts no type, and
+// the entry stays honest about that.
+function jsonTypeOf(value) {
+  if (value === null) {
+    return 'null';
+  }
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+  switch (typeof value) {
+    case 'bigint':
+      return 'integer';
+    case 'number':
+      return Number.isInteger(value) ? 'integer' : 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'string':
+      return 'string';
+    default:
+      return 'object';
+  }
+}
+
+function constraintsOf(schema, prefix = '') {
+  return CONSTRAINT_KEYWORDS.filter((keyword) => Object.hasOwn(schema, keyword)).map(
+    (keyword) => `${prefix}${keyword}: ${describeValue(schema[keyword])}`,
+  );
+}
+
+// Bounds a map places on the key a deployment writes. These contracts state
+// them as a reference to the shared identifier definition, so reading the
+// `propertyNames` node itself would report nothing.
+function propertyNameConstraints(document, schema) {
+  const seen = new Set();
+  let node = schema;
+  while (node !== null && typeof node === 'object' && Object.hasOwn(node, '$ref')) {
+    if (seen.has(node.$ref)) {
+      return [];
+    }
+    seen.add(node.$ref);
+    node = resolveReference(document, node.$ref);
+  }
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) {
+    return [];
+  }
+  const conjuncts = Array.isArray(node.allOf) ? node.allOf : [];
+  return [
+    ...new Set([
+      ...constraintsOf(node, 'propertyNames.'),
+      ...conjuncts.flatMap((branch) => constraintsOf(branch ?? {}, 'propertyNames.')),
+    ]),
+  ].sort();
+}
+
+function occurrenceOf(schema, keyPath, kind, required, variantPath) {
+  const fixed = [];
   if (Object.hasOwn(schema, 'const')) {
-    values.push(describeValue(schema.const));
+    fixed.push(schema.const);
   }
   if (Array.isArray(schema.enum)) {
-    values.push(...schema.enum.map(describeValue));
+    fixed.push(...schema.enum);
   }
-  const constraints = CONSTRAINT_KEYWORDS.filter((keyword) => Object.hasOwn(schema, keyword)).map(
-    (keyword) => `${keyword}: ${describeValue(schema[keyword])}`,
-  );
-  const types = Array.isArray(schema.type)
+  const declared = Array.isArray(schema.type)
     ? schema.type
     : typeof schema.type === 'string'
       ? [schema.type]
@@ -93,10 +154,16 @@ function occurrenceOf(schema, keyPath, kind, required) {
   return {
     key_path: keyPath,
     kind,
-    types,
+    types: declared.length > 0 ? declared : fixed.map(jsonTypeOf),
     required,
-    values,
-    constraints,
+    values: fixed.map(describeValue),
+    constraints: constraintsOf(schema),
+    // Which alternative branches were taken to reach this node. Occurrences
+    // sharing a key apply together; occurrences under different branches of
+    // one combinator are alternatives.
+    variantKey: variantPath.join('>'),
+    // Set when at least one alternative does not declare this key path at all.
+    conditional: false,
     description: typeof schema.description === 'string' ? schema.description : null,
     runtime_validation:
       typeof schema['x-runtime-validation'] === 'string' ? schema['x-runtime-validation'] : null,
@@ -106,13 +173,13 @@ function occurrenceOf(schema, keyPath, kind, required) {
 // Each node records what it knows about the path it sits on, so a property
 // written as a `$ref` still reports the definition's type, values, and bounds,
 // and a path reached through several combinator branches reports all of them.
-function walk(document, schema, prefix, kind, required, occurrences, referenceStack) {
+function walk(document, schema, prefix, kind, required, occurrences, referenceStack, variantPath) {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
     return;
   }
 
   if (prefix !== '') {
-    occurrences.push(occurrenceOf(schema, prefix, kind, required));
+    occurrences.push(occurrenceOf(schema, prefix, kind, required, variantPath));
   }
 
   if (Object.hasOwn(schema, '$ref')) {
@@ -130,14 +197,51 @@ function walk(document, schema, prefix, kind, required, occurrences, referenceSt
       required,
       occurrences,
       new Set([...referenceStack, reference]),
+      variantPath,
     );
     return;
   }
 
-  for (const combinator of ['allOf', 'anyOf', 'oneOf']) {
-    if (Array.isArray(schema[combinator])) {
-      for (const branch of schema[combinator]) {
-        walk(document, branch, prefix, kind, required, occurrences, referenceStack);
+  if (Array.isArray(schema.allOf)) {
+    for (const branch of schema.allOf) {
+      walk(document, branch, prefix, kind, required, occurrences, referenceStack, variantPath);
+    }
+  }
+
+  // `oneOf` and `anyOf` offer alternatives, so a key path only some branches
+  // declare cannot be reported as plainly required: a reader who writes every
+  // key marked required produces a document every alternative rejects.
+  for (const combinator of ['anyOf', 'oneOf']) {
+    const branches = schema[combinator];
+    if (!Array.isArray(branches) || branches.length === 0) {
+      continue;
+    }
+    const collected = branches.map((branch, index) => {
+      const branchOccurrences = [];
+      walk(
+        document,
+        branch,
+        prefix,
+        kind,
+        required,
+        branchOccurrences,
+        referenceStack,
+        [...variantPath, `${prefix}:${combinator}#${index}`],
+      );
+      return branchOccurrences;
+    });
+    const coverage = new Map();
+    for (const branchOccurrences of collected) {
+      for (const keyPath of new Set(branchOccurrences.map((entry) => entry.key_path))) {
+        coverage.set(keyPath, (coverage.get(keyPath) ?? 0) + 1);
+      }
+    }
+    for (const branchOccurrences of collected) {
+      for (const entry of branchOccurrences) {
+        if (coverage.get(entry.key_path) < branches.length) {
+          entry.conditional = true;
+        }
+        occurrences.push(entry);
       }
     }
   }
@@ -154,35 +258,112 @@ function walk(document, schema, prefix, kind, required, occurrences, referenceSt
         requiredNames.has(name),
         occurrences,
         referenceStack,
+        variantPath,
       );
     }
   }
 
   if (schema.items !== null && typeof schema.items === 'object' && !Array.isArray(schema.items)) {
-    walk(document, schema.items, `${prefix}[]`, 'array_item', false, occurrences, referenceStack);
+    walk(
+      document,
+      schema.items,
+      `${prefix}[]`,
+      'array_item',
+      false,
+      occurrences,
+      referenceStack,
+      variantPath,
+    );
   }
 
   const additional = schema.additionalProperties;
   if (additional !== null && typeof additional === 'object' && !Array.isArray(additional)) {
     const valuePath = prefix ? `${prefix}.*` : '*';
-    walk(document, additional, valuePath, 'map_value', false, occurrences, referenceStack);
+    // `propertyNames` bounds the key a deployment writes for each entry. It
+    // sits on the map, so without this it reaches no row a reader consults
+    // while naming a source, selector profile, or authority profile.
+    const names = schema.propertyNames;
+    if (names !== null && typeof names === 'object' && !Array.isArray(names)) {
+      const nameConstraints = propertyNameConstraints(document, names);
+      if (nameConstraints.length > 0) {
+        occurrences.push({
+          key_path: valuePath,
+          kind: 'map_value',
+          types: [],
+          required: false,
+          values: [],
+          constraints: nameConstraints,
+          variantKey: variantPath.join('>'),
+          conditional: false,
+          description: null,
+          runtime_validation: null,
+        });
+      }
+    }
+    walk(
+      document,
+      additional,
+      valuePath,
+      'map_value',
+      false,
+      occurrences,
+      referenceStack,
+      variantPath,
+    );
   }
 }
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 
+// Constraint sets a deployment may satisfy, one group per alternative. Bounds
+// reached without choosing a branch hold under every alternative, so they join
+// each group; printing one flat union instead would read as a conjunction and
+// describe a value no alternative accepts.
+function constraintAlternatives(occurrences) {
+  const shared = occurrences
+    .filter((occurrence) => occurrence.variantKey === '')
+    .flatMap((occurrence) => occurrence.constraints);
+
+  const byVariant = new Map();
+  for (const occurrence of occurrences) {
+    if (occurrence.variantKey === '') {
+      continue;
+    }
+    byVariant.set(occurrence.variantKey, [
+      ...(byVariant.get(occurrence.variantKey) ?? []),
+      ...occurrence.constraints,
+    ]);
+  }
+
+  const groups = [...byVariant.values()]
+    .map((constraints) => uniqueSorted([...shared, ...constraints]))
+    .filter((group) => group.length > 0);
+  const distinct = [...new Map(groups.map((group) => [JSON.stringify(group), group])).values()];
+  if (distinct.length > 0) {
+    return distinct;
+  }
+  const only = uniqueSorted(shared);
+  return only.length > 0 ? [only] : [];
+}
+
 function merge(occurrences) {
   // One entry per key path. A path reached through several combinator branches
-  // shows the union of what those branches allow, and stays required only when
-  // every branch requires it.
+  // shows the union of the types and values those branches allow. It is
+  // `conditional` when some alternative does not declare it, `yes` only when
+  // every occurrence requires it.
   const first = occurrences[0];
+  const conditional = occurrences.some((occurrence) => occurrence.conditional);
   return {
     key_path: first.key_path,
     kind: first.kind,
     type: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.types)).join(' | ') || null,
-    required: occurrences.every((occurrence) => occurrence.required),
+    required: conditional
+      ? 'conditional'
+      : occurrences.every((occurrence) => occurrence.required)
+        ? 'yes'
+        : 'no',
     values: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.values)),
-    constraints: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.constraints)),
+    constraints: constraintAlternatives(occurrences),
     description: occurrences.find((occurrence) => occurrence.description)?.description ?? null,
     runtime_validation:
       occurrences.find((occurrence) => occurrence.runtime_validation)?.runtime_validation ?? null,
@@ -195,7 +376,7 @@ export function collectFields(document) {
     throw new Error('a contract must be a mapping');
   }
   const occurrences = [];
-  walk(document, document, '', null, false, occurrences, new Set());
+  walk(document, document, '', null, false, occurrences, new Set(), []);
 
   const grouped = new Map();
   for (const occurrence of occurrences) {
@@ -242,7 +423,9 @@ export function validateEvidenceConfiguration(document) {
 export async function buildEvidenceConfiguration(repoRoot = defaultRepoRoot) {
   const contracts = await Promise.all(
     CONTRACTS.map(async (contract) => {
-      const schema = parseYaml(await readFile(resolve(repoRoot, contract.file), 'utf8'));
+      const schema = parseYaml(await readFile(resolve(repoRoot, contract.file), 'utf8'), {
+        intAsBigInt: true,
+      });
       const fields = collectFields(schema);
       return { ...contract, field_count: fields.length, fields };
     }),

@@ -1,5 +1,5 @@
 {
-  "format_version": "1.0",
+  "format_version": "1.1",
   "generator": "docs/site/scripts/generate-evidence-configuration.mjs",
   "contracts": [
     {
@@ -13,11 +13,13 @@
           "key_path": "acquisitionCapabilities",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Gated acquisition kinds this bundle opts in to. The Version 1 forms are absent from the vocabulary on purpose, because every bundle already had them; omission and an explicit empty list both enable nothing.",
           "runtime_validation": null
@@ -25,8 +27,8 @@
         {
           "key_path": "acquisitionCapabilities[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "search-then-fetch-set"
           ],
@@ -37,8 +39,8 @@
         {
           "key_path": "assuranceProfile",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "evidence-grade",
             "local",
@@ -52,7 +54,7 @@
           "key_path": "audit",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Governs audit pseudonymization and the fail-closed policy for the whole deployment; `runtime.yaml` contributes only the storage location.",
@@ -61,8 +63,8 @@
         {
           "key_path": "audit.failClosed",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "boolean",
+          "required": "yes",
           "values": [
             "true"
           ],
@@ -73,8 +75,8 @@
         {
           "key_path": "audit.format",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "keyed-jsonl"
           ],
@@ -86,11 +88,13 @@
           "key_path": "audit.hashKeyVersion",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 2147483647",
-            "minimum: 1"
+            [
+              "maximum: 2147483647",
+              "minimum: 1"
+            ]
           ],
           "description": "Stamped into every audit pseudonym as its version prefix, so pseudonyms produced under different audit key material stay distinguishable within one chain.",
           "runtime_validation": null
@@ -99,10 +103,12 @@
           "key_path": "audit.hashSecretRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Points at the file secret Rust separates into the audit chain and identifier subkeys; the same reference cannot also serve `subjectBinding.secretRef`.",
           "runtime_validation": null
@@ -111,7 +117,7 @@
           "key_path": "authentication",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Verification policy for inbound bearer tokens: the runtime validates each token against these values itself and ignores upstream identity headers.",
@@ -121,10 +127,12 @@
           "key_path": "authentication.actorClaim",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "Names the verified claim read as the actor alongside the principal, and omitting the key enables no fallback actor source.",
           "runtime_validation": null
@@ -133,12 +141,14 @@
           "key_path": "authentication.algorithms",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 3",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 3",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Closes the set of signature algorithms accepted on an inbound access token, and no algorithm fallback outside the set is permitted.",
           "runtime_validation": null
@@ -146,8 +156,8 @@
         {
           "key_path": "authentication.algorithms[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "ES256",
             "EdDSA",
@@ -161,12 +171,14 @@
           "key_path": "authentication.audiences",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Exact allowlist of audience values an inbound access token must carry to be accepted.",
           "runtime_validation": null
@@ -175,11 +187,13 @@
           "key_path": "authentication.audiences[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 1"
+            [
+              "maxLength: 512",
+              "minLength: 1"
+            ]
           ],
           "description": "One exact audience value an inbound access token may carry.",
           "runtime_validation": null
@@ -188,10 +202,12 @@
           "key_path": "authentication.evidenceAudienceClaim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "Names the verified claim that fixes the audience an assertion is issued to, and the public request cannot choose another audience.",
           "runtime_validation": null
@@ -200,10 +216,12 @@
           "key_path": "authentication.grantAuthorityClaim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "Names the verified claim carrying the granting authority, read only when a subject's `valueOrigin` is `authenticated-grant`; the claim value must equal the matched authority-profile id.",
           "runtime_validation": null
@@ -212,10 +230,12 @@
           "key_path": "authentication.grantIdClaim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "Names the verified claim carrying the grant identifier, read only when a subject's `valueOrigin` is `authenticated-grant`.",
           "runtime_validation": null
@@ -224,11 +244,13 @@
           "key_path": "authentication.issuer",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "pattern: ^https?://"
+            [
+              "maxLength: 512",
+              "pattern: ^https?://"
+            ]
           ],
           "description": "Exact token issuer an inbound access token must declare, with path-based issuers supported; deployable bundles require HTTPS.",
           "runtime_validation": null
@@ -237,11 +259,13 @@
           "key_path": "authentication.jwksUri",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "pattern: ^https?://"
+            [
+              "maxLength: 512",
+              "pattern: ^https?://"
+            ]
           ],
           "description": "Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may resolve to a public or private address, so DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited.",
           "runtime_validation": null
@@ -249,8 +273,8 @@
         {
           "key_path": "authentication.kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "oidc-access-token"
           ],
@@ -262,11 +286,13 @@
           "key_path": "authentication.maximumTokenLifetimeSeconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 86400",
-            "minimum: 1"
+            [
+              "maximum: 86400",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the accepted `exp - iat` interval, and its presence requires `iat` and an `exp` greater than `iat`.",
           "runtime_validation": null
@@ -275,10 +301,12 @@
           "key_path": "authentication.principalClaim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "The only claim read as the principal, whose absence denies the request; `client_id`, `azp`, request data, and proxy headers are not fallbacks.",
           "runtime_validation": null
@@ -287,10 +315,12 @@
           "key_path": "authentication.requesterTagsClaim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"
+            ]
           ],
           "description": "Names the verified claim whose tag list selects which authority profile can match the request.",
           "runtime_validation": null
@@ -299,11 +329,13 @@
           "key_path": "authentication.revokedKeyIds",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 32",
-            "uniqueItems: true"
+            [
+              "maxItems: 32",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Emergency denylist of issuer key identifiers, checked before cached JWKS key selection so a compromised key is refused even while the cache still holds the key.",
           "runtime_validation": null
@@ -312,12 +344,14 @@
           "key_path": "authentication.revokedKeyIds[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxLength: 256",
-            "minLength: 1",
-            "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+            [
+              "maxLength: 256",
+              "minLength: 1",
+              "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+            ]
           ],
           "description": "One issuer key identifier the verifier refuses, whatever the cached JWKS still holds.",
           "runtime_validation": null
@@ -326,12 +360,14 @@
           "key_path": "authentication.tokenTypes",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 4",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 4",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Allowlist of the exact `typ` value an inbound token's protected JWT header must declare.",
           "runtime_validation": null
@@ -339,8 +375,8 @@
         {
           "key_path": "authentication.tokenTypes[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "application/at+jwt",
             "at+jwt"
@@ -353,11 +389,13 @@
           "key_path": "authorityProfiles",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 128",
-            "minProperties: 1"
+            [
+              "maxProperties: 128",
+              "minProperties: 1"
+            ]
           ],
           "description": "Named authority profiles deciding which requester class may obtain which assertion. Exactly one authority path may match a request, and two paths covering the same requirement, purpose, and subject tuple deny that request rather than failing startup.",
           "runtime_validation": null
@@ -366,9 +404,13 @@
           "key_path": "authorityProfiles.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
           "description": "Everything one requester class may ask for. Access is per requester class rather than per client identity, so two clients carrying the same tags have identical access.",
           "runtime_validation": null
         },
@@ -376,11 +418,13 @@
           "key_path": "authorityProfiles.*.grants",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 128",
-            "minItems: 1"
+            [
+              "maxItems: 128",
+              "minItems: 1"
+            ]
           ],
           "description": "Complete set of authorized paths this requester class has. Permissions are never unioned across grants, so one grant must cover an entire request on its own.",
           "runtime_validation": null
@@ -389,7 +433,7 @@
           "key_path": "authorityProfiles.*.grants[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One authorized path, binding a single requirement, a single purpose, the audience origin, and the referenced requirement's complete subject-role set.",
@@ -398,8 +442,8 @@
         {
           "key_path": "authorityProfiles.*.grants[].audienceFrom",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "authenticated-requester"
           ],
@@ -411,10 +455,12 @@
           "key_path": "authorityProfiles.*.grants[].purpose",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+            ]
           ],
           "description": "The one purpose this path authorizes, matched exactly against the request purpose; a purpose the referenced requirement does not declare fails startup.",
           "runtime_validation": null
@@ -423,11 +469,13 @@
           "key_path": "authorityProfiles.*.grants[].requirement",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "The one requirement this path authorizes, named by its exact requirement URI; a requirement no bundle entry declares fails startup.",
           "runtime_validation": null
@@ -436,12 +484,14 @@
           "key_path": "authorityProfiles.*.grants[].responseFormats",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 3",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 3",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Serializations this path permits, defaulting to signed JWS alone when omitted. Unsigned and SD-JWT VC output each require both the bundle-level `responseFormats` and the one matched grant to permit them.",
           "runtime_validation": null
@@ -449,8 +499,8 @@
         {
           "key_path": "authorityProfiles.*.grants[].responseFormats[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "sd-jwt-vc",
             "signed-jws",
@@ -464,11 +514,13 @@
           "key_path": "authorityProfiles.*.grants[].subjects",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 8",
-            "minItems: 1"
+            [
+              "maxItems: 8",
+              "minItems: 1"
+            ]
           ],
           "description": "Authorization for the referenced requirement's complete subject-role set; a grant that omits a declared role, or repeats one, fails startup.",
           "runtime_validation": null
@@ -477,7 +529,7 @@
           "key_path": "authorityProfiles.*.grants[].subjects[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "Authorization for one subject role, fixing which selector profile identifies the subject and where that subject's selector values may originate.",
@@ -487,10 +539,12 @@
           "key_path": "authorityProfiles.*.grants[].subjects[].role",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Names the requirement subject role this authorization covers; a role the requirement's `subjectRoles` does not declare fails startup, and no role may appear twice in one grant.",
           "runtime_validation": null
@@ -499,10 +553,12 @@
           "key_path": "authorityProfiles.*.grants[].subjects[].selectorProfile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "The selector profile whose field set identifies this role's subject; a profile the requirement's `subjectRoles` entry does not permit for the role fails startup.",
           "runtime_validation": null
@@ -511,11 +567,13 @@
           "key_path": "authorityProfiles.*.grants[].subjects[].valueClaims",
           "kind": "property",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxProperties: 16",
-            "minProperties: 1"
+            [
+              "maxProperties: 16",
+              "minProperties: 1"
+            ]
           ],
           "description": "Maps every field of the named selector profile to the claim path in the verified access token that supplies that field's value. Missing, extra, duplicate-target, or invalid claim paths fail startup.",
           "runtime_validation": null
@@ -524,10 +582,13 @@
           "key_path": "authorityProfiles.*.grants[].subjects[].valueClaims.*",
           "kind": "map_value",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*$"
+            [
+              "pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*$",
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
           ],
           "description": "Claim path resolved only from the strictly verified access token, so a caller-supplied selector, grant reference, or approval value cannot supply the field.",
           "runtime_validation": null
@@ -535,8 +596,8 @@
         {
           "key_path": "authorityProfiles.*.grants[].subjects[].valueOrigin",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "authenticated-context",
             "authenticated-grant",
@@ -549,8 +610,8 @@
         {
           "key_path": "authorityProfiles.*.kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "consent",
             "delegated",
@@ -566,12 +627,14 @@
           "key_path": "authorityProfiles.*.requesterTags",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 32",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 32",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Complete tag set the claim named by `authentication.requesterTagsClaim` must contain for this profile to match, so adding a tag narrows the profile rather than widening it.",
           "runtime_validation": null
@@ -580,10 +643,12 @@
           "key_path": "authorityProfiles.*.requesterTags[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "One tag that must be present in the verified claim; differentiated requirements, purposes, or `valueClaims` are expressed by issuing different tags rather than by naming individual clients.",
           "runtime_validation": null
@@ -592,7 +657,7 @@
           "key_path": "issuer",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Carries the legal issuer identity placed in every assertion, kept separate from the technical provider that operates the process and signs.",
@@ -602,11 +667,13 @@
           "key_path": "issuer.id",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Legal issuer URI placed in every assertion as `issuedBy`, and governance must authorize the provider named in `service.providerId` to act for that issuer.",
           "runtime_validation": null
@@ -615,7 +682,7 @@
           "key_path": "rateLimits",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Governs the anti-enumeration budget for authenticated callers, counted against scoped pseudonyms of the principal and the authority rather than against any raw selector value.",
@@ -625,11 +692,13 @@
           "key_path": "rateLimits.burstPerPrincipal",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 100000",
-            "minimum: 1"
+            [
+              "maximum: 100000",
+              "minimum: 1"
+            ]
           ],
           "description": "Capacity of one principal's request bucket, bounding how many requests may arrive back to back before `requestsPerPrincipalPerMinute` governs the pace.",
           "runtime_validation": null
@@ -638,11 +707,13 @@
           "key_path": "rateLimits.failedSelectorAttemptsPerPrincipalAuthorityPerMinute",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 100000",
-            "minimum: 1"
+            [
+              "maximum: 100000",
+              "minimum: 1"
+            ]
           ],
           "description": "Budget for selector-resolution failures, checked before source access and consumed only when selector validation itself fails, so repeated probing is refused before it reaches a source.",
           "runtime_validation": null
@@ -651,11 +722,13 @@
           "key_path": "rateLimits.requestsPerPrincipalPerMinute",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 1000000",
-            "minimum: 1"
+            [
+              "maximum: 1000000",
+              "minimum: 1"
+            ]
           ],
           "description": "Rate at which one principal's request budget refills, spread continuously across the minute rather than granted in full at its start.",
           "runtime_validation": null
@@ -664,11 +737,13 @@
           "key_path": "requirements",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 128",
-            "minItems: 1"
+            [
+              "maxItems: 128",
+              "minItems: 1"
+            ]
           ],
           "description": "Requirement identifiers and Evidence Type URIs must each be unique across every entry; a repeat of either rejects the whole bundle at startup.",
           "runtime_validation": null
@@ -677,7 +752,7 @@
           "key_path": "requirements[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One independently versioned evidence definition; its configuration revision spans only this requirement's own configuration and artifact closure, letting a relying party pin this requirement without depending on the rest of the deployment.",
@@ -687,7 +762,7 @@
           "key_path": "requirements[].acquisition",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Fixes this requirement's complete source-request shape to one call over a single source, or to a fixed sequence of calls named here; no response content chooses a different source or an additional call.",
@@ -697,12 +772,16 @@
           "key_path": "requirements[].acquisition.fetch",
           "kind": "property",
           "type": "array | string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxItems: 4",
-            "minItems: 2",
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ],
+            [
+              "maxItems: 4",
+              "minItems: 2"
+            ]
           ],
           "description": "Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`; the fixed second-stage source, or the ordered array of member sources, invoked after the search resolves and never chosen from response content.",
           "runtime_validation": null
@@ -711,7 +790,7 @@
           "key_path": "requirements[].acquisition.fetch[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [],
           "description": "One declared fetch member of a `search-then-fetch-set` acquisition, called in the order the array declares and reached only after the search resolves to a unique schema-valid match. Members must be distinct from each other and from the search source.",
@@ -721,12 +800,14 @@
           "key_path": "requirements[].acquisition.fetch[].factInputs",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Allowlist of validated search facts this member receives, and the only search-derived data reaching it through any channel, including the body its preparation builds.",
           "runtime_validation": null
@@ -735,10 +816,12 @@
           "key_path": "requirements[].acquisition.fetch[].factInputs[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
           ],
           "description": "One search fact name this member is permitted to read, which the search source's fact schema must require or the bundle is rejected at startup.",
           "runtime_validation": null
@@ -747,10 +830,12 @@
           "key_path": "requirements[].acquisition.fetch[].source",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "The one configured source this member calls, fixed by the bundle like every other acquisition source.",
           "runtime_validation": null
@@ -758,8 +843,8 @@
         {
           "key_path": "requirements[].acquisition.kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "search-then-fetch",
             "search-then-fetch-set",
@@ -773,11 +858,13 @@
           "key_path": "requirements[].acquisition.maximumAcquisitionMilliseconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 30000",
-            "minimum: 1"
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
           ],
           "description": "Ceiling on the whole acquisition, covering the search, every declared member, and the transitions between stages; exceeding it fails the requirement as a dependency failure and never cancels a durable audit append.",
           "runtime_validation": null
@@ -786,10 +873,12 @@
           "key_path": "requirements[].acquisition.search",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`; names the first-stage source, and the runtime aborts before the fetch stage unless this call resolves to exactly one match.",
           "runtime_validation": null
@@ -798,10 +887,12 @@
           "key_path": "requirements[].acquisition.source",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Read only when `acquisition.kind` is `single`; the one configured source this requirement queries in its single fixed call.",
           "runtime_validation": null
@@ -810,11 +901,13 @@
           "key_path": "requirements[].concepts",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1"
+            [
+              "maxItems: 16",
+              "minItems: 1"
+            ]
           ],
           "description": "Declares the complete, closed set of values this requirement's assertion may disclose; a value the derivation produces under an identifier absent from this list fails evaluation instead of being disclosed.",
           "runtime_validation": null
@@ -823,7 +916,7 @@
           "key_path": "requirements[].concepts[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One value the requirement may disclose, corresponding to exactly one `cccev:InformationConcept`, and becoming one entry of the assertion's supported values when the derivation produces that value.",
@@ -833,10 +926,12 @@
           "key_path": "requirements[].concepts[].constraints",
           "kind": "property",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxProperties: 0"
+            [
+              "maxProperties: 0"
+            ]
           ],
           "description": "Closed, form-specific bounds a derived value must satisfy before it is accepted into evidence; which keys apply is fixed entirely by the concept's `form`.",
           "runtime_validation": null
@@ -845,11 +940,13 @@
           "key_path": "requirements[].concepts[].constraints.bucketScheme",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "URI naming the reviewed bucket scheme for a `date-bucket` or `time-bucket` concept; paired with `schemeVersion`, `bucketScheme` resolves to exactly one codelist artifact, so only the matched bucket code is disclosed and the underlying date, instant, or duration never appears in the assertion.",
           "runtime_validation": null
@@ -858,11 +955,13 @@
           "key_path": "requirements[].concepts[].constraints.categoryScheme",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "URI naming the reviewed category vocabulary a `controlled-category` concept's value must belong to; matched against `schemeVersion` and `codelist` at startup, it enforces exact category membership and rejects any unreviewed category.",
           "runtime_validation": null
@@ -871,10 +970,12 @@
           "key_path": "requirements[].concepts[].constraints.codelist",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative path to the closed codelist artifact whose entries fix exact membership for `controlled-code`, `controlled-category`, and `controlled-code-list` concepts, validated at startup.",
           "runtime_validation": null
@@ -883,11 +984,13 @@
           "key_path": "requirements[].concepts[].constraints.codelistVersion",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 128",
-            "minLength: 1"
+            [
+              "maxLength: 128",
+              "minLength: 1"
+            ]
           ],
           "description": "Version tag paired with `codelist` for `controlled-code` and `controlled-code-list` concepts that must exactly equal the referenced codelist artifact's own declared version, or the bundle fails to load.",
           "runtime_validation": null
@@ -896,12 +999,16 @@
           "key_path": "requirements[].concepts[].constraints.maximum",
           "kind": "property",
           "type": "integer | string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 9007199254740991",
-            "minimum: -9007199254740991",
-            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            [
+              "maximum: 9007199254740991",
+              "minimum: -9007199254740991"
+            ],
+            [
+              "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            ]
           ],
           "description": "Inclusive upper bound paired with `minimum` for `bounded-integer` and `bounded-decimal` concepts; a derived value over it fails evaluation instead of being disclosed.",
           "runtime_validation": null
@@ -910,11 +1017,13 @@
           "key_path": "requirements[].concepts[].constraints.maximumBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 8192",
-            "minimum: 1"
+            [
+              "maximum: 8192",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the disclosed byte length of a `controlled-code`, `controlled-category`, or `audience-scoped-entity-reference` concept's value; a value or projected reference longer than the cap fails validation instead of being truncated.",
           "runtime_validation": null
@@ -923,11 +1032,13 @@
           "key_path": "requirements[].concepts[].constraints.maximumItems",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 64",
-            "minimum: 1"
+            [
+              "maximum: 64",
+              "minimum: 1"
+            ]
           ],
           "description": "Inclusive upper bound paired with `minimumItems` on how many items a `controlled-code-list` or `entity-reference-list` concept discloses; a longer derived list fails validation.",
           "runtime_validation": null
@@ -936,11 +1047,13 @@
           "key_path": "requirements[].concepts[].constraints.maximumScale",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 9",
-            "minimum: 0"
+            [
+              "maximum: 9",
+              "minimum: 0"
+            ]
           ],
           "description": "Upper bound on the number of fractional digits accepted for a `bounded-decimal` concept's derived value; a finer scale fails validation instead of being rounded.",
           "runtime_validation": null
@@ -949,11 +1062,13 @@
           "key_path": "requirements[].concepts[].constraints.maximumSerializedBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 65536",
-            "minimum: 1"
+            [
+              "maximum: 65536",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the serialized JSON byte length of a `reviewed-structured-value` concept's entire disclosed object; an oversized derived value fails validation before signing.",
           "runtime_validation": null
@@ -962,12 +1077,16 @@
           "key_path": "requirements[].concepts[].constraints.minimum",
           "kind": "property",
           "type": "integer | string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 9007199254740991",
-            "minimum: -9007199254740991",
-            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            [
+              "maximum: 9007199254740991",
+              "minimum: -9007199254740991"
+            ],
+            [
+              "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            ]
           ],
           "description": "Inclusive lower bound paired with `maximum` for `bounded-integer` and `bounded-decimal` concepts; a derived value under it fails evaluation instead of being disclosed.",
           "runtime_validation": null
@@ -976,11 +1095,13 @@
           "key_path": "requirements[].concepts[].constraints.minimumItems",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 64",
-            "minimum: 1"
+            [
+              "maximum: 64",
+              "minimum: 1"
+            ]
           ],
           "description": "Inclusive lower bound paired with `maximumItems` on how many items a `controlled-code-list` or `entity-reference-list` concept discloses; a shorter derived list fails validation.",
           "runtime_validation": null
@@ -989,11 +1110,13 @@
           "key_path": "requirements[].concepts[].constraints.schema",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "URI resolving to exactly one closed JSON Schema artifact in the immutable bundle that a `reviewed-structured-value` concept's fields are validated against; the schema closes every property, so unexpected or additional JSON in the derived value fails validation.",
           "runtime_validation": null
@@ -1002,11 +1125,13 @@
           "key_path": "requirements[].concepts[].constraints.schemeVersion",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 128",
-            "minLength: 1"
+            [
+              "maxLength: 128",
+              "minLength: 1"
+            ]
           ],
           "description": "Version tag that must exactly equal a referenced codelist artifact's own declared version at startup; pairs with `categoryScheme` for `controlled-category` concepts and with `bucketScheme` for `date-bucket` and `time-bucket` concepts.",
           "runtime_validation": null
@@ -1014,8 +1139,8 @@
         {
           "key_path": "requirements[].concepts[].constraints.unique",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "boolean",
+          "required": "conditional",
           "values": [
             "true"
           ],
@@ -1026,8 +1151,8 @@
         {
           "key_path": "requirements[].concepts[].form",
           "kind": "property",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "audience-scoped-entity-reference",
             "boolean",
@@ -1049,11 +1174,13 @@
           "key_path": "requirements[].concepts[].id",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Stable identifier that names this concept as `providesValueFor` in the assertion and, unless an `sdJwtVc.claim` override is declared, is also the concept's claim name in the SD-JWT VC serialization.",
           "runtime_validation": null
@@ -1062,7 +1189,7 @@
           "key_path": "requirements[].concepts[].required",
           "kind": "property",
           "type": "boolean",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Whether the derivation must produce a value for this concept; a missing required concept fails the whole evaluation, and a missing optional concept is left out of the disclosed supported values.",
@@ -1072,7 +1199,7 @@
           "key_path": "requirements[].concepts[].sdJwtVc",
           "kind": "property",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "Optional per-concept projection that the concept declaration may set only for `reviewed-structured-value` concepts, selecting how that structured value's fields are exposed as SD-JWT VC disclosures.",
@@ -1082,10 +1209,12 @@
           "key_path": "requirements[].concepts[].sdJwtVc.claim",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            [
+              "pattern: ^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            ]
           ],
           "description": "Public claim name substituted for the concept identifier in the SD-JWT VC response; it must be unique within the requirement and cannot collide with a profile-owned claim.",
           "runtime_validation": null
@@ -1093,8 +1222,8 @@
         {
           "key_path": "requirements[].concepts[].sdJwtVc.disclosure",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "top-level"
           ],
@@ -1106,7 +1235,7 @@
           "key_path": "requirements[].derivation",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Determines which Rhai script computes the requirement's concept values as `derive/3`, and what minimized selector inputs and closed typed parameters that script is allowed to see.",
@@ -1116,10 +1245,12 @@
           "key_path": "requirements[].derivation.parameters",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 32"
+            [
+              "maxProperties: 32"
+            ]
           ],
           "description": "Closed set of adopter-named parameter values available to the requirement's derivation; the map cannot carry secrets or runtime authority.",
           "runtime_validation": null
@@ -1128,14 +1259,20 @@
           "key_path": "requirements[].derivation.parameters.*",
           "kind": "map_value",
           "type": "array | boolean | integer | object | string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 64",
-            "maxLength: 1024",
-            "maximum: 9007199254740991",
-            "minItems: 1",
-            "minimum: -9007199254740991"
+            [
+              "maxLength: 1024"
+            ],
+            [
+              "maximum: 9007199254740991",
+              "minimum: -9007199254740991"
+            ],
+            [
+              "maxItems: 64",
+              "minItems: 1"
+            ]
           ],
           "description": "One named parameter's value, closed to a bounded string, a safe integer, a boolean, one typed canonical decimal, or a bounded array of decimal bucket boundaries whose own bounds reuse that same typed-decimal shape.",
           "runtime_validation": null
@@ -1143,8 +1280,8 @@
         {
           "key_path": "requirements[].derivation.parameters.*.type",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "conditional",
           "values": [
             "decimal"
           ],
@@ -1156,10 +1293,12 @@
           "key_path": "requirements[].derivation.parameters.*.value",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            [
+              "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            ]
           ],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
           "runtime_validation": null
@@ -1168,7 +1307,7 @@
           "key_path": "requirements[].derivation.parameters.*[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [],
           "description": "One decimal bucket boundary in an ordered array parameter, evaluated by the `bucket_number` primitive to classify a derived decimal into the matching boundary's code; each lower bound must equal the previous boundary's upper bound, and a gap fails validation at startup.",
@@ -1178,10 +1317,12 @@
           "key_path": "requirements[].derivation.parameters.*[].code",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            [
+              "pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            ]
           ],
           "description": "Output code returned when a derived decimal falls inside this boundary's interval; duplicate codes across the array fail validation at startup.",
           "runtime_validation": null
@@ -1190,7 +1331,7 @@
           "key_path": "requirements[].derivation.parameters.*[].maximumExclusive",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [],
           "description": "Exclusive upper bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
@@ -1199,8 +1340,8 @@
         {
           "key_path": "requirements[].derivation.parameters.*[].maximumExclusive.type",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "conditional",
           "values": [
             "decimal"
           ],
@@ -1212,10 +1353,12 @@
           "key_path": "requirements[].derivation.parameters.*[].maximumExclusive.value",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            [
+              "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            ]
           ],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
           "runtime_validation": null
@@ -1224,7 +1367,7 @@
           "key_path": "requirements[].derivation.parameters.*[].minimumInclusive",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [],
           "description": "Inclusive lower bound of this boundary's half-open interval, expressed with the same typed-decimal shape as a scalar parameter value.",
@@ -1233,8 +1376,8 @@
         {
           "key_path": "requirements[].derivation.parameters.*[].minimumInclusive.type",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "conditional",
           "values": [
             "decimal"
           ],
@@ -1246,10 +1389,12 @@
           "key_path": "requirements[].derivation.parameters.*[].minimumInclusive.value",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            [
+              "pattern: ^-?(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$"
+            ]
           ],
           "description": "Canonical decimal text of the typed-decimal form, restricted to exact finite decimal text with no exponent, no leading zero, and no trailing fractional zero.",
           "runtime_validation": null
@@ -1258,10 +1403,12 @@
           "key_path": "requirements[].derivation.script",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative Rhai script compiled at startup to expose the requirement's `derive/3` entry point before the runtime reaches readiness.",
           "runtime_validation": null
@@ -1270,10 +1417,12 @@
           "key_path": "requirements[].derivation.selectorInputs",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 8"
+            [
+              "maxItems: 8"
+            ]
           ],
           "description": "Optional closed set of authorized selector roles the derivation may read; omission means `derive/3` receives an empty selector map.",
           "runtime_validation": null
@@ -1282,7 +1431,7 @@
           "key_path": "requirements[].derivation.selectorInputs[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "Declares one subject role the derivation may read, together with the closed profile alternatives permitted for that role; only the alternative matching the authorized request subject reaches `derive/3`.",
@@ -1292,11 +1441,13 @@
           "key_path": "requirements[].derivation.selectorInputs[].alternatives",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1"
+            [
+              "maxItems: 16",
+              "minItems: 1"
+            ]
           ],
           "description": "Closed set of profile and field combinations permitted for the role; the runtime materializes only the combination the matched authority grant carries, never the union of every alternative declared.",
           "runtime_validation": null
@@ -1305,7 +1456,7 @@
           "key_path": "requirements[].derivation.selectorInputs[].alternatives[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
@@ -1315,12 +1466,14 @@
           "key_path": "requirements[].derivation.selectorInputs[].alternatives[].fields",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Exact subset of the named profile's declared fields this alternative exposes, which is how a consumer is handed less than the authorized selector carries.",
           "runtime_validation": null
@@ -1329,10 +1482,12 @@
           "key_path": "requirements[].derivation.selectorInputs[].alternatives[].fields[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
           ],
           "description": "One selector field name, which the named profile must declare or the bundle is rejected at startup.",
           "runtime_validation": null
@@ -1341,10 +1496,12 @@
           "key_path": "requirements[].derivation.selectorInputs[].alternatives[].profile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Selector profile this alternative admits for the role; a profile absent from `selectorProfiles` is rejected at startup.",
           "runtime_validation": null
@@ -1353,10 +1510,12 @@
           "key_path": "requirements[].derivation.selectorInputs[].role",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Subject role this selector input covers, unique across the declaration; the runtime resolves request subjects by role rather than by array position.",
           "runtime_validation": null
@@ -1365,7 +1524,7 @@
           "key_path": "requirements[].disclosureGuard",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Binds this requirement's release to the reviewed disclosure families a human combined-disclosure review has already assessed.",
@@ -1375,12 +1534,14 @@
           "key_path": "requirements[].disclosureGuard.families",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Non-empty set of those reviewed family URIs; sharing even one family with another enabled requirement rejects the whole bundle at startup.",
           "runtime_validation": null
@@ -1389,11 +1550,13 @@
           "key_path": "requirements[].disclosureGuard.families[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "One reviewed disclosure-family URI; this exact value, not what it represents, is what the startup check compares for reuse across requirements.",
           "runtime_validation": null
@@ -1402,11 +1565,13 @@
           "key_path": "requirements[].evidenceType",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Exact Evidence Type URI placed in every assertion issued for this requirement; it must be unique across the bundle, and a duplicate rejects the bundle at startup.",
           "runtime_validation": null
@@ -1414,8 +1579,8 @@
         {
           "key_path": "requirements[].existenceDisclosure",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "collapse-unresolved"
           ],
@@ -1427,10 +1592,12 @@
           "key_path": "requirements[].fixtures",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative path to this requirement's sanitized fixture suite; omitting it is accepted only under `assuranceProfile: local`, and `production` or `evidence-grade` refuse to load without it and its complete case coverage.",
           "runtime_validation": null
@@ -1439,11 +1606,13 @@
           "key_path": "requirements[].id",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Stable requirement URI a public request names to select this requirement; the runtime looks up requirements by this exact value and no other.",
           "runtime_validation": null
@@ -1451,8 +1620,8 @@
         {
           "key_path": "requirements[].kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "constraint",
             "criterion",
@@ -1466,11 +1635,13 @@
           "key_path": "requirements[].observationTimezone",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxLength: 128",
-            "minLength: 1"
+            [
+              "maxLength: 128",
+              "minLength: 1"
+            ]
           ],
           "description": "IANA timezone resolving `legal_local_date` and `legal_local_time` from the runtime-supplied `observed_at` instant; an unrecognized name fails validation, and omitting the field resolves both values in UTC instead.",
           "runtime_validation": null
@@ -1479,12 +1650,14 @@
           "key_path": "requirements[].purposes",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 32",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 32",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Closed set of purpose codes this requirement can be requested under; an authority-profile grant must bind one of them together with a role and selector profile, or that combination has no authority path and the bundle fails to load.",
           "runtime_validation": null
@@ -1493,10 +1666,12 @@
           "key_path": "requirements[].purposes[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._:-]{0,127}$"
+            ]
           ],
           "description": "One purpose code eligible for this requirement; an authority-profile grant must name this exact code before a request under it is authorized.",
           "runtime_validation": null
@@ -1505,12 +1680,14 @@
           "key_path": "requirements[].referenceFrameworks",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Governed legal or procedural framework URIs carried as a whole into every assertion issued for this requirement.",
           "runtime_validation": null
@@ -1519,11 +1696,13 @@
           "key_path": "requirements[].referenceFrameworks[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "One governed framework URI in that set, copied unchanged into the assertion alongside its siblings; the runtime does not select or rank among them.",
           "runtime_validation": null
@@ -1532,11 +1711,13 @@
           "key_path": "requirements[].subjectRoles",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 8",
-            "minItems: 1"
+            [
+              "maxItems: 8",
+              "minItems: 1"
+            ]
           ],
           "description": "Complete set of subject positions this requirement resolves; incoming request array order carries no meaning, and resolved subjects are always canonicalized to this array's declaration order before signing.",
           "runtime_validation": null
@@ -1545,7 +1726,7 @@
           "key_path": "requirements[].subjectRoles[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One subject position this requirement resolves; a request supplying a different number of subjects, a duplicate role, or a role this requirement does not declare is unauthorized.",
@@ -1554,8 +1735,8 @@
         {
           "key_path": "requirements[].subjectRoles[].cardinality",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "one"
           ],
@@ -1567,10 +1748,12 @@
           "key_path": "requirements[].subjectRoles[].role",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Deployment-chosen identifier distinguishing this subject position from the requirement's others; requests, grants, and derivation inputs all address the position by this exact value, never by array position.",
           "runtime_validation": null
@@ -1579,12 +1762,14 @@
           "key_path": "requirements[].subjectRoles[].selectorProfiles",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Selector profiles permitted for this subject position; every one of them must be reachable by some authority-profile grant for every code in `purposes`, or the bundle fails to load.",
           "runtime_validation": null
@@ -1593,10 +1778,12 @@
           "key_path": "requirements[].subjectRoles[].selectorProfiles[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "One selector profile id permitted for this position; it must name an entry in the bundle's `selectorProfiles` map, or the bundle fails to load.",
           "runtime_validation": null
@@ -1605,11 +1792,13 @@
           "key_path": "requirements[].validitySeconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 31536000",
-            "minimum: 1"
+            [
+              "maximum: 31536000",
+              "minimum: 1"
+            ]
           ],
           "description": "Sets the assertion's validity window measured from `issuedAt`; the bundle fails to load if this exceeds `signing.maximumAssertionValiditySeconds`.",
           "runtime_validation": null
@@ -1618,12 +1807,14 @@
           "key_path": "responseFormats",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 3",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 3",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Sets the deployment-wide ceiling of response serializations, and omission means `[signed-jws]`. A bundle that drops signed JWS is rejected at startup, and every other listed format additionally requires the one matched grant's `authorityProfiles.*.grants[].responseFormats` to permit that format.",
           "runtime_validation": null
@@ -1631,8 +1822,8 @@
         {
           "key_path": "responseFormats[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "sd-jwt-vc",
             "signed-jws",
@@ -1646,11 +1837,13 @@
           "key_path": "selectorProfiles",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 128",
-            "minProperties: 1"
+            [
+              "maxProperties: 128",
+              "minProperties: 1"
+            ]
           ],
           "description": "Named registry of selector profiles that requirement subject roles and authority-grant subjects reference by id; an id absent from the map fails validation before startup.",
           "runtime_validation": null
@@ -1659,9 +1852,13 @@
           "key_path": "selectorProfiles.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
           "description": "One named, closed profile of deployment-defined fields and their combined byte bound; a profile is not an identity type, and possession of its field values does not by itself grant authority.",
           "runtime_validation": null
         },
@@ -1669,11 +1866,13 @@
           "key_path": "selectorProfiles.*.fields",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 16",
-            "minProperties: 1"
+            [
+              "maxProperties: 16",
+              "minProperties: 1"
+            ]
           ],
           "description": "Closed map of the profile's field declarations, keyed by adopter-chosen names that are opaque to Rust and carry no meaning of their own.",
           "runtime_validation": null
@@ -1682,9 +1881,13 @@
           "key_path": "selectorProfiles.*.fields.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
+          ],
           "description": "One field's exact declaration: Rust matches a supplied value against it verbatim, performing no case folding, normalization, transliteration, tokenization, partial-date matching, or fuzzy scoring.",
           "runtime_validation": null
         },
@@ -1692,10 +1895,12 @@
           "key_path": "selectorProfiles.*.fields.*.codelist",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Path to the bundled codelist artifact a `controlled-code` value must belong to; a missing referenced artifact fails bundle loading.",
           "runtime_validation": null
@@ -1704,11 +1909,13 @@
           "key_path": "selectorProfiles.*.fields.*.codelistVersion",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 128",
-            "minLength: 1"
+            [
+              "maxLength: 128",
+              "minLength: 1"
+            ]
           ],
           "description": "Version this field's `controlled-code` values are pinned to; it must equal the referenced codelist artifact's own version or bundle loading fails.",
           "runtime_validation": null
@@ -1717,11 +1924,13 @@
           "key_path": "selectorProfiles.*.fields.*.maximum",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 9007199254740991",
-            "minimum: -9007199254740991"
+            [
+              "maximum: 9007199254740991",
+              "minimum: -9007199254740991"
+            ]
           ],
           "description": "Inclusive upper bound on this field's accepted integer selector value; a submitted value greater than this bound is rejected rather than clamped.",
           "runtime_validation": null
@@ -1730,11 +1939,13 @@
           "key_path": "selectorProfiles.*.fields.*.maximumBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 8192",
-            "minimum: 1"
+            [
+              "maximum: 8192",
+              "minimum: 1"
+            ]
           ],
           "description": "Inclusive upper bound, in UTF-8 bytes, on this field's accepted string or `controlled-code` value; it cannot exceed the profile's `maximumAggregateBytes`.",
           "runtime_validation": null
@@ -1743,11 +1954,13 @@
           "key_path": "selectorProfiles.*.fields.*.minimum",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 9007199254740991",
-            "minimum: -9007199254740991"
+            [
+              "maximum: 9007199254740991",
+              "minimum: -9007199254740991"
+            ]
           ],
           "description": "Inclusive lower bound on this field's accepted integer selector value; a submitted value less than this bound is rejected rather than clamped.",
           "runtime_validation": null
@@ -1756,11 +1969,13 @@
           "key_path": "selectorProfiles.*.fields.*.minimumBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 8192",
-            "minimum: 1"
+            [
+              "maximum: 8192",
+              "minimum: 1"
+            ]
           ],
           "description": "Inclusive lower bound, in UTF-8 bytes, on this field's accepted string value; it cannot exceed the field's own `maximumBytes`.",
           "runtime_validation": null
@@ -1768,8 +1983,8 @@
         {
           "key_path": "selectorProfiles.*.fields.*.type",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "boolean",
             "controlled-code",
@@ -1785,11 +2000,13 @@
           "key_path": "selectorProfiles.*.maximumAggregateBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 8192",
-            "minimum: 1"
+            [
+              "maximum: 8192",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the summed canonical byte size of every field value resolved for one authorized use of the profile; exceeding it denies the request.",
           "runtime_validation": null
@@ -1798,7 +2015,7 @@
           "key_path": "service",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Carries the identity this deployment asserts under: the technical Evidence provider identity placed in evidence and the operator-controlled trust domain of the process.",
@@ -1808,11 +2025,13 @@
           "key_path": "service.providerId",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Technical provider URI placed in every assertion as `providedBy`. Enabling `sd-jwt-vc` outside local assurance requires this value to be the stable HTTPS origin of the deployment, because issuer metadata and the published JWKS URI are derived from that origin.",
           "runtime_validation": null
@@ -1821,11 +2040,13 @@
           "key_path": "service.trustDomain",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "format: uri",
-            "maxLength: 512"
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
           ],
           "description": "Scopes the process to one operator-controlled trust domain, whose URI is bound into subject bindings and into requester pseudonym scope, so the same subject yields different pseudonyms under a different trust domain.",
           "runtime_validation": null
@@ -1834,7 +2055,7 @@
           "key_path": "signing",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Governs signature format, active and published key selection, key retirement, and assertion validity; missing signing material fails readiness and no unsigned fallback exists.",
@@ -1844,10 +2065,12 @@
           "key_path": "signing.activePublicJwkFile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+            [
+              "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+            ]
           ],
           "description": "Names the bundle-held public JWK the runtime signer's key must equal exactly, proven by one sign-and-verify test before readiness.",
           "runtime_validation": null
@@ -1855,8 +2078,8 @@
         {
           "key_path": "signing.algorithm",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "ES256"
           ],
@@ -1867,8 +2090,8 @@
         {
           "key_path": "signing.format",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "flattened-jws-json"
           ],
@@ -1879,8 +2102,8 @@
         {
           "key_path": "signing.jwksPath",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "/.well-known/evidence/jwks.json"
           ],
@@ -1892,11 +2115,13 @@
           "key_path": "signing.maximumAssertionValiditySeconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 31536000",
-            "minimum: 1"
+            [
+              "maximum: 31536000",
+              "minimum: 1"
+            ]
           ],
           "description": "Ceiling every `requirements[].validitySeconds` must stay within, and the base of the window a retired public key stays published.",
           "runtime_validation": null
@@ -1905,11 +2130,13 @@
           "key_path": "signing.publishedPublicJwkFiles",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 32",
-            "uniqueItems: true"
+            [
+              "maxItems: 32",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Retains predecessor public keys in the served key set so assertions signed before a rollover still verify, for at least the maximum assertion validity plus the verifier clock skew.",
           "runtime_validation": null
@@ -1918,10 +2145,12 @@
           "key_path": "signing.publishedPublicJwkFiles[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+            [
+              "pattern: ^public-keys/[A-Za-z0-9._-]+\\.jwk\\.json$"
+            ]
           ],
           "description": "One retained public key served beside the active key; an entry that repeats the active key or names a revoked identifier is rejected at startup.",
           "runtime_validation": null
@@ -1930,11 +2159,13 @@
           "key_path": "signing.revokedKeyIds",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 33",
-            "uniqueItems: true"
+            [
+              "maxItems: 33",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Emergency denylist: a listed identifier is excluded from the active set, the published set, and the served key set, and a verifier rejects that identifier before selecting a pinned public key.",
           "runtime_validation": null
@@ -1943,10 +2174,12 @@
           "key_path": "signing.revokedKeyIds[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            [
+              "pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            ]
           ],
           "description": "One denied service key, named by its RFC 7638 thumbprint rather than by a provider-assigned key name.",
           "runtime_validation": null
@@ -1955,11 +2188,13 @@
           "key_path": "signing.verifierClockSkewSeconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 300",
-            "minimum: 0"
+            [
+              "maximum: 300",
+              "minimum: 0"
+            ]
           ],
           "description": "Skew a relying party applies when checking current validity, and the margin added to the maximum assertion validity before a retired public key may be removed.",
           "runtime_validation": null
@@ -1968,11 +2203,13 @@
           "key_path": "sources",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 128",
-            "minProperties: 1"
+            [
+              "maxProperties: 128",
+              "minProperties: 1"
+            ]
           ],
           "description": "Complete map of fixed sources a requirement can reference by id in its `acquisition` field, fixed at startup and immune to override by `runtime.yaml`.",
           "runtime_validation": null
@@ -1981,9 +2218,13 @@
           "key_path": "sources.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
           "description": "One fixed source referenced by this map key from a requirement's `acquisition` field, combining a fixed origin, transport, and minimization posture with the extraction script and schemas that turn the source's response into facts.",
           "runtime_validation": null
         },
@@ -1991,7 +2232,7 @@
           "key_path": "sources.*.authentication",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "One closed credential profile the runtime presents on this source's outbound calls, distinct from the inbound caller policy at the bundle's top-level `authentication`. Reference members name secrets that resolve only after authorization, durable access audit, and request-parts validation, and no secret reaches a script.",
@@ -2001,11 +2242,13 @@
           "key_path": "sources.*.authentication.assumedLifetimeSeconds",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 86400",
-            "minimum: 1"
+            [
+              "maximum: 86400",
+              "minimum: 1"
+            ]
           ],
           "description": "Lifetime credited to an acquired token whose response omits `expires_in`, rather than inferring one from the token. Without this key such a response is a credential failure, and the cached lifetime is still clamped to `maximumCacheSeconds`.",
           "runtime_validation": null
@@ -2014,10 +2257,12 @@
           "key_path": "sources.*.authentication.clientIdRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the client identifier the runtime presents in the client-credentials exchange at `tokenEndpoint`.",
           "runtime_validation": null
@@ -2026,10 +2271,12 @@
           "key_path": "sources.*.authentication.clientSecretRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the client secret the runtime presents at `tokenEndpoint`; the token URL, body, response, and debug output stay redacted, so the resolved value reaches no log.",
           "runtime_validation": null
@@ -2037,8 +2284,8 @@
         {
           "key_path": "sources.*.authentication.credentialPlacement",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "conditional",
           "values": [
             "basic-header",
             "form-body"
@@ -2051,12 +2298,14 @@
           "key_path": "sources.*.authentication.headerName",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 64",
-            "minLength: 1",
-            "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+            [
+              "maxLength: 64",
+              "minLength: 1",
+              "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+            ]
           ],
           "description": "Names the header carrying this source's API-key value. The name is validated as an HTTP field name and rejected when it collides with authentication, routing, framing, cookie, forwarding, proxy, tracing, or hop-by-hop headers.",
           "runtime_validation": null
@@ -2064,8 +2313,8 @@
         {
           "key_path": "sources.*.authentication.kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "basic",
             "none",
@@ -2081,11 +2330,13 @@
           "key_path": "sources.*.authentication.maximumCacheSeconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 86400",
-            "minimum: 0"
+            [
+              "maximum: 86400",
+              "minimum: 0"
+            ]
           ],
           "description": "Bounds how long one acquired token is reused across evidence requests for this source; the cache lifetime is the smaller of this bound and the provider's reported expiry.",
           "runtime_validation": null
@@ -2094,10 +2345,12 @@
           "key_path": "sources.*.authentication.passwordRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the password half of the HTTP Basic credential the runtime encodes into the Authorization header of every request to this source.",
           "runtime_validation": null
@@ -2106,11 +2359,13 @@
           "key_path": "sources.*.authentication.scope",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 1"
+            [
+              "maxLength: 512",
+              "minLength: 1"
+            ]
           ],
           "description": "Fixed scope requested in the client-credentials exchange; a token response reporting a scope other than this one is a credential failure.",
           "runtime_validation": null
@@ -2119,11 +2374,15 @@
           "key_path": "sources.*.authentication.tokenEndpoint",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?/[^?#]*$",
-            "pattern: ^https://[^?#]+$"
+            [
+              "pattern: ^https://[^?#]+$"
+            ],
+            [
+              "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?/[^?#]*$"
+            ]
           ],
           "description": "Fixed endpoint the runtime exchanges client credentials at before calling this source; the exchange is credential bootstrap, never an evidence-data request or a fact source.",
           "runtime_validation": null
@@ -2132,10 +2391,12 @@
           "key_path": "sources.*.authentication.tokenRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the static bearer token the runtime places in the Authorization header of every request to this source.",
           "runtime_validation": null
@@ -2144,10 +2405,12 @@
           "key_path": "sources.*.authentication.usernameRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the user name half of the HTTP Basic credential the runtime presents to this source.",
           "runtime_validation": null
@@ -2156,10 +2419,12 @@
           "key_path": "sources.*.authentication.valueRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical file-secret reference for the API-key value the runtime places in `headerName`; the resolved value is bounded and rejects control characters, CR, and LF.",
           "runtime_validation": null
@@ -2168,11 +2433,15 @@
           "key_path": "sources.*.baseUrl",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?$",
-            "pattern: ^https://[^/?#]+$"
+            [
+              "pattern: ^https://[^/?#]+$"
+            ],
+            [
+              "pattern: ^http://(127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?$"
+            ]
           ],
           "description": "Fixed HTTPS origin the source's evidence-data requests target, with no path, query, fragment, user information, or runtime substitution. An HTTP numeric-loopback origin is accepted only when `sources.*.authentication.kind` is `none`.",
           "runtime_validation": null
@@ -2181,10 +2450,12 @@
           "key_path": "sources.*.extractScript",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected response and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple records and never turns protocol inconsistency into a closed lookup outcome.",
           "runtime_validation": null
@@ -2193,10 +2464,12 @@
           "key_path": "sources.*.factSchema",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the source sent.",
           "runtime_validation": null
@@ -2204,8 +2477,8 @@
         {
           "key_path": "sources.*.posture",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "field-projected",
             "record-transformed",
@@ -2219,7 +2492,7 @@
           "key_path": "sources.*.request",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "The one fixed evidence-data request plan for this source; a preparation script, a caller, and a source response hold no authority over method, path, headers, redirects, bounds, or request count.",
@@ -2229,10 +2502,12 @@
           "key_path": "sources.*.request.adapterParameters",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 64"
+            [
+              "maxProperties: 64"
+            ]
           ],
           "description": "Closed non-secret constants supplied to both the preparation and the extraction script, rejected at bundle load when they fall outside `adapterParametersSchema`.",
           "runtime_validation": null
@@ -2241,14 +2516,29 @@
           "key_path": "sources.*.request.adapterParameters.*",
           "kind": "map_value",
           "type": "array | boolean | integer | object | string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 256",
-            "maxLength: 16384",
-            "maxProperties: 256",
-            "maximum: 9223372036854776000",
-            "minimum: -9223372036854776000"
+            [
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ],
+            [
+              "maximum: 9223372036854775807",
+              "minimum: -9223372036854775808",
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ],
+            [
+              "maxLength: 16384",
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ],
+            [
+              "maxItems: 256",
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ],
+            [
+              "maxProperties: 256",
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "One constant read by both the preparation and the extraction script, which may itself nest further parameter values.",
           "runtime_validation": null
@@ -2257,9 +2547,13 @@
           "key_path": "sources.*.request.adapterParameters.*.*",
           "kind": "map_value",
           "type": null,
-          "required": false,
+          "required": "conditional",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[A-Za-z_][A-Za-z0-9._-]{0,127}$"
+            ]
+          ],
           "description": "One member of a parameter object, which is a parameter value in turn, so the parameter shape nests rather than flattening.",
           "runtime_validation": null
         },
@@ -2267,7 +2561,7 @@
           "key_path": "sources.*.request.adapterParameters.*[]",
           "kind": "array_item",
           "type": null,
-          "required": false,
+          "required": "conditional",
           "values": null,
           "constraints": [],
           "description": "One element of a parameter array, which is a parameter value in turn, so the parameter shape nests rather than flattening.",
@@ -2277,10 +2571,12 @@
           "key_path": "sources.*.request.adapterParametersSchema",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure.",
           "runtime_validation": null
@@ -2289,11 +2585,13 @@
           "key_path": "sources.*.request.concurrencyLimit",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 256",
-            "minimum: 1"
+            [
+              "maximum: 256",
+              "minimum: 1"
+            ]
           ],
           "description": "Bounds how many evaluations may hold an outbound request to this source at once, and waiting for that admission is bounded by `timeoutMilliseconds`.",
           "runtime_validation": null
@@ -2302,10 +2600,12 @@
           "key_path": "sources.*.request.fixedHeaders",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 32"
+            [
+              "maxItems: 32"
+            ]
           ],
           "description": "Ordered non-secret header constants sent on every request to this source; a script cannot add, remove, or change a header.",
           "runtime_validation": null
@@ -2314,7 +2614,7 @@
           "key_path": "sources.*.request.fixedHeaders[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One constant name and value pair added to every request to this source, in the order declared.",
@@ -2324,12 +2624,14 @@
           "key_path": "sources.*.request.fixedHeaders[].name",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 64",
-            "minLength: 1",
-            "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+            [
+              "maxLength: 64",
+              "minLength: 1",
+              "pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+            ]
           ],
           "description": "Header field name, rejected at startup when it falls in the authentication, host and routing, cookie, body framing, content length or type, connection, forwarding, proxy, or tracing families Rust owns.",
           "runtime_validation": null
@@ -2338,11 +2640,13 @@
           "key_path": "sources.*.request.fixedHeaders[].value",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 4096",
-            "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+            [
+              "maxLength: 4096",
+              "pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+            ]
           ],
           "description": "Constant value sent verbatim, with any control character rejected at startup, which closes header injection through configuration.",
           "runtime_validation": null
@@ -2351,11 +2655,13 @@
           "key_path": "sources.*.request.maximumResponseBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 1048576",
-            "minimum: 1"
+            [
+              "maximum: 1048576",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the response body read from this source before parsing and projection, so an oversized response fails as a transport failure rather than being parsed.",
           "runtime_validation": null
@@ -2363,8 +2669,8 @@
         {
           "key_path": "sources.*.request.method",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "GET",
             "POST"
@@ -2377,10 +2683,12 @@
           "key_path": "sources.*.request.path",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+            [
+              "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+            ]
           ],
           "description": "Fixed normalized absolute path used for every request to this source; a source declares this or `pathTemplate` and never both.",
           "runtime_validation": null
@@ -2389,11 +2697,13 @@
           "key_path": "sources.*.request.pathBindings",
           "kind": "property",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxProperties: 16",
-            "minProperties: 1"
+            [
+              "maxProperties: 16",
+              "minProperties: 1"
+            ]
           ],
           "description": "Supplies each `pathTemplate` placeholder with a Rust-resolved value, and a script chooses neither a binding origin nor a path value.",
           "runtime_validation": null
@@ -2402,9 +2712,13 @@
           "key_path": "sources.*.request.pathBindings.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
+          ],
           "description": "One placeholder's tagged binding, filling exactly one complete path segment from a value Rust has already validated.",
           "runtime_validation": null
         },
@@ -2412,10 +2726,12 @@
           "key_path": "sources.*.request.pathBindings.*.field",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
           ],
           "description": "Names the selector field or prior-fact property whose value fills the placeholder; a value carrying `/`, `\\`, `%`, a control, `.`, or `..` is rejected, which closes path traversal and segment injection.",
           "runtime_validation": null
@@ -2423,8 +2739,8 @@
         {
           "key_path": "sources.*.request.pathBindings.*.from",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "prior-fact",
             "selector"
@@ -2437,10 +2753,12 @@
           "key_path": "sources.*.request.pathBindings.*.profile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Selector profile the bound field belongs to; the same role, profile, and field must also be declared in `selectorInputs`, or the source is rejected at startup.",
           "runtime_validation": null
@@ -2449,10 +2767,12 @@
           "key_path": "sources.*.request.pathBindings.*.role",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Subject role whose authorized selector supplies the value; every selector set the request can activate must carry this role and profile, or plan compilation refuses the source.",
           "runtime_validation": null
@@ -2461,12 +2781,14 @@
           "key_path": "sources.*.request.pathTemplate",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxLength: 2048",
-            "minLength: 2",
-            "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{\\}-]*$"
+            [
+              "maxLength: 2048",
+              "minLength: 2",
+              "pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{\\}-]*$"
+            ]
           ],
           "description": "Fixed absolute path whose placeholders each occupy one complete segment and are expanded by Rust; a template carrying a scheme, authority, query, fragment, empty segment, or dot segment fails startup.",
           "runtime_validation": null
@@ -2475,7 +2797,7 @@
           "key_path": "sources.*.request.preparationLimits",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Channel policy and output bounds Rust applies to the request parts a preparation script returns, all checked before credentials are resolved or the source is contacted.",
@@ -2484,8 +2806,8 @@
         {
           "key_path": "sources.*.request.preparationLimits.jsonBody",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "allowed",
             "forbidden",
@@ -2499,11 +2821,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumCollectionItems",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 256",
-            "minimum: 1"
+            [
+              "maximum: 256",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the entries in each array and object of the prepared JSON body; a body over the cap fails preparation and no request is made.",
           "runtime_validation": null
@@ -2512,11 +2836,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumJsonDepth",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 32",
-            "minimum: 1"
+            [
+              "maximum: 32",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the nesting depth of the prepared JSON body; a deeper body fails preparation and no request is made.",
           "runtime_validation": null
@@ -2525,11 +2851,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumNormalizedBytes",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 65536",
-            "minimum: 1"
+            [
+              "maximum: 65536",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the serialized size of the complete request parts, query pairs and body together, so the outbound request stays bounded whichever channel a script fills.",
           "runtime_validation": null
@@ -2538,11 +2866,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumQueryNameBytes",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 64",
-            "minimum: 1"
+            [
+              "maximum: 64",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the length of each query-pair name a preparation script returns, applied before the pair is percent-encoded.",
           "runtime_validation": null
@@ -2551,11 +2881,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumQueryPairs",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 64",
-            "minimum: 1"
+            [
+              "maximum: 64",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps how many query pairs a preparation script may return, bounding the query string the source receives.",
           "runtime_validation": null
@@ -2564,11 +2896,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumQueryValueBytes",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 4096",
-            "minimum: 1"
+            [
+              "maximum: 4096",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps the length of each query-pair value a preparation script returns, applied before the pair is percent-encoded.",
           "runtime_validation": null
@@ -2577,11 +2911,13 @@
           "key_path": "sources.*.request.preparationLimits.maximumStringBytes",
           "kind": "property",
           "type": "integer",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maximum: 16384",
-            "minimum: 1"
+            [
+              "maximum: 16384",
+              "minimum: 1"
+            ]
           ],
           "description": "Caps every string a preparation script returns, covering query names and values as well as JSON body strings and member names.",
           "runtime_validation": null
@@ -2589,8 +2925,8 @@
         {
           "key_path": "sources.*.request.preparationLimits.query",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "allowed",
             "forbidden",
@@ -2604,10 +2940,12 @@
           "key_path": "sources.*.request.prepareScript",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the minimized authorized selectors, closed parameters, and any prior facts into ordered query pairs and at most one JSON body.",
           "runtime_validation": null
@@ -2616,12 +2954,14 @@
           "key_path": "sources.*.request.projection",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 64",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 64",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Allowlist of response leaves Rust retains, alongside the containers needed to reach them, so an extraction script never observes a field the source returned but the bundle did not select.",
           "runtime_validation": null
@@ -2630,12 +2970,14 @@
           "key_path": "sources.*.request.projection[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxLength: 256",
-            "minLength: 2",
-            "pattern: ^/(?!/)([^/~]|~[01]|/|\\*)+$"
+            [
+              "maxLength: 256",
+              "minLength: 2",
+              "pattern: ^/(?!/)([^/~]|~[01]|/|\\*)+$"
+            ]
           ],
           "description": "One extended JSON Pointer whose `*` segment visits every element of the current array, with no numeric index, recursive descent, filter, predicate, union, or script-computed path admitted.",
           "runtime_validation": null
@@ -2643,8 +2985,8 @@
         {
           "key_path": "sources.*.request.redirects",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "deny"
           ],
@@ -2656,11 +2998,13 @@
           "key_path": "sources.*.request.selectorInputs",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 8",
-            "minItems: 0"
+            [
+              "maxItems: 8",
+              "minItems: 0"
+            ]
           ],
           "description": "Closes the minimized authorized selector alternatives a preparation script can see; an empty array is accepted only on a fetch source.",
           "runtime_validation": null
@@ -2669,7 +3013,7 @@
           "key_path": "sources.*.request.selectorInputs[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One subject role together with the alternative profiles and exact field sets a preparation script may receive for that role.",
@@ -2679,11 +3023,13 @@
           "key_path": "sources.*.request.selectorInputs[].alternatives",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1"
+            [
+              "maxItems: 16",
+              "minItems: 1"
+            ]
           ],
           "description": "Closed set of profile and field combinations permitted for the role; the runtime materializes only the combination the matched authority grant carries, never the union of every alternative declared.",
           "runtime_validation": null
@@ -2692,7 +3038,7 @@
           "key_path": "sources.*.request.selectorInputs[].alternatives[]",
           "kind": "array_item",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "One permitted selector profile paired with the exact field subset that alternative exposes.",
@@ -2702,12 +3048,14 @@
           "key_path": "sources.*.request.selectorInputs[].alternatives[].fields",
           "kind": "property",
           "type": "array",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxItems: 16",
-            "minItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 16",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Exact subset of the named profile's declared fields this alternative exposes, which is how a consumer is handed less than the authorized selector carries.",
           "runtime_validation": null
@@ -2716,10 +3064,12 @@
           "key_path": "sources.*.request.selectorInputs[].alternatives[].fields[]",
           "kind": "array_item",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
           ],
           "description": "One selector field name, which the named profile must declare or the bundle is rejected at startup.",
           "runtime_validation": null
@@ -2728,10 +3078,12 @@
           "key_path": "sources.*.request.selectorInputs[].alternatives[].profile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Selector profile this alternative admits for the role; a profile absent from `selectorProfiles` is rejected at startup.",
           "runtime_validation": null
@@ -2740,10 +3092,12 @@
           "key_path": "sources.*.request.selectorInputs[].role",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Subject role this selector input covers, unique across the declaration; the runtime resolves request subjects by role rather than by array position.",
           "runtime_validation": null
@@ -2752,11 +3106,13 @@
           "key_path": "sources.*.request.timeoutMilliseconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 30000",
-            "minimum: 1"
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
           ],
           "description": "Bounds one attempt at this source end to end, covering concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange.",
           "runtime_validation": null
@@ -2765,10 +3121,12 @@
           "key_path": "sources.*.responseSchema",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
           ],
           "description": "Bundle-relative closed JSON Schema the projected source response must satisfy before `sources.*.extractScript` runs; a response outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because projection can legitimately drop or null a value the record did not carry.",
           "runtime_validation": null
@@ -2777,10 +3135,12 @@
           "key_path": "sources.*.tlsTrustProfile",
           "kind": "property",
           "type": "string",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`. Omission trusts only configured system roots, and the profile is rejected outright when `sources.*.authentication.kind` is `none`.",
           "runtime_validation": null
@@ -2788,8 +3148,8 @@
         {
           "key_path": "sources.*.transport",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "http-json"
           ],
@@ -2801,7 +3161,7 @@
           "key_path": "subjectBinding",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Keys the audience- and purpose-scoped subject bindings an assertion carries in place of selector values, derived over the complete canonical role, profile, and value set rather than as per-field hashes.",
@@ -2811,11 +3171,13 @@
           "key_path": "subjectBinding.keyVersion",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 2147483647",
-            "minimum: 1"
+            [
+              "maximum: 2147483647",
+              "minimum: 1"
+            ]
           ],
           "description": "Scopes each derived binding and appears in the binding value, so a new version changes every binding a relying party already retains as an expectation.",
           "runtime_validation": null
@@ -2824,10 +3186,12 @@
           "key_path": "subjectBinding.secretRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Points at the file secret keying every subject binding; that reference and its resolved bytes must both differ from the audit master, and a match fails startup.",
           "runtime_validation": null
@@ -2835,8 +3199,8 @@
         {
           "key_path": "version",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "integer",
+          "required": "yes",
           "values": [
             "1"
           ],
@@ -2857,11 +3221,13 @@
           "key_path": "acquisitionCapabilities",
           "kind": "property",
           "type": "array",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [
-            "maxItems: 1",
-            "uniqueItems: true"
+            [
+              "maxItems: 1",
+              "uniqueItems: true"
+            ]
           ],
           "description": "Gated acquisition kinds this deployment enables, the operator half of the same two-sided gate the bundle declares. Omission and an explicit empty list both enable nothing.",
           "runtime_validation": "A bundle whose requirement needs a gated acquisition kind absent from this list is refused at startup, before the deployment serves anything."
@@ -2869,8 +3235,8 @@
         {
           "key_path": "acquisitionCapabilities[]",
           "kind": "array_item",
-          "type": null,
-          "required": false,
+          "type": "string",
+          "required": "no",
           "values": [
             "search-then-fetch-set"
           ],
@@ -2882,7 +3248,7 @@
           "key_path": "auditStorage",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Groups the physical destination and size bound for the audit log this process writes; the log format, pseudonymization key, and fail-closed policy are governed by the bundle's `audit` section, not by this one.",
@@ -2892,11 +3258,13 @@
           "key_path": "auditStorage.maximumFileBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 1099511627776",
-            "minimum: 1048576"
+            [
+              "maximum: 1099511627776",
+              "minimum: 1048576"
+            ]
           ],
           "description": "Caps how large the active audit segment file may grow before the runtime seals it and starts a new one; a single audit record whose own size exceeds this bound can never be written, and the request that would have produced it fails rather than being audited incompletely.",
           "runtime_validation": null
@@ -2905,12 +3273,14 @@
           "key_path": "auditStorage.path",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 2",
-            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
           ],
           "description": "Absolute path to the append-only keyed-JSONL audit file on durable, operator-owned storage; this physical destination is process-local and is not chosen by the bundle's governed audit policy.",
           "runtime_validation": null
@@ -2919,12 +3289,14 @@
           "key_path": "bundleDirectory",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 2",
-            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
           ],
           "description": "Selects the one governed bundle directory this process loads at startup; no alternate, overlay, or fallback bundle path exists for a running deployment.",
           "runtime_validation": null
@@ -2933,7 +3305,7 @@
           "key_path": "listener",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Groups the network binding and per-request admission limits for the process's evidence endpoint; `metricsListener`, when present, is an entirely separate binding with its own limits.",
@@ -2943,11 +3315,13 @@
           "key_path": "listener.bindHost",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 64",
-            "minLength: 2"
+            [
+              "maxLength: 64",
+              "minLength: 2"
+            ]
           ],
           "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
           "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
@@ -2956,11 +3330,13 @@
           "key_path": "listener.maximumConcurrentRequests",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 4096",
-            "minimum: 1"
+            [
+              "maximum: 4096",
+              "minimum: 1"
+            ]
           ],
           "description": "Sizes the fixed admission semaphore for concurrent evidence requests; a request that cannot acquire a slot within `listener.requestTimeoutMilliseconds` receives a service-unavailable response instead of queuing without bound.",
           "runtime_validation": null
@@ -2969,11 +3345,13 @@
           "key_path": "listener.maximumRequestBytes",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 1048576",
-            "minimum: 1024"
+            [
+              "maximum: 1048576",
+              "minimum: 1024"
+            ]
           ],
           "description": "Caps accepted request body size; a request whose declared or actual length exceeds this bound is rejected as malformed before evidence evaluation begins.",
           "runtime_validation": null
@@ -2982,11 +3360,13 @@
           "key_path": "listener.port",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 65535",
-            "minimum: 1"
+            [
+              "maximum: 65535",
+              "minimum: 1"
+            ]
           ],
           "description": "TCP port the process binds for the evidence API alongside `listener.bindHost`; port `0`, which would ask the kernel for an arbitrary ephemeral port instead of naming one, is refused.",
           "runtime_validation": null
@@ -2995,11 +3375,13 @@
           "key_path": "listener.requestTimeoutMilliseconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 30000",
-            "minimum: 1"
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
           ],
           "description": "Bounds admission-slot acquisition and request-body collection; once protected evaluation starts, this timer no longer cancels it, and source and OIDC boundaries carry their own separate limits.",
           "runtime_validation": null
@@ -3008,11 +3390,13 @@
           "key_path": "listener.shutdownGraceMilliseconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 120000",
-            "minimum: 1"
+            [
+              "maximum: 120000",
+              "minimum: 1"
+            ]
           ],
           "description": "Operational target for graceful shutdown to finish within; it does not cancel a request already inside protected evaluation, so audit and signing invariants complete even if shutdown outlives this grace period.",
           "runtime_validation": null
@@ -3020,8 +3404,8 @@
         {
           "key_path": "listener.tlsTermination",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "operator-controlled-upstream"
           ],
@@ -3032,8 +3416,8 @@
         {
           "key_path": "listener.trustProxyIdentityHeaders",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "boolean",
+          "required": "yes",
           "values": [
             "false"
           ],
@@ -3045,7 +3429,7 @@
           "key_path": "metricsListener",
           "kind": "property",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
           "constraints": [],
           "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. This listener is a separate binding from the evidence listener and is not described by the public evidence contract.",
@@ -3055,11 +3439,13 @@
           "key_path": "metricsListener.bindHost",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 64",
-            "minLength: 2"
+            [
+              "maxLength: 64",
+              "minLength: 2"
+            ]
           ],
           "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
           "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
@@ -3068,11 +3454,13 @@
           "key_path": "metricsListener.port",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maximum: 65535",
-            "minimum: 1"
+            [
+              "maximum: 65535",
+              "minimum: 1"
+            ]
           ],
           "description": "TCP port for the optional metrics listener; paired with `metricsListener.bindHost`, it must not repeat the evidence listener's exact host-and-port binding.",
           "runtime_validation": null
@@ -3081,7 +3469,7 @@
           "key_path": "outboundTls",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Groups outbound TLS trust for calls to configured sources; it can add private certificate authorities through named trust profiles but carries no setting to weaken hostname verification or skip TLS.",
@@ -3090,8 +3478,8 @@
         {
           "key_path": "outboundTls.systemRoots",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "boolean",
+          "required": "yes",
           "values": [
             "true"
           ],
@@ -3103,10 +3491,12 @@
           "key_path": "outboundTls.trustProfiles",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxProperties: 64"
+            [
+              "maxProperties: 64"
+            ]
           ],
           "description": "Closed map of private certificate-authority bundles a source may reference by logical id; the set of ids present here must exactly match the `tlsTrustProfile` names the bundle's sources declare, with no extra or missing profile.",
           "runtime_validation": null
@@ -3115,9 +3505,13 @@
           "key_path": "outboundTls.trustProfiles.*",
           "kind": "map_value",
           "type": "object",
-          "required": false,
+          "required": "no",
           "values": null,
-          "constraints": [],
+          "constraints": [
+            [
+              "propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
           "description": "One named private trust profile, binding a logical id a source's `tlsTrustProfile` reference names to the certificate-authority bundle used only for that source's outbound connections.",
           "runtime_validation": null
         },
@@ -3125,12 +3519,14 @@
           "key_path": "outboundTls.trustProfiles.*.caBundleFile",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 2",
-            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
           ],
           "description": "Absolute path to one bounded PEM file of trust anchors, loaded and validated at startup; changing its bytes requires a restart and changes the computed runtime digest.",
           "runtime_validation": null
@@ -3139,7 +3535,7 @@
           "key_path": "secretProviders",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Configures how a `secret:file/...` reference resolves to bytes at startup; it supplies the storage location only, and which secret each governed field names is fixed by the bundle, not by this section.",
@@ -3149,7 +3545,7 @@
           "key_path": "secretProviders.file",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Declares the file-based secret provider and its root directory; Version 1 defines no other provider kind, so every `secret:file/name` reference resolves through this one path.",
@@ -3159,12 +3555,14 @@
           "key_path": "secretProviders.file.root",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 2",
-            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
           ],
           "description": "Absolute base directory every `secret:file/name` reference resolves beneath; each name is one bounded path component opened relative to this root, and the opened file is checked for type, ownership, mode, and link count before its bytes are read.",
           "runtime_validation": null
@@ -3173,7 +3571,7 @@
           "key_path": "signer",
           "kind": "property",
           "type": "object",
-          "required": true,
+          "required": "yes",
           "values": null,
           "constraints": [],
           "description": "Binds the process to the private-key transport that produces every signature over the bundle's governed active public key; it can select and configure that transport but cannot change the governed key set or signing algorithm.",
@@ -3183,10 +3581,12 @@
           "key_path": "signer.keyName",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Names the specific key within `signer.mount` this signer calls; combined with `signer.mount` and `signer.keyVersion`, it reaches exactly one pinned Transit key.",
           "runtime_validation": null
@@ -3195,11 +3595,13 @@
           "key_path": "signer.keyVersion",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 4294967295",
-            "minimum: 1"
+            [
+              "maximum: 4294967295",
+              "minimum: 1"
+            ]
           ],
           "description": "Pins signing to one exact Transit key version rather than a `latest` alias, so a provider-side rotation cannot silently replace the key bytes behind an unchanged `kid`.",
           "runtime_validation": null
@@ -3207,8 +3609,8 @@
         {
           "key_path": "signer.kind",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "string",
+          "required": "yes",
           "values": [
             "local-jwk",
             "transit"
@@ -3221,10 +3623,12 @@
           "key_path": "signer.mount",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Names the Transit secrets-engine mount this signer calls; it is a path segment in the local Transit-proxy request URL, not a filesystem location.",
           "runtime_validation": null
@@ -3233,10 +3637,12 @@
           "key_path": "signer.privateKeyRef",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
           ],
           "description": "Names the file-provider secret holding the local signing private key material, read only when `signer.kind` is `local-jwk`; the value is a reference, and configuration never carries the key bytes themselves.",
           "runtime_validation": null
@@ -3245,11 +3651,13 @@
           "key_path": "signer.timeoutMilliseconds",
           "kind": "property",
           "type": "integer",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maximum: 30000",
-            "minimum: 1"
+            [
+              "maximum: 30000",
+              "minimum: 1"
+            ]
           ],
           "description": "Bounds how long the runtime waits on each call to the Transit signing proxy; because a `transit` signer keeps no local fallback key, a call that exceeds this bound fails the request rather than blocking it indefinitely.",
           "runtime_validation": null
@@ -3258,12 +3666,14 @@
           "key_path": "signer.unixSocketPath",
           "kind": "property",
           "type": "string",
-          "required": true,
+          "required": "conditional",
           "values": null,
           "constraints": [
-            "maxLength: 512",
-            "minLength: 2",
-            "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            [
+              "maxLength: 512",
+              "minLength: 2",
+              "pattern: ^/(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))[^\\\\\\u0000]+$"
+            ]
           ],
           "description": "Absolute Unix socket path used to reach the workload-local Transit signing proxy; the runtime supplies no provider token over this connection, because token custody and renewal stay with the proxy.",
           "runtime_validation": null
@@ -3271,8 +3681,8 @@
         {
           "key_path": "version",
           "kind": "property",
-          "type": null,
-          "required": true,
+          "type": "integer",
+          "required": "yes",
           "values": [
             "1"
           ],

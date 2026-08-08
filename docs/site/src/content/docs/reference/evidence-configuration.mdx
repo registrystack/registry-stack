@@ -18,13 +18,14 @@ This generated reference lists every key path an Evidence Gateway deployment may
 two frozen Version 1 configuration grammars: the deployment bundle and the runtime configuration.
 
 Each entry reports only what the grammar itself proves: the value type, whether the key is
-required, the fixed values it accepts, and the bounds it enforces. Read an entry to confirm a key
-exists, spell the key correctly, and stay inside its accepted values.
+required, the fixed values it accepts, the bounds it enforces, and the grammar's own description
+of what the key decides. Read an entry to confirm a key exists, spell the key correctly, and stay
+inside its accepted values.
 
 ## Contract status
 
 - Status: current, pre-1.0
-- Reference format: `1.0`
+- Reference format: `1.1`
 - Generator: `npm run generate` in `docs/site`
 - Source: `products/evidence/contracts/bundle.schema.yaml` and
   `products/evidence/contracts/runtime.schema.yaml`
@@ -44,8 +45,11 @@ recursive definition, currently only nested adapter parameter values, appears on
 it re-enters itself.
 
 Where a key is reachable through several alternative shapes, the entry shows the union of the
-types and values those alternatives accept, and reports the key as required only when every
-alternative requires it.
+types and values those alternatives accept. Required reads **Conditional** when at least one
+alternative does not declare the key at all: it may be mandatory once you have chosen that
+alternative, and rejected under the others. Constraints are grouped per alternative and separated
+by *or*, because satisfying every printed bound at once can describe a value no alternative
+accepts.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
     products/evidence/contracts/*.schema.yaml. Run npm run generate from docs/site. */}
@@ -54,10 +58,11 @@ alternative requires it.
 
 ## What this page does not carry
 
-The contracts encode structure, not intent. They hold almost no prose, so this reference cannot
-explain why a key exists or how to choose its value. For that, read the configuration guide in
+Each description here states what one key decides, in the sentence the grammar itself carries. It
+cannot show you how the keys fit together, walk you through authoring a bundle, or explain why a
+deployment is shaped the way it is. For that, read the configuration guide in
 `products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`, which documents the
-same key paths with the reasoning behind them.
+same key paths in the context of a whole deployment project.
 
 A key path that this page lists is not a deployment that runs. Schema validity is one gate.
 Runtime, bundle, secret, and audit posture is a separate gate that `evidencectl doctor` reports,

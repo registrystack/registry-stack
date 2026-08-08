@@ -5,9 +5,11 @@ type Field = {
   key_path: string;
   kind: string;
   type: string | null;
-  required: boolean;
+  required: 'yes' | 'no' | 'conditional';
   values: string[] | null;
-  constraints: string[];
+  // One group per alternative the grammar offers. Bounds inside a group apply
+  // together; separate groups are alternatives.
+  constraints: string[][];
   description: string | null;
   runtime_validation: string | null;
 };
@@ -16,6 +18,12 @@ const kindLabels: Record<string, string> = {
   property: 'Property',
   array_item: 'Array item',
   map_value: 'Map value',
+};
+
+const requiredLabels: Record<Field['required'], string> = {
+  yes: 'Yes',
+  no: 'No',
+  conditional: 'Conditional',
 };
 
 const contracts = reference.contracts as Array<{
@@ -92,7 +100,7 @@ const segments = (text: string) =>
                   )}
                 </th>
                 <td>{field.type ?? '—'}</td>
-                <td>{field.required ? 'Yes' : 'No'}</td>
+                <td>{requiredLabels[field.required]}</td>
                 <td>
                   {field.values ? (
                     <ul class="value-list">
@@ -108,13 +116,18 @@ const segments = (text: string) =>
                 </td>
                 <td>
                   {field.constraints.length > 0 ? (
-                    <ul class="value-list">
-                      {field.constraints.map((constraint) => (
-                        <li>
-                          <code>{constraint}</code>
-                        </li>
-                      ))}
-                    </ul>
+                    field.constraints.map((group, index) => (
+                      <>
+                        {index > 0 && <p class="alternative">or</p>}
+                        <ul class="value-list">
+                          {group.map((constraint) => (
+                            <li>
+                              <code>{constraint}</code>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ))
                   ) : (
                     '—'
                   )}
@@ -178,6 +191,13 @@ const segments = (text: string) =>
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+
+  .alternative {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-style: italic;
+    margin: 0.25rem 0;
   }
 
   .value-list code {

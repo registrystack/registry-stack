@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import {
   CONTRACTS,
+  FORMAT_VERSION,
   buildEvidenceConfiguration,
   collectFields,
   generateEvidenceConfiguration,
@@ -35,9 +36,9 @@ test('nested properties become dotted key paths carrying their required flag', (
   assert.deepEqual(
     fields.map((field) => [field.key_path, field.required]),
     [
-      ['listener', true],
-      ['listener.label', false],
-      ['listener.port', true],
+      ['listener', 'yes'],
+      ['listener.label', 'no'],
+      ['listener.port', 'yes'],
     ],
   );
 });
@@ -122,9 +123,130 @@ test('combinator branches merge into one entry per key path', () => {
   const byPath = new Map(fields.map((field) => [field.key_path, field]));
   assert.deepEqual(pathsOf(fields), ['signer', 'signer.kind', 'signer.ref']);
   assert.deepEqual(byPath.get('signer.kind').values, ['env', 'file']);
-  // `ref` is required in neither branch, `kind` in both.
-  assert.equal(byPath.get('signer.kind').required, true);
-  assert.equal(byPath.get('signer.ref').required, false);
+  // `kind` is required in both branches; `ref` exists in only one, so it can
+  // be neither required nor freely written beside the other branch's keys.
+  assert.equal(byPath.get('signer.kind').required, 'yes');
+  assert.equal(byPath.get('signer.ref').required, 'conditional');
+});
+
+test('a key only one alternative declares is conditional, not required', () => {
+  const fields = collectFields({
+    type: 'object',
+    required: ['signer'],
+    properties: {
+      signer: {
+        oneOf: [
+          {
+            type: 'object',
+            required: ['kind', 'privateKeyRef'],
+            properties: { kind: { const: 'local-jwk' }, privateKeyRef: { type: 'string' } },
+          },
+          {
+            type: 'object',
+            required: ['kind', 'mount'],
+            properties: { kind: { const: 'transit' }, mount: { type: 'string' } },
+          },
+        ],
+      },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // Reporting both as required describes a document both alternatives reject.
+  assert.equal(byPath.get('signer').required, 'yes');
+  assert.equal(byPath.get('signer.kind').required, 'yes');
+  assert.equal(byPath.get('signer.privateKeyRef').required, 'conditional');
+  assert.equal(byPath.get('signer.mount').required, 'conditional');
+});
+
+test('alternative branches report alternative constraint sets, not their union', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      baseUrl: {
+        type: 'string',
+        minLength: 1,
+        oneOf: [{ pattern: '^https://' }, { pattern: '^http://127\\.0\\.0\\.1' }],
+      },
+      port: { type: 'integer', minimum: 1, maximum: 65535 },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // Each alternative carries the shared bound as well, because within one
+  // alternative the two do apply together.
+  assert.deepEqual(byPath.get('baseUrl').constraints, [
+    ['minLength: 1', 'pattern: ^https://'],
+    ['minLength: 1', 'pattern: ^http://127\\.0\\.0\\.1'],
+  ]);
+  // A key with no alternatives keeps a single group.
+  assert.deepEqual(byPath.get('port').constraints, [['maximum: 65535', 'minimum: 1']]);
+});
+
+test('allOf branches stay conjunctive', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      name: { allOf: [{ type: 'string', minLength: 1 }, { maxLength: 64 }] },
+    },
+  });
+  assert.deepEqual(fields[0].constraints, [['maxLength: 64', 'minLength: 1']]);
+  assert.equal(fields[0].required, 'no');
+});
+
+test('a map reports the bounds its propertyNames places on each key', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      sources: {
+        type: 'object',
+        propertyNames: { pattern: '^[a-z][a-z0-9-]{0,63}$', maxLength: 64 },
+        additionalProperties: { type: 'object', properties: { origin: { type: 'string' } } },
+      },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  assert.deepEqual(byPath.get('sources.*').constraints, [
+    ['propertyNames.maxLength: 64', 'propertyNames.pattern: ^[a-z][a-z0-9-]{0,63}$'],
+  ]);
+  assert.equal(byPath.get('sources.*').kind, 'map_value');
+});
+
+test('propertyNames written as a reference still reports its bounds', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      sources: {
+        type: 'object',
+        propertyNames: { $ref: '#/$defs/local-id' },
+        additionalProperties: { type: 'object' },
+      },
+    },
+    $defs: { 'local-id': { type: 'string', pattern: '^[a-z][a-z0-9._-]{0,127}$' } },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  assert.deepEqual(byPath.get('sources.*').constraints, [
+    ['propertyNames.pattern: ^[a-z][a-z0-9._-]{0,127}$'],
+  ]);
+});
+
+test('a fixed value proves the type when the schema omits one', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      assuranceProfile: { enum: ['local', 'production'] },
+      trustProxyIdentityHeaders: { const: false },
+      retries: { const: 0 },
+      declared: { type: 'string', enum: ['a'] },
+      free: { minLength: 1 },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  assert.equal(byPath.get('assuranceProfile').type, 'string');
+  assert.equal(byPath.get('trustProxyIdentityHeaders').type, 'boolean');
+  assert.equal(byPath.get('retries').type, 'integer');
+  // A declared type wins; nothing is inferred over it.
+  assert.equal(byPath.get('declared').type, 'string');
+  // Nothing to infer from, so the entry stays honest about not knowing.
+  assert.equal(byPath.get('free').type, null);
 });
 
 test('fixed values and validation keywords are carried onto the entry', () => {
@@ -143,7 +265,7 @@ test('fixed values and validation keywords are carried onto the entry', () => {
     },
   });
   const byPath = new Map(fields.map((field) => [field.key_path, field]));
-  assert.deepEqual(byPath.get('port').constraints, ['maximum: 65535', 'minimum: 1']);
+  assert.deepEqual(byPath.get('port').constraints, [['maximum: 65535', 'minimum: 1']]);
   assert.deepEqual(byPath.get('mode').values, ['lenient', 'strict']);
   assert.deepEqual(byPath.get('version').values, ['1']);
   assert.equal(byPath.get('host').description, 'Loopback or private address.');
@@ -156,14 +278,14 @@ test('validation rejects a document with repeated or missing key paths', () => {
     key_path,
     kind: 'property',
     type: 'string',
-    required: false,
+    required: 'no',
     values: null,
     constraints: [],
     description: null,
     runtime_validation: null,
   });
   const document = (fields) => ({
-    format_version: '1.0',
+    format_version: FORMAT_VERSION,
     generator: 'npm run generate',
     contracts: CONTRACTS.map((contract, index) => {
       const entries = index === 0 ? fields : [entry('b')];
@@ -188,6 +310,23 @@ test('the committed contracts produce a valid reference for both configuration f
   for (const contract of document.contracts) {
     assert.ok(contract.fields.length > 0, `${contract.id} produced no fields`);
   }
+});
+
+test('a bound outside double precision is reported exactly as the contract states it', async () => {
+  // The adapter parameter bounds are the signed 64-bit integer range. Reading
+  // them through a double rounds the last three digits, publishing a bound no
+  // contract states and that the runtime would reject.
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const bundle = document.contracts.find((contract) => contract.id === 'bundle');
+  const field = bundle.fields.find(
+    (entry) => entry.key_path === 'sources.*.request.adapterParameters.*',
+  );
+  const constraints = field.constraints.flat();
+  assert.ok(
+    constraints.includes('maximum: 9223372036854775807'),
+    `expected the exact signed 64-bit maximum, got ${JSON.stringify(constraints)}`,
+  );
+  assert.ok(constraints.includes('minimum: -9223372036854775808'));
 });
 
 test('the rendered key paths match the ones CONFIG.md documents', async () => {
