@@ -819,6 +819,90 @@ mod tests {
             .is_some());
     }
 
+    /// A project marked inside an already indexed root stays undiscovered, and says nothing about
+    /// itself.
+    ///
+    /// This pins a decision that is deferred rather than a behavior that is wanted.
+    /// [`Workspace::ensure_root_for`] stops as soon as [`Workspace::root_for`] answers, and that
+    /// answer is drawn from the roots this session has indexed rather than from the directories
+    /// above the document, so a nearer marked root under an indexed one is never walked to. The
+    /// consequence is silence: the containing root's family does not own the inner project's
+    /// documents, so the document is indexed by nobody, reported on by nobody, and contributes
+    /// nothing to the root it sits under. Silence is what this server is allowed to answer with,
+    /// because its one invariant is one-sided: the editor may stay quiet where the compiler
+    /// speaks, and may never speak where the compiler is quiet.
+    ///
+    /// Walking to the nearer root at every notification would mean replacing the [`RootState`] of
+    /// the root that answers now, and that state is where the session knows which documents the
+    /// client holds unsaved and which of those sit over paths the project has lost. Dropping a
+    /// root without losing that bookkeeping is root eviction, which nothing else in this design
+    /// asks for.
+    ///
+    /// The control below is the other half of the property. The same project on disk, opened as
+    /// the root it is, is indexed and reports the sentence its question earns, so what is pinned
+    /// above is a project left undiscovered and not a project nothing can read.
+    #[test]
+    fn a_project_marked_inside_an_indexed_root_is_left_undiscovered() {
+        let temp = TempDir::new().unwrap();
+        project_in(temp.path());
+        let inner = temp.path().join("evidence");
+        evidence_project_in(&inner);
+        let manifest = temp
+            .path()
+            .join("registry-stack.yaml")
+            .canonicalize()
+            .unwrap();
+        let question = inner
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml")
+            .canonicalize()
+            .unwrap();
+
+        let mut workspace = workspace_over(&[temp.path()]);
+        workspace.ensure_root_for(&question).unwrap();
+        workspace.update(question.clone(), QUESTION.to_owned(), 1);
+
+        assert_eq!(
+            workspace
+                .roots()
+                .flat_map(|state| state.index().diagnostics())
+                .map(|diagnostic| (diagnostic.path.as_path(), diagnostic.message.as_str()))
+                .collect::<Vec<_>>(),
+            Vec::new(),
+            "nothing is reported on the inner document, and the root above it reports what it \
+             reports with no project nested inside it"
+        );
+        assert_eq!(workspace.roots().count(), 1);
+        let containing = workspace
+            .root_for(&question)
+            .expect("the root above the inner project answers for its documents");
+        assert_eq!(containing.root, temp.path().canonicalize().unwrap());
+        assert_eq!(containing.family, ProjectFamily::Relay);
+        assert_eq!(
+            containing.index().document_paths().collect::<Vec<_>>(),
+            vec![manifest.as_path()],
+            "the inner project's documents belong to no family this root reads"
+        );
+
+        let discovered = workspace_over(&[&inner]);
+
+        assert_eq!(discovered.roots().count(), 1);
+        let own = discovered
+            .root_for(&question)
+            .expect("the inner project is a root when it is the one the client opened");
+        assert_eq!(own.family, ProjectFamily::Evidence);
+        assert!(own.index().document_paths().any(|path| path == question));
+        assert_eq!(
+            own.index()
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("evidence/question-shape")],
+            "the stub question is a question this project reads and reports on"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_root_reached_through_a_symlinked_ancestor_is_rejected() {
