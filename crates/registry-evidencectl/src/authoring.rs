@@ -32,9 +32,10 @@ use crate::suggest::{
 pub(crate) use registry_evidence_authoring::{
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
-        MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_QUESTIONS,
-        MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY,
-        SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
+        MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_PROJECT_MARKER_BYTES,
+        MAX_QUESTIONS, MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
+        QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY,
+        SOURCES_DIRECTORY,
     },
     model::{
         AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
@@ -350,8 +351,36 @@ fn validate_project_root(project_root: &Path) -> Result<PathBuf> {
             project_root.display()
         );
     }
-    fs::canonicalize(project_root)
-        .with_context(|| format!("resolving project root {}", project_root.display()))
+    let root = fs::canonicalize(project_root)
+        .with_context(|| format!("resolving project root {}", project_root.display()))?;
+
+    // The marker is optional: a root that carries none compiles exactly as it
+    // always has. A root that carries one must parse, so a project an author
+    // meant to anchor never compiles from a document that failed to.
+    let marker_path = root.join(registry_evidence_authoring::PROJECT_MARKER_FILE);
+    match fs::symlink_metadata(&marker_path) {
+        Ok(marker_metadata)
+            if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() =>
+        {
+            bail!(
+                "project marker {} must be a plain file",
+                marker_path.display()
+            );
+        }
+        Ok(_) => {
+            let bytes =
+                read_regular_file(&marker_path, MAX_PROJECT_MARKER_BYTES, "project marker")?;
+            registry_evidence_authoring::parse_project_marker(&bytes)
+                .map_err(|finding| anyhow!("{}", finding.message))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspecting project marker {}", marker_path.display()))
+        }
+    }
+
+    Ok(root)
 }
 
 fn validate_plain_path_components(path: &Path, description: &str) -> Result<()> {
@@ -3872,6 +3901,41 @@ factSchema: schemas/source-facts.schema.yaml
     }
 
     #[test]
+    fn a_valid_project_marker_is_accepted() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.write_marker(registry_evidence_authoring::default_project_marker_document());
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("a project root with a valid marker compiles exactly as one without it");
+    }
+
+    #[test]
+    fn a_corrupt_project_marker_is_rejected() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.write_marker("version: 1\nproject: [\n");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a project root with a corrupt marker must not compile");
+        assert!(
+            error.to_string().contains("does not parse"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn a_project_marker_with_an_unsupported_version_is_rejected() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        fixture.write_marker("version: 2\nproject: evidence-authoring\n");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a project root with an unsupported marker version must not compile");
+        assert!(
+            error.to_string().contains("version must be 1"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn copied_project_artifacts_reject_symlinked_parent_directories() {
         let temporary = tempfile::tempdir().expect("tempdir");
         let project = temporary.path().join("project");
@@ -4785,6 +4849,15 @@ factSchema: schemas/family-facts.schema.yaml
                 .expect("read staging")
                 .next()
                 .is_none()
+        }
+
+        fn write_marker(&self, contents: &str) {
+            fs::write(
+                self.project
+                    .join(registry_evidence_authoring::PROJECT_MARKER_FILE),
+                contents,
+            )
+            .expect("project marker");
         }
     }
 

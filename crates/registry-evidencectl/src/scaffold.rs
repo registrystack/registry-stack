@@ -71,6 +71,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         document.as_bytes(),
         0o644,
     )?;
+    write_new_file(
+        &staged_root.join(registry_evidence_authoring::PROJECT_MARKER_FILE),
+        registry_evidence_authoring::default_project_marker_document().as_bytes(),
+        0o644,
+    )?;
     for directory in [
         "selectors",
         "sources",

@@ -195,6 +195,28 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
 }
 
 #[test]
+fn new_writes_the_project_marker_byte_for_byte() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
+    let project = workspace.path().join("project");
+    let output = openapi_new(&project, path(&spec), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert_eq!(
+        fs::read(project.join("evidence-project.yaml")).expect("project marker"),
+        registry_evidence_authoring::default_project_marker_document().as_bytes()
+    );
+    assert_eq!(
+        fs::metadata(project.join("evidence-project.yaml"))
+            .expect("project marker metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+}
+
+#[test]
 fn existing_paths_and_force_are_refused_without_changes() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
@@ -236,6 +258,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
             ".gitignore",
             "adapters",
             "derivations",
+            "evidence-project.yaml",
             "fixtures",
             "questions",
             "schemas",
@@ -249,6 +272,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
             ".gitignore",
             "adapters",
             "derivations",
+            "evidence-project.yaml",
             "fixtures",
             "questions",
             "schemas",
