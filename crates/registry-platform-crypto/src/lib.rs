@@ -1009,7 +1009,7 @@ impl PublicJwk {
                 }
                 let x = decode_coordinate(self.x.as_deref(), "x")?;
                 let y = decode_coordinate(self.y.as_deref(), "y")?;
-                UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, es256_uncompressed_point(&x, &y))
+                UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, p256_uncompressed_point(&x, &y))
                     .parse()
                     .map_err(|_| JwkError::Invalid("ES256 public point"))?;
             }
@@ -1017,11 +1017,11 @@ impl PublicJwk {
                 if self.kty != "EC" || self.crv.as_deref() != Some("P-384") {
                     return Err(JwkError::Invalid("ES384 keys must be EC/P-384"));
                 }
-                // AWS-LC exposes no standalone P-384 point parser, so a
-                // coordinate pair of the right width that is not on the curve
-                // is refused when a signature is verified rather than here.
-                decode_fixed(self.x.as_deref(), 48, "x")?;
-                decode_fixed(self.y.as_deref(), 48, "y")?;
+                let x = decode_coordinate(self.x.as_deref(), "x")?;
+                let y = decode_coordinate(self.y.as_deref(), "y")?;
+                UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, p384_uncompressed_point(&x, &y))
+                    .parse()
+                    .map_err(|_| JwkError::Invalid("ES384 public point"))?;
             }
             Ok(SigningAlgorithm::Rs256) => {
                 if self.kty != "RSA" {
@@ -1337,7 +1337,7 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
     let key_pair = EcdsaKeyPair::from_private_key_and_public_key(
         &ECDSA_P256_SHA256_FIXED_SIGNING,
         &d,
-        &es256_uncompressed_point(&x, &y),
+        &p256_uncompressed_point(&x, &y),
     )
     .map_err(|_| CryptoError::Crypto("invalid ES256 private key"))?;
     // FIXED is the raw r || s encoding JWS carries. The ASN.1 signing
@@ -1353,7 +1353,7 @@ fn sign_es256(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
 ///
 /// Taking arrays rather than slices keeps the encoding total: there is no
 /// coordinate width that reaches the curve library as a malformed point.
-fn es256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
+fn p256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
     let mut encoded = [0u8; 65];
     encoded[0] = 0x04;
     encoded[1..33].copy_from_slice(x);
@@ -1361,9 +1361,23 @@ fn es256_uncompressed_point(x: &[u8; 32], y: &[u8; 32]) -> [u8; 65] {
     encoded
 }
 
-/// Decode a JWK coordinate into the fixed 32-byte width P-256 requires.
-fn decode_coordinate(value: Option<&str>, field: &'static str) -> Result<[u8; 32], JwkError> {
-    decode_fixed(value, 32, field)?
+/// The P-384 counterpart of `p256_uncompressed_point`, with the same totality
+/// argument. Each curve keeps its own assembler because stable Rust cannot
+/// express the `2N + 1` output width a single const-generic one would need.
+fn p384_uncompressed_point(x: &[u8; 48], y: &[u8; 48]) -> [u8; 97] {
+    let mut encoded = [0u8; 97];
+    encoded[0] = 0x04;
+    encoded[1..49].copy_from_slice(x);
+    encoded[49..97].copy_from_slice(y);
+    encoded
+}
+
+/// Decode a JWK coordinate into the fixed width its curve requires.
+fn decode_coordinate<const N: usize>(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<[u8; N], JwkError> {
+    decode_fixed(value, N, field)?
         .try_into()
         .map_err(|_| JwkError::Invalid(field))
 }
@@ -1373,10 +1387,14 @@ fn sign_es384(payload: &[u8], jwk: &PrivateJwk) -> Result<Vec<u8>, CryptoError> 
     if d.len() != 48 {
         return Err(JwkError::Invalid("d length").into());
     }
-    let point = p384_public_point(&jwk.public())?;
-    let key =
-        EcdsaKeyPair::from_private_key_and_public_key(&ECDSA_P384_SHA384_FIXED_SIGNING, &d, &point)
-            .map_err(|_| CryptoError::Crypto("invalid ES384 private key"))?;
+    let x = decode_coordinate(jwk.x.as_deref(), "x")?;
+    let y = decode_coordinate(jwk.y.as_deref(), "y")?;
+    let key = EcdsaKeyPair::from_private_key_and_public_key(
+        &ECDSA_P384_SHA384_FIXED_SIGNING,
+        &d,
+        &p384_uncompressed_point(&x, &y),
+    )
+    .map_err(|_| CryptoError::Crypto("invalid ES384 private key"))?;
     let signature = key
         .sign(&SystemRandom::new(), payload)
         .map_err(|_| CryptoError::Crypto("ES384 signing failed"))?;
@@ -1481,21 +1499,11 @@ fn p256_verifying_key(jwk: &PublicJwk) -> Result<P256VerifyingKey, CryptoError> 
 }
 
 fn verify_es384(payload: &[u8], signature: &[u8], jwk: &PublicJwk) -> Result<(), CryptoError> {
-    let point = p384_public_point(jwk)?;
-    UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, point)
+    let x = decode_coordinate(jwk.x.as_deref(), "x")?;
+    let y = decode_coordinate(jwk.y.as_deref(), "y")?;
+    UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, p384_uncompressed_point(&x, &y))
         .verify(payload, signature)
         .map_err(|_| CryptoError::InvalidSignature)
-}
-
-/// Encode the JWK coordinates as an uncompressed SEC1 point.
-fn p384_public_point(jwk: &PublicJwk) -> Result<[u8; 97], CryptoError> {
-    let x = decode_fixed(jwk.x.as_deref(), 48, "x")?;
-    let y = decode_fixed(jwk.y.as_deref(), 48, "y")?;
-    let mut sec1 = [0u8; 97];
-    sec1[0] = 0x04;
-    sec1[1..49].copy_from_slice(&x);
-    sec1[49..97].copy_from_slice(&y);
-    Ok(sec1)
 }
 
 fn verify_rsa(
@@ -1741,6 +1749,17 @@ mod tests {
         "Rle6NzhA6z80JzmFr-GdJqUws2TlPoxXAtod7KVT9hPw6xfOdBHaD56f6NKxATy3b7bo8pL-Fq2mFiMyzeqy9w";
     const P384_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"did:web:issuer.test#p384-key-1"}"#;
 
+    const ES384_OPENSSL_VECTOR_PAYLOAD: &[u8] =
+        b"registry-platform-crypto openssl 3.6.2 es384 known-answer vector";
+    /// The public half of a P-384 pair OpenSSL 3.6.2 generated, `x` and `y`
+    /// taken from the uncompressed point OpenSSL prints for that key.
+    const ES384_OPENSSL_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-384","x":"5DdfCWW37biY67BYT5RfqwwonZP6KVlTkmGD5REYpY3R1U0cDRCcerer26H1T3zc","y":"fIP0mOBgT2Py6DZelcG6BFvJROt8g43lX4g8XIeVujRy4H1ghKeUJh1WWk0XPBO1","alg":"ES384","kid":"openssl-es384-vector"}"#;
+    /// OpenSSL 3.6.2's ES384 signature over `ES384_OPENSSL_VECTOR_PAYLOAD` with
+    /// the pair above, rewritten from the ASN.1 DER SEQUENCE OpenSSL emits into
+    /// the raw `r || s` JWS carries: each of `r` and `s` left-padded to the
+    /// curve's 48-byte width.
+    const ES384_OPENSSL_SIGNATURE: &str = "MQ4axJZgmlYpKgUgXCxo1-9FHqhClByVu8PX9iK0BBuFD5RISplywLqpzUgd8o4uNXI8dYRxDbKaOMqKBCw0ofjUehrD7MUl1H8IGKi3km2XaTx62UrO8OH9A0lT8nmK";
+
     #[cfg(all(unix, feature = "transit"))]
     struct MockTransitReply {
         method: &'static str,
@@ -1985,6 +2004,15 @@ mod tests {
     // `registry-notary-rs256-1024`. These pin the AWS-LC 2048-bit RSA floor.
     const RSA_1024_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-1024-test","alg":"RS256","n":"0XamHpbNC-FqjNCuvjTv3JlceEpQlZtsULPcCTy0CYnGxMNHNYUdcUuVXSFtIQCpHPWUwLL-GWu5PmF_svocDHHsbnlbPj3Eg9dVN2m1g-du7jK1IA3eeTmfWZAkZC9R_ITsULIr7QjrMrUm2GgejMLqnaeZpVxmCD6X6ER02Ik","e":"AQAB","d":"yOuWzSC57vt6yTgjZjBBJMm2-WvPgLJlY8Qi_HlN-Rg_od3vIFdftp1Z2MuHcnC_xxeKaI1JT_kU59F-PJ_M5iWqT5f4fXLgEcBMkBjXTgK-uK3hwHQUKz7F20p3_hJDZoG9v1bBxLhBtk1NPx2O1GggRsrAVpw1yy6ZwcwdRkE","p":"-Vee6DQ7Sam8Gr1BFda8bkY2RufiBmJ6rQvZiOD3kOU8Lm9lQYQ0l4_w2n3KBblsQ6qamCfw2_WLDxgBiyn94w","q":"1w5vxxGu66T1WEJo-yl8Xz109DrG9upv-YNuPUPHy9U6B4A8_2iaK1ony6jwwmEDmroepEw8CpX9M0IySA3bow","dp":"D3seNaKQj8lHEY3wjY-QkXQwiIR7JxRUM4xJzFLTbB6fdu6ZpdC0hzh7psUqluJlU2ozQQEx1iZPpPdDmUVZKw","dq":"TCmWuJ-wnU_cfBd46op0u54eT2iJkmTQp0M-xX-9wJiRZpqp_6JiBzx0n5IDQjPtfNyxgWpmUTFxbLfi6tXNlQ","qi":"qA3t0sbVQvSRcUYOZmh9re_Ln6B5qxfqUcgRG7naqe1HL_7pGpE9CaeVZ_koLmXSRrYZ8Y5m14vJjQd7aGta8w"}"#;
     const RSA_1024_SIGNATURE: &str = "AHSzPijESokHRJWCXV0Vc_n0Faee3y4fU1z4-f8qT5BbvHX8sM9BknCVTfg4AWCB6szaVJV5J3oeLlTM8qGIrLj1qMewYjhxbNymNoDkzXTiYDt_NJw28LooZiXAZYmy8HK7EJqwnbvyS4-0j4KpiXl1MkNHYIe_l3JuvG-af24";
+
+    const RS384_OPENSSL_VECTOR_PAYLOAD: &[u8] =
+        b"registry-platform-crypto openssl 3.6.2 rs384 known-answer vector";
+    /// A 2048-bit RSA private JWK carrying the CRT components OpenSSL 3.6.2
+    /// prints for a key it generated. Test-only material, not a production key.
+    const RS384_OPENSSL_PRIVATE_JWK: &str = r#"{"kty":"RSA","kid":"openssl-rs384-vector","alg":"RS384","n":"odXWNdjRAm54dJ0hOG_nKhW7oHn1sDvVRZYohv9yws51rUiMB_QS1n2J2MjOaCfM3Htp2jQHW4fZNGMOrjE1CuJuFInTKAAHrJtFRmQb54rY2kc7meLrN7PS4sxkjoh5vbcl3B9ZJ3dpqWw8fa7tg3priRhmj9eb67f7C0fOl2zRRez1kmq7bxm29jvEE4ZK3rYhm5ZvfYKhnK1bQFdm5X0FjbxUcZtd1BREUdmqUQebEPQwlFvRv0Qupq5rrn3ZgDwn9Dbji40WXtbfISNuEocTIGOO7hfd-D42wCZlWrn8CJGuNd2bwXC-fEZBIfSk5pIB_b_cfubWOyvxnyz6bQ","e":"AQAB","d":"PScdIU7TN_x_hu1DOtzKOLRqqGq9hMEvR3LE0LJhbqxuejLSO0UnAyb_-kty95emiWAXMS185EDyuiF-UCNm_DxwxVEJWfGc9MPdiwpUIwvsApttMaq2IF_SngIHM3btrdsxsrqjyU6NvkgYmZOKy6ZsUStHwi4CjLGCaxJQxhXt9Wbqek5DDCS8G8Bzjy-oUBsInTpuxPWGMOWtpcu6w-dDj5wCALNzKJmAc7SVhUTNXY1V-kwZSkq_mjCZvKPH_6m2Xqzzr-UINnoq5hOI8Jp43MTjdHnS6tFegFqAiQe4SRJL83cTjVzSXAINNXpdNrexSwB_qCeY63Sx2F2Vjw","p":"1vz7HVe4XJNvFjxaq4KAebHjaFUE2uaKpYGWCRW2_FoanDnW7WmqRDpU_mb1elO3Su4kLYMzFCHiSOQie_8cgGoEyLE2Eg1MGnRyoW2pwt77RP5fchc4gkQEw6JguT-0IiPlip_NWi60p0n8zXmd_y_2SE0d4yyMYInOOoydP0s","q":"wLUdx51lQ_tbpc1ILAJ6ds2SKh715PVzBMo_vVmR5uGOduw00XZm_87tF8-JzN2sP0MARY-S-3BHsCvvIRxbUeMrC2FXDzAwWZ-zOEl0r5vbOPOhMSSzIX94RZPtqI3o6zHsPFYZxtU8g8WMiLGe5K1srLbs1zo5KYq_5s9VQic","dp":"k0R2S9JUEu5XkTbEsWnS0gn-CfD7Q2vbG6aZ_R0n3NNoGQ4x4S2ZmeUPZblnfGUuUKCynY6bBbZ0SJQl3ySRBJIbNtLVhCYhtJmCEHyLZlbSbp-FCCVJ60nmrZBki2FM5noKehwfUiBeVZ4EE0i05yKWpU5WI9DXVCXx4_-Ak-M","dq":"qn1SPHEuz0dJXNXSHUWQDR1wTB2aFJdmy_0XCTF-WJKDVQlC7XHgTD9JGYC-fGY95rYjPmd4dUVv1xf3dwa8cCUXxvi2ajSLAi-9AnZSaq7r82Xv3SeH54H76Sqn3zC1uacwRm0yXuv2nuoenCzw04XvGJq5zOyw9-TORKh32I8","qi":"e4kQt1SOxFswplA_tfw9Xz4qN7zmM8vdcAN3lyeDBvTRaKtumH6mtDSPmdu7_3XbvK5A8ARxlOiInTtFOF_NnMEsiQXtn3GnA9z3euJmY7zHT_bKYveQIk6tvHaOaXvtghWKBDDm8lPUNLjCj2uQISbE0Ai5To7fu7-AVV6n4cw"}"#;
+    /// OpenSSL 3.6.2's RS384 signature over `RS384_OPENSSL_VECTOR_PAYLOAD` with
+    /// the key above.
+    const RS384_OPENSSL_SIGNATURE: &str = "TyTgylxchYn-SuG-mYzIpsu7RUlans7MbxyAboqGbyVmejbLd8C_bYt9p13wotq_pgs0JnslQ6RmZTh0-rFaZ4E_ZFf1ZxwQbB7Hud2WMCTs0fSh33k-XaauTXxZfSXrecojQrxrB_U1XBQpvL9olz0fygRcBal59ZuGGkTLPMD7RNUwDkMpZ16fs2aNIjiubvT4zG9HS3_kshgi5ATmzjiLQYrS5uLsyCZI7Fqfcar5cH6yJTZScdJgXEiKGtM1pEKZ6leSAkW7OCfYvHPPHXONo2nHxM15I1BnEh5aTfeBHYLm8HBQrXm5NaOmYXX7PYqzu7AvdFs2zxLfY5F6SQ";
 
     #[test]
     fn private_jwk_parse_debug_redacts_and_public_strips_private_material() {
@@ -2786,6 +2814,32 @@ mod tests {
     }
 
     #[test]
+    fn es384_public_jwk_rejects_length_correct_off_curve_coordinates() {
+        let zero_coordinate = URL_SAFE_NO_PAD.encode([0_u8; 48]);
+        let candidate = json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": zero_coordinate.clone(),
+            "y": zero_coordinate,
+            "alg": "ES384",
+            "kid": "invalid-point",
+        });
+
+        assert!(matches!(
+            PublicJwk::parse(&candidate.to_string()),
+            Err(JwkError::Invalid("ES384 public point"))
+        ));
+
+        let legitimate = serde_json::to_string(
+            &PrivateJwk::parse(P384_JWK)
+                .expect("p384 private jwk parses")
+                .public(),
+        )
+        .expect("p384 public jwk serializes");
+        PublicJwk::parse(&legitimate).expect("a point on P-384 is still accepted");
+    }
+
+    #[test]
     fn es384_sign_then_verify_roundtrips() {
         let private = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
         let public = private.public();
@@ -2813,6 +2867,35 @@ mod tests {
         verify(payload, &second, &public).expect("second signature verifies");
     }
 
+    /// Independent known-answer check for ES384. Both halves of the vector, the
+    /// key and the signature, come from OpenSSL 3.6.2 rather than from this
+    /// crate.
+    ///
+    /// ES384 signs and verifies through aws-lc-rs on both sides, so a
+    /// round-trip proves only that the crate agrees with itself. It would still
+    /// pass if signing emitted an ASN.1 DER SEQUENCE where JWS wants raw
+    /// `r || s`. OpenSSL does emit DER, and the frozen constant is that DER pair
+    /// rewritten as raw `r || s`, so accepting it pins the JWS encoding against
+    /// an outside implementation.
+    ///
+    /// ECDSA is randomized, so only acceptance is pinned: this signature is one
+    /// of many valid ones over the payload.
+    #[test]
+    fn es384_accepts_an_openssl_signature_over_a_fixed_payload() {
+        let public = PublicJwk::parse(ES384_OPENSSL_PUBLIC_JWK).expect("openssl p384 jwk parses");
+        let signature = URL_SAFE_NO_PAD
+            .decode(ES384_OPENSSL_SIGNATURE)
+            .expect("the openssl vector decodes");
+
+        assert_eq!(signature.len(), 96, "ES384 JWS signatures are raw r || s");
+        verify(ES384_OPENSSL_VECTOR_PAYLOAD, &signature, &public)
+            .expect("an OpenSSL ES384 signature verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
     #[test]
     fn es384_sign_rejects_an_out_of_range_private_scalar() {
         let mut value: Value = serde_json::from_str(P384_JWK).expect("p384 jwk json");
@@ -2827,6 +2910,23 @@ mod tests {
         assert!(matches!(
             sign(b"registry-platform-es384-zero", &private),
             Err(CryptoError::Crypto(_))
+        ));
+    }
+
+    /// Importing the pair rather than the scalar alone means a `d` sitting
+    /// beside another pair's `x` and `y` does not sign, matching ES256. Such a
+    /// JWK would otherwise produce a valid signature over a public half it does
+    /// not describe, which no relying party holding the stated key can verify.
+    #[test]
+    fn es384_sign_rejects_a_private_key_whose_public_half_is_another_pair() {
+        let other = PublicJwk::parse(ES384_OPENSSL_PUBLIC_JWK).expect("openssl p384 jwk parses");
+        let mut key = PrivateJwk::parse(P384_JWK).expect("p384 private jwk parses");
+        key.x = other.x.clone();
+        key.y = other.y.clone();
+
+        assert!(matches!(
+            sign(b"registry-platform-es384-mismatch", &key),
+            Err(CryptoError::Crypto("invalid ES384 private key"))
         ));
     }
 
@@ -2925,6 +3025,32 @@ mod tests {
             verify(payload, &rs384_signature, &rs256.public()),
             Err(CryptoError::InvalidSignature)
         ));
+    }
+
+    /// Independent known-answer check for RS384. Both halves of the vector, the
+    /// key and the signature, come from OpenSSL 3.6.2 rather than from this
+    /// crate.
+    ///
+    /// RS384 signs and verifies through aws-lc-rs on both sides, so a
+    /// round-trip proves only that the crate agrees with itself. It would still
+    /// pass under the wrong digest or the wrong PKCS#1 padding. RSASSA-PKCS1-v1_5
+    /// is deterministic, so both directions are pinned: this crate must accept
+    /// OpenSSL's signature and must emit exactly those bytes for the same key
+    /// and payload.
+    #[test]
+    fn rs384_matches_an_openssl_signature_over_a_fixed_payload() {
+        let private = PrivateJwk::parse(RS384_OPENSSL_PRIVATE_JWK).expect("openssl rsa jwk parses");
+        let expected = URL_SAFE_NO_PAD
+            .decode(RS384_OPENSSL_SIGNATURE)
+            .expect("the openssl vector decodes");
+
+        verify(RS384_OPENSSL_VECTOR_PAYLOAD, &expected, &private.public())
+            .expect("an OpenSSL RS384 signature verifies");
+        assert_eq!(
+            sign(RS384_OPENSSL_VECTOR_PAYLOAD, &private).expect("payload signs"),
+            expected,
+            "RS384 is deterministic, so this crate must emit OpenSSL's bytes"
+        );
     }
 
     #[test]

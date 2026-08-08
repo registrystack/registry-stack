@@ -4,8 +4,9 @@ Crypto primitives shared by registry services.
 
 ## What It Provides
 
-- `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519, EC/P-256, and RSA JWKs.
-- EdDSA, ES256, and RS256 signing and verification helpers.
+- `PrivateJwk` and `PublicJwk` parsing for OKP/Ed25519, EC/P-256, EC/P-384, and
+  RSA JWKs.
+- EdDSA, ES256, ES384, RS256, and RS384 signing and verification helpers.
 - `SigningProvider` and `LocalJwkSigner`, plus the `transit` feature's
   `TransitSigner`, for code that should sign without depending directly on one
   private-key storage model. The opt-in feature keeps HTTP and async-networking
@@ -63,12 +64,12 @@ Ok(())
 ## Supported Algorithms
 
 This crate currently supports EdDSA with OKP/Ed25519 keys, ES256 with EC/P-256
-keys, and RS256 with RSA keys. Unsupported JWK algorithms are rejected at parse
-time. RS256 RSA keys must use a 2048-8192-bit modulus. RS256 private RSA JWKs
-must include the full two-prime CRT fields `n`, `e`, `d`, `p`, `q`, `dp`, `dq`,
-and `qi` so the key can be imported into AWS-LC. Add new algorithms only when a
-registry consumer needs them and can define the interoperability and security
-policy.
+keys, ES384 with EC/P-384 keys, and RS256 and RS384 with RSA keys. Unsupported
+JWK algorithms are rejected at parse time. RSA keys must use a 2048-8192-bit
+modulus. Private RSA JWKs must include the full two-prime CRT fields `n`, `e`,
+`d`, `p`, `q`, `dp`, `dq`, and `qi` so the key can be imported into AWS-LC. Add
+new algorithms only when a registry consumer needs them and can define the
+interoperability and security policy.
 
 ## Security Notes
 
