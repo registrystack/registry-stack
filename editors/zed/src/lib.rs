@@ -21,9 +21,14 @@ impl zed::Extension for RegistryStackExtension {
                 command,
                 vec!["tooling".to_owned(), "language-server".to_owned()],
             )
+        } else if let Some(command) = worktree.which("evidencectl") {
+            (
+                command,
+                vec!["tooling".to_owned(), "language-server".to_owned()],
+            )
         } else {
             return Err(
-                "neither registry-language-server nor registryctl was found on PATH; install Registry Stack before enabling this extension"
+                "neither registry-language-server, registryctl, nor evidencectl was found on PATH; install Registry Stack before enabling this extension"
                     .to_owned(),
             );
         };
