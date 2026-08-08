@@ -13,10 +13,12 @@
 //! this provider does not offer.
 //!
 //! The assertion itself is built by
-//! [`registry_platform_authcommon::client_assertion`], which is shared with
-//! everything else in the stack that authenticates this way. What this module
-//! owns is the token request that presents one and the credential it is
-//! exchanged for.
+//! [`registry_platform_authcommon::client_assertion`]. Nothing else in the
+//! stack calls that builder yet: `registry-mint`'s own caller tooling
+//! (`crates/registry-mint/src/caller.rs`) signs a client assertion for testing
+//! Mint's token endpoint, but it builds its own claims, header, and algorithm
+//! mapping rather than reusing this one. What this module owns is the token
+//! request that presents one and the credential it is exchanged for.
 //!
 //! # What is cached, and for how long
 //!
@@ -154,11 +156,11 @@ impl PrivateKeyJwtConfig {
     /// Authenticate as `client_id` at `token_endpoint`, signing with
     /// `client_key`.
     ///
-    /// `client_key` may sign with EdDSA, ES256, or RS256, and must carry a key
-    /// identifier: the identifier is how the authorization server selects the
-    /// registered public key to check the assertion against. The assertion
-    /// header names whichever of the three the key states, so the server needs
-    /// that algorithm among the ones it accepts.
+    /// `client_key` may sign with EdDSA, ES256, RS256, ES384, or RS384, and must
+    /// carry a key identifier: the identifier is how the authorization server
+    /// selects the registered public key to check the assertion against. The
+    /// assertion header names whichever of the five the key states, so the
+    /// server needs that algorithm among the ones it accepts.
     #[must_use]
     pub fn new(token_endpoint: Url, client_id: impl Into<String>, client_key: PrivateJwk) -> Self {
         Self {
@@ -372,10 +374,10 @@ impl PrivateKeyJwt {
         // against this key's own public half is what proves the two belong
         // together.
         //
-        // ES256 no longer reaches this, because importing a P-256 pair compares
-        // the two halves and the signing probe above already refused the key.
-        // EdDSA and RS256 import the private half alone and still sign happily,
-        // so the check stays.
+        // ES256 and ES384 no longer reach this, because importing an EC pair
+        // compares the two halves and the signing probe above already refused
+        // the key. EdDSA, RS256, and RS384 import the private half alone and
+        // still sign happily, so the check stays.
         registry_platform_crypto::verify(CLIENT_KEY_PROBE, &probe, &config.client_key.public())
             .map_err(|_| refuse("the client key's halves belong to different key pairs"))?;
         // Ties the message below to the constant, so the constant cannot drift
@@ -800,6 +802,24 @@ mod tests {
         PrivateJwk::parse(RSA_CLIENT_JWK).expect("the test key parses")
     }
 
+    /// A test-only P-384 client key. It restates the key material
+    /// `registry-platform-authcommon` and `registry-platform-crypto` already pin
+    /// for their own ES384 tests under a client `kid`, so it puts no new key
+    /// material in the tree. It authenticates nothing.
+    const P384_CLIENT_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"client-key-es384-2026-01"}"#;
+
+    fn es384_client_key() -> PrivateJwk {
+        PrivateJwk::parse(P384_CLIENT_JWK).expect("the test key parses")
+    }
+
+    /// The pinned RSA key restated under `alg`, which is the only difference
+    /// between an RS256 and an RS384 RSA JWK.
+    fn rs384_client_key() -> PrivateJwk {
+        let mut key = rs256_client_key();
+        key.alg = Some("RS384".to_owned());
+        key
+    }
+
     /// An ES256 key that parses and states its algorithm, yet cannot sign: zero
     /// is a well-formed 32-byte scalar and an invalid P-256 private key.
     ///
@@ -987,6 +1007,8 @@ mod tests {
             ("EdDSA", client_key(Some(KEY_ID))),
             ("ES256", es256_client_key(Some(KEY_ID))),
             ("RS256", rs256_client_key()),
+            ("ES384", es384_client_key()),
+            ("RS384", rs384_client_key()),
         ] {
             let key_id = key.kid.clone().expect("the test key carries a kid");
             let public: PublicJwk = key.public();
