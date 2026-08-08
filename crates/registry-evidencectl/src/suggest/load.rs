@@ -7,20 +7,24 @@
 //! is that something: it dispatches a [`SpecSource`] to the filesystem or to
 //! [`super::fetch`], applies the size ceiling, and hands the resulting text to
 //! [`Spec::parse`].
+//!
+//! The ceiling is [`MAX_OPENAPI_BYTES`], the one the authoring library holds
+//! every OpenAPI description in a project to, so that a description a project
+//! may carry is a description a project may be created from. A document past it
+//! is rejected before it is read: the largest published registry API
+//! descriptions are a few megabytes, and beyond that a path is a mistake rather
+//! than a specification to draft from.
 
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
-use registry_evidence_authoring::openapi::{openapi::Spec, types::SpecSource};
+use registry_evidence_authoring::{
+    layout::MAX_OPENAPI_BYTES,
+    openapi::{openapi::Spec, types::SpecSource},
+};
 
 use super::fetch;
-
-/// OpenAPI documents larger than this are rejected before they are read, the
-/// way `sample::load_sample` rejects an oversized sample. The largest published
-/// registry API descriptions are a few megabytes; a document past this ceiling
-/// is a mistaken path rather than a specification to draft from.
-const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Reads and parses the OpenAPI document `source` names, from disk or
 /// from the network. Accepts YAML or JSON (YAML is a superset for this
@@ -39,7 +43,7 @@ pub fn open(source: &SpecSource) -> Result<Spec> {
 pub fn open_retained(source: &SpecSource) -> Result<(Spec, String)> {
     let text = match source {
         SpecSource::File(path) => read_local(path)?,
-        SpecSource::Url(url) => fetch::get(url, MAX_DOCUMENT_BYTES)?,
+        SpecSource::Url(url) => fetch::get(url, MAX_OPENAPI_BYTES)?,
     };
     let spec = Spec::parse(&text, &source.display())?;
     Ok((spec, text))
@@ -50,12 +54,12 @@ pub fn open_retained(source: &SpecSource) -> Result<(Spec, String)> {
 fn read_local(path: &Path) -> Result<String> {
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
-    if metadata.len() > MAX_DOCUMENT_BYTES {
+    if metadata.len() > MAX_OPENAPI_BYTES {
         bail!(
             "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
             path.display(),
             metadata.len(),
-            MAX_DOCUMENT_BYTES
+            MAX_OPENAPI_BYTES
         );
     }
     std::fs::read_to_string(path)
