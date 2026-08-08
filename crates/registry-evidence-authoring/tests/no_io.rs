@@ -677,6 +677,98 @@ fn an_authored_import_does_not_read_the_file_it_names() {
     fs::remove_dir_all(&directory).expect("the scratch directory is removable");
 }
 
+/// Whether a piece of work finishes inside a deadline.
+///
+/// The work runs on a thread of its own, so work that never finishes stops this
+/// suite waiting rather than stopping this suite. A thread left blocked in
+/// `open` cannot be woken from here and is not joined: it holds one descriptor
+/// on a file in a scratch directory, and it goes when the test binary does.
+#[cfg(unix)]
+fn finishes_within(deadline: std::time::Duration, work: impl FnOnce() + Send + 'static) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        work();
+        // Past the deadline the receiver is gone. That is the answer this
+        // function returns, not a failure to report.
+        let _ = done.send(());
+    });
+    finished.recv_timeout(deadline).is_ok()
+}
+
+/// The same claim as above, observed at the system call rather than at the
+/// verdict.
+///
+/// A verdict that does not move says the contents were not used. It does not
+/// say the path was not opened, and an editor that opens whatever an author
+/// types is the hazard whether or not it keeps what it finds. A named pipe
+/// tells the two apart: opening one for reading blocks until a writer arrives,
+/// so a reader hangs where a non-reader returns and the answer is a duration.
+///
+/// Both halves run behind a deadline, so this test can fail but cannot hang.
+/// The two waits are deliberately lopsided. The armed engine is blocked in
+/// `open` and is never coming back, so a short wait settles it; the crate under
+/// test answers in microseconds and is given long enough that a loaded machine
+/// cannot be mistaken for a blocked one.
+///
+/// Named pipes are a Unix idea, so this runs on the two platforms CI uses and
+/// the verdict test above is what runs everywhere.
+#[cfg(unix)]
+#[test]
+fn reading_an_authored_import_never_opens_the_path_it_names() {
+    use std::{os::unix::fs::FileTypeExt, time::Duration};
+
+    let directory = scratch_directory("named-pipe");
+    let module = directory.join("blocking");
+    let pipe = module.with_extension("rhai");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .expect("mkfifo is runnable");
+    assert!(made.success(), "mkfifo left no pipe at {}", pipe.display());
+    assert!(
+        fs::symlink_metadata(&pipe)
+            .expect("the pipe is there")
+            .file_type()
+            .is_fifo(),
+        "{} is not a named pipe, so blocking would mean nothing",
+        pipe.display()
+    );
+
+    let program = format!(
+        "import \"{}\" as imported;\nfn answer(facts, selectors, context) {{ #{{}} }}\n",
+        module.display()
+    );
+
+    // The control. A probe that cannot tell a reader from a non-reader says
+    // nothing about either, so the reader is run first and has to hang.
+    let armed = {
+        let program = program.clone();
+        finishes_within(Duration::from_secs(2), move || {
+            let engine = rhai::Engine::new();
+            // The verdict is not what is being read here; the duration is.
+            let _ = engine.compile_into_self_contained(&rhai::Scope::new(), program);
+        })
+    };
+    assert!(
+        !armed,
+        "an engine carrying rhai's own module resolver returned without \
+         blocking on {}, so this probe proves nothing and needs rewriting",
+        pipe.display()
+    );
+
+    let subject = finishes_within(Duration::from_secs(30), move || {
+        let _ = validate_authored_answer(&program);
+    });
+    assert!(
+        subject,
+        "reading a derivation that imports `{}` blocked, which is what opening \
+         a named pipe with no writer does",
+        pipe.display()
+    );
+
+    fs::remove_dir_all(&directory).expect("the scratch directory is removable");
+}
+
 #[test]
 fn the_source_sweep_reads_a_forbidden_spelling_as_a_whole_segment() {
     assert!(!refusals("let handle = File::open(path)?;").is_empty());
