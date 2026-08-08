@@ -26,6 +26,8 @@ pub mod layout;
 pub mod marker;
 pub mod model;
 pub mod openapi;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod validate;
 
 pub use derivation::validate_authored_answer;

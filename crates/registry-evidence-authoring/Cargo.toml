@@ -15,6 +15,9 @@ workspace = true
 # Off by default: only a caller that publishes a machine-readable description
 # of the authoring form pays for `schemars`.
 schema = ["dep:schemars"]
+# Off by default: in-memory authoring project fixtures for this crate's own
+# tests and for adopter tooling tests that need one without restating it.
+testing = []
 
 [dependencies]
 anyhow.workspace = true
