@@ -20,9 +20,10 @@ The supported native deployment has:
   revisions, purposes, audiences, roles, selector profiles, and value origins;
 - fixed, bounded HTTP JSON source requests with fixed or tagged selector/prior-fact-bound paths,
   fixed non-secret headers, client-side response projection, denied redirects,
-  logical private-CA trust profiles, and generic Basic, static Bearer, static
-  API-key, or OAuth 2.0 client-credentials authentication through secret
-  references;
+  logical private-CA trust profiles, and generic Basic, static Authorization
+  header, static API-key, or OAuth 2.0 client-credentials authentication through
+  secret references, the last authenticating by client secret or by private-key
+  JWT assertion;
 - optional credential-free source access only for `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
 - one active ES256/P-256 service signing key whose `kid` is its RFC 7638
@@ -1025,8 +1026,8 @@ every local path/trust binding validated, mounted secret files and signer
 metadata parsed, the active public key matched, the signer completed its
 sign-and-verify test, and the audit chain opened and verified. Readiness
 rechecks the subject-binding key, signing provider, pinned audit sink, and every source
-credential. Basic, static Bearer, and static API-key credentials are checked
-locally. OAuth client-credentials readiness performs its bounded token
+credential. Basic, static Authorization header, and static API-key credentials
+are checked locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
 An explicit local source with `authentication.kind: none` has no credential
 check or bootstrap and sends no authentication header. Production and

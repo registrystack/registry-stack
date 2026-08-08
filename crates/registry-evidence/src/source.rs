@@ -3,11 +3,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine as _;
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue};
+use registry_platform_authcommon::client_assertion::{
+    sign_client_assertion, ClientAssertionRequest, DEFAULT_ASSERTION_LIFETIME_SECONDS,
+};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{read_bounded, BoundedReadError};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -18,9 +22,9 @@ use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{
-    validate_local_unauthenticated_source_origin, AcquisitionPosture, CredentialPlacement,
-    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
-    SecretRef, SourceAuthentication, SourceConfig, SourceSelectorSet,
+    is_http_token_byte, validate_local_unauthenticated_source_origin, AcquisitionPosture,
+    CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig,
+    PreparationChannelPolicy, SecretRef, SourceAuthentication, SourceConfig, SourceSelectorSet,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::RequestParts;
@@ -31,6 +35,11 @@ const PRIVATE_CA_MAXIMUM_BYTES: u64 = 1024 * 1024;
 const PROJECTED_RESPONSE_MAXIMUM_BYTES: usize = 65_536;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
+/// Scheme used when a source states no other, and the only scheme RFC 6750
+/// admits for an access token the runtime acquired itself.
+const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
+/// RFC 7523 section 2.2 fixes this identifier for a JWT client assertion.
+const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
 /// A role-bound selector that has already passed authentication,
 /// authorization, exact-field, type, and size validation.
@@ -172,6 +181,7 @@ enum AuthenticationPlan {
     },
     StaticAuthorization {
         token_ref: SecretRef,
+        scheme: String,
     },
     StaticApiKey {
         header_name: HeaderName,
@@ -180,12 +190,26 @@ enum AuthenticationPlan {
     Oauth2(Box<OauthPlan>),
 }
 
+/// How the client proves its identity at the token endpoint.
+///
+/// The bundle states the two forms as alternative flat keys, and compilation
+/// is where that alternation becomes a choice the runtime cannot get wrong.
+enum OauthClientAuthentication {
+    ClientSecret {
+        secret_ref: SecretRef,
+        placement: CredentialPlacement,
+    },
+    PrivateKeyJwt {
+        key_ref: SecretRef,
+    },
+}
+
 struct OauthPlan {
     token_endpoint: Url,
     client_id_ref: SecretRef,
-    client_secret_ref: SecretRef,
+    client_authentication: OauthClientAuthentication,
     scope: Option<String>,
-    credential_placement: CredentialPlacement,
+    audience: Option<String>,
     maximum_cache_lifetime: Duration,
     /// Lifetime used when the provider omits `expires_in`.
     assumed_lifetime: Option<Duration>,
@@ -419,9 +443,9 @@ impl SourceExecutor {
                 let password = resolve(&self.secrets, password_ref)?;
                 basic_authorization(&username, &password)?
             }
-            AuthenticationPlan::StaticAuthorization { token_ref } => {
+            AuthenticationPlan::StaticAuthorization { token_ref, scheme } => {
                 let token = resolve(&self.secrets, token_ref)?;
-                bearer_authorization(token.expose_secret())?
+                scheme_authorization(scheme, token.expose_secret())?
             }
             AuthenticationPlan::StaticApiKey {
                 header_name,
@@ -820,9 +844,14 @@ fn compile_authentication(
             username_ref: username_ref.clone(),
             password_ref: password_ref.clone(),
         }),
-        SourceAuthentication::StaticAuthorization { token_ref } => {
+        SourceAuthentication::StaticAuthorization { token_ref, scheme } => {
+            let scheme = scheme.as_deref().unwrap_or(DEFAULT_AUTHORIZATION_SCHEME);
+            if scheme.is_empty() || !scheme.bytes().all(is_http_token_byte) {
+                return Err(SourceError::InvalidPlan);
+            }
             Ok(AuthenticationPlan::StaticAuthorization {
                 token_ref: token_ref.clone(),
+                scheme: scheme.to_owned(),
             })
         }
         SourceAuthentication::StaticApiKey {
@@ -842,7 +871,9 @@ fn compile_authentication(
             token_endpoint,
             client_id_ref,
             client_secret_ref,
+            client_assertion_key_ref,
             scope,
+            audience,
             credential_placement,
             maximum_cache_seconds,
             assumed_lifetime_seconds,
@@ -851,12 +882,28 @@ fn compile_authentication(
             if token_endpoint.query().is_some() {
                 return Err(SourceError::InvalidPlan);
             }
+            let client_authentication = match (
+                client_secret_ref,
+                credential_placement,
+                client_assertion_key_ref,
+            ) {
+                (Some(secret_ref), Some(placement), None) => {
+                    OauthClientAuthentication::ClientSecret {
+                        secret_ref: secret_ref.clone(),
+                        placement: *placement,
+                    }
+                }
+                (None, None, Some(key_ref)) => OauthClientAuthentication::PrivateKeyJwt {
+                    key_ref: key_ref.clone(),
+                },
+                _ => return Err(SourceError::InvalidPlan),
+            };
             Ok(AuthenticationPlan::Oauth2(Box::new(OauthPlan {
                 token_endpoint,
                 client_id_ref: client_id_ref.clone(),
-                client_secret_ref: client_secret_ref.clone(),
+                client_authentication,
                 scope: scope.clone(),
-                credential_placement: *credential_placement,
+                audience: audience.clone(),
                 maximum_cache_lifetime: Duration::from_secs(*maximum_cache_seconds),
                 assumed_lifetime: assumed_lifetime_seconds.map(Duration::from_secs),
                 admission_timeout,
@@ -1050,35 +1097,7 @@ impl OauthPlan {
             }
         }
         *cache = None;
-        let client_id = resolve(secrets, &self.client_id_ref)?;
-        let client_secret = resolve(secrets, &self.client_secret_ref)?;
-        let client_id_text = protected_text(&client_id)?;
-        let client_secret_text = protected_text(&client_secret)?;
-        let mut form = vec![("grant_type", "client_credentials")];
-        if let Some(scope) = self.scope.as_deref() {
-            form.push(("scope", scope));
-        }
-        // Both placements keep the client credentials out of the request URI,
-        // where proxy and ingress logs would capture them.
-        let mut request = client
-            .post(self.token_endpoint.clone())
-            .header(ACCEPT, JSON_MEDIA_TYPE);
-        match self.credential_placement {
-            CredentialPlacement::BasicHeader => {
-                request = request.header(
-                    AUTHORIZATION,
-                    basic_authorization(&client_id, &client_secret)?,
-                );
-            }
-            CredentialPlacement::FormBody => {
-                form.push(("client_id", client_id_text));
-                form.push(("client_secret", client_secret_text));
-            }
-        }
-        request = request.form(&form);
-        drop(form);
-        drop(client_id);
-        drop(client_secret);
+        let request = self.token_request(client, secrets)?;
         // `expires_in` is measured from issuance, and issuance happens at the
         // authorization server while this request is in flight. Anchoring here
         // rather than after the response arrives assumes the token was issued at
@@ -1101,6 +1120,108 @@ impl OauthPlan {
             });
         }
         Ok(token)
+    }
+
+    /// Resolve the client credentials and build the token request.
+    ///
+    /// `RequestBuilder::form` serializes the body as it is called, so every
+    /// resolved secret is zeroized when this returns rather than being held
+    /// across the token round trip.
+    fn token_request(
+        &self,
+        client: &reqwest::Client,
+        secrets: &SecretResolver,
+    ) -> Result<reqwest::RequestBuilder, SourceError> {
+        let client_id = resolve(secrets, &self.client_id_ref)?;
+        let client_id_text = protected_text(&client_id)?;
+        let mut form = vec![("grant_type", "client_credentials")];
+        if let Some(scope) = self.scope.as_deref() {
+            form.push(("scope", scope));
+        }
+        if let Some(audience) = self.audience.as_deref() {
+            form.push(("audience", audience));
+        }
+        // No supported form places a client credential in the request URI,
+        // where proxy and ingress logs would capture it.
+        let mut request = client
+            .post(self.token_endpoint.clone())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        match &self.client_authentication {
+            OauthClientAuthentication::ClientSecret {
+                secret_ref,
+                placement,
+            } => {
+                let client_secret = resolve(secrets, secret_ref)?;
+                // A secret that is not UTF-8 is a misconfigured file rather
+                // than a credential, and which placement carries it does not
+                // change that. The check stays ahead of the match so neither
+                // arm can be the one that accepts it.
+                let client_secret_text = protected_text(&client_secret)?;
+                match placement {
+                    CredentialPlacement::BasicHeader => {
+                        request = request.header(
+                            AUTHORIZATION,
+                            basic_authorization(&client_id, &client_secret)?,
+                        );
+                        Ok(request.form(&form))
+                    }
+                    CredentialPlacement::FormBody => {
+                        form.push(("client_id", client_id_text));
+                        form.push(("client_secret", client_secret_text));
+                        Ok(request.form(&form))
+                    }
+                }
+            }
+            OauthClientAuthentication::PrivateKeyJwt { key_ref } => {
+                let assertion = self.client_assertion(secrets, key_ref, client_id_text)?;
+                // RFC 7523 section 2.2 lets the client identifier travel beside
+                // the assertion, and an authorization server that keys its
+                // client lookup on it rejects the request without it.
+                form.push(("client_id", client_id_text));
+                form.push(("client_assertion_type", CLIENT_ASSERTION_TYPE));
+                form.push(("client_assertion", assertion.as_str()));
+                Ok(request.form(&form))
+            }
+        }
+    }
+
+    /// Sign the RFC 7523 section 2.2 client assertion.
+    ///
+    /// The audience is the token endpoint the assertion is sent to, which both
+    /// RFC 7523 section 3 and SMART on FHIR Backend Services fix, so no bundle
+    /// key can point an assertion at a different recipient.
+    fn client_assertion(
+        &self,
+        secrets: &SecretResolver,
+        key_ref: &SecretRef,
+        client_id: &str,
+    ) -> Result<Zeroizing<String>, SourceError> {
+        let key_material = resolve(secrets, key_ref)?;
+        // `PrivateJwk::parse` is the crate's own entry point for untrusted key
+        // material: it bounds the document size, rejects duplicate JSON
+        // members, refuses unsupported private members, and validates that the
+        // private half is present and well formed. Deserializing straight into
+        // the type skips all four, so a key this runtime cannot actually sign
+        // with would only fail later, at the signing call.
+        let key = PrivateJwk::parse(protected_text(&key_material)?).map_err(|_| {
+            // The parse error names JWK members, so it is never surfaced.
+            SourceError::Credential
+        })?;
+        let issued_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|_| SourceError::Credential)?
+            .as_secs();
+        let issued_at = i64::try_from(issued_at).map_err(|_| SourceError::Credential)?;
+        sign_client_assertion(
+            &key,
+            &ClientAssertionRequest {
+                client_id,
+                audience: self.token_endpoint.as_str(),
+                lifetime_seconds: DEFAULT_ASSERTION_LIFETIME_SECONDS,
+                issued_at,
+            },
+        )
+        .map_err(|_| SourceError::Credential)
     }
 }
 
@@ -1241,14 +1362,26 @@ fn basic_authorization(
     sensitive_header(&header)
 }
 
-fn bearer_authorization(token: &[u8]) -> Result<HeaderValue, SourceError> {
+/// Build an Authorization value from a scheme name and a resolved token.
+///
+/// The scheme is already an HTTP token by the time it arrives, so the only
+/// value that can carry a space or a line break into the header is the
+/// credential, which `sensitive_header` refuses.
+fn scheme_authorization(scheme: &str, token: &[u8]) -> Result<HeaderValue, SourceError> {
     if token.is_empty() {
         return Err(SourceError::Credential);
     }
-    let mut header = Zeroizing::new(Vec::with_capacity(7 + token.len()));
-    header.extend_from_slice(b"Bearer ");
+    let mut header = Zeroizing::new(Vec::with_capacity(scheme.len() + 1 + token.len()));
+    header.extend_from_slice(scheme.as_bytes());
+    header.push(b' ');
     header.extend_from_slice(token);
     sensitive_header(&header)
+}
+
+/// RFC 6750 fixes the scheme an OAuth access token is presented under, so the
+/// token the runtime acquires itself is never configurable.
+fn bearer_authorization(token: &[u8]) -> Result<HeaderValue, SourceError> {
+    scheme_authorization(DEFAULT_AUTHORIZATION_SCHEME, token)
 }
 
 fn sensitive_header(bytes: &[u8]) -> Result<HeaderValue, SourceError> {
@@ -1839,10 +1972,13 @@ mod tests {
                 .expect("synthetic endpoint parses"),
             client_id_ref: SecretRef::parse("secret:file/missing-client-id")
                 .expect("secret reference parses"),
-            client_secret_ref: SecretRef::parse("secret:file/missing-client-secret")
-                .expect("secret reference parses"),
+            client_authentication: OauthClientAuthentication::ClientSecret {
+                secret_ref: SecretRef::parse("secret:file/missing-client-secret")
+                    .expect("secret reference parses"),
+                placement: CredentialPlacement::FormBody,
+            },
             scope: Some("fixture.read".into()),
-            credential_placement: CredentialPlacement::FormBody,
+            audience: None,
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_millis(20),
@@ -1914,10 +2050,13 @@ mod tests {
                 .expect("token endpoint parses"),
             client_id_ref: SecretRef::parse("secret:file/oauth-client-id")
                 .expect("secret reference parses"),
-            client_secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
-                .expect("secret reference parses"),
+            client_authentication: OauthClientAuthentication::ClientSecret {
+                secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
+                    .expect("secret reference parses"),
+                placement: CredentialPlacement::FormBody,
+            },
             scope: None,
-            credential_placement: CredentialPlacement::FormBody,
+            audience: None,
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_secs(5),

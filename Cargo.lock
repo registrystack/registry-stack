@@ -5570,6 +5570,7 @@ dependencies = [
  "rcgen",
  "registry-evidence-verifier",
  "registry-platform-audit",
+ "registry-platform-authcommon",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-crypto",

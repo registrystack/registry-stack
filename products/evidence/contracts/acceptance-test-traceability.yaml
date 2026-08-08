@@ -302,7 +302,7 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}
       - {file: crates/registry-evidence/src/config.rs, name: path_templates_headers_and_projection_fail_closed}
   - id: acceptance-row-47
-    summary: Fixed non-secret headers, static Bearer, and static API-key authentication pass generic exact-request and redaction tests; forbidden, duplicate, framing, routing, forwarding, proxy, tracing, cookie, and authentication header collisions fail at startup.
+    summary: Fixed non-secret headers, static Authorization header, and static API-key authentication pass generic exact-request and redaction tests; forbidden, duplicate, framing, routing, forwarding, proxy, tracing, cookie, and authentication header collisions fail at startup.
     tests:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_redacted}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilation}

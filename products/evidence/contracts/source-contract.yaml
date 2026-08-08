@@ -147,24 +147,28 @@ authentication:
     inputs: [username_secret_ref, password_secret_ref]
     placement: Authorization header.
   static-authorization:
-    inputs: [token_secret_ref]
+    inputs: [token_secret_ref, optional_scheme]
     placement: Authorization header.
+    scheme_rule: RFC 9110 section 11.1 makes the authentication scheme an HTTP token the origin chooses, so a source may state the one it expects; absent, the runtime sends Bearer. The scheme is a governed bundle token, never derived from a request or a response, and static-api-key cannot serve a source that wants another scheme because its header name is refused by the collision denylist.
   static-api-key:
     inputs: [bundle_fixed_header_name, value_secret_ref]
     placement: The exact allowlisted provider header.
     rule: Header name is validated against the same collision denylist as fixed headers and cannot be Authorization.
   oauth2-client-credentials:
-    inputs: [token_endpoint, client_id_secret_ref, client_secret_secret_ref, optional_fixed_scope, credential_placement, maximum_cache_lifetime, optional_assumed_token_lifetime]
+    inputs: [token_endpoint, client_id_secret_ref, optional_client_secret_ref, optional_client_assertion_key_secret_ref, optional_fixed_scope, optional_fixed_audience, optional_credential_placement, maximum_cache_lifetime, optional_assumed_token_lifetime]
     rules:
       - Token acquisition is credential bootstrap, not an evidence-data request or fact source.
-      - Endpoint, grant, scope, placement, response bounds, redirect denial, and cache maximum are fixed.
+      - Endpoint, grant, client authentication form, scope, audience, placement, response bounds, redirect denial, and cache maximum are fixed.
       - Waiting for the per-source token-cache and single-flight boundary is limited by the configured source timeout.
       - Cache lifetime is clamped to provider expiry and the configured maximum.
       - Token request and response are unavailable to Rhai and fully redacted.
     token_lifetime_rule: RFC 6749 section 5.1 makes expires_in recommended rather than required, so a token response carrying only access_token and token_type is accepted when the bundle configures assumedLifetimeSeconds. The assumed lifetime is a governed positive bundle value, never inferred from the token, and the cache is still clamped to the configured maximum. A provider that omits expires_in without a configured assumed lifetime, or returns a zero or non-numeric expires_in, remains a credential failure.
     token_extension_member_rule: 'RFC 6749 section 5.1 permits members beyond the ones it defines, and deployed authorization servers send them, so a token response member Version 1 does not read is ignored rather than refused. Ignoring is not trusting: an unread member is never a credential, is never available to Rhai, and is scrubbed with the rest of the parsed response. Every member Version 1 does read stays closed, so a wrong type or a scope other than the configured one remains a credential failure, and duplicate members remain a parse failure, which is what prevents a second access_token arriving as an extension.'
+    client_authentication_forms: [client-secret, private-key-jwt]
+    client_authentication_rule: 'A source declares exactly one client authentication form. clientSecretRef selects the client-secret form and requires credentialPlacement; clientAssertionKeyRef selects the private-key-jwt form and admits neither. RFC 7523 section 2.2 fixes the client-assertion type identifier and fixes the assertion audience to the token endpoint, so neither is configurable, and the assertion lifetime is fixed rather than governed. The referenced secret is a private JWK the runtime signs with under the algorithm the key itself declares; SMART on FHIR Backend Services names ES384 and RS384 for that signature. A key the runtime cannot read is a credential failure raised before any token request, and neither the key nor the assertion is available to Rhai.'
     credential_placements: [basic-header, form-body]
     credential_placement_rule: RFC 6749 section 2.3.1 defines Basic authentication and the request-body parameters and requires that those parameters never appear in the request URI. Version 1 offers no query-string placement, so no client identifier or secret can reach an authorization-server, proxy, or ingress URL log. The token URL, body, response, and debug output are still fully redacted.
+    audience_rule: An authorization server that scopes a token to a named API reads a fixed audience token-request parameter, without which it returns a token the source cannot accept. The audience is a governed bundle string, never derived from a request or a response, and it is sent only when the bundle states it.
     token_endpoint_transport: The same HTTPS-or-explicit-numeric-loopback rule as the evidence-data origin.
   secret_rules:
     - The governed bundle contains only secret:file logical references. Environment-variable interpolation and literal secret values are not supported.

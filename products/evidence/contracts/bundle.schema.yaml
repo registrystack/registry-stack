@@ -861,9 +861,19 @@ $defs:
             const: static-authorization
           tokenRef:
             description: >-
-              Logical file-secret reference for the static bearer token the runtime places
-              in the Authorization header of every request to this source.
+              Logical file-secret reference for the static token the runtime places in the
+              Authorization header of every request to this source.
             $ref: '#/$defs/secret-ref'
+          scheme:
+            description: >-
+              Authentication scheme the token is presented under; absent, the runtime sends
+              `Bearer`. RFC 9110 section 11.1 makes the scheme an HTTP token chosen by the
+              origin, and `static-api-key` cannot serve a source that wants another one because
+              it refuses the Authorization header by name.
+            type: string
+            minLength: 1
+            maxLength: 32
+            pattern: ^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$
       - type: object
         additionalProperties: false
         required:
@@ -890,9 +900,30 @@ $defs:
           - kind
           - tokenEndpoint
           - clientIdRef
-          - clientSecretRef
-          - credentialPlacement
           - maximumCacheSeconds
+        oneOf:
+          - description: >-
+              Shared-secret client authentication. The secret names the credential and
+              `credentialPlacement` names the channel it travels in, so neither is meaningful
+              without the other.
+            required:
+              - clientSecretRef
+              - credentialPlacement
+            not:
+              required:
+                - clientAssertionKeyRef
+          - description: >-
+              Assertion client authentication. The signing key is the whole credential, so
+              a shared secret and a placement for one have nothing to describe.
+            required:
+              - clientAssertionKeyRef
+            allOf:
+              - not:
+                  required:
+                    - clientSecretRef
+              - not:
+                  required:
+                    - credentialPlacement
         properties:
           kind:
             const: oauth2-client-credentials
@@ -915,7 +946,15 @@ $defs:
             description: >-
               Logical file-secret reference for the client secret the runtime presents at
               `tokenEndpoint`; the token URL, body, response, and debug output stay redacted,
-              so the resolved value reaches no log.
+              so the resolved value reaches no log. Declared with `credentialPlacement` and
+              never beside `clientAssertionKeyRef`.
+            $ref: '#/$defs/secret-ref'
+          clientAssertionKeyRef:
+            description: >-
+              Logical file-secret reference for the private JWK the runtime signs an RFC 7523
+              section 2.2 client assertion with, which is the client authentication SMART on
+              FHIR Backend Services requires. The assertion is audienced to `tokenEndpoint`
+              and lives 60 seconds; no private key leaves the process.
             $ref: '#/$defs/secret-ref'
           scope:
             description: >-
@@ -924,12 +963,21 @@ $defs:
             type: string
             minLength: 1
             maxLength: 512
+          audience:
+            description: >-
+              Fixed `audience` form parameter sent with the token request, for an authorization
+              server that keys the issued token to an audience the scope cannot express and
+              returns an unusable token without it.
+            type: string
+            minLength: 1
+            maxLength: 512
           credentialPlacement:
             description: >-
               Selects whether the client identifier and secret travel in the Authorization
               header or the form body of the token request; Version 1 offers no query-string
               placement, so neither value can reach an authorization-server, proxy, or ingress
-              URL log.
+              URL log. Declared with `clientSecretRef` and never beside `clientAssertionKeyRef`,
+              whose assertion always travels in the form body.
             enum:
               - basic-header
               - form-body

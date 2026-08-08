@@ -7,7 +7,7 @@
       "file": "products/evidence/contracts/bundle.schema.yaml",
       "title": "bundle/evidence.yaml",
       "marker": "evidence-bundle-key-paths",
-      "field_count": 228,
+      "field_count": 231,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -2602,6 +2602,40 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.authentication.audience",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 512",
+              "minLength: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Fixed `audience` form parameter sent with the token request, for an authorization server that keys the issued token to an audience the scope cannot express and returns an unusable token without it.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.authentication.clientAssertionKeyRef",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [],
+            [
+              "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Logical file-secret reference for the private JWK the runtime signs an RFC 7523 section 2.2 client assertion with, which is the client authentication SMART on FHIR Backend Services requires. The assertion is audienced to `tokenEndpoint` and lives 60 seconds; no private key leaves the process.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.authentication.clientIdRef",
           "kind": "property",
           "type": "string",
@@ -2625,12 +2659,13 @@
           "values": null,
           "values_conditional": false,
           "constraints": [
+            [],
             [
               "pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$"
             ]
           ],
           "conditional_constraints": [],
-          "description": "Logical file-secret reference for the client secret the runtime presents at `tokenEndpoint`; the token URL, body, response, and debug output stay redacted, so the resolved value reaches no log.",
+          "description": "Logical file-secret reference for the client secret the runtime presents at `tokenEndpoint`; the token URL, body, response, and debug output stay redacted, so the resolved value reaches no log. Declared with `credentialPlacement` and never beside `clientAssertionKeyRef`.",
           "runtime_validation": null
         },
         {
@@ -2645,7 +2680,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Selects whether the client identifier and secret travel in the Authorization header or the form body of the token request; Version 1 offers no query-string placement, so neither value can reach an authorization-server, proxy, or ingress URL log.",
+          "description": "Selects whether the client identifier and secret travel in the Authorization header or the form body of the token request; Version 1 offers no query-string placement, so neither value can reach an authorization-server, proxy, or ingress URL log. Declared with `clientSecretRef` and never beside `clientAssertionKeyRef`, whose assertion always travels in the form body.",
           "runtime_validation": null
         },
         {
@@ -2718,6 +2753,24 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.authentication.scheme",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 32",
+              "minLength: 1",
+              "pattern: ^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Authentication scheme the token is presented under; absent, the runtime sends `Bearer`. RFC 9110 section 11.1 makes the scheme an HTTP token chosen by the origin, and `static-api-key` cannot serve a source that wants another one because it refuses the Authorization header by name.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.authentication.scope",
           "kind": "property",
           "type": "string",
@@ -2767,7 +2820,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Logical file-secret reference for the static bearer token the runtime places in the Authorization header of every request to this source.",
+          "description": "Logical file-secret reference for the static token the runtime places in the Authorization header of every request to this source.",
           "runtime_validation": null
         },
         {

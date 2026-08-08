@@ -337,13 +337,19 @@ authentication:
   kind: static-authorization
   tokenRef: secret:file/source-token
 
+# Authorization: Token <secret>, for a source that names another scheme
+authentication:
+  kind: static-authorization
+  tokenRef: secret:file/source-token
+  scheme: Token
+
 # A provider-specific API-key header
 authentication:
   kind: static-api-key
   headerName: X-API-Key
   valueRef: secret:file/source-api-key
 
-# OAuth 2.0 client credentials
+# OAuth 2.0 client credentials, client-secret form
 authentication:
   kind: oauth2-client-credentials
   tokenEndpoint: https://auth.registry.gov.example/token
@@ -351,6 +357,16 @@ authentication:
   clientSecretRef: secret:file/source-client-secret
   scope: recordsearch
   credentialPlacement: basic-header
+  maximumCacheSeconds: 300
+
+# OAuth 2.0 client credentials, private_key_jwt form
+authentication:
+  kind: oauth2-client-credentials
+  tokenEndpoint: https://auth.registry.gov.example/token
+  clientIdRef: secret:file/source-client-id
+  clientAssertionKeyRef: secret:file/source-client-key
+  scope: recordsearch
+  audience: https://api.registry.gov.example/
   maximumCacheSeconds: 300
 ```
 
@@ -363,11 +379,28 @@ ports, user information, paths, queries, fragments, HTTPS origins, and
 non-loopback addresses are rejected. Production and evidence-grade bundles
 reject this kind.
 
+`static-authorization` sends `Authorization: Bearer <secret>` unless `scheme`
+names another one. RFC 9110 section 11.1 leaves the scheme to the origin, so a
+source expecting `Token`, `SSWS`, or another provider scheme states it here; the
+value is validated as an HTTP token of at most 32 bytes. `static-api-key` cannot
+serve those sources, because its `headerName` denylist refuses `Authorization`.
+
 `static-api-key.headerName` cannot be `Authorization`, `Host`, `Cookie`,
 `Set-Cookie`, `Content-Length`, `Content-Type`, `Transfer-Encoding`, a
 hop-by-hop header, forwarding/proxy header, or tracing header. Names are
 validated as HTTP field names. Secret values are bounded and reject controls,
 CR, and LF.
+
+An OAuth source declares exactly one client authentication form.
+`clientSecretRef` selects the client-secret form and requires
+`credentialPlacement`; `clientAssertionKeyRef` selects `private_key_jwt` and
+admits neither. The referenced key file holds a private JWK, and the runtime
+signs a short-lived assertion under the algorithm that key declares: SMART on
+FHIR Backend Services names ES384 and RS384, and requires this form rather than
+a client secret. RFC 7523 section 2.2 fixes the assertion audience to
+`tokenEndpoint` and fixes the client-assertion type, so neither is configurable,
+and the assertion lifetime is fixed rather than governed. A key the runtime
+cannot read fails the request before any token call.
 
 OAuth `credentialPlacement` is one of `basic-header` or `form-body`. RFC 6749
 section 2.3.1 requires the client identifier and secret to travel in the
@@ -375,6 +408,10 @@ Authorization header or the request body and never in the request URI, so
 Version 1 offers no query-string placement and no credential can reach a token
 URL log. Token redirects are denied and token responses are bounded. The token
 request is credential bootstrap, not a second evidence-data lookup.
+
+`audience` is sent as a token-request parameter only when the bundle states it.
+An authorization server that scopes a token to a named API needs it; without it
+it returns a token the source will reject.
 
 RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
 compliant provider may return only `access_token` and `token_type`. A token
@@ -388,7 +425,8 @@ audit or subject-binding key unless those encoded ASCII bytes are intentionally
 the key. Generate independent random values of at least 32 bytes and store the
 raw bytes in their owner-only files. Source usernames, passwords, tokens,
 client ids, and client secrets use their provider-defined lexical form and the
-runtime's generic secret bounds.
+runtime's generic secret bounds. A `clientAssertionKeyRef` file instead holds
+the JSON private JWK itself, including its `alg` and `kid`.
 
 For inbound access tokens, `tokenTypes: [at+jwt]` requires a protected JWT
 header with `typ: at+jwt`; `application/at+jwt` requires that exact alternative.
@@ -959,6 +997,8 @@ sources
 sources.*
 sources.*.authentication
 sources.*.authentication.assumedLifetimeSeconds
+sources.*.authentication.audience
+sources.*.authentication.clientAssertionKeyRef
 sources.*.authentication.clientIdRef
 sources.*.authentication.clientSecretRef
 sources.*.authentication.credentialPlacement
@@ -966,6 +1006,7 @@ sources.*.authentication.headerName
 sources.*.authentication.kind
 sources.*.authentication.maximumCacheSeconds
 sources.*.authentication.passwordRef
+sources.*.authentication.scheme
 sources.*.authentication.scope
 sources.*.authentication.tokenEndpoint
 sources.*.authentication.tokenRef

@@ -276,7 +276,8 @@ The source definition still fixes:
 - HTTP method;
 - normalized path;
 - whether a query and/or JSON body is permitted;
-- generic Basic, static Bearer, or OAuth client-credentials authentication;
+- generic Basic, static Authorization header, or OAuth client-credentials
+  authentication;
 - permitted content type and core-owned headers;
 - the closed `single` or `search-then-fetch` acquisition and its one- or
   two-request ceiling;

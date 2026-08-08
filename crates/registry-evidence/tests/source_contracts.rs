@@ -47,6 +47,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const SHAPE_EVIDENCE_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
 const SHAPE_EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
+/// Synthetic P-384 client key. SMART on FHIR Backend Services names ES384 and
+/// RS384 as the assertion algorithms, so the assertion path is proven on one of
+/// them rather than on the runtime's own ES256 signing key.
+const CLIENT_ASSERTION_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"client-key-es384-2026-01"}"#;
+
 fn source_config(
     base_url: &str,
     authentication: Value,
@@ -174,6 +179,16 @@ fn parts() -> RequestParts {
 }
 
 fn resolver(entries: &[(&str, &str)]) -> (TempDir, Arc<SecretResolver>) {
+    let bytes: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(name, value)| (*name, value.as_bytes()))
+        .collect();
+    resolver_from_bytes(&bytes)
+}
+
+/// A secret file is opaque bytes on disk, so proving what the runtime does
+/// with material that is not text means writing it as bytes.
+fn resolver_from_bytes(entries: &[(&str, &[u8])]) -> (TempDir, Arc<SecretResolver>) {
     let root = tempfile::tempdir().expect("temporary secret root");
     for (name, value) in entries {
         let path = root.path().join(name);
@@ -197,6 +212,14 @@ fn query_parameters(url: &url::Url) -> Vec<(String, String)> {
     url.query_pairs()
         .map(|(name, value)| (name.into_owned(), value.into_owned()))
         .collect()
+}
+
+/// Decode one base64url JWS segment into the JSON object it encodes.
+fn decode_jws_segment(segment: &str) -> Value {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(segment)
+        .expect("the JWS segment is base64url");
+    serde_json::from_slice(&bytes).expect("the JWS segment is JSON")
 }
 
 fn contains_parameter(parameters: &[(String, String)], name: &str, value: &str) -> bool {
@@ -2931,4 +2954,415 @@ async fn ambient_proxy_child() {
         )
         .await
         .expect("ambient proxy is ignored for token and evidence-data requests");
+}
+
+/// A source that names an authentication scheme gets that scheme verbatim, and
+/// one that names none still gets `Bearer`.
+///
+/// The kind cannot be served by `static-api-key` instead, because that kind
+/// refuses the Authorization header by name, so this is the only path to a
+/// source that authenticates with anything other than a bearer token.
+#[tokio::test]
+async fn a_static_authorization_source_sends_the_scheme_it_declares() {
+    for (declared, expected) in [
+        (Some("Token"), "Token synthetic-token"),
+        (Some("SSWS"), "SSWS synthetic-token"),
+        (Some("Bearer"), "Bearer synthetic-token"),
+        (None, "Bearer synthetic-token"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/data"))
+            .and(header("authorization", expected))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (_root, secrets) = resolver(&[("source-token", "synthetic-token")]);
+        let mut authentication = json!({
+            "kind": "static-authorization",
+            "tokenRef": "secret:file/source-token",
+        });
+        if let Some(declared) = declared {
+            authentication["scheme"] = json!(declared);
+        }
+        let source = fixed_source(&server.uri(), authentication);
+        SourceExecutor::new(&source, secrets)
+            .expect("static executor builds")
+            .execute(
+                &[selector("record")],
+                &RequestParts {
+                    query: vec![],
+                    body: Some(json!({})),
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{declared:?} scheme request failed: {error:?}"));
+    }
+}
+
+/// RFC 7523 section 2.2 replaces the shared secret with a signed assertion, and
+/// SMART on FHIR Backend Services requires that form. The assertion has to be
+/// audienced to the token endpoint it is sent to, or a hostile authorization
+/// server could replay it elsewhere, and no shared-secret parameter may appear
+/// beside it.
+#[tokio::test]
+async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "synthetic-access-token",
+            "token_type": "Bearer",
+            "expires_in": 300
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .and(header("authorization", "Bearer synthetic-access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_root, secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", CLIENT_ASSERTION_PRIVATE_JWK),
+    ]);
+    let token_endpoint = format!("{}/token", server.uri());
+    let source = fixed_source(
+        &server.uri(),
+        json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": token_endpoint,
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "audience": "https://api.invalid/",
+            "maximumCacheSeconds": 60
+        }),
+    );
+    SourceExecutor::new(&source, secrets)
+        .expect("assertion executor builds")
+        .execute(
+            &[selector("record")],
+            &RequestParts {
+                query: vec![],
+                body: Some(json!({})),
+            },
+        )
+        .await
+        .expect("assertion-authenticated source request succeeds");
+
+    let requests = server.received_requests().await.expect("request journal");
+    let token_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/token")
+        .expect("the token request was recorded");
+    assert!(
+        query_parameters(&token_request.url).is_empty(),
+        "the assertion form added token query fields"
+    );
+    let form = encoded_parameters(&token_request.body);
+    assert!(
+        contains_parameter(&form, "grant_type", "client_credentials")
+            && contains_parameter(&form, "client_id", "synthetic-client")
+            && contains_parameter(&form, "audience", "https://api.invalid/")
+            && contains_parameter(
+                &form,
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+            ),
+        "the assertion token form is not exact: {form:?}"
+    );
+    assert!(
+        !form.iter().any(|(name, _)| name == "client_secret"),
+        "a shared secret travelled beside the assertion"
+    );
+
+    let assertion = form
+        .iter()
+        .find_map(|(name, value)| (name == "client_assertion").then_some(value.as_str()))
+        .expect("the form carries an assertion");
+    let segments = assertion.split('.').collect::<Vec<_>>();
+    assert_eq!(segments.len(), 3, "the assertion is not a compact JWS");
+    let header = decode_jws_segment(segments[0]);
+    let claims = decode_jws_segment(segments[1]);
+
+    // A non-empty third segment only proves something was appended. What the
+    // authorization server actually checks is that the registered key signed
+    // these exact bytes, so the assertion is verified against the public half
+    // of the very key the source was configured with.
+    let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(segments[2])
+        .expect("the signature is base64url");
+    let signing_input = &assertion[..segments[0].len() + 1 + segments[1].len()];
+    let signing_key = PrivateJwk::parse(CLIENT_ASSERTION_PRIVATE_JWK).expect("the test key parses");
+    registry_platform_crypto::verify(signing_input.as_bytes(), &signature, &signing_key.public())
+        .expect("the assertion is not signed by the configured key");
+    assert_eq!(header["alg"], json!("ES384"));
+    assert_eq!(header["typ"], json!("JWT"));
+    assert_eq!(claims["aud"], json!(token_endpoint));
+    assert_eq!(claims["iss"], json!("synthetic-client"));
+    assert_eq!(claims["sub"], json!("synthetic-client"));
+    assert_eq!(
+        claims["exp"].as_i64().expect("exp is numeric")
+            - claims["iat"].as_i64().expect("iat is numeric"),
+        60,
+        "the assertion lifetime is not the fixed one"
+    );
+    assert!(
+        claims["jti"].as_str().is_some_and(|jti| !jti.is_empty()),
+        "the assertion carries no replay identifier"
+    );
+}
+
+/// A key the runtime cannot read is a credential failure, and it has to be one
+/// before anything reaches the authorization server: a token request built
+/// without client authentication would put the bare client identifier on the
+/// wire.
+#[tokio::test]
+async fn an_unreadable_client_assertion_key_fails_before_the_token_request() {
+    // The public half of the configured key: structurally a valid JWK, and it
+    // carries a key identifier, so it can only be refused for the reason that
+    // matters here, which is that it holds no private material to sign with.
+    let public_only = serde_json::to_string(
+        &PrivateJwk::parse(CLIENT_ASSERTION_PRIVATE_JWK)
+            .expect("the test key parses")
+            .public(),
+    )
+    .expect("the public half serializes");
+    for (label, key_material) in [
+        ("not JSON at all", "not a private jwk"),
+        ("no private scalar", public_only.as_str()),
+        (
+            "a duplicate JSON member",
+            r#"{"kty":"EC","crv":"P-384","kid":"k","d":"AA","d":"BB"}"#,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let (_root, secrets) = resolver(&[
+            ("oauth-client-id", "synthetic-client"),
+            ("oauth-client-key", key_material),
+        ]);
+        let source = fixed_source(
+            &server.uri(),
+            json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": format!("{}/token", server.uri()),
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientAssertionKeyRef": "secret:file/oauth-client-key",
+                "maximumCacheSeconds": 60
+            }),
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, secrets)
+                .expect("assertion executor builds")
+                .credentials_ready()
+                .await,
+            Err(SourceError::Credential),
+            "a key with {label} was not refused"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("request journal")
+                .is_empty(),
+            "a key with {label} still reached the authorization server"
+        );
+    }
+}
+
+/// Assertion key material is untrusted input, so it goes through the crypto
+/// crate's own parser rather than a plain deserialize. The difference is
+/// observable rather than theoretical: every document below is otherwise a
+/// signable key, so a deserialize that ignored what it did not recognize would
+/// put a signed assertion on the wire under a key the operator did not write.
+#[tokio::test]
+async fn client_assertion_key_material_the_jwk_parser_refuses_never_signs() {
+    let with_member = |member: &str, value: Value| {
+        let mut key: Value =
+            serde_json::from_str(CLIENT_ASSERTION_PRIVATE_JWK).expect("the test key is JSON");
+        key[member] = value;
+        key.to_string()
+    };
+    for (label, key_material) in [
+        // RSA multi-prime material, which this stack does not support.
+        ("an `oth` member", with_member("oth", json!([]))),
+        // Symmetric key material beside an asymmetric private key.
+        ("a `k` member", with_member("k", json!("c3ltbWV0cmlj"))),
+        // Two `kid` members leave the document ambiguous about which key it
+        // names, and a plain deserialize settles it by keeping the last.
+        (
+            "a duplicate `kid`",
+            CLIENT_ASSERTION_PRIVATE_JWK.replacen('{', r#"{"kid":"client-key-es384-2025-01","#, 1),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let (_root, secrets) = resolver(&[
+            ("oauth-client-id", "synthetic-client"),
+            ("oauth-client-key", key_material.as_str()),
+        ]);
+        let source = fixed_source(
+            &server.uri(),
+            json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": format!("{}/token", server.uri()),
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientAssertionKeyRef": "secret:file/oauth-client-key",
+                "maximumCacheSeconds": 60
+            }),
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, secrets)
+                .expect("assertion executor builds")
+                .credentials_ready()
+                .await,
+            Err(SourceError::Credential),
+            "a key with {label} was accepted"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("request journal")
+                .is_empty(),
+            "a key with {label} signed an assertion onto the wire"
+        );
+    }
+}
+
+/// A secret file that is not UTF-8 is a misconfigured deployment rather than a
+/// credential, and which placement carries it does not change that. Basic
+/// authentication base64-encodes whatever bytes it is given, so nothing
+/// downstream of this check would notice.
+#[tokio::test]
+async fn a_client_secret_that_is_not_utf8_is_refused_in_either_placement() {
+    for placement in ["basic-header", "form-body"] {
+        let server = MockServer::start().await;
+        let (_root, secrets) = resolver_from_bytes(&[
+            ("oauth-client-id", b"synthetic-client".as_slice()),
+            // A lone continuation byte begins no UTF-8 sequence.
+            ("oauth-client-secret", &[0x80, 0x81, 0x82]),
+        ]);
+        let source = oauth_source(
+            &server.uri(),
+            &format!("{}/token", server.uri()),
+            placement,
+            60,
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, secrets)
+                .expect("executor builds")
+                .credentials_ready()
+                .await,
+            Err(SourceError::Credential),
+            "{placement} accepted a client secret that is not UTF-8"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("request journal")
+                .is_empty(),
+            "{placement} put a client secret that is not UTF-8 on the wire"
+        );
+    }
+}
+
+/// Compilation is a second gate behind bundle validation, and it is not
+/// redundant: `SourceExecutor::new` compiles a source configuration directly,
+/// so a path that never ran bundle validation must still be unable to put a
+/// space, a separator, or a line break where the scheme goes.
+#[test]
+fn compilation_refuses_an_authorization_scheme_that_is_not_an_http_token() {
+    for scheme in [
+        "Bearer token",
+        "Bearer\r\nx-injected: 1",
+        "Bearer\u{a0}",
+        "Be(a)rer",
+        "",
+    ] {
+        let (_root, secrets) = resolver(&[("source-token", "synthetic-token")]);
+        let source = fixed_source(
+            "https://source.invalid",
+            json!({
+                "kind": "static-authorization",
+                "tokenRef": "secret:file/source-token",
+                "scheme": scheme
+            }),
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, secrets).err(),
+            Some(SourceError::InvalidPlan),
+            "{scheme:?} compiled into a plan"
+        );
+    }
+}
+
+/// The same second gate for the OAuth credential forms. Compilation narrows
+/// the three flat keys into a closed two-member enum, and every combination
+/// that is not exactly one credential form has to be refused on the way in,
+/// not resolved to a default.
+#[test]
+fn compilation_refuses_an_oauth_source_without_exactly_one_credential_form() {
+    for (label, secret_ref, placement, key_ref) in [
+        (
+            "both forms",
+            Some("secret:file/oauth-client-secret"),
+            Some("basic-header"),
+            Some("secret:file/oauth-client-key"),
+        ),
+        (
+            "both forms with no placement",
+            Some("secret:file/oauth-client-secret"),
+            None,
+            Some("secret:file/oauth-client-key"),
+        ),
+        (
+            "a secret with no placement",
+            Some("secret:file/oauth-client-secret"),
+            None,
+            None,
+        ),
+        (
+            "a placement with no secret",
+            None,
+            Some("basic-header"),
+            None,
+        ),
+        (
+            "an assertion key beside a placement",
+            None,
+            Some("basic-header"),
+            Some("secret:file/oauth-client-key"),
+        ),
+        ("neither form", None, None, None),
+    ] {
+        let mut authentication = json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": "https://source.invalid/token",
+            "clientIdRef": "secret:file/oauth-client-id",
+            "maximumCacheSeconds": 60
+        });
+        if let Some(secret_ref) = secret_ref {
+            authentication["clientSecretRef"] = json!(secret_ref);
+        }
+        if let Some(placement) = placement {
+            authentication["credentialPlacement"] = json!(placement);
+        }
+        if let Some(key_ref) = key_ref {
+            authentication["clientAssertionKeyRef"] = json!(key_ref);
+        }
+        let (_root, secrets) = resolver(&[("oauth-client-id", "synthetic-client")]);
+        let source = fixed_source("https://source.invalid", authentication);
+        assert_eq!(
+            SourceExecutor::new(&source, secrets).err(),
+            Some(SourceError::InvalidPlan),
+            "{label} compiled into a plan"
+        );
+    }
 }

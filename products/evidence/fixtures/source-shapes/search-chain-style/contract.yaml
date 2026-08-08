@@ -10,7 +10,7 @@ property_table_cell:
   search_fact_kind: reference
   member_fact_kind: attested boolean, and count
   negative_capability: attested set completeness
-  credential: static bearer, and per-source OAuth client credentials
+  credential: static Authorization header, and per-source OAuth client credentials
 wire_properties:
   flat_dotted_keys: >-
     The register returns a declaration object whose keys are literally dotted

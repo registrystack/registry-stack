@@ -149,7 +149,7 @@ must use them:
 | Subject selector | Closed identifier or compound field set with deployment-defined names, scalar types, bounds, and fixed source placements |
 | Lookup outcome | Provider-owned `match`, `no_match`, or `ambiguous`; facts exist only on `match` |
 | Source | One fixed HTTP JSON data request using field projection and denied redirects |
-| Source authentication | Secret-referenced Basic, static Bearer, static API-key header, or OAuth 2.0 client credentials; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin |
+| Source authentication | Secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin |
 | Audit | `registry-platform-audit` JSONL sink on explicitly durable storage, fail-closed |
 | Signing | Flattened JWS JSON with one active ES256/P-256 key, RFC 7638 `kid`, explicit published and revoked sets, and a public JWKS endpoint |
 | Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it |
@@ -286,11 +286,15 @@ declares a fixed request and selects one generic authentication profile:
 - no credential only under `assuranceProfile: local`, at a canonical numeric-
   loopback HTTP origin with an explicit non-zero port;
 - HTTP Basic with username and password secret references;
-- static Bearer with a token secret reference;
+- static Authorization header with a token secret reference and an optional
+  fixed scheme, defaulting to Bearer;
 - static API-key header with a fixed allowlisted header name and secret
   reference;
-- OAuth 2.0 client credentials with client identifier and secret references,
-  a fixed HTTPS token endpoint, fixed grant and optional fixed scope.
+- OAuth 2.0 client credentials with a client identifier reference, a fixed
+  HTTPS token endpoint, a fixed grant, an optional fixed scope and audience,
+  and exactly one client authentication form: a client secret reference with a
+  fixed placement, or a private-key reference the runtime signs a JWT client
+  assertion with.
 
 Credential acquisition is not available to Rhai. OAuth token acquisition may
 make a separate HTTP request, but it is not a second evidence-data lookup and
@@ -578,8 +582,9 @@ fixtures, and production Rust contains no case-specific branch or type.
   latter fixes two source identifiers, validates the search FactSet before the
   fetch, audits each call, and exposes no third-call or response-led routing
   surface.
-- Implement generic HTTP Basic, static Bearer, static API-key header, and OAuth
-  2.0 client-credentials providers using secret references.
+- Implement generic HTTP Basic, static Authorization header, static API-key
+  header, and OAuth 2.0 client-credentials providers using secret references,
+  the last authenticating by client secret or by private-key JWT assertion.
 - Bind credential-free source access to explicit local assurance and an exact
   numeric-loopback HTTP origin, with no authentication header on the wire.
 - Implement strict provider-text `parse_integer` without enabling implicit
@@ -730,7 +735,7 @@ follow-up issue.
 | Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
 | Values and validation | Every Version 1 Supported Value form declared in `CONCEPT.md` passes positive, negative, boundary, size, cardinality, Evidence construction, JWS serialization, and verification tests. The four initial assertion cases exercise boolean, controlled-code, time-bucket, multiple-concept, and multi-subject behavior through the full service. |
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
-| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Bearer, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
+| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Authorization header, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
 | Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
 | Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
@@ -859,10 +864,10 @@ At minimum, pin these acceptance and negative cases:
 46. Fixed paths and tagged selector or fetch prior-fact path templates pass exact encoding tests.
     Missing, extra, duplicated, slash, backslash, percent, control, empty, and
     dot-segment bindings fail before credential acquisition or source access.
-47. Fixed non-secret headers, static Bearer, and static API-key authentication
-    pass generic exact-request and redaction tests. Forbidden, duplicate,
-    framing, routing, forwarding, proxy, tracing, cookie, and authentication
-    header collisions fail at startup.
+47. Fixed non-secret headers, static Authorization header, and static API-key
+    authentication pass generic exact-request and redaction tests. Forbidden,
+    duplicate, framing, routing, forwarding, proxy, tracing, cookie, and
+    authentication header collisions fail at startup.
 48. System roots and logical private-CA trust profiles pass positive TLS tests.
     Unbound, malformed, insecure, symlinked, mutable, or hostname-bypassing CA
     configurations prevent readiness, and ambient HTTP proxy environment
