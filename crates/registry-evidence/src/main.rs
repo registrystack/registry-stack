@@ -1430,35 +1430,14 @@ fn evaluate_fixture_acquisition(
                     name_list(&object_keys(&fetch_response))
                 ),
             );
-            let facts = match kernel.extract_source(fetch, &fetch_response, &search_facts) {
-                Ok(LookupResult::Match(facts)) => {
-                    trace.record(
-                        Stage::Extract,
-                        StageStatus::Ok,
-                        format!("fact keys {}", name_list(&fact_keys(&facts))),
-                    );
-                    facts
-                }
-                Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
-                    trace.record_with(
-                        Stage::Extract,
-                        StageStatus::Failed,
-                        "a fetch may only resolve uniquely, and this one did not",
-                        vec![format!(
-                            "fetch response keys available {}",
-                            name_list(&object_keys(&fetch_response))
-                        )],
-                    );
-                    return Ok(Err(KernelError::SourceProtocol));
-                }
-                Err(error) => {
-                    trace.record(
-                        Stage::Extract,
-                        StageStatus::Failed,
-                        format!("the fetch extraction failed: {error}"),
-                    );
-                    return Ok(Err(error));
-                }
+            let facts = match record_dependent_lookup(
+                trace,
+                kernel.extract_source(fetch, &fetch_response, &search_facts),
+                &fetch_response,
+                "fetch",
+            ) {
+                Ok(facts) => facts,
+                Err(outcome) => return Ok(outcome),
             };
             Ok(record_derivation(
                 trace,
@@ -1503,11 +1482,20 @@ fn evaluate_fixture_acquisition(
             let mut search_facts = BTreeMap::new();
             let mut union = BTreeMap::new();
             for stage in &plan.stages {
+                // Each stage is traced as it is walked, so a chain reports
+                // which call the case reached rather than reporting the whole
+                // acquisition as one step. Which call stopped a case is the
+                // question this acquisition kind exists to raise.
+                let role = match stage.role {
+                    StageRole::Search => "search",
+                    StageRole::Member => "member",
+                };
                 let source_config = bundle
                     .config
                     .sources
                     .get(&stage.source)
                     .ok_or(CliError("fixture source is unavailable"))?;
+                let source = &stage.source;
                 let response = match project_fixture_response(
                     source_config,
                     responses
@@ -1515,28 +1503,44 @@ fn evaluate_fixture_acquisition(
                         .ok_or(CliError("fixture source response is unavailable"))?,
                 ) {
                     Ok(response) => response,
-                    Err(_) => return Ok(Err(KernelError::SourceProtocol)),
+                    Err(_) => {
+                        trace.record(
+                            Stage::Acquire,
+                            StageStatus::Failed,
+                            format!(
+                                "{role} source {source:?} response failed its declared projection"
+                            ),
+                        );
+                        return Ok(Err(KernelError::SourceProtocol));
+                    }
                 };
+                trace.record(
+                    Stage::Acquire,
+                    StageStatus::Ok,
+                    format!(
+                        "{role} response from {source:?}, projected keys {}",
+                        name_list(&object_keys(&response))
+                    ),
+                );
                 let prior_facts = stage.inputs.project(&search_facts);
-                let facts = match kernel.extract_source(&stage.source, &response, &prior_facts) {
-                    Ok(LookupResult::Match(facts)) => facts,
-                    // The search collapses structurally; a member that does
-                    // not resolve after a unique search match is a
-                    // dependency inconsistency, and the stages declared
-                    // after it are never evaluated.
-                    Ok(LookupResult::NoMatch) => match stage.role {
-                        StageRole::Search => return Ok(Ok(KernelOutcome::NoMatch)),
-                        StageRole::Member => {
-                            return Ok(Err(KernelError::SourceProtocol));
-                        }
+                let lookup = kernel.extract_source(&stage.source, &response, &prior_facts);
+                // The search collapses structurally; a member that does not
+                // resolve after a unique search match is a dependency
+                // inconsistency, and the stages declared after it are never
+                // evaluated. The two roles are recorded as differently as they
+                // are treated, so the trace does not report an unresolved
+                // member as an outcome the requirement can settle on.
+                let facts = match stage.role {
+                    StageRole::Search => match record_lookup(trace, lookup, &response) {
+                        Ok(facts) => facts,
+                        Err(outcome) => return Ok(outcome),
                     },
-                    Ok(LookupResult::Ambiguous) => match stage.role {
-                        StageRole::Search => return Ok(Ok(KernelOutcome::Ambiguous)),
-                        StageRole::Member => {
-                            return Ok(Err(KernelError::SourceProtocol));
+                    StageRole::Member => {
+                        match record_dependent_lookup(trace, lookup, &response, role) {
+                            Ok(facts) => facts,
+                            Err(outcome) => return Ok(outcome),
                         }
-                    },
-                    Err(error) => return Ok(Err(error)),
+                    }
                 };
                 if stage.role == StageRole::Search {
                     search_facts = facts.clone();
@@ -1545,15 +1549,17 @@ fn evaluate_fixture_acquisition(
                 // disjoint before it was allowed to load.
                 union.extend(facts);
             }
-            Ok(kernel
-                .derive_and_validate_with_selectors(
+            Ok(record_derivation(
+                trace,
+                kernel.derive_and_validate_with_selectors(
                     &requirement.id,
                     &union,
                     derivation_selectors,
                     observed_at,
                     projection(),
-                )
-                .map(KernelOutcome::Match))
+                ),
+                requirement,
+            ))
         }
     }
 }
@@ -1644,6 +1650,52 @@ fn record_lookup(
                 StageStatus::Failed,
                 format!("the extraction failed: {error}"),
                 available,
+            );
+            Err(Err(error))
+        }
+    }
+}
+
+/// Record one lookup that may only resolve uniquely.
+///
+/// A stage that runs on a reference an earlier stage already resolved has no
+/// unresolved answer available to it: the subject is settled, so a source that
+/// cannot find it contradicts the one that could. That is a dependency
+/// inconsistency rather than an outcome the requirement can settle on, and it
+/// is recorded as a failure of the stage rather than as a verdict. `role` names
+/// the stage in the vocabulary of the acquisition kind that called it.
+fn record_dependent_lookup(
+    trace: &mut FixtureTrace,
+    lookup: Result<LookupResult, KernelError>,
+    response: &Value,
+    role: &str,
+) -> Result<BTreeMap<String, Value>, Result<KernelOutcome, KernelError>> {
+    match lookup {
+        Ok(LookupResult::Match(facts)) => {
+            trace.record(
+                Stage::Extract,
+                StageStatus::Ok,
+                format!("fact keys {}", name_list(&fact_keys(&facts))),
+            );
+            Ok(facts)
+        }
+        Ok(LookupResult::NoMatch) | Ok(LookupResult::Ambiguous) => {
+            trace.record_with(
+                Stage::Extract,
+                StageStatus::Failed,
+                format!("a {role} may only resolve uniquely, and this one did not"),
+                vec![format!(
+                    "{role} response keys available {}",
+                    name_list(&object_keys(response))
+                )],
+            );
+            Err(Err(KernelError::SourceProtocol))
+        }
+        Err(error) => {
+            trace.record(
+                Stage::Extract,
+                StageStatus::Failed,
+                format!("the {role} extraction failed: {error}"),
             );
             Err(Err(error))
         }
@@ -4633,7 +4685,15 @@ mod tests {
             .expect("cases")
             .len();
         assert_eq!(
-            evaluate_fixture(&bundle, &kernel, &source_plans, fixture, true).await,
+            evaluate_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                fixture,
+                true,
+                &mut FixtureTrace::default(),
+            )
+            .await,
             Ok(FixtureSummary {
                 evaluated_cases: expected_cases,
             })
@@ -4683,6 +4743,8 @@ mod tests {
             .expect("fixed time parses")
             .with_timezone(&Utc);
         let selectors = Value::Object(JsonMap::new());
+        // A fresh trace per call. This test reads the refusal, and a shared
+        // trace would carry the stages of every earlier case into the next one.
         let evaluate = |case: Value| {
             evaluate_fixture_acquisition(
                 &bundle,
@@ -4691,6 +4753,7 @@ mod tests {
                 case.as_object().expect("case is an object"),
                 &selectors,
                 observed_at,
+                &mut FixtureTrace::default(),
             )
         };
 

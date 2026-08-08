@@ -254,6 +254,118 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     assert_eq!(acquire["status"], json!("failed"));
 }
 
+/// A chained acquisition is traced stage by stage, not as one acquisition.
+///
+/// The whole reason this acquisition kind exists is that it makes several calls
+/// in a fixed order, each reading only what an earlier one produced. A trace
+/// that reported the chain as a single step would drop exactly the fact a
+/// reader needs from it: which call the case got to, and which one stopped it.
+#[test]
+fn explaining_a_chained_acquisition_traces_every_planned_stage() {
+    let deployment = Deployment::stage("surviving-spouse-status");
+    // The operator half of the acquisition gate. The bundle names the kind it
+    // needs; without this the deployment is refused before any case runs.
+    deployment.append(
+        "runtime.yaml",
+        "acquisitionCapabilities: [search-then-fetch-set]\n",
+    );
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "explained evaluation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let cases = report["cases"].as_array().expect("cases is an array");
+
+    // The search and both members, each acquired and each extracted, before the
+    // one derivation that sees them together.
+    let resolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the fixture states a resolving case");
+    assert_eq!(
+        stage_names(resolved),
+        vec![
+            "prepare", "acquire", "extract", "acquire", "extract", "acquire", "extract", "derive",
+            "validate", "expect", "sign",
+        ],
+        "a resolving chained case did not record every planned stage"
+    );
+
+    // A member whose response the declared projection refuses stops the chain at
+    // its acquisition, so the trace names the call that was refused and never
+    // reports the stages after it as reached.
+    let refused = cases
+        .iter()
+        .find(|case| case["id"] == json!("negative-union-register-unresolved"))
+        .expect("the fixture states a case whose first member answers nothing");
+    assert_eq!(
+        stage_outcomes(refused),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "failed"),
+            ("expect", "ok"),
+        ],
+        "the chain did not stop on the member whose response was refused"
+    );
+
+    // A member that answers, but resolves no unique record for the reference the
+    // search produced, stops the chain one stage later: the response is acquired
+    // and the extraction is what fails.
+    let stopped = cases
+        .iter()
+        .find(|case| case["id"] == json!("negative-death-register-unresolved"))
+        .expect("the fixture states a case whose second member does not resolve");
+    assert_eq!(
+        stage_outcomes(stopped),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "ok"),
+            ("extract", "failed"),
+            ("expect", "ok"),
+        ],
+        "the chain did not stop on the member that resolved nothing"
+    );
+
+    // An unresolved search is a settled outcome rather than an inconsistency,
+    // and it is reported as one on the stage that reached it.
+    let unresolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("ambiguous"))
+        .expect("the fixture states an unresolved search");
+    let extract = unresolved["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("an unresolved search records its extraction");
+    assert_eq!(extract["status"], json!("ambiguous"));
+}
+
+/// The stages one traced case recorded, each with the status it reached.
+fn stage_outcomes(case: &Value) -> Vec<(&str, &str)> {
+    case["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .map(|stage| {
+            (
+                stage["stage"].as_str().expect("a stage is named"),
+                stage["status"].as_str().expect("a stage has a status"),
+            )
+        })
+        .collect()
+}
+
 /// The stages one traced case recorded, in the order it recorded them.
 fn stage_names(case: &Value) -> Vec<&str> {
     case["stages"]
