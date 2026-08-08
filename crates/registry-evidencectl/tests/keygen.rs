@@ -720,6 +720,94 @@ fn client_assertion_public_out_overrides_the_default_public_path() {
     assert_eq!(mode_of(&public_out), 0o644);
 }
 
+/// One assertion key per authorization server is what the operator contract
+/// asks for, and Evidence resolves every `secret:file/` reference inside one
+/// flat secret root. Two keys therefore have to be nameable in the same
+/// directory: with only the algorithm deciding the filename, the second
+/// invocation collides with the first and the guidance cannot be followed
+/// without moving files by hand.
+#[test]
+fn client_assertion_names_a_second_key_in_the_same_secret_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("keys");
+
+    for name in ["records-authority-key", "registry-authority-key"] {
+        let output = evidencectl()
+            .args(["keygen", "client-assertion", "--out-dir"])
+            .arg(&out_dir)
+            .args(["--private-name", name])
+            .output()
+            .expect("run evidencectl");
+        assert!(
+            output.status.success(),
+            "keygen client-assertion --private-name {name} failed: {}",
+            stderr_of(&output)
+        );
+    }
+
+    // The name the operator states is the name the bundle references, so it is
+    // the private file's own name and carries no algorithm or suffix. The
+    // public half follows it, since a second pair needs a second public path
+    // just as much.
+    let first = out_dir.join("records-authority-key");
+    let second = out_dir.join("registry-authority-key");
+    assert_eq!(mode_of(&first), 0o600, "private file mode");
+    assert_eq!(mode_of(&second), 0o600, "private file mode");
+    assert_eq!(
+        mode_of(&out_dir.join("records-authority-key-public.jwk.json")),
+        0o644
+    );
+    assert_eq!(
+        mode_of(&out_dir.join("registry-authority-key-public.jwk.json")),
+        0o644
+    );
+    assert!(
+        !out_dir.join("client-assertion-p384-private-jwk").exists(),
+        "a stated name must replace the algorithm default, not add to it"
+    );
+
+    // Distinct keys, not one key written twice: a server told to expect one
+    // public half must not accept assertions minted for the other.
+    let first_key = PrivateJwk::parse(&fs::read_to_string(&first).expect("read private jwk"))
+        .expect("private JWK parses");
+    let second_key = PrivateJwk::parse(&fs::read_to_string(&second).expect("read private jwk"))
+        .expect("private JWK parses");
+    assert_ne!(first_key.kid, second_key.kid, "both servers got one key");
+}
+
+/// A name outside the resolver's `secret:file/` grammar produces a key no
+/// bundle can point at, and one containing a path separator or a parent segment
+/// would leave the secret directory entirely. Both are refused before anything
+/// is written, so the operator learns at generation rather than at load.
+#[test]
+fn client_assertion_refuses_a_private_name_no_bundle_could_reference() {
+    for name in [
+        "../escape",
+        "nested/name",
+        "Upper",
+        ".hidden",
+        "9-leading-digit",
+        "",
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out_dir = dir.path().join("keys");
+        let output = evidencectl()
+            .args(["keygen", "client-assertion", "--out-dir"])
+            .arg(&out_dir)
+            .args(["--private-name", name])
+            .output()
+            .expect("run evidencectl");
+        assert!(
+            !output.status.success(),
+            "--private-name {name:?} was accepted"
+        );
+        assert!(
+            !out_dir.exists(),
+            "--private-name {name:?} was refused after writing"
+        );
+    }
+}
+
 #[test]
 fn client_assertion_refuses_overwrite_and_force_option() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -82,6 +82,12 @@ pub struct ClientAssertionArgs {
     #[arg(long)]
     pub public_out: Option<PathBuf>,
 
+    /// Name of the private JWK file, which is the `secret:file/NAME` a source's
+    /// `clientAssertionKeyRef` points at; defaults to one naming the algorithm.
+    /// The public half follows it as `NAME-public.jwk.json`.
+    #[arg(long)]
+    pub private_name: Option<String>,
+
     /// Signature algorithm the assertion is signed with.
     #[arg(long, value_enum, default_value_t = ClientAssertionAlgorithm::Es384)]
     pub algorithm: ClientAssertionAlgorithm,
@@ -169,14 +175,63 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
             HOLDER_PRIVATE_FILENAME,
             HOLDER_PUBLIC_FILENAME,
         ),
-        KeygenCommand::ClientAssertion(args) => run_keypair(
-            generate_client_assertion_keypair(args.algorithm)?,
-            &args.out_dir,
-            args.public_out.as_deref(),
-            args.algorithm.private_filename(),
-            args.algorithm.public_filename(),
-        ),
+        KeygenCommand::ClientAssertion(args) => {
+            // Before generating: an RSA keypair is expensive, and a name the
+            // runtime could never resolve is worth refusing without it.
+            let (private_filename, public_filename) = client_assertion_filenames(&args)?;
+            run_keypair(
+                generate_client_assertion_keypair(args.algorithm)?,
+                &args.out_dir,
+                args.public_out.as_deref(),
+                &private_filename,
+                &public_filename,
+            )
+        }
     }
+}
+
+/// Where one client assertion keypair is written.
+///
+/// The operator contract asks for one assertion key per authorization server,
+/// and Evidence resolves every `secret:file/` reference inside one flat secret
+/// root, so a deployment reaching two servers needs two names in one directory.
+/// The default names the algorithm, which is right for the single-server
+/// deployment and collides for any other.
+///
+/// A stated name is the private file's own name, because that is what the
+/// bundle references. It has to satisfy the resolver's `secret:file/NAME`
+/// grammar, or generation succeeds and produces key material no bundle can
+/// point at.
+fn client_assertion_filenames(args: &ClientAssertionArgs) -> Result<(String, String)> {
+    let Some(name) = args.private_name.as_deref() else {
+        return Ok((
+            args.algorithm.private_filename().to_owned(),
+            args.algorithm.public_filename().to_owned(),
+        ));
+    };
+    if !is_secret_file_name(name) {
+        bail!(
+            "--private-name must be a name the runtime can resolve as \
+             secret:file/NAME: a lowercase ASCII letter, then lowercase \
+             letters, digits, '.', '_', or '-', at most 128 bytes"
+        );
+    }
+    Ok((name.to_owned(), format!("{name}-public.jwk.json")))
+}
+
+/// The `secret:file/NAME` grammar, as `registry-platform-config` resolves it.
+///
+/// Restated here rather than shared: this tool delegates the runtime to the
+/// `evidence` binary and does not link the config crate. The grammar admits no
+/// path separator and no leading dot, so it also keeps the written file inside
+/// the secret directory.
+fn is_secret_file_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes.len() <= 128
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
 }
 
 /// Generate the four files needed during local Evidence authoring.

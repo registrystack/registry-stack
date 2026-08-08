@@ -242,6 +242,19 @@ to validate only one of ES384 and RS384, so the source's authorization server de
 need. The two pairs use different filenames, so a deployment facing two sources that disagree keeps
 both in one secret root.
 
+A deployment reaching two authorization servers needs a key for each, and both live in the same
+secret root, so name them:
+
+```sh
+evidencectl keygen client-assertion --out-dir "<secrets-dir>" --private-name records-authority-key
+```
+
+`--private-name` names the private file itself, so the name you pass is the one
+`clientAssertionKeyRef` points at, as `secret:file/records-authority-key`. The public half is written
+beside it as `records-authority-key-public.jwk.json`. A name follows the `secret:file/` grammar: a
+lowercase ASCII letter, then lowercase letters, digits, `.`, `_`, or `-`. `evidencectl` refuses
+anything else rather than write key material no bundle could reference.
+
 Point `clientAssertionKeyRef` at the private file and register the public file with the source's
 authorization server. The `kid` is the RFC 7638 thumbprint of the public half, and Evidence Gateway
 sends it in the assertion header so the authorization server selects the registered key without an
