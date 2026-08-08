@@ -10,10 +10,10 @@ use std::{
 use registry_evidence_authoring::{
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
-        MAX_ACCESS_POLICY_BYTES, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_PROJECT_MARKER_BYTES,
-        MAX_QUESTIONS, MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
-        QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY, SELECTORS_DIRECTORY,
-        SOURCES_DIRECTORY,
+        MAX_ACCESS_POLICY_BYTES, MAX_CONCEPTS, MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES,
+        MAX_PROJECT_MARKER_BYTES, MAX_QUESTIONS, MAX_QUESTION_BYTES, MAX_SOURCE_ARTIFACT_BYTES,
+        OPENAPI_FILE, QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SECRETS_DIRECTORY,
+        SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
     },
     marker::PROJECT_MARKER_FILE,
 };
@@ -100,6 +100,10 @@ impl DocumentRole {
     /// the index comes from a schema's or a fixture's own content. Reading them would put a
     /// recorded response, which the form allows to reach 1 MiB, through the YAML tree on every
     /// keystroke in an unrelated question.
+    ///
+    /// Their names are another matter, and [`pointed_directory`] is where they are read: the list an
+    /// author picks a path from is the files that directory holds, which is a listing and opens
+    /// nothing.
     pub(crate) fn is_indexed(self) -> bool {
         match self {
             Self::Marker | Self::Question | Self::Source | Self::Selector | Self::AccessPolicy => {
@@ -146,6 +150,41 @@ pub(crate) const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
     (SCHEMAS_DIRECTORY, DocumentRole::Schema),
     (FIXTURES_DIRECTORY, DocumentRole::Fixture),
 ];
+
+/// The project directory a role's documents sit in, for the three roles a document points at by
+/// writing a path rather than by spelling a name.
+///
+/// These are the directories a list of the files such a pointer may name is read from. They are the
+/// roles [`DocumentRole::is_indexed`] leaves out, so the loader never visits them and the names in
+/// them would otherwise reach an author only once some document had already written one.
+pub(crate) fn pointed_directory(role: DocumentRole) -> Option<&'static str> {
+    match role {
+        DocumentRole::Schema => Some(SCHEMAS_DIRECTORY),
+        DocumentRole::Fixture => Some(FIXTURES_DIRECTORY),
+        DocumentRole::Derivation => Some(DERIVATIONS_DIRECTORY),
+        DocumentRole::Marker
+        | DocumentRole::OpenApi
+        | DocumentRole::Question
+        | DocumentRole::Source
+        | DocumentRole::Selector
+        | DocumentRole::AccessPolicy => None,
+    }
+}
+
+/// The most files one [`pointed_directory`] offers a pointer at that role.
+///
+/// The number is the authoring form's own, read the way [`DocumentRole::max_documents`] reads its
+/// ceilings: a project declares at most [`MAX_QUESTIONS`] questions, one question answers at most
+/// [`MAX_CONCEPTS`] concepts, and each of those names at most one file, so no project the compiler
+/// accepts can usefully name more files of one role than this.
+///
+/// It bounds what the editor volunteers and nothing else, which is why it does not fall under the
+/// rule that the editor stops where the compiler stops. A pointer at a file past the ceiling still
+/// resolves, still navigates, and is still defined by the document that spells it, because the file
+/// a pointer names is defined from the pointer. A directory holding more entries than this offers
+/// fewer of them and says nothing about it: a list nobody bounded is a list a directory of a million
+/// entries gets to build on every keystroke.
+pub(crate) const MAX_POINTED_FILES_OFFERED: usize = MAX_QUESTIONS * MAX_CONCEPTS;
 
 /// The extensions an authored document may carry: `yaml` for the marker, the OpenAPI description,
 /// every directory in [`YAML_DIRECTORIES`], and access policies, and `rhai` for a derivation. This is
@@ -463,6 +502,41 @@ mod tests {
             assert!(
                 !(role.is_indexed() && read),
                 "{role:?} is indexed, so a root already answers for its text"
+            );
+        }
+    }
+
+    /// A directory is listed for exactly the roles a document names by writing a path, and the
+    /// directory it names is the one that role's own representative path sits in. A role listed here
+    /// that the loader also indexes would be a directory read twice for two answers.
+    #[test]
+    fn only_the_roles_a_pointer_names_by_path_are_listed() {
+        for (role, directory) in [
+            (DocumentRole::Marker, None),
+            (DocumentRole::OpenApi, None),
+            (DocumentRole::Question, None),
+            (DocumentRole::Source, None),
+            (DocumentRole::Selector, None),
+            (DocumentRole::Schema, Some(SCHEMAS_DIRECTORY)),
+            (DocumentRole::Fixture, Some(FIXTURES_DIRECTORY)),
+            (DocumentRole::AccessPolicy, None),
+            (DocumentRole::Derivation, Some(DERIVATIONS_DIRECTORY)),
+        ] {
+            assert_eq!(pointed_directory(role), directory, "{role:?}");
+            assert!(
+                !(role.is_indexed() && directory.is_some()),
+                "{role:?} is indexed, so the loader already reads the directory it sits in"
+            );
+        }
+
+        for (path, role) in ONE_PATH_PER_ROLE.iter().copied() {
+            let Some(directory) = pointed_directory(role) else {
+                continue;
+            };
+            assert_eq!(
+                Path::new(path).parent().and_then(Path::to_str),
+                Some(directory),
+                "{path}"
             );
         }
     }

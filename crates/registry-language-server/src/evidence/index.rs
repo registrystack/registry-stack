@@ -87,7 +87,7 @@ pub(crate) fn build_index(
         diagnostics: Vec::new(),
         choices: Vec::new(),
         referenced_files: BTreeSet::new(),
-        narrowed: Vec::new(),
+        offered: Vec::new(),
         operations_published_under_get: BTreeSet::new(),
         derivation_claims: BTreeMap::new(),
     };
@@ -174,7 +174,7 @@ pub(crate) fn build_index(
     for path in dropped {
         builder.define_by_its_place(path);
     }
-    builder.narrow_offers();
+    builder.settle_offers();
 
     IndexedProject {
         symbols: builder.symbols,
@@ -195,11 +195,12 @@ struct IndexBuilder<'a> {
     /// The files already defined by a pointer at them, so two documents pointing at one schema
     /// define it once rather than reporting each other as duplicates.
     referenced_files: BTreeSet<SymbolKey>,
-    /// The references whose field takes fewer names than its kind holds, each one paired with the
-    /// reason. They are recorded rather than resolved on the spot because two of the three reasons
-    /// can only be read once every document has been walked: which schema files the project has, and
-    /// which derivations another question already claims.
-    narrowed: Vec<(usize, Narrowing)>,
+    /// The references whose field takes something other than every name of its kind, each one paired
+    /// with what it does take. They are recorded rather than resolved on the spot because three of
+    /// the four lists can only be read once every document has been walked: which files the project
+    /// holds under each of the three directories a pointer names one in, and which derivations
+    /// another question already claims.
+    offered: Vec<(usize, Offered)>,
     /// The operation identifiers the description publishes under `get`, which is the only method a
     /// question may name.
     operations_published_under_get: BTreeSet<String>,
@@ -208,12 +209,18 @@ struct IndexBuilder<'a> {
     derivation_claims: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Why a field takes fewer names than its kind holds.
+/// What a field takes, where every name of its kind is not the answer.
 ///
 /// Each variant is a rule the compiler applies to the *name* rather than to its kind, so the kind
 /// alone cannot answer what belongs in the field. None of them becomes a diagnostic: the editor
 /// declines to volunteer a name it knows the compiler refuses, and leaves refusing to the compiler.
-enum Narrowing {
+///
+/// The three file variants also reach past the symbols the project declares. A file is named by the
+/// path a document writes, so the only files the symbol table holds are the ones some document has
+/// already pointed at, and the file an author has just created is the one they are about to point
+/// at. Their lists are read from the directory the form puts that role in, which defines nothing and
+/// so cannot report anything.
+enum Offered {
     /// A question's `source.operation`. The compiler resolves an identifier across all eight methods
     /// and only then refuses one that resolved to something other than a `get`, so the operation is
     /// a real symbol with a real definition and only the offer is narrower.
@@ -222,6 +229,9 @@ enum Narrowing {
     /// A source's artifact shares this kind and is spelled far more loosely, so the kind holds names
     /// this field refuses.
     SpelledAsAnAnswerSchema,
+    /// A question's `governance.fixtures`, which the form spells as one `fixtures/<name>.yaml`
+    /// document, so the files that directory holds are the list.
+    SpelledAsAFixture,
     /// A question's `derivation`, which no other question may name.
     ClaimedByNoOtherQuestion { question: String },
 }
@@ -298,7 +308,7 @@ impl IndexBuilder<'_> {
                     path,
                     schema,
                     EvidenceKind::SchemaFile,
-                    Some(Narrowing::SpelledAsAnAnswerSchema),
+                    Offered::SpelledAsAnAnswerSchema,
                     reported,
                 );
             }
@@ -313,9 +323,9 @@ impl IndexBuilder<'_> {
                 path,
                 derivation,
                 EvidenceKind::DerivationFile,
-                Some(Narrowing::ClaimedByNoOtherQuestion {
+                Offered::ClaimedByNoOtherQuestion {
                     question: name.to_owned(),
-                }),
+                },
                 reported,
             );
         }
@@ -341,7 +351,13 @@ impl IndexBuilder<'_> {
             // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
             // reads the same file while it writes the bundle, and the `evidence` binary refuses a
             // fixtures artifact whose path is not under `fixtures/` when it reads that bundle back.
-            self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile, None, reported);
+            self.refer_to_file(
+                path,
+                fixtures,
+                EvidenceKind::FixtureFile,
+                Offered::SpelledAsAFixture,
+                reported,
+            );
         }
     }
 
@@ -391,11 +407,11 @@ impl IndexBuilder<'_> {
         // (`crates/registry-evidencectl/src/authoring.rs:1543-1551`) then refuses a resolved
         // operation whose method is not `get`, with a sentence about the method. So the editor must
         // keep finding an operation published under `post`, and must not propose one.
-        self.refer_narrowed(
+        self.refer_offering(
             SymbolQuery::global(EvidenceKind::Operation, operation_id),
             path,
             written,
-            Narrowing::PublishedUnderGet,
+            Offered::PublishedUnderGet,
             true,
         );
         // What the rungs below need, taken now: reading the response leaves needs the description
@@ -662,19 +678,20 @@ impl IndexBuilder<'_> {
     /// resolves them the same way: a derivation is `derivations/<name>.rhai`, an answer schema is
     /// `schemas/<name>.yaml`, a fixture file is `fixtures/<name>.yaml`. A target written any other
     /// way is one the compiler refuses too.
+    ///
+    /// Each of the three carries its own list rather than taking every name of its kind, because the
+    /// symbol table holds a file only once a document has pointed at it and the file an author needs
+    /// offered is the one nothing points at yet.
     fn refer_to_file(
         &mut self,
         path: &Path,
         pointer: &YamlScalar,
         kind: EvidenceKind,
-        narrowing: Option<Narrowing>,
+        offered: Offered,
         reported: bool,
     ) {
         let target = SymbolQuery::global(kind, pointer.value.as_str());
-        match narrowing {
-            Some(narrowing) => self.refer_narrowed(target, path, pointer, narrowing, reported),
-            None => self.add_reference(target, path, pointer, reported),
-        }
+        self.refer_offering(target, path, pointer, offered, reported);
 
         let Some(role) = referenced_file_role(kind) else {
             return;
@@ -781,21 +798,23 @@ impl IndexBuilder<'_> {
         self.add_reference(target, path, at, false);
     }
 
-    /// Records a reference the author picks from fewer names than its kind holds.
+    /// Records a reference the author picks from a list of its own rather than from every name of
+    /// its kind.
     ///
     /// Resolution is unchanged: the reference reaches every name of its kind, so a name the compiler
     /// refuses still finds its definition and still reports what is wrong with it where it is
-    /// written. Only what the editor volunteers is narrowed.
-    fn refer_narrowed(
+    /// written, and a name only the list holds defines nothing by being on it. Only what the editor
+    /// volunteers is settled here.
+    fn refer_offering(
         &mut self,
         target: SymbolQuery,
         path: &Path,
         at: &YamlScalar,
-        narrowing: Narrowing,
+        offered: Offered,
         reported: bool,
     ) {
         self.add_reference(target, path, at, reported);
-        self.narrowed.push((self.references.len() - 1, narrowing));
+        self.offered.push((self.references.len() - 1, offered));
     }
 
     fn add_reference(
@@ -817,34 +836,45 @@ impl IndexBuilder<'_> {
         });
     }
 
-    /// Reads each recorded narrowing into the names its field will actually take.
+    /// Reads each recorded [`Offered`] into the names its field will actually take.
     ///
-    /// This runs once, after the last document, because two of the three sets are project-wide: the
-    /// answer schemas are the schema files this project has, and a derivation is offered only where
-    /// no other question already claims it.
-    fn narrow_offers(&mut self) {
+    /// This runs once, after the last document, because three of the four lists are project-wide:
+    /// the files this project holds under each directory a pointer names one in, and, among the
+    /// derivations, the ones no other question has claimed.
+    ///
+    /// Each of the three file lists is the files the project holds beside the files some document
+    /// already points at. The two halves overlap for every pointer at a file that is really there,
+    /// and one set holds each name once. Neither half holds the other: a document may point at a
+    /// file the project does not hold, and a directory past [`MAX_POINTED_FILES_OFFERED`] is listed
+    /// short of its end.
+    fn settle_offers(&mut self) {
         let published_under_get = Arc::new(mem::take(&mut self.operations_published_under_get));
         // A source's artifact and an answer's schema share one kind, because they name one file and
         // `Find references` on that file must collect both. The form spells them differently, so the
         // pool an answer picks from is the part of that kind the form's own rule accepts.
         let answer_schemas = Arc::new(
-            self.defined_names(EvidenceKind::SchemaFile)
+            self.pointed_files(EvidenceKind::SchemaFile, DocumentRole::Schema)
                 .filter(|name| validate_answer_schema_path(name).is_empty())
                 .collect::<BTreeSet<_>>(),
         );
+        let fixtures = Arc::new(
+            self.pointed_files(EvidenceKind::FixtureFile, DocumentRole::Fixture)
+                .collect::<BTreeSet<_>>(),
+        );
         let derivations = self
-            .defined_names(EvidenceKind::DerivationFile)
+            .pointed_files(EvidenceKind::DerivationFile, DocumentRole::Derivation)
             .collect::<BTreeSet<_>>();
 
-        for (reference, narrowing) in mem::take(&mut self.narrowed) {
-            let offers = match narrowing {
-                Narrowing::PublishedUnderGet => Arc::clone(&published_under_get),
-                Narrowing::SpelledAsAnAnswerSchema => Arc::clone(&answer_schemas),
+        for (reference, offered) in mem::take(&mut self.offered) {
+            let offers = match offered {
+                Offered::PublishedUnderGet => Arc::clone(&published_under_get),
+                Offered::SpelledAsAnAnswerSchema => Arc::clone(&answer_schemas),
+                Offered::SpelledAsAFixture => Arc::clone(&fixtures),
                 // Usually empty, and honestly so: a derivation is defined by a question pointing at
                 // it, so almost every name of this kind is a name some question has already
                 // claimed. An empty list beats one whose every entry walks the author into
                 // `each question must name its own derivation file`.
-                Narrowing::ClaimedByNoOtherQuestion { question } => Arc::new(
+                Offered::ClaimedByNoOtherQuestion { question } => Arc::new(
                     derivations
                         .iter()
                         .filter(|name| {
@@ -858,6 +888,22 @@ impl IndexBuilder<'_> {
             };
             self.references[reference].offers = Some(offers);
         }
+    }
+
+    /// Every name a pointer at one file role may take: the files the project holds in that role's
+    /// directory, and the files documents already point at.
+    ///
+    /// The second half is what the symbol table knows, and on its own it is only the files some
+    /// document has written a path to, so the file an author has just created and is about to point
+    /// at would not be among them. The first half is the directory listing, which reads names and no
+    /// contents, so it also holds the file no document spells yet.
+    fn pointed_files(
+        &self,
+        kind: EvidenceKind,
+        role: DocumentRole,
+    ) -> impl Iterator<Item = String> + '_ {
+        self.defined_names(kind)
+            .chain(crate::evidence::pointed_files(self.root, role))
     }
 
     fn defined_names(&self, kind: EvidenceKind) -> impl Iterator<Item = String> + '_ {

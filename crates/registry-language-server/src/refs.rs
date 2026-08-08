@@ -355,12 +355,17 @@ pub(crate) struct IndexedReference {
     /// name of the kind, which is what almost every field takes.
     ///
     /// A field's kind answers "what sort of thing goes here", and for most fields that is the whole
-    /// rule. A few fields are narrower than their kind for a reason the kind cannot carry: the
-    /// compiler resolves an operation identifier across every HTTP method and then refuses one that
-    /// is not a `get`; a derivation file belongs to the one question that names it; an answer's
-    /// schema is spelled as a document of the authoring form where a source's artifact is not. What
-    /// they have in common is that the name is what decides, so [`Self::target`] having dropped the
-    /// name is exactly what loses the rule.
+    /// rule. A few fields do not match their kind for a reason the kind cannot carry: the compiler
+    /// resolves an operation identifier across every HTTP method and then refuses one that is not a
+    /// `get`; a derivation file belongs to the one question that names it; an answer's schema is
+    /// spelled as a document of the authoring form where a source's artifact is not; a fixture and a
+    /// derivation are named by writing a path, so the file the author has just created is the one
+    /// they are about to write and the one no document declares. What they have in common is that
+    /// the name is what decides, so [`Self::target`] having dropped the name is exactly what loses
+    /// the rule.
+    ///
+    /// This is the list itself and not a filter over the symbol table, which is why a field spelled
+    /// as a path can offer a file no document has pointed at yet.
     ///
     /// Resolution is deliberately not narrowed by this. The editor may stay quiet where the compiler
     /// refuses and must never speak where the compiler accepts, so a name outside this list still
@@ -643,38 +648,56 @@ impl ProjectIndex {
     /// scope it holds it in; dropping the name from that query and keeping the rest turns "what does
     /// this resolve to" into "what could this have been", which is the question a list answers.
     ///
-    /// Dropping the name is also what loses every rule the name decides, so a field narrower than
-    /// its kind hands back the names it will take in [`IndexedReference::offers`] and this keeps to
-    /// them. That narrowing belongs here and not in navigation: a list is the editor volunteering a
-    /// name, and volunteering one the compiler is known to refuse is the editor walking an author
-    /// into a failure it could see coming.
+    /// Dropping the name is also what loses every rule the name decides, so a field whose names its
+    /// kind does not describe hands back the names it will take in [`IndexedReference::offers`] and
+    /// this reads them instead of the symbols. That belongs here and not in navigation: a list is
+    /// the editor volunteering a name, and volunteering one the compiler is known to refuse is the
+    /// editor walking an author into a failure it could see coming, while a field spelled as a path
+    /// wants the file the author has just created, which is a file no document declares.
     ///
     /// Nothing here reports anything, and nothing here reads a file. A position holding neither a
     /// reference nor a recorded set of choices is offered nothing, which includes every position in
     /// a document the loader kept out of the project.
     pub fn completions_at(&self, path: &Path, position: Position) -> Vec<CompletionCandidate> {
         if let Some(reference) = self.reference_at(path, position) {
-            let mut candidates = self
-                .symbols
-                .iter()
-                .filter(|symbol| {
-                    symbol.resolvable
-                        && self.query_can_offer(&reference.target, &symbol.key)
-                        && reference
-                            .offers
-                            .as_ref()
-                            .is_none_or(|offers| offers.contains(&symbol.name))
+            let mut candidates = reference
+                .offers
+                .as_ref()
+                .map(|offers| {
+                    // The field's own list already answers what goes here, so the kind and the card
+                    // come from the reference. They are what the symbols would have said anyway: a
+                    // symbol is only offered when its kind is the one the reference holds.
+                    offers
+                        .iter()
+                        .filter_map(|name| {
+                            candidate(
+                                name,
+                                reference.style,
+                                reference.target.kind.lsp_completion_kind(),
+                                reference.target.kind.label().to_owned(),
+                                reference.location.range,
+                            )
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .filter_map(|symbol| {
-                    candidate(
-                        &symbol.name,
-                        reference.style,
-                        symbol.kind.lsp_completion_kind(),
-                        symbol.kind.label().to_owned(),
-                        reference.location.range,
-                    )
-                })
-                .collect::<Vec<_>>();
+                .unwrap_or_else(|| {
+                    self.symbols
+                        .iter()
+                        .filter(|symbol| {
+                            symbol.resolvable
+                                && self.query_can_offer(&reference.target, &symbol.key)
+                        })
+                        .filter_map(|symbol| {
+                            candidate(
+                                &symbol.name,
+                                reference.style,
+                                symbol.kind.lsp_completion_kind(),
+                                symbol.kind.label().to_owned(),
+                                reference.location.range,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                });
             // One entry per name, however many places define it. A name two documents declare is
             // one thing the author may write, and the duplicate that makes it ambiguous is a
             // finding rather than a second menu entry.

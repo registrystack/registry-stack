@@ -6,17 +6,25 @@
 //! have held and the card is what the one it does hold resolves to. There is no second model of
 //! which field takes which kind, because a second model is a model that can disagree.
 //!
+//! Three fields are spelled as paths rather than as names another document declares, and their lists
+//! are the files the project holds in the directory the form puts them in. The file an author has
+//! just created is exactly the file they are about to point at, and no document spells it yet, so a
+//! list drawn from the documents alone would miss the moment it exists for.
+//!
 //! Neither one may report anything, and neither one may reach a document the loader refused. The
 //! sentences an author has to act on stay in `evidence_index.rs` and `evidence_openapi.rs`.
 
 mod support;
 
-use registry_evidence_authoring::testing::ProjectFile;
+use registry_evidence_authoring::{
+    layout::{MAX_CONCEPTS, MAX_QUESTIONS},
+    testing::ProjectFile,
+};
 use registry_language_server::{CompletionCandidate, ProjectIndex};
 use support::{
-    adult_status_project, operation_question_project, replacing, EvidenceProject,
-    ACCESS_POLICY_PATH, OPENAPI_PATH, OPERATION_OPENAPI, OPERATION_QUESTION, QUESTION,
-    QUESTION_PATH, SOURCE,
+    adult_status_project, file, operation_question_project, replacing, EvidenceProject,
+    ACCESS_POLICY_PATH, DERIVATION, FIXTURE, OPENAPI_PATH, OPERATION_OPENAPI, OPERATION_QUESTION,
+    QUESTION, QUESTION_PATH, SCHEMA, SOURCE,
 };
 use tower_lsp_server::ls_types::{CompletionItemKind, Position};
 
@@ -217,6 +225,181 @@ fn a_fact_path_that_resolves_to_nothing_is_still_offered_the_leaves() {
     assert_eq!(
         labels_at(&index, &project, QUESTION_PATH, "fact-path"),
         vec!["/records/*/date_of_birth".to_owned()]
+    );
+}
+
+/// The shared question with a structured answer, which is the one answer kind that names a schema,
+/// so one document holds all three places the authoring form spells a file by its path.
+fn question_pointing_at_three_files() -> String {
+    let written = QUESTION.replace(
+        "    type: boolean\n",
+        "    type: reviewed-structured-value\n    \
+         schema: <|answer-schema|>schemas/person-record.yaml\n    \
+         maximumSerializedBytes: 4096\n",
+    );
+    assert_ne!(
+        written, QUESTION,
+        "the shared question writes the boolean answer this rewrites"
+    );
+    written
+}
+
+/// The same project with that question and the schema it names: a project the compiler accepts,
+/// pointing at a schema, a fixtures document and a derivation it really holds.
+fn three_pointers_project() -> Vec<ProjectFile> {
+    let files = replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &question_pointing_at_three_files(),
+    );
+    replacing(&files, "schemas/person-record.yaml", SCHEMA)
+}
+
+/// The same project with one file in each of those three directories that no document spells. This
+/// is the project an author has a moment after creating a file and a moment before pointing at it.
+fn project_holding_unspelled_files() -> Vec<ProjectFile> {
+    let files = replacing(&three_pointers_project(), UNSPELLED_SCHEMA, SCHEMA);
+    let files = replacing(&files, UNSPELLED_FIXTURE, FIXTURE);
+    replacing(&files, UNSPELLED_DERIVATION, DERIVATION)
+}
+
+const UNSPELLED_SCHEMA: &str = "schemas/person-address.yaml";
+const UNSPELLED_FIXTURE: &str = "fixtures/adult-status-edges.yaml";
+const UNSPELLED_DERIVATION: &str = "derivations/adult-status-edges.rhai";
+
+/// The three lists that are not the symbol table's. A file a document already spells is a file some
+/// symbol stands for; the file the author just created is the one they are about to spell, and it is
+/// the case the whole feature exists for.
+#[test]
+fn a_file_no_document_spells_is_offered_where_one_is_pointed_at() {
+    let project = EvidenceProject::new(&project_holding_unspelled_files());
+    let index = project.index();
+
+    for (cursor, unspelled) in [
+        ("answer-schema", UNSPELLED_SCHEMA),
+        ("fixtures", UNSPELLED_FIXTURE),
+        ("derivation", UNSPELLED_DERIVATION),
+    ] {
+        let labels = labels_at(&index, &project, QUESTION_PATH, cursor);
+        assert!(
+            labels.iter().any(|label| label == unspelled),
+            "{cursor} offers {labels:?}, which does not hold {unspelled}"
+        );
+    }
+}
+
+/// A file is one thing the author may write, however many ways the editor learned of it. The three
+/// paths the shared question spells are both files on disk and names some document declares, and
+/// each one is one entry.
+#[test]
+fn a_file_a_document_already_spells_is_offered_once() {
+    let project = EvidenceProject::new(&project_holding_unspelled_files());
+    let index = project.index();
+
+    for (cursor, spelled) in [
+        ("answer-schema", "schemas/person-record.yaml"),
+        ("fixtures", "fixtures/adult-status.yaml"),
+        ("derivation", "derivations/adult-status.rhai"),
+    ] {
+        let labels = labels_at(&index, &project, QUESTION_PATH, cursor);
+        assert_eq!(
+            labels.iter().filter(|label| *label == spelled).count(),
+            1,
+            "{cursor} offers {labels:?}"
+        );
+    }
+}
+
+/// Every question names its own derivation file, so a file another question claims is a file this
+/// one may not have. Reading the directory finds it anyway, and offering it would walk the author
+/// into a refusal the editor could see coming.
+#[test]
+fn a_derivation_another_question_claims_is_not_offered() {
+    const CLAIMED: &str = "derivations/residence-region.rhai";
+    let second = QUESTION
+        .replace("<|id|>adult-status", "residence-region")
+        .replace("<|concept|>is_adult", "in_region")
+        .replace("<|allow|>is_adult", "in_region")
+        .replace(
+            "<|derivation|>derivations/adult-status.rhai",
+            "derivations/residence-region.rhai",
+        )
+        .replace("<|source-ref|>", "")
+        .replace("<|subject-profile|>", "")
+        .replace("<|fixtures|>", "");
+    let files = replacing(
+        &project_holding_unspelled_files(),
+        "questions/residence-region.yaml",
+        &second,
+    );
+    let project = EvidenceProject::new(&replacing(&files, CLAIMED, DERIVATION));
+    let index = project.index();
+
+    let labels = labels_at(&index, &project, QUESTION_PATH, "derivation");
+    assert!(
+        labels.iter().any(|label| label == UNSPELLED_DERIVATION),
+        "the file no question claims is still offered: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label == CLAIMED),
+        "the file the second question claims reached this question's list: {labels:?}"
+    );
+}
+
+/// The guard the rest of this addition rests on. Reading a directory to fill a list must define
+/// nothing, so a project pointing at a schema, a fixtures document and a derivation it holds is a
+/// project the editor still reports nothing about: a second definition of one of those files would
+/// answer it with a duplicate over a project the compiler accepts.
+#[test]
+fn a_project_pointing_at_files_it_holds_reports_nothing() {
+    for files in [three_pointers_project(), project_holding_unspelled_files()] {
+        let project = EvidenceProject::new(&files);
+        let index = project.index();
+
+        assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    }
+}
+
+/// An author who has not created `fixtures/` yet is not told anything about it. The compact form
+/// holds neither a schema nor a fixtures directory, so the list at its one file pointer is read
+/// while two of the three directories are absent.
+#[test]
+fn a_directory_the_project_does_not_hold_is_silent() {
+    let project = EvidenceProject::new(&operation_question_project());
+    let index = project.index();
+
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert_eq!(
+        labels_at(&index, &project, QUESTION_PATH, "derivation"),
+        vec!["derivations/adult-status.rhai".to_owned()]
+    );
+}
+
+/// A directory nobody bounded is a directory anything may be dropped into, and a list is work done
+/// on every keystroke. The ceiling is the authoring form's own reading of how many files of one role
+/// a project can usefully name, and hitting it offers fewer files rather than saying anything: the
+/// pointer at a file past it still resolves, because the document that spells it defines it.
+#[test]
+fn a_directory_holding_more_files_than_the_form_can_name_offers_fewer() {
+    let ceiling = MAX_QUESTIONS * MAX_CONCEPTS;
+    let mut files = project_holding_unspelled_files();
+    files.extend(
+        (0..=ceiling).map(|number| file(&format!("fixtures/case-{number:05}.yaml"), FIXTURE)),
+    );
+    let project = EvidenceProject::new(&files);
+    let index = project.index();
+
+    let labels = labels_at(&index, &project, QUESTION_PATH, "fixtures");
+    assert_eq!(labels.len(), ceiling, "the list is bounded by the ceiling");
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    assert!(
+        !index
+            .definitions_at(
+                &project.path(QUESTION_PATH),
+                project.cursor(QUESTION_PATH, "fixtures"),
+            )
+            .is_empty(),
+        "the file the question points at still resolves"
     );
 }
 

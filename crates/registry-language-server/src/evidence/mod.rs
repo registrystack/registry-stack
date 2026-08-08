@@ -13,6 +13,7 @@ pub(crate) mod openapi;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
 };
@@ -33,7 +34,7 @@ use crate::{
 };
 
 pub(crate) use index::build_index;
-use layout::DocumentRole;
+use layout::{DocumentRole, MAX_POINTED_FILES_OFFERED};
 
 /// The file that marks a directory as an Evidence authoring project.
 pub(crate) const PROJECT_FILE: &str = PROJECT_MARKER_FILE;
@@ -199,6 +200,51 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
         documents,
         diagnostics,
     })
+}
+
+/// The files one project directory holds in a role a document points at by path, spelled the way a
+/// pointer spells them.
+///
+/// This is a listing and nothing more. Only names are read, so the reason
+/// [`DocumentRole::is_indexed`] leaves these roles out stands whole: a recorded response the form
+/// allows to reach 1 MiB is still not put through the YAML tree on a keystroke. The directory is
+/// read once and never descended into, for the same reason [`add_documents`] is not, and every entry
+/// goes through the containment rules the server opens any project path under.
+///
+/// Every name here becomes a candidate an author is offered and never a symbol, a reference, or a
+/// sentence, which is what lets the three ways of finding nothing answer alike: a directory the
+/// author has not created yet, one the containment rules refuse, and one that cannot be read all
+/// yield no names and report nothing. The listing stops at [`MAX_POINTED_FILES_OFFERED`] names,
+/// dropping the largest as it goes, so a directory far past the ceiling is bounded rather than
+/// gathered whole.
+pub(crate) fn pointed_files(root: &Path, role: DocumentRole) -> BTreeSet<String> {
+    let mut named = BTreeSet::new();
+    let Some(directory) = layout::pointed_directory(role) else {
+        return named;
+    };
+    let path = root.join(directory);
+    if !secure_directory(root, &path).unwrap_or(false) {
+        return named;
+    }
+    let Ok(entries) = fs::read_dir(&path) else {
+        return named;
+    };
+    for entry in entries.flatten() {
+        let entry = entry.path();
+        if document_role(root, &entry) != Some(role)
+            || !crate::safety::is_safe_authored_file(root, &entry)
+        {
+            continue;
+        }
+        let Some(name) = entry.file_name().and_then(OsStr::to_str) else {
+            continue;
+        };
+        named.insert(format!("{directory}/{name}"));
+        if named.len() > MAX_POINTED_FILES_OFFERED {
+            named.pop_last();
+        }
+    }
+    named
 }
 
 /// Adds the documents one project directory holds in `role`. The directory is read once and never
