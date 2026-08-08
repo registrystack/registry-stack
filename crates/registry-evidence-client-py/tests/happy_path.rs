@@ -221,6 +221,38 @@ fn evidence_client_module(py: Python<'_>) -> Bound<'_, PyModule> {
     module
 }
 
+/// Because `auto-initialize` links this binary against libpython, it has to
+/// find that library at process startup, before any test below runs. Without
+/// the rpath `build.rs` records for the embedding build, that lookup falls to
+/// `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`, and the whole binary aborts under a
+/// `mise`-, `pyenv`- or virtualenv-managed interpreter: not as a failing test,
+/// but as a dynamic-linker error that also stops `cargo test --workspace` at
+/// this crate and skips every suite ordered after it. Re-running this same
+/// binary with those variables cleared asserts the startup path stands on its
+/// own. Unix only: rpath has no Windows equivalent, where the loader searches
+/// `PATH` instead.
+#[cfg(unix)]
+#[test]
+fn the_binary_starts_without_a_library_path_variable() {
+    let binary = std::env::current_exe().expect("the running test binary has a path");
+    // `--list` starts the process, and the interpreter with it, without
+    // running any test a second time.
+    let started = std::process::Command::new(&binary)
+        .arg("--list")
+        .env_remove("DYLD_LIBRARY_PATH")
+        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
+        .env_remove("LD_LIBRARY_PATH")
+        .output()
+        .expect("the test binary can be re-executed");
+    assert!(
+        started.status.success(),
+        "{} did not start without a library path variable: {}{}",
+        binary.display(),
+        String::from_utf8_lossy(&started.stderr),
+        String::from_utf8_lossy(&started.stdout),
+    );
+}
+
 #[test]
 fn round_trip_through_send_and_verify() {
     let signing_key = fresh_signing_key();
