@@ -62,11 +62,13 @@
   "scripts": {
     "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap --minify",
     "compile-tests": "tsc -p tsconfig.test.json",
-    "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "compile-unit-tests": "tsc -p tsconfig.unit.json",
+    "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.unit.json --noEmit",
     "package:dev": "npm run check && npm run compile && vsce package --no-dependencies --out registry-stack-dev.vsix && npm run verify:package",
     "verify:package": "node scripts/verify-vsix.cjs registry-stack-dev.vsix",
     "pretest": "npm run compile && npm run compile-tests",
-    "test": "vscode-test",
+    "test:unit": "npm run compile-unit-tests && node --test out/unit/test/unit/projectRoot.test.js",
+    "test": "npm run test:unit && vscode-test",
     "vscode:prepublish": "npm run compile"
   },
   "dependencies": {

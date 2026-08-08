@@ -10,17 +10,10 @@ import {
   ServerOptions,
 } from 'vscode-languageclient/node';
 
+import { isProjectRoot } from './projectRoot.js';
+
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
-
-// Relay project root: a single manifest file.
-const RELAY_MARKER_FILE = 'registry-stack.yaml';
-// Evidence project root: the marker written by newer projects, or the
-// pre-marker pair of an OpenAPI description and a questions directory. This
-// mirrors declares_root() in crates/registry-language-server/src/evidence/mod.rs.
-const EVIDENCE_MARKER_FILE = 'evidence-project.yaml';
-const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
-const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(
@@ -130,35 +123,6 @@ function findProjectFolders(): vscode.WorkspaceFolder[] {
   return (vscode.workspace.workspaceFolders ?? []).filter((folder) => {
     return folder.uri.scheme === 'file' && isProjectRoot(folder.uri.fsPath);
   });
-}
-
-function isProjectRoot(directory: string): boolean {
-  if (isFile(path.join(directory, RELAY_MARKER_FILE))) {
-    return true;
-  }
-  if (isFile(path.join(directory, EVIDENCE_MARKER_FILE))) {
-    return true;
-  }
-  return (
-    isFile(path.join(directory, EVIDENCE_OPENAPI_FILE)) &&
-    isDirectory(path.join(directory, EVIDENCE_QUESTIONS_DIRECTORY))
-  );
-}
-
-function isFile(candidate: string): boolean {
-  try {
-    return fs.statSync(candidate).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function isDirectory(candidate: string): boolean {
-  try {
-    return fs.statSync(candidate).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function folderKey(folder: vscode.WorkspaceFolder): string {
