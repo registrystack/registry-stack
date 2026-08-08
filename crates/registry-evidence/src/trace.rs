@@ -107,6 +107,14 @@ pub struct CaseTrace {
 #[derive(Debug, Default, Serialize)]
 pub struct FixtureTrace {
     pub cases: Vec<CaseTrace>,
+    /// What the fixture that built this trace declared must never appear in it.
+    ///
+    /// Not part of the rendered value. It travels with the trace so that
+    /// whoever renders it can check it without loading the fixture again, which
+    /// is what lets a run that stopped on an error be checked as closely as a
+    /// run that settled every case.
+    #[serde(skip)]
+    canaries: Vec<String>,
 }
 
 /// One fixture run rendered for a machine reader.
@@ -131,6 +139,19 @@ pub struct FixtureReport<'a> {
 const FIXTURE_SCOPE: &str = "(fixture)";
 
 impl FixtureTrace {
+    /// Declare what this trace must never contain.
+    ///
+    /// Declared as soon as the fixture is read, before any case runs, so the
+    /// canaries are in place for every trace that can still be rendered.
+    pub fn declare_canaries(&mut self, canaries: Vec<String>) {
+        self.canaries = canaries;
+    }
+
+    /// What the fixture declared must never appear in this trace.
+    pub fn canaries(&self) -> &[String] {
+        &self.canaries
+    }
+
     /// Open a case. Stages recorded from here on belong to it.
     pub fn begin_case(&mut self, id: &str) {
         self.cases.push(CaseTrace {

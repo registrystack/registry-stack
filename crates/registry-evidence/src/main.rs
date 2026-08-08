@@ -297,6 +297,12 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let mut trace = FixtureTrace::default();
             let summary =
                 evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true, &mut trace).await;
+            // Checked here rather than at the end of the evaluation, and before
+            // the render below. A run that stopped on an error never reaches
+            // that end, and it is the run whose trace gets read; a trace found
+            // prohibited and printed anyway would disclose the value its own
+            // fixture named.
+            validate_trace_canaries(&trace)?;
             // The trace is printed before the failure is returned. The failure
             // is a fixed message that says a case failed but never which one or
             // why; `CliError` carries no dynamic payload and does not gain one
@@ -346,16 +352,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let source_plans = compile_bundle_source_plans(&bundle.config)?;
             // This hidden seam is driven by Evidencectl, which reports the
             // command's own output. It records a trace and discards it rather
-            // than growing a second explained surface.
-            let summary = evaluate_fixture(
-                &bundle,
-                &kernel,
-                &source_plans,
-                &fixture,
-                false,
-                &mut FixtureTrace::default(),
-            )
-            .await?;
+            // than growing a second explained surface. The canaries are still
+            // checked against that discarded trace: a fixture that would leak
+            // when explained has to fail here too, or the seam becomes the way
+            // to pass a fixture the explained command refuses.
+            let mut trace = FixtureTrace::default();
+            let summary =
+                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false, &mut trace)
+                    .await;
+            validate_trace_canaries(&trace)?;
+            let summary = summary?;
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
                 summary.evaluated_cases
@@ -956,6 +962,56 @@ fn explain_surfaces(trace: &FixtureTrace) -> Result<Vec<String>, CliError> {
     ])
 }
 
+/// Check a trace against the canaries of the fixture that built it.
+///
+/// Separate from the fixture's whole privacy expectation because that one is a
+/// verdict on a run that finished, while this one has to hold on a run that
+/// stopped early. A case that raises an error never reaches the end of the
+/// evaluation, and that is exactly the run whose trace an operator reads.
+fn validate_trace_canaries(trace: &FixtureTrace) -> Result<(), CliError> {
+    let surfaces = explain_surfaces(trace)?;
+    for prohibited in trace.canaries() {
+        if surfaces
+            .iter()
+            .any(|surface| surface.contains(prohibited.as_str()))
+        {
+            return Err(CliError("fixture prohibited diagnostic is present"));
+        }
+    }
+    Ok(())
+}
+
+/// The canaries a fixture declares, read before any of its cases run.
+///
+/// An absent or malformed expectation is an error rather than an empty list.
+/// Returning nothing would drop the check for precisely the fixture whose
+/// declaration nobody can read.
+fn declared_canaries(
+    fixture: &JsonMap<String, Value>,
+    expectation_key: &str,
+    exclude_key: &str,
+) -> Result<Vec<String>, CliError> {
+    let expectation = fixture
+        .get(expectation_key)
+        .and_then(Value::as_object)
+        .ok_or(CliError("fixture privacy expectation is unavailable"))?;
+    Ok(expectation_strings(expectation, exclude_key)?
+        .into_iter()
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Whether a fixture case identifier can be written into a trace as it stands.
+///
+/// The identifier is fixture-controlled and the text trace puts it on a line of
+/// its own, so a control character in one would let a fixture write lines that
+/// read as stages the run never reached. Refused here rather than escaped at the
+/// render, which would quote every ordinary identifier to contain the one kind
+/// that has no legitimate use in an authored name.
+fn is_renderable_case_identifier(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.contains(char::is_control)
+}
+
 async fn evaluate_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1020,6 +1076,11 @@ async fn evaluate_fixture(
             "fixture is not an approved synthetic acceptance definition",
         ));
     }
+    trace.declare_canaries(declared_canaries(
+        object,
+        "privacy_expectation",
+        "diagnostics_exclude",
+    )?);
     let common = object.get("common").and_then(Value::as_object);
     let cases = object
         .get("cases")
@@ -1038,7 +1099,7 @@ async fn evaluate_fixture(
         let id = case
             .get("id")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty() && value.len() <= 128)
+            .filter(|value| is_renderable_case_identifier(value))
             .ok_or(CliError("fixture case identifier is invalid"))?;
         trace.begin_case(id);
 
@@ -1497,6 +1558,44 @@ fn evaluate_fixture_acquisition(
     }
 }
 
+/// Record one acquisition, yielding the projected response to carry on with.
+///
+/// A response the source contract refuses is an acquisition that was reached
+/// and failed, so it is recorded before the failure travels on. Left
+/// unrecorded, the trace of the refused case would end at the preparation
+/// before it and read as though the case never called its source at all.
+///
+/// The cause is not reported. What made a response unacceptable is a statement
+/// about that response, and the trace is read by whoever could not see it.
+fn record_projection(
+    trace: &mut FixtureTrace,
+    projected: Result<Value, SourceError>,
+    acquired: &str,
+    failure: CliError,
+) -> Result<Value, CliError> {
+    match projected {
+        Ok(projected) => {
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Ok,
+                format!(
+                    "{acquired}, projected keys {}",
+                    name_list(&object_keys(&projected))
+                ),
+            );
+            Ok(projected)
+        }
+        Err(_) => {
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Failed,
+                format!("{acquired}, and the source contract refused it"),
+            );
+            Err(failure)
+        }
+    }
+}
+
 /// Record one lookup, yielding either facts to carry on with or a settled
 /// outcome for the caller to return unchanged.
 ///
@@ -1659,6 +1758,11 @@ async fn evaluate_reference_fixture(
             "privacyExpectation",
         ],
     )?;
+    trace.declare_canaries(declared_canaries(
+        fixture,
+        "privacyExpectation",
+        "diagnosticsExclude",
+    )?);
     let common = fixture
         .get("common")
         .and_then(Value::as_object)
@@ -1727,7 +1831,7 @@ async fn evaluate_reference_fixture(
         let id = case
             .get("id")
             .and_then(Value::as_str)
-            .filter(|id| !id.is_empty() && id.len() <= 128 && identifiers.insert(*id))
+            .filter(|id| is_renderable_case_identifier(id) && identifiers.insert(*id))
             .ok_or(CliError("reference fixture case identifier is invalid"))?;
         trace.begin_case(id);
         let expected = case
@@ -1981,17 +2085,12 @@ async fn evaluate_reference_fixture(
                 let response = case
                     .get("response")
                     .ok_or(CliError("reference fixture response is unavailable"))?;
-                let projected = project_fixture_response(source, response)
-                    .map_err(|_| CliError("reference fixture source projection failed"))?;
-                trace.record(
-                    Stage::Acquire,
-                    StageStatus::Ok,
-                    format!(
-                        "1 response from source {:?}, projected keys {}",
-                        requirement.initial_source(),
-                        name_list(&object_keys(&projected))
-                    ),
-                );
+                let projected = record_projection(
+                    trace,
+                    project_fixture_response(source, response),
+                    &format!("1 response from source {:?}", requirement.initial_source()),
+                    CliError("reference fixture source projection failed"),
+                )?;
                 (
                     validate_reference_response(
                         response_context,
@@ -2019,16 +2118,12 @@ async fn evaluate_reference_fixture(
                 let search_response = responses
                     .get(search)
                     .ok_or(CliError("reference search response is unavailable"))?;
-                let projected_search = project_fixture_response(source, search_response)
-                    .map_err(|_| CliError("reference search response projection failed"))?;
-                trace.record(
-                    Stage::Acquire,
-                    StageStatus::Ok,
-                    format!(
-                        "search response from {search:?}, projected keys {}",
-                        name_list(&object_keys(&projected_search))
-                    ),
-                );
+                let projected_search = record_projection(
+                    trace,
+                    project_fixture_response(source, search_response),
+                    &format!("search response from {search:?}"),
+                    CliError("reference search response projection failed"),
+                )?;
                 let prior_facts = match record_lookup(
                     trace,
                     kernel.extract_source(search, &projected_search, &BTreeMap::new()),
@@ -2090,16 +2185,12 @@ async fn evaluate_reference_fixture(
                 let fetch_response = responses
                     .get(fetch)
                     .ok_or(CliError("reference fetch response is unavailable"))?;
-                let projected_fetch = project_fixture_response(fetch_source, fetch_response)
-                    .map_err(|_| CliError("reference fetch response projection failed"))?;
-                trace.record(
-                    Stage::Acquire,
-                    StageStatus::Ok,
-                    format!(
-                        "fetch response from {fetch:?}, projected keys {}",
-                        name_list(&object_keys(&projected_fetch))
-                    ),
-                );
+                let projected_fetch = record_projection(
+                    trace,
+                    project_fixture_response(fetch_source, fetch_response),
+                    &format!("fetch response from {fetch:?}"),
+                    CliError("reference fetch response projection failed"),
+                )?;
                 let fetch_lookup =
                     match kernel.extract_source(fetch, &projected_fetch, &prior_facts) {
                         Ok(LookupResult::NoMatch | LookupResult::Ambiguous) => {

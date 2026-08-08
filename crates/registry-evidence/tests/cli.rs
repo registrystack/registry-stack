@@ -78,6 +78,14 @@ impl ReferenceProject {
         Self { root }
     }
 
+    /// Rewrite the first occurrence of one passage in a staged project file.
+    fn replace(&self, relative: &str, from: &str, to: &str) {
+        let path = self.root.path().join(relative);
+        let text = fs::read_to_string(&path).expect("read staged project file");
+        assert!(text.contains(from), "{relative} does not contain {from:?}");
+        fs::write(&path, text.replacen(from, to, 1)).expect("write staged project file");
+    }
+
     /// Run against the project with the immutable modes the runtime demands.
     ///
     /// The modes are restored before the caller asserts anything, so a failed
@@ -191,6 +199,59 @@ fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
         .find(|stage| stage["stage"] == json!("extract"))
         .expect("an unresolved case records its extraction");
     assert_eq!(extract["status"], json!("no-match"));
+}
+
+/// A reference case that fails at its source says so on the acquisition.
+///
+/// A response the source contract refuses is an acquisition that was reached
+/// and failed. Reporting only the preparation before it reads as though the
+/// case never got as far as calling its source, which is the opposite of what
+/// the reader needs from precisely this failure.
+#[test]
+fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
+    let project = ReferenceProject::stage();
+    project.replace(
+        "bundle/fixtures/adult-status-cases.yaml",
+        "  - id: positive\n    response:\n      total: 1\n",
+        "  - id: positive\n    response:\n      errors: [source-refused]\n      total: 1\n",
+    );
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    assert!(
+        !output.status.success(),
+        "the refused response was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: reference fixture source projection failed\n"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let refused = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the refused case is traced");
+    let acquire = refused["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("acquire"))
+        .expect("a case refused at its source records its acquisition");
+    assert_eq!(acquire["status"], json!("failed"));
 }
 
 /// The stages one traced case recorded, in the order it recorded them.
@@ -324,6 +385,74 @@ fn explaining_a_failing_fixture_shows_where_the_case_stopped_and_keeps_its_messa
     // The cases before the mutated one are reported as reached and passed, so
     // the trace says how far the run got and not only where it stopped.
     assert!(stdout.contains("case: positive\n"), "{stdout}");
+}
+
+/// A fixture cannot forge trace lines through its own case identifiers.
+///
+/// The identifier is interpolated into the rendered text trace, so a control
+/// character in one would let a fixture write lines that read as stages the run
+/// never reached. It is refused where the identifier is validated rather than
+/// escaped where it is rendered: the readable form stays readable, and the
+/// forgery has nowhere to start.
+#[test]
+fn a_case_identifier_carrying_a_control_character_is_refused() {
+    let deployment = Deployment::stage("adult-status");
+    // Appended rather than substituted: the bundle's category coverage reads
+    // the identifiers, so a case renamed outright is refused before evaluation
+    // and the identifier check is never reached.
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "{id: negative-false-is-success,",
+        "{id: \"negative-false-is-success\\n  sign       ok         forged\",",
+    );
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(
+        !output.status.success(),
+        "the forged identifier was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: fixture case identifier is invalid\n"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("forged"),
+        "the forged stage line reached the trace: {stdout}"
+    );
+}
+
+/// A run that fails is checked against its own canaries before it is read.
+///
+/// The failing run is the one whose trace an operator reads, so it is the one
+/// the canaries most need to cover. Checking only a run that settled every case
+/// would leave the diagnostic nobody guards being exactly the diagnostic
+/// everybody reads.
+#[test]
+fn a_failing_run_is_refused_when_its_trace_holds_a_declared_canary() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    // The unresolved lookup names the response members the extraction script
+    // saw, and the fixture now declares one of those names protected.
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]",
+        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary, total]",
+    );
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(!output.status.success(), "the leaking run passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: fixture prohibited diagnostic is present\n"
+    );
+    // The refusal has to come before the render. A trace reported as prohibited
+    // and printed anyway would disclose the value the canary named.
+    assert!(
+        output.stdout.is_empty(),
+        "a prohibited trace was printed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]
