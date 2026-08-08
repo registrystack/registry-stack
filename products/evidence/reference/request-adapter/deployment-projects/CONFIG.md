@@ -91,6 +91,7 @@ The governed file is `bundle/evidence.yaml`.
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds this bundle opts in to, at most one entry. Omission and `[]` both enable nothing. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
 | `authorityProfiles` | yes | Who may request which requirement, purpose, audience, roles, profiles, and value origins. |
@@ -208,7 +209,7 @@ Each requirement declares these fields:
 | Key | Required | Meaning |
 |---|---|---|
 | `id`, `kind` | yes | Stable requirement URI and one of `criterion`, `information-requirement`, or `constraint`. |
-| `acquisition` | yes | Exactly `{kind: single, source: <id>}` or `{kind: search-then-fetch, search: <id>, fetch: <id>}`. The latter has a hard two-call ceiling and no response-led routing. |
+| `acquisition` | yes | One of the three closed shapes below. None permits response-led routing. |
 | `purposes` | yes | Closed purpose codes that authority grants may select. |
 | `subjectRoles` | yes | Complete role set, `cardinality: one`, and permitted selector profile ids. Public subject array order is not semantic; roles are resolved uniquely and canonicalized to declaration order. |
 | `referenceFrameworks`, `evidenceType` | yes | Governed legal/procedural framework URIs and the exact Evidence Type URI. |
@@ -219,6 +220,30 @@ Each requirement declares these fields:
 | `fixtures` | conditional | Bundle-relative sanitized project fixture referenced by exactly one requirement. It may be omitted only under `assuranceProfile: local`; production and evidence-grade require it and complete coverage. |
 | `disclosureGuard.families` | yes | Non-empty reviewed disclosure-family URI set. Reuse across enabled requirements is rejected; distinct labels still require human combined-disclosure review. |
 | `existenceDisclosure` | yes | Exactly `collapse-unresolved` in Version 1. |
+
+`acquisition.kind` selects one of three closed shapes:
+
+| `kind` | Other keys | Call ceiling |
+|---|---|---|
+| `single` | `source` | One. |
+| `search-then-fetch` | `search`, `fetch` (one source id) | Two. |
+| `search-then-fetch-set` | `search`, `fetch` (2 through 4 members), `maximumAcquisitionMilliseconds` | One plus the declared member count. |
+
+`search-then-fetch-set` is a gated kind. It serves only where this bundle names
+it under `acquisitionCapabilities` and the operator separately names it under
+the runtime file's `acquisitionCapabilities`; a bundle missing either half is
+refused before the listener binds. Each `fetch[]` member declares its own
+`source` and a `factInputs` allowlist of 1 through 16 validated search fact
+names, which is the only search-derived data that member receives through any
+channel, including the body its preparation builds. Members must be distinct
+from each other and from the search source, and each fact name must be a
+required fact of the search source's fact schema. Members are called in
+declared order after the search resolves to a unique schema-valid match, and
+derivation receives the union of the stage FactSets, whose names startup proved
+disjoint. `maximumAcquisitionMilliseconds` is 1 through 30,000 and bounds the
+whole acquisition, including the transitions between stages; exceeding it fails
+the requirement as a dependency failure and never cancels a durable audit
+append.
 
 Supported concept forms are `boolean`, `controlled-code`,
 `controlled-category`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
@@ -585,6 +610,7 @@ outboundTls:
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds this deployment enables, at most one entry. Omission and `[]` both enable nothing, so a bundle needing a gated kind is refused before the listener binds. |
 
 `bundleDirectory`, secret roots, audit destinations, and CA files must be
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
@@ -772,6 +798,8 @@ and document the new keys in the prose above.
 
 <!-- evidence-bundle-key-paths:start -->
 ```text
+acquisitionCapabilities
+acquisitionCapabilities[]
 assuranceProfile
 audit
 audit.failClosed
@@ -826,7 +854,12 @@ requirements
 requirements[]
 requirements[].acquisition
 requirements[].acquisition.fetch
+requirements[].acquisition.fetch[]
+requirements[].acquisition.fetch[].factInputs
+requirements[].acquisition.fetch[].factInputs[]
+requirements[].acquisition.fetch[].source
 requirements[].acquisition.kind
+requirements[].acquisition.maximumAcquisitionMilliseconds
 requirements[].acquisition.search
 requirements[].acquisition.source
 requirements[].concepts
@@ -1000,6 +1033,8 @@ version
 
 <!-- evidence-runtime-key-paths:start -->
 ```text
+acquisitionCapabilities
+acquisitionCapabilities[]
 auditStorage
 auditStorage.maximumFileBytes
 auditStorage.path
