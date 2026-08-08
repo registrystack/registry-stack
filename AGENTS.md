@@ -88,8 +88,10 @@ semantics of its own. Its source is covered by the same source-product and
 domain neutrality checks as the runtime.
 
 `registry-evidence-authoring` is the library beside `evidencectl` holding the
-single implementation of the authoring form: the model an adopter writes and
-the checks that shape must satisfy. It sits outside the frozen Version 1
+single implementation of the authoring form: the model an adopter writes, the
+checks that shape must satisfy, and the reading of an OpenAPI description that
+turns a published operation into the leaves a question may select. It sits
+outside the frozen Version 1
 runtime contract, is not a second runtime, and adds no Evidence semantics of
 its own; the sentences it reports are the ones adopter tooling already
 reported. It performs no input or output, so a caller may run the same checks
