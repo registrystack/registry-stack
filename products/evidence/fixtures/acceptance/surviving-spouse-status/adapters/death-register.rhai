@@ -7,13 +7,13 @@ fn extract(source_response, context) {
         throw("source_protocol_error");
     }
     // A complete register that holds no death record still resolves the person
-    // and answers `not-recorded`. Failing to resolve at all is a different
-    // thing, and it is not a fact about the subject.
+    // and answers false. Failing to resolve at all is a different thing, and it
+    // is not a fact about the subject.
     if source_response["record_found"] != true {
         return #{outcome: "no_match"};
     }
     if is_missing(source_response["death_subject_reference"]) ||
-       is_missing(source_response["date_of_death"]) ||
+       is_missing(source_response["death_recorded"]) ||
        is_missing(source_response["death_record_contract"]) ||
        is_missing(source_response["death_record_complete"]) {
         throw("source_protocol_error");
@@ -26,7 +26,7 @@ fn extract(source_response, context) {
     // can tell whether two registers answered about one subject.
     #{outcome: "match", facts: #{
         death_subject_reference: source_response["death_subject_reference"],
-        date_of_death: source_response["date_of_death"],
+        death_recorded: source_response["death_recorded"],
         death_record_contract: source_response["death_record_contract"],
         death_record_complete: source_response["death_record_complete"]
     }}

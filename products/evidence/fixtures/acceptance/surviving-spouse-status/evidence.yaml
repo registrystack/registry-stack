@@ -94,7 +94,7 @@ sources:
       projection:
         - /record_found
         - /death_subject_reference
-        - /date_of_death
+        - /death_recorded
         - /death_record_contract
         - /death_record_complete
       redirects: deny
@@ -136,7 +136,6 @@ requirements:
         civil_reference_namespace: urn:example:fixture:civil-record
         union_set_contract: urn:example:fixture:union-set:v1
         death_register_contract: urn:example:fixture:death-register:v1
-        no_death_recorded_marker: not-recorded
     concepts: [{id: urn:example:fixture:concept:surviving-spouse-status, form: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:union-status]}

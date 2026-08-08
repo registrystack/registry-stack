@@ -19,29 +19,46 @@ fn derive(facts, selectors, evaluation_context) {
     if facts["union_set_complete"] != true || facts["death_record_complete"] != true {
         throw("derivation_input_error");
     }
+    // The latest recognized union decides the answer, so the latest start date
+    // is found before any reason is read. A single fold that kept the first
+    // event it saw would answer a tie by array order, which is a property of
+    // how the register serialized its response and not of the subject.
     let have_latest = false;
     let latest_start = "";
-    let latest_reason = "";
     for event in facts["union_events"] {
         if event["union_recognized"] == true {
-            let later = !have_latest;
-            if have_latest {
-                later = compare_dates(
-                    parse_date(event["union_start_date"]),
-                    parse_date(latest_start)
-                ) > 0;
-            }
-            if later {
+            if !have_latest || compare_dates(
+                parse_date(event["union_start_date"]),
+                parse_date(latest_start)
+            ) > 0 {
                 have_latest = true;
                 latest_start = event["union_start_date"];
+            }
+        }
+    }
+    let latest_reason = "";
+    if have_latest {
+        let sharing_latest = 0;
+        for event in facts["union_events"] {
+            if event["union_recognized"] == true && compare_dates(
+                parse_date(event["union_start_date"]),
+                parse_date(latest_start)
+            ) == 0 {
+                sharing_latest += 1;
                 latest_reason = event["union_end_reason"];
             }
+        }
+        // Two recognized unions beginning on one day leave no latest one. The
+        // register has not said which it is, and guessing signs an answer it
+        // did not give.
+        if sharing_latest > 1 {
+            throw("derivation_input_error");
         }
     }
     [#{
         concept_id: "urn:example:fixture:concept:surviving-spouse-status",
         value: have_latest &&
             latest_reason == "death-of-other-party" &&
-            facts["date_of_death"] == parameters["no_death_recorded_marker"]
+            facts["death_recorded"] == false
     }]
 }
