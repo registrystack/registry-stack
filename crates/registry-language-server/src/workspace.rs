@@ -220,6 +220,11 @@ pub(crate) struct RootState {
     family: ProjectFamily,
     documents: BTreeMap<PathBuf, String>,
     open_versions: BTreeMap<PathBuf, i32>,
+    /// The text of the buffers this root holds aside: the ones the client has open over paths the
+    /// project does not hold. They take no part in the index, and they are kept rather than dropped
+    /// because the client still owns those documents. When the file under one comes back, this
+    /// revision is what the root answers from, and not what the returning file says.
+    absent_buffers: BTreeMap<PathBuf, String>,
     disk_diagnostics: Vec<IndexedDiagnostic>,
     index: ProjectIndex,
 }
@@ -239,6 +244,7 @@ impl RootState {
             family,
             documents: loaded.documents,
             open_versions: BTreeMap::new(),
+            absent_buffers: BTreeMap::new(),
             disk_diagnostics: loaded.diagnostics,
             index,
         })
@@ -262,16 +268,20 @@ impl RootState {
     /// The directory ceiling is deliberately not applied here. It bounds what the editor reads from
     /// a project on its own; a document the client is holding open is one the author is looking at,
     /// and leaving it out would give them a file on screen with no symbols and no reason for it.
+    ///
+    /// Whether the project still holds the file under the buffer is not asked here either. The
+    /// revision that just arrived is this root's text for the path either way, and
+    /// [`Self::settle_open_buffers`] decides on every rebuild which side of the project it sits on,
+    /// so one keystroke over a path the project has lost is answered in the one place that answers
+    /// it for every other path as well.
     fn update(&mut self, path: PathBuf, text: String, version: i32) {
         if !self.family.owns_document(&self.root, &path) {
             return;
         }
-        if !self.project_holds(&path) {
-            self.forget_absent_buffer(&path);
-            self.rebuild();
-            return;
-        }
         self.open_versions.insert(path.clone(), version);
+        // The revision that arrived is the whole of what the client holds, so it replaces whatever
+        // this root was keeping for the path on either side of the project.
+        self.absent_buffers.remove(&path);
         self.disk_diagnostics
             .retain(|diagnostic| diagnostic.path != path);
         let ceiling = self.family.document_ceiling(&self.root, &path);
@@ -296,6 +306,7 @@ impl RootState {
             return;
         }
         self.open_versions.remove(path);
+        self.absent_buffers.remove(path);
         self.reload_from_disk(path);
     }
 
@@ -311,41 +322,57 @@ impl RootState {
     }
 
     /// Whether this root answers for `path` from a buffer the client has open rather than from the
-    /// file on disk. A buffer wins for as long as the project holds the file under it.
+    /// file on disk.
+    ///
+    /// Only the protocol answers this. Between `didOpen` and `didClose` the client owns the
+    /// document's content, whatever becomes of the file underneath it, so a buffer wins here until
+    /// the client closes it. What such a buffer stops doing when the file leaves the project is
+    /// contributing to the project, which is [`Self::project_holds`] and is asked on its own.
     fn answers_from_a_buffer(&self, path: &Path) -> bool {
-        self.open_versions.contains_key(path) && self.project_holds(path)
+        self.open_versions.contains_key(path)
     }
 
-    /// Drops everything this root holds for a path the project no longer has.
+    /// Puts every buffer the client has open on the side of the project it belongs to now.
     ///
-    /// A buffer open over a path the project no longer holds does not contribute reference
-    /// diagnostics against the project. The compiler reads the project's directories, so a file
-    /// that has left them is not in the tree it builds, and every sentence drawn from that buffer
-    /// is drawn over a project it accepts. A client keeps such a buffer open for as long as the
-    /// author keeps the tab open, which is well past the deletion that emptied it.
+    /// A buffer open over a path the project no longer holds is held aside, and contributes no
+    /// symbols, no references, and no diagnostics. The compiler reads the project's directories, so
+    /// a file that has left them is not in the tree it builds, and every sentence drawn from that
+    /// buffer is drawn over a project it accepts. A client keeps such a buffer open for as long as
+    /// the author keeps the tab open, which is well past the deletion that emptied it. Nothing is
+    /// reported in its place: there is no edit to the buffer that would answer it, and the client
+    /// already shows the author that the document is gone.
     ///
-    /// Nothing is reported in its place. Every diagnostic this channel carries is something the
-    /// compiler refuses, and a file the project no longer holds is not: there is no edit to the
-    /// buffer that would answer it, and the client already shows the author that the document is
-    /// gone.
+    /// A buffer whose file has come back is taken up again, from the revision the client holds and
+    /// not from the file, because the client owns that document until it closes it. The unsaved
+    /// work an author can still see on screen is the revision every request about that document is
+    /// answered from, and a branch switched back over an edited tab is the ordinary way a file
+    /// leaves and returns underneath one.
     ///
-    /// The version goes with the text. It records the revision this root answers for a document
-    /// with, and this root has stopped answering for one. When the file comes back the root takes
-    /// it from disk again, and the client's next edit makes it a buffer again.
-    fn forget_absent_buffer(&mut self, path: &Path) {
-        self.open_versions.remove(path);
-        self.documents.remove(path);
-        self.disk_diagnostics
-            .retain(|diagnostic| diagnostic.path != path);
-    }
-
-    /// The buffers this root holds in one directory over paths the project no longer has.
-    fn absent_buffers_in(&self, directory: &Path) -> Vec<PathBuf> {
-        self.open_versions
-            .keys()
-            .filter(|path| path.parent() == Some(directory) && !self.project_holds(path))
-            .cloned()
-            .collect()
+    /// Both moves run on every rebuild rather than at the notification that caused one, because a
+    /// session learns about the filesystem only from what the client tells it, and a client may
+    /// tell it half of a change: a deletion whose matching return never arrives would otherwise
+    /// leave a name reported unknown over a project the compiler builds, until the author happened
+    /// to type into that very buffer.
+    ///
+    /// Two bounds are left. This reaches the paths the client has open and no others, so a file
+    /// deleted with no tab over it and returned unannounced is not one this root remembers to ask
+    /// about. And a root is asked nothing between one notification and the next, so what the client
+    /// last published stands until the session does something. Closing either would take a watcher
+    /// of the filesystem, which this server does not have.
+    fn settle_open_buffers(&mut self) {
+        for path in self.open_versions.keys().cloned().collect::<Vec<_>>() {
+            if self.project_holds(&path) {
+                if let Some(text) = self.absent_buffers.remove(&path) {
+                    self.documents.insert(path, text);
+                }
+                continue;
+            }
+            if let Some(text) = self.documents.remove(&path) {
+                self.absent_buffers.insert(path.clone(), text);
+            }
+            self.disk_diagnostics
+                .retain(|diagnostic| diagnostic.path != path);
+        }
     }
 
     /// Applies one batch of watched changes together, as the client delivered it.
@@ -383,10 +410,11 @@ impl RootState {
     ///
     /// A document the client has open is left alone, text and diagnostics both. The author is
     /// looking at that buffer, and its text is the unsaved revision rather than whatever is on disk.
-    /// A buffer over a path the directory no longer holds is not such a document, and is forgotten
-    /// first: a batch is how a deletion reaches this root, and the file under that buffer is what
-    /// the batch deleted. The read happens before anything is dropped, so a directory the server
-    /// cannot enumerate leaves the root exactly as it was and says why.
+    /// Whether the directory still holds the file under such a buffer is not decided here: a batch
+    /// is how a deletion reaches this root, but it is also how half of one does, so that question is
+    /// asked of every open buffer at the rebuild closing the batch. The read happens before anything
+    /// is dropped, so a directory the server cannot enumerate leaves the root exactly as it was and
+    /// says why.
     fn settle_bounded_directory(&mut self, path: &Path) -> Result<()> {
         let Some(scan) = self.family.scan_bounded_directory(&self.root, path)? else {
             return Ok(());
@@ -394,9 +422,6 @@ impl RootState {
         let Some(directory) = path.parent() else {
             return Ok(());
         };
-        for absent in self.absent_buffers_in(directory) {
-            self.forget_absent_buffer(&absent);
-        }
         let open_versions = &self.open_versions;
         let settled =
             |path: &Path| path.parent() == Some(directory) && !open_versions.contains_key(path);
@@ -417,14 +442,11 @@ impl RootState {
 
     /// Takes one document from disk, without rebuilding the index around it.
     ///
-    /// A path an unbounded directory holds reaches this root one at a time rather than through a
-    /// settled directory, so the buffer a deletion left behind is forgotten here as well.
+    /// A path the client has open is left to the client, whatever the file under it now says or
+    /// whether it is there at all: the content of an open document is the client's until it closes
+    /// it, so this root does not read one back from disk.
     fn apply_from_disk(&mut self, path: &Path) {
         if !self.family.owns_document(&self.root, path) || self.answers_from_a_buffer(path) {
-            return;
-        }
-        if self.open_versions.contains_key(path) {
-            self.forget_absent_buffer(path);
             return;
         }
         self.disk_diagnostics
@@ -465,7 +487,13 @@ impl RootState {
         }
     }
 
+    /// Rebuilds the index this root answers from.
+    ///
+    /// Every path into this root ends here, which is why the buffers the client has open are
+    /// settled against the project first: an index built without asking would be built from a tree
+    /// the project had before whatever prompted the rebuild.
     fn rebuild(&mut self) {
+        self.settle_open_buffers();
         self.index = ProjectIndex::from_documents_with_diagnostics(
             self.family,
             &self.root,
@@ -1713,6 +1741,40 @@ mod tests {
             "the project holds the question again, and its pointers with it: {:?}",
             reported_at(&state, &question)
         );
+    }
+
+    /// A tab closed over a departed path leaves nothing of it behind.
+    ///
+    /// This one was written after the change it covers rather than before it. The two defects that
+    /// prompted the change are pinned over the protocol in `tests/evidence_open_buffers.rs`; this
+    /// holds the store to the retention rule they imply. A buffer held aside is the author's text,
+    /// kept for one reason: to give it back when the file returns. A client that closes the document
+    /// ends that reason, and the text stops being this root's to keep.
+    #[test]
+    fn a_buffer_closed_over_a_departed_path_is_not_kept() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, questions) = full_questions_project(temp.path(), "adult-status");
+        let departed = questions.join("filler-000.yaml");
+        state.update(
+            departed.clone(),
+            question_naming_absent_files("filler-000"),
+            2,
+        );
+        fs::remove_file(&departed).unwrap();
+        state
+            .reload_watched_batch(std::slice::from_ref(&departed))
+            .unwrap();
+        assert_eq!(
+            state.absent_buffers.keys().collect::<Vec<_>>(),
+            vec![&departed],
+            "the client still holds the tab, so the root holds the revision it would give back"
+        );
+
+        state.close(&departed);
+
+        assert!(state.absent_buffers.is_empty());
+        assert!(!state.open_versions.contains_key(&departed));
+        assert!(!state.documents.contains_key(&departed));
     }
 
     /// A settle keeps the unsaved text of a buffer whose file is still there.
