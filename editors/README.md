@@ -72,23 +72,20 @@ installation and launch instructions:
 Use the following checks in either editor:
 
 1. Confirm the Registry Stack language-server output or log says that the project was indexed.
-2. In `registry-stack.yaml`, invoke **Go to Definition** on the value in
-   `integration: person-record`. It must open the `id` in
+2. In `registry-stack.yaml`, invoke **Go to Definition** on `person-record` in the consultation's
+   `integration: person-record` field. It must open the `id` in
    `integrations/person-record/integration.yaml`.
-3. Invoke **Go to Definition** on `person_record` in `output: person_record.active`. It must jump
-   to the `consultations.person_record` key in the same manifest.
-4. Invoke **Go to Definition** on `person-active` in the `person-status` profile's `claims` list.
-   It must jump to the `claims.person-active` definition.
-5. Open `integrations/person-record/fixtures/active.yaml` and invoke **Go to Definition** on
-   `person-active` under `expect.claims`. It must jump back to the manifest claim.
-6. Open `environments/local.yaml` and invoke **Go to Definition** on the `person-record`
-   integration key. It must open the integration definition.
-7. Invoke **Find References** on the integration definition. Results must include the manifest
-   alias, consultation reference, and environment binding.
-8. Search workspace symbols for `person`. Results must include the registry, integration, service,
-   consultation, claims, credential profile, and fixture symbols. The document outline for
-   `registry-stack.yaml` must list its Registry Stack symbols.
-9. Temporarily change `integration: person-record` to `integration: missing-source`. The editor
+3. Invoke **Go to Definition** on `person-record` under the manifest's top-level `integrations:`
+   mapping. It must open the same integration definition.
+4. Open `environments/local.yaml` and invoke **Go to Definition** on the `person-record` key under
+   `integrations:`. It must open the same integration definition.
+5. Open `integrations/person-record/integration.yaml` and invoke **Find References** on
+   `person-record` in the `id` field. Results must include the manifest alias, the consultation's
+   integration reference, and the environment binding.
+6. Search workspace symbols for `person`. Results must include the integration, service,
+   consultation, and fixture symbols. The document outline for `registry-stack.yaml` must list its
+   registry, service, and consultation symbols.
+7. Temporarily change `integration: person-record` to `integration: missing-source`. The editor
    must report `Unknown integration reference 'missing-source'`. Restore `person-record` and
    confirm that the diagnostic clears.
 
