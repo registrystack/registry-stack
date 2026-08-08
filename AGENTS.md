@@ -40,6 +40,7 @@ client against a real authorization server.
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registryctl` | Relay adopter tooling |
+| `crates/registry-language-server` | Editor language server for Relay manifests and Evidence authoring documents, linked into both adopter tools |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -84,9 +85,13 @@ an adopter's YAML tooling reads, and drives fixture runs for complete
 deployment projects. It delegates runtime evaluation, signing, bundle validation, and
 fixture evaluation to the `evidence` binary, and reuses
 `registry-evidence-client` and `registry-evidence-verifier` for relying-party
-request preparation and offline response verification. It adds no Evidence
-semantics of its own. Its source is covered by the same source-product and
-domain neutrality checks as the runtime.
+request preparation and offline response verification. It links
+`registry-language-server`, so an adopter's editor reports the authoring
+sentences the command line already reports. It adds no Evidence semantics of
+its own. Its source is covered by the same source-product and domain neutrality
+checks as the runtime, and so is the language server's in full: every line of
+that crate ships inside `evidencectl`, and the modules its Relay half and its
+Evidence half share are where a term would leak from one into the other.
 
 `registry-evidence-authoring` is the library beside `evidencectl` holding the
 single implementation of the authoring form: the model an adopter writes, the
