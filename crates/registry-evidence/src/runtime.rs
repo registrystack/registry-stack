@@ -1566,10 +1566,16 @@ impl EvidenceRuntime {
         let execution = executor.execute_with_prior_facts(&selectors, prior_facts, &request_parts);
         let executed = match deadline {
             Some(deadline) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                match tokio::time::timeout(remaining, execution).await {
-                    Ok(executed) => executed,
-                    Err(_) => {
+                // A ceiling already spent by the durable append above, or by
+                // preparation, is answered before the source future is polled
+                // at all; see `stage_time_budget`.
+                let bounded = match stage_time_budget(deadline, Instant::now()) {
+                    Some(remaining) => tokio::time::timeout(remaining, execution).await.ok(),
+                    None => None,
+                };
+                match bounded {
+                    Some(executed) => executed,
+                    None => {
                         self.append_failure(
                             material,
                             operation,
@@ -1829,6 +1835,23 @@ impl AuditMaterial {
         event.actor_pseudonym = self.actor_pseudonym.clone();
         event
     }
+}
+
+/// How long one source round-trip may still run, or `None` once the
+/// acquisition ceiling is spent.
+///
+/// `tokio::time::timeout` polls the future it wraps before it consults its
+/// timer, so handing it a zero remainder is not a refusal: the wrapped
+/// execution is polled once, which is enough to acquire a credential and put an
+/// evidence-data request on the wire, and only then is it abandoned. The
+/// ceiling bounds when a request may leave the process, so a spent one has to
+/// be answered before the future is polled at all. The stage's durable
+/// access-attempt append and its preparation script both run after the
+/// deadline was computed, so a remainder of zero is reachable on any stage,
+/// including the first, where no between-stage guard precedes it.
+fn stage_time_budget(deadline: Instant, now: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(now);
+    (!remaining.is_zero()).then_some(remaining)
 }
 
 fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
@@ -2167,6 +2190,22 @@ mod tests {
         let first = canonical_pair(b"a", b"bc").expect("pair");
         let second = canonical_pair(b"ab", b"c").expect("pair");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_spent_acquisition_ceiling_leaves_no_time_for_one_more_source_call() {
+        let now = Instant::now();
+
+        // `tokio::time::timeout` polls the future it wraps before it consults
+        // its timer, so a zero remainder handed to it would still let one
+        // request leave the process after the ceiling. A spent deadline has to
+        // be answered before the source future exists, not by the timer.
+        assert_eq!(stage_time_budget(now, now), None);
+        assert_eq!(stage_time_budget(now - Duration::from_millis(1), now), None);
+        assert_eq!(
+            stage_time_budget(now + Duration::from_millis(5), now),
+            Some(Duration::from_millis(5))
+        );
     }
 
     #[test]
