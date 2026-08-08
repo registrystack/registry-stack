@@ -50,6 +50,16 @@ is, so a project whose questions all name a `source.ref` and no operation still
 carries one. It declares `openapi: 3.0.x` or `3.1.x`; any other version is
 rejected.
 
+As soon as one question names an `operation`, that description is read under a
+closed profile. Its top-level keys are `openapi`, `info`, `servers`, `paths`,
+and `components`, so anything else, `tags` and a top-level `security`
+included, is refused as an unsupported key. `servers` holds exactly one entry,
+whose object carries the single field `url`, spelled as a canonical loopback
+HTTP origin with an explicit non-zero port: `http://127.0.0.1:8080` or
+`http://[::1]:8080`. HTTPS, a hostname such as `localhost`, a trailing slash, a
+`description` beside the `url`, and a second server are each refused. A project
+whose questions all name a `source.ref` is held to the version alone.
+
 Only the marker and a question have a Rust type behind them, so only those two
 carry a generated schema. `crates/registry-evidence-authoring/src/schema.rs`
 states the reason: a schema written by hand for one of the other parts would be
@@ -127,7 +137,7 @@ or `subjects` for a list of 1 to 8. Declaring both, or neither, is rejected.
 | `subjects` | one of the two | 1 to 8 parties. |
 | `subject.role` | yes | What this party is to the question. Unique across the question's subjects. |
 | `subject.selector` | yes | The request field carrying this party's identifier. |
-| `subject.profile` | no | The selector profile the field belongs to. A question that names an `operation` must omit it, because `evidencectl` derives the profile from the operation. |
+| `subject.profile` | no | The selector profile the field belongs to. A question that names an `operation` must omit it, because `evidencectl` derives the profile from the operation. A question that names a `source.ref` may omit it only when exactly one alternative of that source's selector input for this role lists this field; no match and two matches are refused alike, so a field two profiles expose has to name its profile. |
 | `subject.derivation` | no | Whether this party's selector value is offered to the derivation program. Defaults to `false`. |
 
 `subjects[]` carries the same four keys as `subject`.
@@ -159,7 +169,12 @@ projects out of the response.
 
 Declaring both forms, or neither, is rejected. An `operationId` must resolve to
 exactly one operation, and that operation must be a GET; a match on any other
-method is refused with the same finality as a match on none.
+method is refused with the same finality as a match on none. What it resolves
+to is read under the same closed profile the document is: the selected path
+item carries only `get` and `parameters`, and the operation itself only
+`operationId`, `parameters`, and `responses`, so an ordinary `summary` or
+`description` beside them is refused, and so are an operation-level `security`,
+a request body, and `servers` on either the path item or the operation.
 
 ### Facts
 
@@ -168,7 +183,7 @@ One fact names a value and the place it is read from.
 | Key | Required | Meaning |
 |---|---|---|
 | `facts[].name` | yes | The name the derivation reads the value under. Lowercase local identifier, unique within the question. |
-| `facts[].path` | yes | An extended JSON Pointer into the response. Unique within the question, starts with `/`, at most 256 bytes, no control characters. |
+| `facts[].path` | yes | An extended JSON Pointer into the response. Unique within the question, starts with `/`, at most 256 bytes, no control characters, and naming a scalar leaf the response schema offers. |
 | `facts[].combine` | yes | `exactly-one` or `collect`. |
 
 A path walks into an array by writing `*` for the element, so
@@ -176,6 +191,24 @@ A path walks into an array by writing `*` for the element, so
 that visits a collection must say `combine: collect`; a path that visits none
 must say `combine: exactly-one`. Either mismatch is rejected by name, so a
 finding says which fact disagrees with its own path.
+
+A well-formed path still has to land on a value the response offers. The leaves
+are read from the selected operation's exact `200` `application/json` response
+schema, with no `default` or wildcard response standing in for it, and a
+container is never one of them.
+`crates/registry-evidence-authoring/src/openapi/flatten.rs` produces no leaf
+under a `oneOf` or `anyOf`, an `allOf` merging more than one schema, an untyped
+or genuinely multi-type node (only `[T, "null"]` is admitted), the unnamed
+members of `additionalProperties` or `patternProperties`, an object with no
+`properties`, an array with no `items`, a repeated `$ref` in a cycle, or past
+16 pointer segments.
+
+A selected scalar also carries its own closed bounds, and the compile stops
+where it does not: an integer needs both `minimum` and `maximum`, or an `enum`
+or a `const`; a string needs `minLength` and `maxLength`, or a `format`, an
+`enum`, or a `const`. The finding names the pointer and asks for those bounds
+in the retained OpenAPI document, because that is the one place a fact's shape
+is stated.
 
 ### Bounding collections
 
@@ -222,13 +255,13 @@ both are named. A question whose facts visit no collection therefore writes
 | `answers[].minimum`, `answers[].maximum` | for `bounded-integer` | Both required together, both within plus or minus 9007199254740991, and `minimum` no greater than `maximum`. |
 | `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI. |
 | `answers[].maximumSerializedBytes` | for `reviewed-structured-value` | The serialized ceiling for the value, in 1 to 65536. |
-| `answers[].sdJwtVc` | no | How this answer appears in the SD-JWT VC serialization. |
+| `answers[].sdJwtVc` | optional with `reviewed-structured-value` | How this answer appears in the SD-JWT VC serialization. No other answer type accepts it. |
 
 Each type accepts only the keys its own row lists. A `boolean` answer declares
 no `values`, no bounds, no `schema`, no `maximumSerializedBytes`, and no
-`sdJwtVc`. A `controlled-category` answer declares no numeric bounds. A
-`bounded-integer` answer declares no `values`. A `reviewed-structured-value`
-answer declares no scalar constraints.
+`sdJwtVc`. A `controlled-category` answer declares no numeric bounds and no
+`sdJwtVc`. A `bounded-integer` answer declares no `values` and no `sdJwtVc`. A
+`reviewed-structured-value` answer declares no scalar constraints.
 
 ### Disclosure
 
@@ -312,6 +345,17 @@ A production compile also requires a stable `id` on every answer, and refuses a
 disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
 `evidenceType`, `disclosureFamilies`, or an answer `id`.
 
+Authored `governance` is also where two questions can collide, and the compile
+is not what catches it. It reads one question at a time; `BundleConfig::validate`
+in `crates/registry-evidence/src/config.rs` then requires that requirement
+identifiers, Evidence Type identifiers, and answer concept identifiers each be
+unique across the whole bundle, and that no two requirements share a disclosure
+family. Two questions that each satisfy every rule on this page therefore
+compile, and the `evidence` binary's bundle check refuses what they produced.
+Without `governance` there is nothing to collide: `evidencectl` derives
+`requirement:{id}`, `evidence-type:{id}`, `disclosure-family:{id}`, and
+`concept:{question_id}:{concept}` from the question's own id.
+
 ## Bounds at a glance
 
 Every ceiling the authoring form applies, with the file that states it.
@@ -328,6 +372,7 @@ Every ceiling the authoring form applies, with the file that states it.
 | Concepts per question | 1 to 16 | `validate.rs` |
 | Facts per question | 1 to 16 | `validate.rs` |
 | Fact path and collection pointer | 256 bytes | `validate.rs` |
+| Selectable leaf depth | 16 pointer segments | `openapi/flatten.rs` |
 | Collection bounds per question | 16 | `validate.rs` |
 | Collection bound value | 1 to 256 | `validate.rs` |
 | Controlled-category values | 2 to 32, each 64 bytes | `validate.rs` |
