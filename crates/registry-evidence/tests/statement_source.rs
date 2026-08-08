@@ -346,7 +346,10 @@ async fn the_reserved_instant_reaches_the_statement_and_a_pinned_instant_repeats
 
     // The runtime's own instant is what the statement saw, in the fixed-width
     // form the transport binds, so a pinned evaluation is reproducible.
-    assert_eq!(first, json!({"rows": [{"observed": "2026-08-07T03:00:00Z"}]}));
+    assert_eq!(
+        first,
+        json!({"rows": [{"observed": "2026-08-07T03:00:00Z"}]})
+    );
     assert_eq!(first, second);
 
     let later = run(
@@ -357,7 +360,10 @@ async fn the_reserved_instant_reaches_the_statement_and_a_pinned_instant_repeats
     )
     .await
     .expect("the statement runs at another instant");
-    assert_eq!(later, json!({"rows": [{"observed": "2026-08-07T04:30:00Z"}]}));
+    assert_eq!(
+        later,
+        json!({"rows": [{"observed": "2026-08-07T04:30:00Z"}]})
+    );
 }
 
 #[tokio::test]
