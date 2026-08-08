@@ -393,6 +393,51 @@ class PerEntryAddressingTests(unittest.TestCase):
         self.assertIn("elsewhere/second.schema.json", problems[0])
         self.assertIn("second-key-paths", problems[0])
 
+    def test_write_all_writes_nothing_when_a_later_reference_is_missing_its_marker(self):
+        """`one/CONFIG.md` is stale and would regenerate; `two/CONFIG.md` is
+        broken. The break must stop the write before `one/CONFIG.md` is
+        touched, not just before `two/CONFIG.md` is."""
+        original_one = self.read("one/CONFIG.md")
+        self.write("two/CONFIG.md", "prose with no markers\n")
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            with self.assertRaises(checker.ContractError):
+                checker.write_all(self.root)
+        self.assertEqual(self.read("one/CONFIG.md"), original_one)
+        self.assertNotIn("alpha", original_one)
+
+    def test_write_all_writes_nothing_when_a_later_schema_does_not_parse(self):
+        original_one = self.read("one/CONFIG.md")
+        original_two = self.read("two/CONFIG.md")
+        self.write("elsewhere/second.schema.json", "{not valid json")
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            with self.assertRaises(checker.ContractError):
+                checker.write_all(self.root)
+        self.assertEqual(self.read("one/CONFIG.md"), original_one)
+        self.assertEqual(self.read("two/CONFIG.md"), original_two)
+
+    def test_write_all_only_writes_the_references_whose_content_changed(self):
+        """A second run, after only one schema gains a key, must not touch
+        the reference whose block is already current."""
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            checker.write_all(self.root)
+            self.write(
+                "contracts/first.schema.yaml",
+                "type: object\nproperties:\n  alpha:\n    type: string\n"
+                "  gamma:\n    type: string\n",
+            )
+            written = []
+            original_write_text = Path.write_text
+
+            def spy(target, *args, **kwargs):
+                written.append(target)
+                return original_write_text(target, *args, **kwargs)
+
+            with mock.patch.object(Path, "write_text", spy):
+                changed = checker.write_all(self.root)
+        self.assertTrue(changed)
+        self.assertEqual(written, [self.root / "one/CONFIG.md"])
+        self.assertIn("gamma", self.read("one/CONFIG.md"))
+
 
 class CommittedParityTests(unittest.TestCase):
     """Every committed schema must stay in parity with the reference it feeds."""

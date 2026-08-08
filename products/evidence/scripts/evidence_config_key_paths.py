@@ -248,8 +248,18 @@ def references() -> dict:
 
 
 def write_all(root: Path) -> bool:
-    """Regenerate every block in place. Returns whether any reference changed."""
-    changed = False
+    """Regenerate every block in place. Returns whether any reference changed.
+
+    Every reference is read and rewritten in memory before any file is
+    written, so a schema that fails to parse or a reference missing a marker
+    raises before a single byte reaches disk: a failed run leaves the
+    committed references exactly as they were, matching the generated-output
+    rule that a regeneration is reproduced whole or not at all. This does not
+    make the final write step atomic; a `write_text` failure partway through
+    that step (a permissions error, a full disk) can still leave some
+    references updated and others not.
+    """
+    updates = {}
     for reference, contracts in references().items():
         path = root / reference
         original = path.read_text(encoding="utf-8")
@@ -258,9 +268,12 @@ def write_all(root: Path) -> bool:
             paths = key_paths(load_schema(root / contract.schema))
             updated = rewrite_block(updated, contract.marker, paths)
         if updated != original:
-            path.write_text(updated, encoding="utf-8")
-            changed = True
-    return changed
+            updates[path] = updated
+
+    for path, updated in updates.items():
+        path.write_text(updated, encoding="utf-8")
+
+    return bool(updates)
 
 
 def check_all(root: Path) -> list:
