@@ -6,6 +6,7 @@ import fnmatch
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,14 @@ from ci_changes import (
     validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
+
+# products/evidence/scripts is not a package, so reaching its key-path
+# checker needs this path on sys.path, the same way that script's own test
+# reaches it.
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[2] / "products/evidence/scripts")
+)
+from evidence_config_key_paths import CONTRACTS as KEY_PATH_CONTRACTS
 
 
 # The path the authoring-form routing tests classify. It names a file inside
@@ -43,6 +52,40 @@ def published_evidence_configuration_schemas() -> set[str]:
 
     generator = EVIDENCE_CONFIGURATION_GENERATOR.read_text(encoding="utf-8")
     return set(re.findall(r"^\s+file: '([^']+)',$", generator, re.MULTILINE))
+
+
+def evidence_configuration_generator_contracts() -> dict[str, dict[str, str]]:
+    """Every CONTRACTS entry the docs generator declares, keyed by id.
+
+    Each entry's `reference` field names a module-level `..._REFERENCE`
+    constant rather than carrying the path as a literal, the same indirection
+    `test_every_published_evidence_schema_and_reference_runs_docs` resolves
+    below, so this reads those constants first and substitutes them in.
+    """
+
+    generator = EVIDENCE_CONFIGURATION_GENERATOR.read_text(encoding="utf-8")
+    references = dict(
+        re.findall(r"^const (\w+_REFERENCE) =\s*'([^']+)';$", generator, re.MULTILINE)
+    )
+    entries = re.findall(
+        r"\{\s*"
+        r"id: '([^']+)',\s*"
+        r"file: '([^']+)',\s*"
+        r"title: '[^']*',\s*"
+        r"marker: '([^']+)',\s*"
+        r"status: '[^']*',\s*"
+        r"reference: (\w+),\s*"
+        r"\},",
+        generator,
+    )
+    return {
+        contract_id: {
+            "file": file,
+            "marker": marker,
+            "reference": references[reference_name],
+        }
+        for contract_id, file, marker, reference_name in entries
+    }
 
 
 def normal_dependency_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -741,6 +784,26 @@ on:
             "products/evidence/scripts/evidence_config_key_paths.py, and a "
             "key-path block in the reference those two name",
         )
+
+    def test_docs_and_key_path_contracts_agree(self) -> None:
+        """The generator's CONTRACTS list and the python CONTRACTS dict must match.
+
+        The test above only reads the docs generator's list, so a schema the
+        generator names but the python dict leaves out, or names under a
+        different marker or reference, would still leave that test green while
+        `check-config-key-paths.sh --write` has nothing to generate or diff for
+        it. This is what proves the two lists actually agree, rather than
+        assuming it.
+        """
+        generator_contracts = evidence_configuration_generator_contracts()
+        self.assertTrue(generator_contracts)
+        self.assertEqual(set(generator_contracts), set(KEY_PATH_CONTRACTS))
+        for contract_id, entry in generator_contracts.items():
+            with self.subTest(contract_id=contract_id):
+                key_path_contract = KEY_PATH_CONTRACTS[contract_id]
+                self.assertEqual(entry["file"], key_path_contract.schema)
+                self.assertEqual(entry["marker"], key_path_contract.marker)
+                self.assertEqual(entry["reference"], key_path_contract.reference)
 
     def test_first_country_docs_and_journey_routing_matrix(self) -> None:
         cases = (
