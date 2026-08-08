@@ -638,7 +638,7 @@ services:
                 && symbol.name == "person_record"
         }));
 
-        let manifest = temp.path().join(PROJECT_FILE);
+        let manifest = temp.path().canonicalize().unwrap().join(PROJECT_FILE);
         let locations = index.definitions_at(&manifest, Position::new(10, 38));
         assert_eq!(locations.len(), 1);
         assert!(locations[0].path.ends_with("integration.yaml"));

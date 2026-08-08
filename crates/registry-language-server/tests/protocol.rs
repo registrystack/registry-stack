@@ -636,9 +636,137 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
 
     send(
         &mut stdin,
-        json!({ "jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": null }),
+        json!({ "jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": null }),
     );
-    receive_response(&mut stdout, 5);
+    receive_response(&mut stdout, 6);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn serves_untitled_and_rootless_documents_without_error() {
+    let project = write_project();
+    let root_uri = Uri::from_file_path(project.path()).unwrap().to_string();
+    let elsewhere = TempDir::new().unwrap();
+    let rootless = elsewhere.path().join("notes.yaml");
+    fs::write(&rootless, "version: 1\nid: rootless\n").unwrap();
+    let rootless_uri = Uri::from_file_path(rootless.canonicalize().unwrap())
+        .unwrap()
+        .to_string();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-language-server"))
+        .current_dir(project.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": root_uri,
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "demo" }]
+            }
+        }),
+    );
+    receive_response(&mut stdout, 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+
+    // An `untitled:` buffer and a `zipfile:` document name nothing on this filesystem, so the
+    // server declines them outright; a real file outside every project is served with an empty
+    // answer instead.
+    for (id, uri, answers) in [
+        (2, "untitled:Untitled-1", false),
+        (3, "zipfile:///archive.zip::/registry-stack.yaml", false),
+        (4, rootless_uri.as_str(), true),
+    ] {
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "yaml",
+                        "version": 1,
+                        "text": "version: 1\nid: scratch\n"
+                    }
+                }
+            }),
+        );
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "textDocument/documentSymbol",
+                "params": { "textDocument": { "uri": uri } }
+            }),
+        );
+
+        let mut symbols = None;
+        for _ in 0..50 {
+            let message = receive(&mut stdout);
+            if message.get("id").and_then(Value::as_i64) == Some(id) {
+                symbols = Some(message);
+                break;
+            }
+            assert_ne!(
+                message.pointer("/params/type").and_then(Value::as_i64),
+                Some(1),
+                "{uri} logged an error: {message}"
+            );
+            assert_ne!(
+                message.pointer("/params/uri").and_then(Value::as_str),
+                Some(uri),
+                "{uri} was published diagnostics: {message}"
+            );
+        }
+        let symbols = symbols.expect("the server always answers a documentSymbol request");
+        assert_eq!(
+            symbols.pointer("/result").and_then(Value::as_array),
+            answers.then_some(&vec![]),
+            "{symbols}"
+        );
+    }
+
+    // The project the client did open is still indexed.
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "workspace/symbol",
+            "params": { "query": "lookup" }
+        }),
+    );
+    let indexed = receive_response(&mut stdout, 5);
+    assert_eq!(
+        indexed.pointer("/result/0/name").and_then(Value::as_str),
+        Some("lookup")
+    );
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": null }),
+    );
+    receive_response(&mut stdout, 6);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),

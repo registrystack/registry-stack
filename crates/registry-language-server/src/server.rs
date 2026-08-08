@@ -2,8 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -25,17 +24,16 @@ use tower_lsp_server::{
 };
 
 use crate::{
-    refs::{document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex},
-    relay::{is_project_document, is_safe_authored_file, load_project_documents},
+    refs::{IndexedLocation, IndexedSymbol},
+    workspace::Workspace,
 };
 
 const SERVER_NAME: &str = "Registry Stack Language Server";
-const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub struct Backend {
     client: Client,
-    state: RwLock<Option<WorkspaceState>>,
+    workspace: RwLock<Workspace>,
     load_error: RwLock<Option<String>>,
     published_paths: Mutex<BTreeSet<PathBuf>>,
     supports_dynamic_file_watching: AtomicBool,
@@ -45,7 +43,7 @@ impl Backend {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            state: RwLock::new(None),
+            workspace: RwLock::new(Workspace::default()),
             load_error: RwLock::new(None),
             published_paths: Mutex::new(BTreeSet::new()),
             supports_dynamic_file_watching: AtomicBool::new(false),
@@ -54,30 +52,34 @@ impl Backend {
 
     async fn publish_diagnostics(&self) {
         let (mut by_path, versions) = {
-            let state = self.state.read().await;
-            let Some(state) = state.as_ref() else {
-                return;
-            };
-            let mut by_path = state
-                .index
-                .document_paths()
-                .map(|path| (path.to_path_buf(), Vec::new()))
-                .collect::<BTreeMap<_, Vec<Diagnostic>>>();
-            for diagnostic in state.index.diagnostics() {
-                by_path
-                    .entry(diagnostic.path.clone())
-                    .or_default()
-                    .push(Diagnostic::new(
-                        diagnostic.range,
-                        Some(diagnostic.severity),
-                        None,
-                        Some("registry-stack".to_owned()),
-                        diagnostic.message.clone(),
-                        None,
-                        None,
-                    ));
+            let workspace = self.workspace.read().await;
+            let mut by_path = BTreeMap::<PathBuf, Vec<Diagnostic>>::new();
+            let mut versions = BTreeMap::new();
+            for root in workspace.roots() {
+                for path in root.index().document_paths() {
+                    by_path.entry(path.to_path_buf()).or_default();
+                }
+                for diagnostic in root.index().diagnostics() {
+                    by_path
+                        .entry(diagnostic.path.clone())
+                        .or_default()
+                        .push(Diagnostic::new(
+                            diagnostic.range,
+                            Some(diagnostic.severity),
+                            None,
+                            Some("registry-stack".to_owned()),
+                            diagnostic.message.clone(),
+                            None,
+                            None,
+                        ));
+                }
+                versions.extend(
+                    root.open_versions()
+                        .iter()
+                        .map(|(path, version)| (path.clone(), *version)),
+                );
             }
-            (by_path, state.open_versions.clone())
+            (by_path, versions)
         };
 
         let mut published = self.published_paths.lock().await;
@@ -96,72 +98,65 @@ impl Backend {
         *published = current_paths;
     }
 
-    async fn update_document(&self, path: PathBuf, text: String, version: i32) {
-        let path = normalize_document_path(&path);
-        let mut state = self.state.write().await;
-        let mut load_error = None;
-        if state.is_none() {
-            if let Some(root) = find_project_root(&path) {
-                match WorkspaceState::load(&root) {
-                    Ok(loaded) => {
-                        *state = Some(loaded);
-                        *self.load_error.write().await = None;
-                    }
-                    Err(error) => load_error = Some(bounded_load_error(&error)),
-                }
-            }
-        }
-        if let Some(state) = state.as_mut() {
-            state.update(path, text, version);
-        }
-        drop(state);
-        if let Some(error) = load_error {
+    /// Records the load failure a lazily discovered root reported, once, where the client can see it.
+    async fn report_load_error(&self, error: Option<String>) {
+        if let Some(error) = error {
             *self.load_error.write().await = Some(error.clone());
             self.client.log_message(MessageType::ERROR, error).await;
         }
+    }
+
+    async fn update_document(&self, path: PathBuf, text: String, version: i32) {
+        let load_error = {
+            let mut workspace = self.workspace.write().await;
+            let path = workspace.intern(&path);
+            let load_error = match workspace.ensure_root_for(&path) {
+                Ok(()) => {
+                    *self.load_error.write().await = None;
+                    None
+                }
+                Err(error) => Some(bounded_load_error(&error)),
+            };
+            workspace.update(path, text, version);
+            load_error
+        };
+        self.report_load_error(load_error).await;
         self.publish_diagnostics().await;
     }
 
     async fn reload_closed_document(&self, path: PathBuf) {
-        let path = normalize_document_path(&path);
-        let mut state = self.state.write().await;
-        if let Some(state) = state.as_mut() {
-            state.close(&path);
+        {
+            let mut workspace = self.workspace.write().await;
+            let path = workspace.intern(&path);
+            workspace.close(&path);
         }
-        drop(state);
         self.publish_diagnostics().await;
     }
 
     async fn reload_watched_documents(&self, paths: Vec<PathBuf>) {
-        let mut paths = paths
-            .into_iter()
-            .map(|path| normalize_document_path(&path))
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths.dedup();
-        let mut state = self.state.write().await;
-        let mut load_error = None;
-        if state.is_none() {
-            if let Some(root) = paths.iter().find_map(|path| find_project_root(path)) {
-                match WorkspaceState::load(&root) {
-                    Ok(loaded) => {
-                        *state = Some(loaded);
-                        *self.load_error.write().await = None;
-                    }
-                    Err(error) => load_error = Some(bounded_load_error(&error)),
+        let load_error = {
+            let mut workspace = self.workspace.write().await;
+            let mut paths = paths
+                .iter()
+                .map(|path| workspace.intern(path))
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths.dedup();
+            let mut load_error = None;
+            for path in &paths {
+                if let Err(error) = workspace.ensure_root_for(path) {
+                    load_error.get_or_insert_with(|| bounded_load_error(&error));
                 }
             }
-        }
-        if let Some(state) = state.as_mut() {
-            for path in paths {
-                state.reload_from_disk(&path);
+            if load_error.is_none() {
+                *self.load_error.write().await = None;
             }
-        }
-        drop(state);
-        if let Some(error) = load_error {
-            *self.load_error.write().await = Some(error.clone());
-            self.client.log_message(MessageType::ERROR, error).await;
-        }
+            for path in paths {
+                workspace.reload_from_disk(&path);
+            }
+            load_error
+        };
+        self.report_load_error(load_error).await;
         self.publish_diagnostics().await;
     }
 }
@@ -177,15 +172,12 @@ impl LanguageServer for Backend {
             .unwrap_or(false);
         self.supports_dynamic_file_watching
             .store(supports_dynamic_file_watching, Ordering::Relaxed);
-        if let Some(root) = project_root_from_initialize(&params) {
-            match WorkspaceState::load(&root) {
-                Ok(state) => {
-                    *self.state.write().await = Some(state);
-                    *self.load_error.write().await = None;
-                }
-                Err(error) => *self.load_error.write().await = Some(bounded_load_error(&error)),
-            }
-        }
+
+        let mut workspace = self.workspace.write().await;
+        workspace.set_folders(workspace_folders(&params));
+        let errors = workspace.adopt_folder_roots();
+        *self.load_error.write().await = errors.first().map(bounded_load_error);
+        drop(workspace);
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -245,14 +237,15 @@ impl LanguageServer for Backend {
         }
 
         let (message_type, message) = {
-            let state = self.state.read().await;
-            if let Some(state) = state.as_ref() {
+            let workspace = self.workspace.read().await;
+            let roots = workspace
+                .roots()
+                .map(|root| root.index().root().display().to_string())
+                .collect::<Vec<_>>();
+            if !roots.is_empty() {
                 (
                     MessageType::INFO,
-                    format!(
-                        "Registry Stack project indexed at {}",
-                        state.index.root().display()
-                    ),
+                    format!("Registry Stack project indexed at {}", roots.join(", ")),
                 )
             } else if let Some(error) = self.load_error.read().await.clone() {
                 (MessageType::ERROR, error)
@@ -273,8 +266,8 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let document = params.text_document;
-        if let Some(path) = document.uri.to_file_path() {
-            self.update_document(path.into_owned(), document.text, document.version)
+        if let Some(path) = document_path(&document.uri) {
+            self.update_document(path, document.text, document.version)
                 .await;
         }
     }
@@ -292,8 +285,8 @@ impl LanguageServer for Backend {
                 .await;
             return;
         }
-        if let Some(path) = params.text_document.uri.to_file_path() {
-            self.update_document(path.into_owned(), change.text, params.text_document.version)
+        if let Some(path) = document_path(&params.text_document.uri) {
+            self.update_document(path, change.text, params.text_document.version)
                 .await;
         }
     }
@@ -302,15 +295,15 @@ impl LanguageServer for Backend {
         let Some(text) = params.text else {
             return;
         };
-        let Some(path) = params.text_document.uri.to_file_path() else {
+        let Some(path) = document_path(&params.text_document.uri) else {
             return;
         };
-        let path = path.into_owned();
         let version = {
-            let state = self.state.read().await;
-            state
-                .as_ref()
-                .and_then(|state| state.open_versions.get(&normalize_document_path(&path)))
+            let workspace = self.workspace.read().await;
+            let canonical = workspace.resolve(&path);
+            workspace
+                .root_for(&canonical)
+                .and_then(|root| root.open_versions().get(&canonical))
                 .copied()
                 .unwrap_or(0)
         };
@@ -318,8 +311,8 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        if let Some(path) = params.text_document.uri.to_file_path() {
-            self.reload_closed_document(path.into_owned()).await;
+        if let Some(path) = document_path(&params.text_document.uri) {
+            self.reload_closed_document(path).await;
         }
     }
 
@@ -327,7 +320,7 @@ impl LanguageServer for Backend {
         let paths = params
             .changes
             .into_iter()
-            .filter_map(|change| change.uri.to_file_path().map(|path| path.into_owned()))
+            .filter_map(|change| document_path(&change.uri))
             .collect::<Vec<_>>();
         if !paths.is_empty() {
             self.reload_watched_documents(paths).await;
@@ -339,14 +332,15 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let document = params.text_document_position_params;
-        let Some(path) = document.text_document.uri.to_file_path() else {
+        let Some(path) = document_path(&document.text_document.uri) else {
             return Ok(None);
         };
         let locations = {
-            let state = self.state.read().await;
-            state
-                .as_ref()
-                .map(|state| state.index.definitions_at(&path, document.position))
+            let workspace = self.workspace.read().await;
+            let path = workspace.resolve(&path);
+            workspace
+                .root_for(&path)
+                .map(|root| root.index().definitions_at(&path, document.position))
                 .unwrap_or_default()
         };
         let locations = locations
@@ -358,15 +352,16 @@ impl LanguageServer for Backend {
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let document = params.text_document_position;
-        let Some(path) = document.text_document.uri.to_file_path() else {
+        let Some(path) = document_path(&document.text_document.uri) else {
             return Ok(None);
         };
         let locations = {
-            let state = self.state.read().await;
-            state
-                .as_ref()
-                .map(|state| {
-                    state.index.references_at(
+            let workspace = self.workspace.read().await;
+            let path = workspace.resolve(&path);
+            workspace
+                .root_for(&path)
+                .map(|root| {
+                    root.index().references_at(
                         &path,
                         document.position,
                         params.context.include_declaration,
@@ -385,16 +380,16 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let Some(path) = params.text_document.uri.to_file_path() else {
+        let Some(path) = document_path(&params.text_document.uri) else {
             return Ok(None);
         };
         let symbols = {
-            let state = self.state.read().await;
-            state
-                .as_ref()
-                .map(|state| {
-                    state
-                        .index
+            let workspace = self.workspace.read().await;
+            let path = workspace.resolve(&path);
+            workspace
+                .root_for(&path)
+                .map(|root| {
+                    root.index()
                         .document_symbols(&path)
                         .into_iter()
                         .map(to_document_symbol)
@@ -410,119 +405,14 @@ impl LanguageServer for Backend {
         params: WorkspaceSymbolParams,
     ) -> Result<Option<WorkspaceSymbolResponse>> {
         let symbols = {
-            let state = self.state.read().await;
-            state
-                .as_ref()
-                .map(|state| {
-                    state
-                        .index
-                        .workspace_symbols(&params.query)
-                        .into_iter()
-                        .filter_map(to_symbol_information)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
+            let workspace = self.workspace.read().await;
+            workspace
+                .roots()
+                .flat_map(|root| root.index().workspace_symbols(&params.query))
+                .filter_map(to_symbol_information)
+                .collect::<Vec<_>>()
         };
         Ok(Some(WorkspaceSymbolResponse::Flat(symbols)))
-    }
-}
-
-#[derive(Debug)]
-struct WorkspaceState {
-    root: PathBuf,
-    documents: BTreeMap<PathBuf, String>,
-    open_versions: BTreeMap<PathBuf, i32>,
-    disk_diagnostics: Vec<IndexedDiagnostic>,
-    index: ProjectIndex,
-}
-
-impl WorkspaceState {
-    fn load(root: &Path) -> anyhow::Result<Self> {
-        let root = root.canonicalize()?;
-        let loaded = load_project_documents(&root)?;
-        let index = ProjectIndex::from_documents_with_diagnostics(
-            &root,
-            &loaded.documents,
-            loaded.diagnostics.clone(),
-        );
-        Ok(Self {
-            root,
-            documents: loaded.documents,
-            open_versions: BTreeMap::new(),
-            disk_diagnostics: loaded.diagnostics,
-            index,
-        })
-    }
-
-    fn update(&mut self, path: PathBuf, text: String, version: i32) {
-        if !is_project_document(&self.root, &path) {
-            return;
-        }
-        self.open_versions.insert(path.clone(), version);
-        if text.len() <= MAX_DOCUMENT_BYTES {
-            self.disk_diagnostics
-                .retain(|diagnostic| diagnostic.path != path);
-            self.documents.insert(path, text);
-            self.rebuild();
-        }
-    }
-
-    fn close(&mut self, path: &Path) {
-        if !is_project_document(&self.root, path) {
-            return;
-        }
-        self.open_versions.remove(path);
-        self.reload_from_disk(path);
-    }
-
-    fn reload_from_disk(&mut self, path: &Path) {
-        if !is_project_document(&self.root, path) || self.open_versions.contains_key(path) {
-            return;
-        }
-        self.disk_diagnostics
-            .retain(|diagnostic| diagnostic.path != path);
-        if !is_safe_authored_file(&self.root, path) {
-            self.documents.remove(path);
-            self.rebuild();
-            return;
-        }
-        match fs::read(path) {
-            Ok(bytes) if bytes.len() > MAX_DOCUMENT_BYTES => {
-                self.documents.remove(path);
-                self.disk_diagnostics.push(document_diagnostic(
-                    path,
-                    "Project document exceeds the 1 MiB indexing limit",
-                ));
-            }
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => {
-                    self.documents.insert(path.to_path_buf(), text);
-                }
-                Err(_) => {
-                    self.documents.remove(path);
-                    self.disk_diagnostics.push(document_diagnostic(
-                        path,
-                        "Project document is not valid UTF-8 and cannot be indexed",
-                    ));
-                }
-            },
-            Err(_) => {
-                self.documents.remove(path);
-                self.disk_diagnostics.push(document_diagnostic(
-                    path,
-                    "Project document could not be read; check its permissions",
-                ));
-            }
-        }
-        self.rebuild();
-    }
-
-    fn rebuild(&mut self) {
-        self.index = ProjectIndex::from_documents_with_diagnostics(
-            &self.root,
-            &self.documents,
-            self.disk_diagnostics.clone(),
-        );
     }
 }
 
@@ -542,56 +432,42 @@ fn bounded_load_error(error: &anyhow::Error) -> String {
     format!("Could not index Registry Stack project: {detail}")
 }
 
-fn project_root_from_initialize(params: &InitializeParams) -> Option<PathBuf> {
+/// The filesystem path a document URI names, for `file:` URIs only.
+///
+/// `Uri::to_file_path` reads the path component of any scheme, so an `untitled:` buffer or a
+/// virtual `zipfile:` document would otherwise arrive as an ordinary path and take part in root
+/// discovery and indexing. Only a `file:` URI names something on this filesystem.
+fn document_path(uri: &Uri) -> Option<PathBuf> {
+    uri.scheme()
+        .as_str()
+        .eq_ignore_ascii_case("file")
+        .then(|| uri.to_file_path().map(|path| path.into_owned()))
+        .flatten()
+}
+
+/// The folders a client opened, in the order the protocol prefers them.
+fn workspace_folders(params: &InitializeParams) -> Vec<PathBuf> {
     if let Some(folders) = params.workspace_folders.as_ref() {
-        for folder in folders {
-            if let Some(path) = folder.uri.to_file_path() {
-                if let Some(root) = find_project_root(&path) {
-                    return Some(root);
-                }
-            }
+        let folders = folders
+            .iter()
+            .filter_map(|folder| document_path(&folder.uri))
+            .collect::<Vec<_>>();
+        if !folders.is_empty() {
+            return folders;
         }
     }
 
     #[allow(deprecated)]
-    if let Some(uri) = params.root_uri.as_ref() {
-        if let Some(path) = uri.to_file_path() {
-            if let Some(root) = find_project_root(&path) {
-                return Some(root);
-            }
-        }
+    if let Some(path) = params.root_uri.as_ref().and_then(document_path) {
+        return vec![path];
     }
 
     #[allow(deprecated)]
     params
         .root_path
         .as_deref()
-        .and_then(|path| find_project_root(Path::new(path)))
-}
-
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let start = if start.is_file() {
-        start.parent()?
-    } else {
-        start
-    };
-    for candidate in start.ancestors() {
-        let manifest = candidate.join("registry-stack.yaml");
-        if fs::symlink_metadata(&manifest).is_ok_and(|metadata| metadata.file_type().is_file()) {
-            return candidate.canonicalize().ok();
-        }
-    }
-    None
-}
-
-fn normalize_document_path(path: &Path) -> PathBuf {
-    if let Ok(path) = path.canonicalize() {
-        return path;
-    }
-    path.parent()
-        .and_then(|parent| parent.canonicalize().ok())
-        .and_then(|parent| path.file_name().map(|name| parent.join(name)))
-        .unwrap_or_else(|| path.to_path_buf())
+        .map(|path| vec![PathBuf::from(path)])
+        .unwrap_or_default()
 }
 
 fn to_lsp_location(location: IndexedLocation) -> Option<Location> {
@@ -632,161 +508,78 @@ fn to_symbol_information(symbol: &IndexedSymbol) -> Option<SymbolInformation> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::path::Path;
 
-    use tempfile::TempDir;
-    use tower_lsp_server::ls_types::Position;
+    use tower_lsp_server::ls_types::{
+        ClientCapabilities, DidChangeWatchedFilesClientCapabilities, WorkspaceClientCapabilities,
+    };
 
     use super::*;
 
-    fn project() -> TempDir {
-        let temp = TempDir::new().unwrap();
-        fs::write(
-            temp.path().join("registry-stack.yaml"),
-            "version: 1\nregistry: { id: demo }\nservices: {}\n",
-        )
-        .unwrap();
-        temp
+    fn initialize_params(folders: Option<Vec<&Path>>, root: Option<&Path>) -> InitializeParams {
+        #[allow(deprecated)]
+        InitializeParams {
+            workspace_folders: folders.map(|folders| {
+                folders
+                    .into_iter()
+                    .map(|path| tower_lsp_server::ls_types::WorkspaceFolder {
+                        uri: Uri::from_file_path(path).unwrap(),
+                        name: path.display().to_string(),
+                    })
+                    .collect()
+            }),
+            root_uri: root.map(|path| Uri::from_file_path(path).unwrap()),
+            capabilities: ClientCapabilities {
+                workspace: Some(WorkspaceClientCapabilities {
+                    did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+                        dynamic_registration: Some(true),
+                        ..DidChangeWatchedFilesClientCapabilities::default()
+                    }),
+                    ..WorkspaceClientCapabilities::default()
+                }),
+                ..ClientCapabilities::default()
+            },
+            ..InitializeParams::default()
+        }
     }
 
     #[test]
-    fn finds_project_from_nested_directory() {
-        let temp = project();
-        let nested = temp.path().join("integrations/people");
-        fs::create_dir_all(&nested).unwrap();
+    fn reads_folders_from_workspace_folders_then_the_deprecated_root() {
+        let first = Path::new("/projects/first");
+        let second = Path::new("/projects/second");
         assert_eq!(
-            find_project_root(&nested),
-            Some(temp.path().canonicalize().unwrap())
+            workspace_folders(&initialize_params(Some(vec![first, second]), None)),
+            vec![first.to_path_buf(), second.to_path_buf()]
         );
-    }
-
-    #[test]
-    fn invalid_edits_index_what_still_parses_and_report_one_syntax_error() {
-        let temp = project();
-        let mut state = WorkspaceState::load(temp.path()).unwrap();
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: current }\nservices: {}\n".to_owned(),
-            2,
-        );
-        assert!(state
-            .index
-            .workspace_symbols("current")
-            .iter()
-            .any(|symbol| symbol.name == "current"));
-
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: current }\nservices: {}\nbroken: [\n".to_owned(),
-            3,
-        );
-        assert_eq!(state.open_versions.get(&manifest), Some(&3));
-        assert!(state
-            .index
-            .workspace_symbols("current")
-            .iter()
-            .any(|symbol| symbol.name == "current"));
         assert_eq!(
-            state
-                .index
-                .definitions_at(&manifest, Position::new(1, 20))
-                .len(),
-            1
+            workspace_folders(&initialize_params(None, Some(first))),
+            vec![first.to_path_buf()]
         );
-        let diagnostics = state.index.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics[0].message.starts_with("Invalid YAML syntax"));
-        assert_eq!(diagnostics[0].range.start, Position::new(3, 8));
-
-        state.update(manifest.clone(), "registry: [\n".to_owned(), 4);
-        assert!(state.index.workspace_symbols("current").is_empty());
-        assert_eq!(state.index.diagnostics().len(), 1);
+        assert!(workspace_folders(&initialize_params(None, None)).is_empty());
     }
 
     #[test]
-    fn reloads_external_changes_from_disk() {
-        let temp = project();
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let mut state = WorkspaceState::load(temp.path()).unwrap();
-
-        fs::write(
-            &manifest,
-            "version: 1\nregistry: { id: external }\nservices: {}\n",
-        )
-        .unwrap();
-        state.reload_from_disk(&manifest);
-
-        assert!(state
-            .index
-            .workspace_symbols("external")
-            .iter()
-            .any(|symbol| symbol.name == "external"));
-    }
-
-    #[test]
-    fn adds_and_removes_external_project_documents() {
-        let temp = project();
-        let mut state = WorkspaceState::load(temp.path()).unwrap();
-        let entities = temp.path().join("entities");
-        fs::create_dir(&entities).unwrap();
-        let entity = entities.join("person.yaml");
-        fs::write(&entity, "version: 1\nid: person\n").unwrap();
-        let entity = entity.canonicalize().unwrap();
-
-        state.reload_from_disk(&entity);
-        assert!(state
-            .index
-            .workspace_symbols("person")
-            .iter()
-            .any(|symbol| symbol.name == "person"));
-
-        fs::remove_file(&entity).unwrap();
-        state.reload_from_disk(&entity);
-        assert!(state.index.workspace_symbols("person").is_empty());
-    }
-
-    #[test]
-    fn external_changes_do_not_replace_an_open_document() {
-        let temp = project();
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let mut state = WorkspaceState::load(temp.path()).unwrap();
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: unsaved }\nservices: {}\n".to_owned(),
-            2,
+    fn only_file_uris_name_a_document_on_this_filesystem() {
+        let path = Path::new("/projects/demo/registry-stack.yaml");
+        assert_eq!(
+            document_path(&Uri::from_file_path(path).unwrap()),
+            Some(path.to_path_buf())
         );
+        for foreign in [
+            "untitled:Untitled-1",
+            "zipfile:///archive.zip::/registry-stack.yaml",
+            "https://example.test/registry-stack.yaml",
+        ] {
+            let uri = serde_json::from_str::<Uri>(&format!("{foreign:?}")).unwrap();
+            assert_eq!(document_path(&uri), None, "{foreign}");
+        }
+    }
 
-        fs::write(
-            &manifest,
-            "version: 1\nregistry: { id: external }\nservices: {}\n",
-        )
-        .unwrap();
-        state.reload_from_disk(&manifest);
-        assert!(state
-            .index
-            .workspace_symbols("unsaved")
-            .iter()
-            .any(|symbol| symbol.name == "unsaved"));
-        assert!(state.index.workspace_symbols("external").is_empty());
-
-        state.close(&manifest);
-        assert!(state
-            .index
-            .workspace_symbols("external")
-            .iter()
-            .any(|symbol| symbol.name == "external"));
+    #[test]
+    fn a_load_failure_is_reported_without_the_underlying_detail_running_away() {
+        let error = anyhow::anyhow!("{}", "detail ".repeat(500));
+        let message = bounded_load_error(&error);
+        assert!(message.starts_with("Could not index Registry Stack project:"));
+        assert!(message.chars().count() <= 560);
     }
 }

@@ -6,4 +6,5 @@ pub(crate) mod index;
 
 pub(crate) use index::{
     build_index, is_project_document, is_safe_authored_file, load_project_documents,
+    LoadedProjectDocuments, PROJECT_FILE,
 };

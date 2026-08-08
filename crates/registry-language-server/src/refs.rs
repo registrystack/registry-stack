@@ -243,8 +243,8 @@ impl ProjectIndex {
         &self.symbols
     }
 
+    /// Symbols declared in one document, named by its canonical path.
     pub fn document_symbols(&self, path: &Path) -> Vec<&IndexedSymbol> {
-        let path = normalize_lookup_path(path);
         self.symbols
             .iter()
             .filter(|symbol| symbol.location.path == path)
@@ -266,9 +266,9 @@ impl ProjectIndex {
             .collect()
     }
 
+    /// Where the symbol or reference under a position is defined. `path` is canonical.
     pub fn definitions_at(&self, path: &Path, position: Position) -> Vec<IndexedLocation> {
-        let path = normalize_lookup_path(path);
-        if let Some(reference) = self.reference_at(&path, position) {
+        if let Some(reference) = self.reference_at(path, position) {
             return self
                 .definitions_for(&reference.target)
                 .into_iter()
@@ -276,24 +276,24 @@ impl ProjectIndex {
                 .collect();
         }
 
-        self.symbol_at(&path, position)
+        self.symbol_at(path, position)
             .map(|symbol| vec![symbol.location.clone()])
             .unwrap_or_default()
     }
 
+    /// Every use of the symbol under a position. `path` is canonical.
     pub fn references_at(
         &self,
         path: &Path,
         position: Position,
         include_declaration: bool,
     ) -> Vec<IndexedLocation> {
-        let path = normalize_lookup_path(path);
         let keys = if let Some(symbol) = self
-            .symbol_at(&path, position)
+            .symbol_at(path, position)
             .filter(|symbol| symbol.resolvable)
         {
             vec![symbol.key.clone()]
-        } else if let Some(reference) = self.reference_at(&path, position) {
+        } else if let Some(reference) = self.reference_at(path, position) {
             self.definitions_for(&reference.target)
                 .into_iter()
                 .map(|symbol| symbol.key.clone())
@@ -457,10 +457,6 @@ pub(crate) fn bounded_value(value: &str) -> String {
         bounded.push('…');
     }
     bounded
-}
-
-fn normalize_lookup_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn range_contains(range: Range, position: Position) -> bool {

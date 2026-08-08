@@ -4,6 +4,7 @@
 mod refs;
 mod relay;
 mod server;
+mod workspace;
 mod yaml;
 
 pub use refs::{ProjectIndex, RelayKind, SymbolKind};
