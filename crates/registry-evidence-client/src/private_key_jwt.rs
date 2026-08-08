@@ -181,6 +181,9 @@ impl PrivateKeyJwtConfig {
     /// recommends. Set this only when the server published a different value: an
     /// assertion whose audience the server does not recognize is refused as an
     /// authentication failure, with no indication of which claim was wrong.
+    ///
+    /// Must not be empty; an empty value is refused when the provider is built
+    /// rather than here.
     #[must_use]
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audience = Some(audience.into());
@@ -301,6 +304,15 @@ impl PrivateKeyJwt {
 
         if config.client_id.trim().is_empty() {
             return Err(refuse("the client identifier must not be empty"));
+        }
+        // Only a stated audience can be empty. A caller that stated none gets the
+        // token endpoint, which is a parsed URL and therefore never is.
+        if config
+            .audience
+            .as_ref()
+            .is_some_and(|audience| audience.trim().is_empty())
+        {
+            return Err(refuse("the assertion audience must not be empty"));
         }
         if !config.token_endpoint.username().is_empty()
             || config.token_endpoint.password().is_some()
@@ -602,12 +614,14 @@ struct DeclinedToken {
 
 /// Report a refusal from the assertion builder in this provider's own words.
 ///
-/// Every one of these was ruled out when the provider was built, so reaching
-/// one means a configuration that passed those checks still cannot produce an
-/// assertion. It stays an explicit failure rather than a retry, because no
-/// later request would sign either. The match is exhaustive so a refusal added
-/// to the builder has to be given a reason here, rather than arriving as one
-/// the adopter cannot act on.
+/// Every refusal the builder makes about its inputs was ruled out when the
+/// provider was built, and the one it makes about its own output cannot happen
+/// for a claim set of strings and numbers, so reaching any of them means a
+/// configuration that passed those checks still cannot produce an assertion. It
+/// stays an explicit failure rather than a retry, because no later request would
+/// sign either. The match is exhaustive so a refusal added to the builder has to
+/// be given a reason here, rather than arriving as one the adopter cannot act
+/// on.
 fn assertion_refusal(error: ClientAssertionError) -> TokenError {
     let reason = match error {
         ClientAssertionError::EmptyClientId => "the client identifier must not be empty",
@@ -1515,6 +1529,22 @@ mod tests {
                         .expect("the endpoint parses"),
                     client_key(Some(KEY_ID)),
                 ),
+            ),
+            (
+                "the assertion audience must not be empty",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_audience(""),
+            ),
+            (
+                "the assertion audience must not be empty",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_audience("   "),
             ),
             (
                 "the client key must carry a key identifier",
