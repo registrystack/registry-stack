@@ -76,13 +76,21 @@ the authoring project's shape.
 
 Two gaps to know about before relying on this for Evidence work:
 
-- VS Code does not complete Evidence YAML string values yet (source names, selector references,
-  and similar). Schema-driven completion for a string value needs
-  `editor.quickSuggestions.strings: true`, which this integration does not set and does not ship
-  completion behavior for. That is planned for a later phase, not this one.
+- The language server completes Evidence YAML values it can name a candidate for: cross-file
+  references (source, selector profile, operation, and question names, and similar) and the fact
+  paths a source's operation makes selectable. Manually invoking completion (Ctrl+Space) always
+  returns that list, because the server answers an invoked request and one opened by a trigger
+  character (`:`, `.`, `/`) identically. An automatic popup while typing inside a string, without
+  invoking it, still needs `editor.quickSuggestions.strings: true`, since VS Code decides whether
+  to ask at all before the request reaches the server. Two things get no candidates from this
+  server at all: a mapping key, whose completion comes from the generated schema through the
+  `redhat.vscode-yaml` extension rather than from here, and a source's `request.prepareScript` and
+  `extractScript` pointers, which the project index does not walk into references yet.
 - Rhai request-preparation and derivation scripts (`*.rhai`) get no editor behavior from this
   integration in either editor. Neither the VS Code client's document selector nor the Zed
-  extension associates `.rhai` files with the language server yet.
+  extension associates `.rhai` files with the language server yet; the watcher that reindexes a
+  project on an external change to one is not the same as offering completion, diagnostics, or
+  navigation inside it.
 
 ## Local end-to-end smoke test
 
