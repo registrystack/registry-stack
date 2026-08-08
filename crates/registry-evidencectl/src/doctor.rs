@@ -468,12 +468,24 @@ fn check_acquisition(
             }
         },
     };
+    let mut named: Vec<&str> = Vec::new();
     for capability in &enabled {
         if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
             run.refuse(
                 runtime_path,
                 "enables an acquisition capability this release does not define; the runtime refuses the deployment at startup".to_owned(),
             );
+        }
+        // A repeat enables nothing a single entry does not, which is why the
+        // runtime requires the list to be unique rather than tolerating it,
+        // and why doctor must not read the deployment as enabled.
+        if named.contains(&capability.as_str()) {
+            run.refuse(
+                runtime_path,
+                "lists the same acquisition capability twice; the runtime refuses the deployment at startup".to_owned(),
+            );
+        } else {
+            named.push(capability);
         }
     }
 

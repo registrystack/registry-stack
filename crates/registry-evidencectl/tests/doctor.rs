@@ -823,6 +823,35 @@ fn doctor_passes_once_the_deployment_enables_the_kind_the_bundle_requires() {
     );
 }
 
+/// A capability named twice enables nothing a single naming does not, so it
+/// reads as harmless. The runtime does not read it that way: it refuses the
+/// deployment because the list must be unique. Doctor reporting PASS on a
+/// project that will not start is the one outcome this check exists to
+/// prevent.
+#[test]
+fn doctor_reports_an_acquisition_capability_the_deployment_listed_twice() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    declare_acquisitions(&project);
+    enable_acquisition_capability_twice(&project);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a project the runtime would refuse:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("runtime.yaml: lists the same acquisition capability twice"),
+        "doctor did not name the repeated capability entry:\n{stdout}"
+    );
+}
+
 /// An adopter reading a bundle needs to know what it will call before anything
 /// is running: which sources, in what order, and which facts one call hands to
 /// the next. All of that is configuration. A fact value is not: it is acquired
@@ -966,6 +995,16 @@ fn enable_acquisition_capability(project: &Path) {
     let mut document = fs::read_to_string(&path).expect("runtime configuration");
     document.push_str("acquisitionCapabilities:\n  - search-then-fetch-set\n");
     fs::write(&path, document).expect("enable the acquisition capability");
+}
+
+/// Record the same decision twice, which the runtime refuses.
+fn enable_acquisition_capability_twice(project: &Path) {
+    let path = project.join("runtime.yaml");
+    let mut document = fs::read_to_string(&path).expect("runtime configuration");
+    document.push_str(
+        "acquisitionCapabilities:\n  - search-then-fetch-set\n  - search-then-fetch-set\n",
+    );
+    fs::write(&path, document).expect("enable the acquisition capability twice");
 }
 
 fn write_mint(path: &Path, document: &str) {
