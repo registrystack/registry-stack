@@ -18,7 +18,7 @@ use registry_evidence_authoring::{
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
 use crate::{
-    refs::{bounded_value, IndexedDiagnostic, DOCUMENT_START},
+    refs::{bounded_message, IndexedDiagnostic, DOCUMENT_START},
     yaml::{ParsedDocument, YamlPair, YamlValue},
 };
 
@@ -41,7 +41,7 @@ pub(crate) fn question_shape_diagnostics(
                 code: Some("evidence/question-shape".to_owned()),
                 message: format!(
                     "This is not the shape of a question: {}",
-                    bounded_value(&error.to_string())
+                    bounded_message(&error.to_string())
                 ),
             }]
         }
@@ -56,8 +56,9 @@ pub(crate) fn question_shape_diagnostics(
             code: Some(format!("evidence/{}", finding.code)),
             // The sentence is the authoring library's, so the editor and the compiler say the same
             // thing about the same document. It is bounded like any other text that reaches a
-            // message, because one of those sentences names a field the author wrote.
-            message: bounded_value(&finding.message),
+            // message, because some of those sentences quote a name the author wrote, and bounded as
+            // a sentence rather than as a name so the instruction that follows the name survives.
+            message: bounded_message(&finding.message),
         })
         .collect()
 }

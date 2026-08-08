@@ -3,9 +3,19 @@
 //!
 //! The editor does not decide what a question must look like. It deserializes the document with the
 //! same reader the compiler uses, runs `registry_evidence_authoring::validate::validate_question`,
-//! and puts each finding where the field it names is written. Every test below asserts the same
-//! sentence twice: once from the library, called directly, and once from the diagnostic the server
-//! would publish, so a diagnostic can never drift away from the refusal behind it.
+//! and puts each finding where the field it names is written.
+//!
+//! A test of a finding asserts the same sentence twice: once from the library, called directly, and
+//! once from the diagnostic the server would publish, so a diagnostic can never drift away from the
+//! refusal behind it. A document the reader cannot deserialize is paired the same way, against that
+//! reader.
+//!
+//! The diagnostics the index draws from one document's name for another are not paired here. The
+//! `evidence/unknown-*` codes and the two file-name codes are refused by `registry-evidencectl`,
+//! which depends on this crate, so a dependency the other way would be a cycle and there is nothing
+//! in this crate left to call. `tests/evidence_index.rs` holds each of those diagnostics to its own
+//! exact sentence, and names the refusal it stands for in prose; nothing executes that half of the
+//! pair, so the two implementations of those rules are held together by review.
 
 mod support;
 
@@ -119,6 +129,83 @@ fn a_finding_naming_a_field_the_document_omits_lands_on_the_field_above_it() {
     );
 }
 
+/// One doubled concept is one mistake. The authoring library owns the sentence that names it and
+/// says it once, at the answer that repeats; the index sees the same concept defined twice and stays
+/// quiet, because a duplicate reported there would be a second and a third error on one line.
+#[test]
+fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
+    let text = QUESTION.replace(
+        "  - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
+        "  - concept: is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n  \
+         - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
+    );
+
+    let (project, reported) = question_project(&text);
+
+    assert_eq!(
+        authoring_findings(&without_cursors(&text)),
+        vec![(
+            "answer-concept-unique",
+            "answer concepts must be unique".to_owned()
+        )],
+        "the authoring library refuses this question"
+    );
+    assert_eq!(
+        reported
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            Some("evidence/answer-concept-unique"),
+            "answer concepts must be unique"
+        )],
+        "{reported:?}"
+    );
+    assert_eq!(
+        reported[0].range.start,
+        project.cursor(QUESTION_PATH, "concept"),
+        "the diagnostic underlines the concept that repeats"
+    );
+}
+
+/// A finding quotes the name the author wrote, and the instruction it gives comes after that name.
+/// The sentence reaches the editor whole, so the author reads the part they have to act on rather
+/// than the part they already have in front of them.
+#[test]
+fn a_finding_that_quotes_a_long_name_reaches_the_editor_whole() {
+    let fact = "date_of_birth_of_the_person_this_question_is_asked_about_in_full";
+    let text = QUESTION.replace(
+        "source:\n  ref: <|source-ref|>people\n",
+        &format!(
+            "source:\n  operation: listPeople\n  facts:\n    - name: {fact}\n      \
+             path: /records/*/date_of_birth\n      combine: <|combine|>exactly-one\n"
+        ),
+    );
+    let sentence = format!(
+        "source fact `{fact}` visits a collection and must explicitly use `combine: collect`"
+    );
+    assert!(sentence.chars().count() > 120, "{sentence}");
+
+    let (project, reported) = question_project(&text);
+
+    assert_eq!(
+        authoring_findings(&without_cursors(&text)),
+        vec![("fact-combination", sentence.clone())],
+        "the authoring library refuses this question"
+    );
+    let paired = reported
+        .iter()
+        .filter(|diagnostic| diagnostic.code.as_deref() == Some("evidence/fact-combination"))
+        .collect::<Vec<_>>();
+    assert_eq!(paired.len(), 1, "{reported:?}");
+    assert_eq!(paired[0].message, sentence);
+    assert_eq!(
+        paired[0].range.start,
+        project.cursor(QUESTION_PATH, "combine"),
+        "the diagnostic underlines the combination the finding named"
+    );
+}
+
 /// A document the deserializer cannot read is one problem, reported once, and the question is still
 /// the question its file names: the access policy that admits it keeps navigating and stays quiet.
 #[test]
@@ -157,38 +244,58 @@ fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itse
 /// The policy the whole channel is held to: every Evidence diagnostic is an error, and every one
 /// names the rule behind it so a client can silence one rule instead of the server. Nothing
 /// advisory, nothing informational, nothing an author is invited to disagree with.
+///
+/// Each document names the rules it is expected to break, so a mistake that starts reporting a
+/// different rule, or one rule twice, fails here rather than passing a count.
 #[test]
 fn every_evidence_diagnostic_is_an_error_that_names_its_rule() {
     let broken = [
         // A name with nothing behind it.
-        QUESTION.replace("<|source-ref|>people", "ledger"),
+        (
+            QUESTION.replace("<|source-ref|>people", "ledger"),
+            vec!["evidence/unknown-source"],
+        ),
         // A shape the reader refuses.
-        QUESTION.replace("    type: boolean\n", "    type: mystery\n"),
+        (
+            QUESTION.replace("    type: boolean\n", "    type: mystery\n"),
+            vec!["evidence/question-shape"],
+        ),
         // A field the authoring library refuses.
-        QUESTION.replace("<|concept|>is_adult", "IsAdult"),
+        (
+            QUESTION.replace("<|concept|>is_adult", "IsAdult"),
+            vec!["evidence/answer-concept-identifier"],
+        ),
         // An identifier that disagrees with the file it is written in.
-        QUESTION.replace("id: <|id|>adult-status", "id: adult-status-v2"),
+        (
+            QUESTION.replace("id: <|id|>adult-status", "id: adult-status-v2"),
+            vec!["evidence/question-file-name"],
+        ),
         // A document that stops parsing.
-        format!("{QUESTION}unterminated: [\n"),
+        (
+            format!("{QUESTION}unterminated: [\n"),
+            vec!["evidence/syntax"],
+        ),
     ];
 
-    let mut seen = 0;
-    for text in &broken {
+    for (text, expected) in &broken {
         let (_project, reported) = question_project(text);
-        assert!(!reported.is_empty(), "{text}");
         for diagnostic in &reported {
             assert_eq!(
                 diagnostic.severity,
                 DiagnosticSeverity::ERROR,
                 "{diagnostic:?}"
             );
-            let code = diagnostic
-                .code
-                .as_deref()
-                .unwrap_or_else(|| panic!("{diagnostic:?} names its rule"));
-            assert!(code.starts_with("evidence/"), "{code}");
-            seen += 1;
         }
+        assert_eq!(
+            reported
+                .iter()
+                .map(|diagnostic| diagnostic
+                    .code
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{diagnostic:?} names its rule")))
+                .collect::<Vec<_>>(),
+            *expected,
+            "{text}"
+        );
     }
-    assert!(seen >= broken.len(), "each broken document reported");
 }

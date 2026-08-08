@@ -50,6 +50,30 @@ impl SymbolKind {
             Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
         }
     }
+
+    /// The word for the thing a scoped name is written inside, which an author reads in
+    /// "Duplicate {label} definition '{name}' in {container} '{scope}'".
+    ///
+    /// A Relay consultation is declared under the service that offers it, and an Evidence concept is
+    /// answered by the question that carries it. There are no services in an Evidence authoring
+    /// project, so each family names the container in its own vocabulary rather than in the one that
+    /// happened to need a scope first.
+    fn scope_label(self) -> &'static str {
+        match self {
+            Self::Relay(_) => "service",
+            Self::Evidence(_) => "question",
+        }
+    }
+
+    /// Whether a name of this kind written twice is reported here.
+    ///
+    /// `registry_evidence_authoring::validate` already refuses a question that answers one concept
+    /// twice, at the answer that repeats, and its sentence is the one the compiler prints. A
+    /// duplicate reported here would be a second error on one mistake, and one per occurrence at
+    /// that, which is what the `disclosure.allow` reference refuses for the same reason.
+    fn reports_duplicates(self) -> bool {
+        !matches!(self, Self::Evidence(EvidenceKind::Concept))
+    }
 }
 
 impl From<RelayKind> for SymbolKind {
@@ -506,7 +530,7 @@ impl ProjectIndex {
         }
 
         for (key, duplicates) in definitions {
-            if duplicates.len() < 2 {
+            if duplicates.len() < 2 || !key.kind.reports_duplicates() {
                 continue;
             }
             for symbol in duplicates {
@@ -519,10 +543,7 @@ impl ProjectIndex {
                         "Duplicate {} definition '{}'{}",
                         key.kind.label(),
                         bounded_value(&key.name),
-                        key.scope
-                            .as_ref()
-                            .map(|scope| format!(" in service '{}'", bounded_value(scope)))
-                            .unwrap_or_default()
+                        scope_suffix(key.kind, key.scope.as_deref())
                     ),
                 });
             }
@@ -541,12 +562,7 @@ impl ProjectIndex {
                         "Unknown {} reference '{}'{}",
                         reference.target.kind.label(),
                         bounded_value(&reference.target.name),
-                        reference
-                            .target
-                            .scope
-                            .as_ref()
-                            .map(|scope| format!(" in service '{}'", bounded_value(scope)))
-                            .unwrap_or_default()
+                        scope_suffix(reference.target.kind, reference.target.scope.as_deref())
                     ),
                 )),
                 1 => None,
@@ -606,11 +622,35 @@ fn diagnostic_cmp(left: &IndexedDiagnostic, right: &IndexedDiagnostic) -> std::c
         .then_with(|| left.message.cmp(&right.message))
 }
 
+/// The tail of a message that says where a scoped name is written, in the word its family uses.
+fn scope_suffix(kind: SymbolKind, scope: Option<&str>) -> String {
+    scope
+        .map(|scope| format!(" in {} '{}'", kind.scope_label(), bounded_value(scope)))
+        .unwrap_or_default()
+}
+
+/// One name an author wrote, made safe to quote inside a message and cut to the width of a name.
 pub(crate) fn bounded_value(value: &str) -> String {
-    const MAX_CHARS: usize = 120;
+    bounded(value, 120)
+}
+
+/// A whole sentence another implementation composed, made safe the same way and cut far above the
+/// length of any sentence it writes.
+///
+/// A sentence from the authoring library already carries a name the author wrote inside it, and the
+/// instruction the author has to act on comes after that name. Cutting such a sentence to the width
+/// of one name removes exactly the part the finding exists to give, so the ceiling here bounds the
+/// channel rather than the message.
+pub(crate) fn bounded_message(message: &str) -> String {
+    bounded(message, 1024)
+}
+
+/// What both ceilings share: a control character becomes one no terminal obeys, and text that does
+/// not fit ends in the mark that says so.
+fn bounded(value: &str, max_chars: usize) -> String {
     let mut bounded = value
         .chars()
-        .take(MAX_CHARS)
+        .take(max_chars)
         .map(|character| {
             if character.is_control() {
                 '�'
@@ -619,7 +659,7 @@ pub(crate) fn bounded_value(value: &str) -> String {
             }
         })
         .collect::<String>();
-    if value.chars().count() > MAX_CHARS {
+    if value.chars().count() > max_chars {
         bounded.push('…');
     }
     bounded
@@ -643,4 +683,67 @@ fn location_cmp(left: &IndexedLocation, right: &IndexedLocation) -> std::cmp::Or
     left.path
         .cmp(&right.path)
         .then_with(|| range_cmp(left.range, right.range))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each family names the container in its own words. A Relay consultation is declared inside the
+    /// service that offers it; an Evidence concept is answered by a question, and an Evidence
+    /// authoring project has no services at all.
+    #[test]
+    fn a_scope_is_named_in_the_vocabulary_of_the_family_that_owns_it() {
+        assert_eq!(
+            scope_suffix(
+                SymbolKind::Relay(RelayKind::Consultation),
+                Some("person-records")
+            ),
+            " in service 'person-records'"
+        );
+        assert_eq!(
+            scope_suffix(
+                SymbolKind::Evidence(EvidenceKind::Concept),
+                Some("adult-status")
+            ),
+            " in question 'adult-status'"
+        );
+    }
+
+    /// A name with no scope says nothing about where it is written, in either family.
+    #[test]
+    fn a_name_with_no_scope_carries_no_suffix() {
+        assert_eq!(
+            scope_suffix(SymbolKind::Relay(RelayKind::Service), None),
+            String::new()
+        );
+        assert_eq!(
+            scope_suffix(SymbolKind::Evidence(EvidenceKind::Question), None),
+            String::new()
+        );
+    }
+
+    /// The one kind whose duplicates another implementation already refuses, and the kinds this
+    /// index is the only one to see.
+    #[test]
+    fn only_the_concept_leaves_its_duplicates_to_the_authoring_library() {
+        assert!(!SymbolKind::Evidence(EvidenceKind::Concept).reports_duplicates());
+        assert!(SymbolKind::Evidence(EvidenceKind::Question).reports_duplicates());
+        assert!(SymbolKind::Relay(RelayKind::Consultation).reports_duplicates());
+    }
+
+    /// A name is quoted at the width of a name, and a whole sentence at the width of a sentence.
+    /// Both replace a control character with one that carries no instruction.
+    #[test]
+    fn text_that_reaches_a_message_is_bounded_and_stripped_of_control_characters() {
+        let name = "n".repeat(200);
+        assert_eq!(bounded_value(&name).chars().count(), 121);
+        assert_eq!(bounded_message(&name), name);
+
+        let sentence = "s".repeat(2000);
+        assert_eq!(bounded_message(&sentence).chars().count(), 1025);
+
+        assert_eq!(bounded_value("one\u{1b}[2Jtwo"), "one�[2Jtwo");
+        assert_eq!(bounded_message("one\u{1b}[2Jtwo"), "one�[2Jtwo");
+    }
 }
