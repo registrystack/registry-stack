@@ -203,8 +203,26 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["docs_archives"])
 
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
+        # A path inside the runtime crate seeds that crate alone. registry-mint
+        # dev-depends on registry-evidence so its compatibility test proves
+        # Evidence accepts a minted token. Changing Evidence must therefore run
+        # the mint shard too.
+        outputs = classify(self.workspace, ("crates/registry-evidence/src/source.rs",))
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertIn("registry-evidence", outputs["rust_packages"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"evidence", "mint"},
+        )
+
+        # A products/evidence path belongs to no crate directory, so it seeds
+        # every Evidence package and its closure runs wider than the runtime
+        # crate's. registry-language-server reads the authoring model and
+        # registryctl embeds the language server, so an authoring-form change
+        # reaches the editor tooling that has to keep agreeing with it. A
+        # product contract cannot say in advance which package it constrains,
+        # so it runs all four shards.
         for path in (
-            "crates/registry-evidence/src/source.rs",
             "products/evidence/contracts/source-contract.yaml",
             "products/evidence/reference/request-adapter/ADAPTER-API.md",
             "products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/fixtures/cases.yaml",
@@ -213,13 +231,28 @@ class CiChangesTest(unittest.TestCase):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["evidence_contracts"])
                 self.assertIn("registry-evidence", outputs["rust_packages"])
-                # registry-mint dev-depends on registry-evidence so its
-                # compatibility test proves Evidence accepts a minted token.
-                # Changing Evidence must therefore run the mint shard too.
                 self.assertEqual(
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-                    {"evidence", "mint"},
+                    {"evidence", "mint", "developer-tools", "registryctl"},
                 )
+
+    def test_an_authoring_form_change_runs_the_editor_tooling_that_reads_it(self) -> None:
+        # registry-language-server links registry-evidence-authoring to index
+        # an adopter's Evidence documents, and both evidencectl and registryctl
+        # link the language server. A change to the authoring form can therefore
+        # break an editor session without touching a line of either binary, so
+        # the closure has to carry it into their shards.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-authoring/src/lib.rs",),
+        )
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"evidence", "developer-tools", "registryctl"},
+        )
+        self.assertIn("registry-language-server", outputs["rust_packages"])
+        self.assertIn("registryctl", outputs["rust_packages"])
 
     def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
         # A Node-binding-only change has no bearing on any tutorial's shell
