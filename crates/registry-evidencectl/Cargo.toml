@@ -24,6 +24,7 @@ getrandom.workspace = true
 inquire.workspace = true
 registry-evidence-authoring.workspace = true
 registry-evidence-client.workspace = true
+registry-language-server.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-crypto.workspace = true
 p256.workspace = true
@@ -33,6 +34,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 signal-hook.workspace = true
+tokio = { workspace = true, features = ["io-util", "process"] }
 ureq.workspace = true
 url.workspace = true
 zeroize.workspace = true

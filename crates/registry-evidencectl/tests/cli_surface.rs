@@ -10,9 +10,9 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 11] = [
+const TOP_LEVEL_COMMANDS: [&str; 12] = [
     "access", "keygen", "jwks", "new", "build", "fixtures", "source", "dev", "request", "verify",
-    "audit",
+    "audit", "tooling",
 ];
 
 #[test]
@@ -36,6 +36,25 @@ fn every_top_level_command_is_listed_and_dispatchable() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn tooling_lists_and_dispatches_language_server() {
+    let help = evidencectl(&["tooling", "--help"]);
+    assert!(
+        help.contains("language-server"),
+        "`evidencectl tooling --help` does not list `language-server`:\n{help}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["tooling", "language-server", "--help"])
+        .output()
+        .expect("run evidencectl");
+    assert!(
+        output.status.success(),
+        "`evidencectl tooling language-server --help` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
