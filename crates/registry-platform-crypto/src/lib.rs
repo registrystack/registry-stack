@@ -2,12 +2,17 @@
 //! Crypto primitives shared by Registry Platform consumers.
 
 use async_trait::async_trait;
+use aws_lc_rs::encoding::{AsBigEndian as _, AsDer as _, EcPrivateKeyBin, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
-use aws_lc_rs::rsa::{KeyPair as AwsRsaKeyPair, PublicKeyComponents as AwsRsaPublicKeyComponents};
+use aws_lc_rs::rsa::{
+    KeyPair as AwsRsaKeyPair, KeySize as AwsRsaKeySize,
+    PublicKeyComponents as AwsRsaPublicKeyComponents,
+};
 use aws_lc_rs::signature::{
-    EcdsaKeyPair, RsaParameters, RsaSignatureEncoding, UnparsedPublicKey, ECDSA_P256_SHA256_FIXED,
-    ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED, ECDSA_P384_SHA384_FIXED_SIGNING,
-    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
+    EcdsaKeyPair, KeyPair as _, RsaParameters, RsaSignatureEncoding, UnparsedPublicKey,
+    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED,
+    ECDSA_P384_SHA384_FIXED_SIGNING, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
+    RSA_PKCS1_SHA256, RSA_PKCS1_SHA384,
 };
 #[cfg(feature = "transit")]
 use base64::engine::general_purpose::STANDARD;
@@ -27,7 +32,10 @@ use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use p256::pkcs8::DecodePublicKey as _;
 #[cfg(feature = "transit")]
 use p256::PublicKey as P256PublicKey;
-use pkcs1::{der::asn1::UintRef, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey};
+use pkcs1::{
+    der::asn1::UintRef, der::Decode as _, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey,
+};
+use pkcs8::PrivateKeyInfo as Pkcs8PrivateKeyInfo;
 pub use registry_platform_canonical_json::{
     canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
 };
@@ -1281,6 +1289,145 @@ pub fn pairwise_subject_ref_hash(
         "hmac-sha256:{}",
         hmac_sha256_base64url_no_pad(key, &canonical)
     ))
+}
+
+/// The algorithms this crate can generate a private JWK for.
+///
+/// Deliberately narrower than [`SigningAlgorithm`], which also names algorithms
+/// only [`sign`] and [`verify`] handle: asking for one of those is
+/// unrepresentable here rather than a runtime failure.
+///
+/// The pair is the one SMART on FHIR Backend Services settles on (SMART App
+/// Launch v2.2.0, the `client-confidential-asymmetric` profile): an
+/// authorization server there has to validate only one of RS384 and ES384, so a
+/// generator offering only one of them would leave adopters unable to
+/// authenticate against a conformant server that chose the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedKeyAlgorithm {
+    /// ECDSA over P-384 with SHA-384, written as an EC/P-384 JWK.
+    Es384,
+    /// RSASSA-PKCS1-v1_5 with SHA-384 over a 2048-bit modulus, written as an
+    /// RSA JWK.
+    Rs384,
+}
+
+impl GeneratedKeyAlgorithm {
+    /// The signing algorithm a key generated for this variant carries.
+    #[must_use]
+    pub const fn signing_algorithm(self) -> SigningAlgorithm {
+        match self {
+            Self::Es384 => SigningAlgorithm::Es384,
+            Self::Rs384 => SigningAlgorithm::Rs384,
+        }
+    }
+}
+
+/// Modulus width for a generated RSA key. RFC 7518 section 3.3 requires at
+/// least 2048 bits, every relying party accepts that width, and a wider modulus
+/// costs generation time on every call for no interoperability gain.
+const GENERATED_RSA_KEY_SIZE: AwsRsaKeySize = AwsRsaKeySize::Rsa2048;
+
+/// Width in bytes of a P-384 scalar and of each of its point coordinates.
+const P384_COORDINATE_BYTES: usize = 48;
+
+/// Generate a fresh private JWK carrying its `alg` and a `kid` that is the RFC
+/// 7638 thumbprint of its public half.
+///
+/// Generation runs on aws-lc-rs, the same backend [`sign`] uses, so one
+/// implementation both produces a key and consumes it. Runs synchronously on
+/// the calling thread; RSA generation is the slow path because it searches for
+/// primes, so its cost varies from call to call and belongs off a request path.
+pub fn generate_private_jwk(algorithm: GeneratedKeyAlgorithm) -> Result<PrivateJwk, CryptoError> {
+    let mut jwk = match algorithm {
+        GeneratedKeyAlgorithm::Es384 => generate_es384_jwk(),
+        GeneratedKeyAlgorithm::Rs384 => generate_rs384_jwk(),
+    }?;
+    jwk.alg = Some(algorithm.signing_algorithm().jwa_name().to_owned());
+    // Validate before deriving the kid, so no thumbprint is ever published for
+    // members this crate would refuse to sign with.
+    jwk.validate_private()?;
+    jwk.kid = Some(jwk.public().jkt()?);
+    Ok(jwk)
+}
+
+fn generate_es384_jwk() -> Result<PrivateJwk, CryptoError> {
+    let key_pair = EcdsaKeyPair::generate(&ECDSA_P384_SHA384_FIXED_SIGNING)
+        .map_err(|_| CryptoError::Crypto("ES384 key generation failed"))?;
+    // aws-lc-rs zeroizes this buffer on drop, and the base64url encoding below
+    // lands straight in the JWK member `PrivateJwk::drop` zeroizes, so the
+    // scalar exists in exactly those two places.
+    let scalar: EcPrivateKeyBin<'_> = key_pair
+        .private_key()
+        .as_be_bytes()
+        .map_err(|_| CryptoError::Crypto("ES384 private key export failed"))?;
+    let point = key_pair.public_key().as_ref();
+    // The SEC 1 uncompressed point `0x04 || x || y` that
+    // `p384_uncompressed_point` assembles for signing, taken apart again into
+    // the JWK's two coordinates.
+    if point.len() != 1 + 2 * P384_COORDINATE_BYTES || point[0] != 0x04 {
+        return Err(CryptoError::Crypto(
+            "ES384 public point is not uncompressed",
+        ));
+    }
+    let (x, y) = point[1..].split_at(P384_COORDINATE_BYTES);
+
+    Ok(PrivateJwk {
+        kty: "EC".to_owned(),
+        kid: None,
+        alg: None,
+        crv: Some("P-384".to_owned()),
+        d: Some(URL_SAFE_NO_PAD.encode(scalar.as_ref())),
+        x: Some(URL_SAFE_NO_PAD.encode(x)),
+        y: Some(URL_SAFE_NO_PAD.encode(y)),
+        n: None,
+        e: None,
+        p: None,
+        q: None,
+        dp: None,
+        dq: None,
+        qi: None,
+    })
+}
+
+fn generate_rs384_jwk() -> Result<PrivateJwk, CryptoError> {
+    let key_pair = AwsRsaKeyPair::generate(GENERATED_RSA_KEY_SIZE)
+        .map_err(|_| CryptoError::Crypto("RS384 key generation failed"))?;
+    // aws-lc-rs exports an RSA private key as PKCS#8 only, while a JWK carries
+    // the eight PKCS#1 members, so the PKCS#8 wrapper comes off here. This is
+    // the inverse of `rsa_private_key_der`, which reassembles the same PKCS#1
+    // structure to hand a JWK back to aws-lc-rs. The exported buffer zeroizes
+    // on drop and every member below borrows from it rather than copying.
+    let pkcs8: Pkcs8V1Der<'_> = key_pair
+        .as_der()
+        .map_err(|_| CryptoError::Crypto("RSA private key export failed"))?;
+    let info = Pkcs8PrivateKeyInfo::try_from(pkcs8.as_ref())
+        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#8"))?;
+    let key = Pkcs1RsaPrivateKey::from_der(info.private_key)
+        .map_err(|_| CryptoError::Crypto("exported RSA private key is not PKCS#1"))?;
+
+    Ok(PrivateJwk {
+        kty: "RSA".to_owned(),
+        kid: None,
+        alg: None,
+        crv: None,
+        d: Some(encode_rsa_uint(key.private_exponent)),
+        x: None,
+        y: None,
+        n: Some(encode_rsa_uint(key.modulus)),
+        e: Some(encode_rsa_uint(key.public_exponent)),
+        p: Some(encode_rsa_uint(key.prime1)),
+        q: Some(encode_rsa_uint(key.prime2)),
+        dp: Some(encode_rsa_uint(key.exponent1)),
+        dq: Some(encode_rsa_uint(key.exponent2)),
+        qi: Some(encode_rsa_uint(key.coefficient)),
+    })
+}
+
+/// A JWK carries an RSA member as its unsigned big-endian bytes with leading
+/// zeros stripped, which is exactly what `UintRef` holds. `rsa_uint` reads the
+/// same encoding back.
+fn encode_rsa_uint(value: UintRef<'_>) -> String {
+    URL_SAFE_NO_PAD.encode(value.as_bytes())
 }
 
 /// Sign `payload` using the private key in `jwk`.
@@ -3699,5 +3846,185 @@ mod tests {
         use subtle::ConstantTimeEq;
 
         assert_eq!(b"a".ct_eq(b"a").unwrap_u8(), 1);
+    }
+
+    #[test]
+    fn generated_es384_key_passes_this_crates_own_validation() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("ES384 generates");
+
+        assert_eq!(private.kty, "EC");
+        assert_eq!(private.crv.as_deref(), Some("P-384"));
+        assert_eq!(private.alg.as_deref(), Some("ES384"));
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Es384)));
+
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str()),
+            "the generated kid is the RFC 7638 thumbprint of the public half"
+        );
+
+        // Re-parsing through the public entry points is the real check: it runs
+        // the same validation an adopter's key file goes through.
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(private.d.as_deref().expect("generated key carries d"))
+                .expect("d is base64url")
+                .len(),
+            48,
+            "a P-384 scalar is 48 bytes wide"
+        );
+    }
+
+    /// The round trip is what proves the JWK members are ordered and encoded
+    /// correctly. A generated key whose `x` and `y` were swapped, or whose `d`
+    /// carried a stray leading zero, still parses; it does not verify.
+    #[test]
+    fn generated_es384_key_signs_and_verifies_under_its_public_half() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("ES384 generates");
+        let public = private.public();
+        let payload = b"registry-platform-crypto generated es384 round trip";
+
+        let signature = sign(payload, &private).expect("generated key signs");
+        assert_eq!(signature.len(), 96, "ES384 JWS signatures are raw r || s");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn generated_rs384_key_signs_and_verifies_under_its_public_half() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+        let public = private.public();
+        let payload = b"registry-platform-crypto generated rs384 round trip";
+
+        let signature = sign(payload, &private).expect("generated key signs");
+        verify(payload, &signature, &public).expect("generated public half verifies");
+        assert!(matches!(
+            verify(b"tampered", &signature, &public),
+            Err(CryptoError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn generated_rs384_key_is_a_2048_bit_rsa_key() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+
+        assert_eq!(private.kty, "RSA");
+        assert_eq!(private.alg.as_deref(), Some("RS384"));
+        assert_eq!(private.crv, None, "an RSA JWK carries no curve");
+        assert!(matches!(private.algorithm(), Ok(SigningAlgorithm::Rs384)));
+
+        let modulus = URL_SAFE_NO_PAD
+            .decode(private.n.as_deref().expect("generated key carries n"))
+            .expect("n is base64url");
+        assert_eq!(modulus.len(), 256, "RFC 7518 requires at least 2048 bits");
+        assert_ne!(modulus[0] & 0x80, 0, "the modulus has no leading zero byte");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(private.e.as_deref().expect("generated key carries e"))
+                .expect("e is base64url"),
+            [0x01, 0x00, 0x01],
+            "the public exponent is 65537"
+        );
+
+        let public = private.public();
+        assert_eq!(
+            private.kid.as_deref(),
+            Some(public.jkt().expect("thumbprint computes").as_str())
+        );
+        let rendered = serde_json::to_string(&private).expect("public half renders");
+        PublicJwk::parse(&rendered).expect("generated public half validates");
+    }
+
+    /// Every CRT member has to belong to the same key. Recomputing the modulus
+    /// from the two primes catches a pair assembled from mismatched components,
+    /// which signing alone would not: aws-lc-rs can fall back to the plain
+    /// private exponent.
+    #[test]
+    fn generated_rs384_primes_multiply_back_to_the_modulus() {
+        let private = generate_private_jwk(GeneratedKeyAlgorithm::Rs384).expect("RS384 generates");
+        let decode = |member: Option<&str>| {
+            URL_SAFE_NO_PAD
+                .decode(member.expect("generated key carries the member"))
+                .expect("member is base64url")
+        };
+        let modulus = decode(private.n.as_deref());
+        let p = decode(private.p.as_deref());
+        let q = decode(private.q.as_deref());
+
+        assert_eq!(p.len(), 128, "a 2048-bit key has two 1024-bit primes");
+        assert_eq!(q.len(), 128);
+        assert_eq!(
+            multiply_big_endian(&p, &q),
+            modulus,
+            "p * q must reproduce n"
+        );
+        for member in [private.dp.as_deref(), private.dq.as_deref()] {
+            assert!(
+                !decode(member).is_empty(),
+                "the CRT exponents must be present"
+            );
+        }
+        assert!(!decode(private.qi.as_deref()).is_empty());
+    }
+
+    /// Schoolbook multiplication of two big-endian integers, with the leading
+    /// zero bytes trimmed so the result compares against a JWK modulus.
+    fn multiply_big_endian(left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut product = vec![0_u32; left.len() + right.len()];
+        for (left_index, left_byte) in left.iter().rev().enumerate() {
+            let mut carry = 0_u32;
+            for (right_index, right_byte) in right.iter().rev().enumerate() {
+                let slot = left_index + right_index;
+                let total = product[slot] + u32::from(*left_byte) * u32::from(*right_byte) + carry;
+                product[slot] = total & 0xff;
+                carry = total >> 8;
+            }
+            product[left_index + right.len()] += carry;
+        }
+        let mut bytes: Vec<u8> = product
+            .into_iter()
+            .rev()
+            .map(|value| u8::try_from(value).expect("each slot holds one byte"))
+            .collect();
+        let first_significant = bytes.iter().position(|byte| *byte != 0).unwrap_or(0);
+        bytes.drain(..first_significant);
+        bytes
+    }
+
+    #[test]
+    fn two_generations_produce_different_keys() {
+        for algorithm in [GeneratedKeyAlgorithm::Es384, GeneratedKeyAlgorithm::Rs384] {
+            let first = generate_private_jwk(algorithm).expect("first key generates");
+            let second = generate_private_jwk(algorithm).expect("second key generates");
+
+            assert_ne!(first.d, second.d, "{algorithm:?} reused a private scalar");
+            assert_ne!(first.kid, second.kid, "{algorithm:?} reused a kid");
+        }
+    }
+
+    #[test]
+    fn generated_key_algorithm_names_its_signing_algorithm() {
+        assert_eq!(
+            GeneratedKeyAlgorithm::Es384.signing_algorithm(),
+            SigningAlgorithm::Es384
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Rs384.signing_algorithm(),
+            SigningAlgorithm::Rs384
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Es384.signing_algorithm().jwa_name(),
+            "ES384"
+        );
+        assert_eq!(
+            GeneratedKeyAlgorithm::Rs384.signing_algorithm().jwa_name(),
+            "RS384"
+        );
     }
 }

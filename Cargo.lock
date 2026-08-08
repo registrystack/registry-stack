@@ -5878,6 +5878,7 @@ dependencies = [
  "hmac 0.13.0",
  "p256",
  "pkcs1",
+ "pkcs8",
  "proptest",
  "registry-platform-canonical-json",
  "reqwest 0.12.28",

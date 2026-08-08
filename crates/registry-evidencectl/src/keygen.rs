@@ -11,9 +11,10 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use p256::ecdsa::SigningKey;
-use registry_platform_crypto::{PrivateJwk, PublicJwk};
+use registry_platform_crypto::{GeneratedKeyAlgorithm, PrivateJwk, PublicJwk};
+use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
 #[derive(Debug, Subcommand)]
@@ -30,6 +31,9 @@ pub enum KeygenCommand {
     Token(TokenArgs),
     /// P-256 ES256 holder keypair for SD-JWT VC confirmation binding.
     Holder(HolderArgs),
+    /// Keypair a source's `clientAssertionKeyRef` points at, for a token
+    /// endpoint that authenticates the client by signed assertion.
+    ClientAssertion(ClientAssertionArgs),
 }
 
 #[derive(Debug, Args)]
@@ -68,12 +72,72 @@ pub struct HolderArgs {
     pub public_out: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+pub struct ClientAssertionArgs {
+    /// Secret directory receiving the private JWK file (created 0700).
+    #[arg(long)]
+    pub out_dir: PathBuf,
+
+    /// Public JWK output path; defaults to a file inside the secret directory.
+    #[arg(long)]
+    pub public_out: Option<PathBuf>,
+
+    /// Signature algorithm the assertion is signed with.
+    #[arg(long, value_enum, default_value_t = ClientAssertionAlgorithm::Es384)]
+    pub algorithm: ClientAssertionAlgorithm,
+}
+
+/// The two algorithms a client authenticating by signed assertion has to be
+/// able to offer.
+///
+/// SMART App Launch v2.2.0's `client-confidential-asymmetric` profile requires
+/// a token endpoint to validate only one of ES384 and RS384, so which one an
+/// adopter needs is the deployment's to say, not this tool's. ES384 is the
+/// default because its key is far smaller and faster to generate; RS384 is
+/// there because a conformant endpoint may accept nothing else.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ClientAssertionAlgorithm {
+    /// ECDSA over P-384 with SHA-384.
+    Es384,
+    /// RSASSA-PKCS1-v1_5 with SHA-384 over a 2048-bit modulus.
+    Rs384,
+}
+
+impl ClientAssertionAlgorithm {
+    const fn generated(self) -> GeneratedKeyAlgorithm {
+        match self {
+            Self::Es384 => GeneratedKeyAlgorithm::Es384,
+            Self::Rs384 => GeneratedKeyAlgorithm::Rs384,
+        }
+    }
+
+    /// The filenames carry the algorithm, so a deployment that has to offer
+    /// both keeps them side by side in one secret directory.
+    const fn private_filename(self) -> &'static str {
+        match self {
+            Self::Es384 => CLIENT_ASSERTION_P384_PRIVATE_FILENAME,
+            Self::Rs384 => CLIENT_ASSERTION_RSA_PRIVATE_FILENAME,
+        }
+    }
+
+    const fn public_filename(self) -> &'static str {
+        match self {
+            Self::Es384 => CLIENT_ASSERTION_P384_PUBLIC_FILENAME,
+            Self::Rs384 => CLIENT_ASSERTION_RSA_PUBLIC_FILENAME,
+        }
+    }
+}
+
 /// Filename for the private signing JWK, fixed to match the reference
 /// deployment project's secret-mount layout.
 const SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const HOLDER_PRIVATE_FILENAME: &str = "holder-p256-private-jwk";
 const HOLDER_PUBLIC_FILENAME: &str = "holder-p256-public.jwk.json";
+const CLIENT_ASSERTION_P384_PRIVATE_FILENAME: &str = "client-assertion-p384-private-jwk";
+const CLIENT_ASSERTION_P384_PUBLIC_FILENAME: &str = "client-assertion-p384-public.jwk.json";
+const CLIENT_ASSERTION_RSA_PRIVATE_FILENAME: &str = "client-assertion-rsa2048-private-jwk";
+const CLIENT_ASSERTION_RSA_PUBLIC_FILENAME: &str = "client-assertion-rsa2048-public.jwk.json";
 const AUDIT_HMAC_FILENAME: &str = "audit-hmac-key";
 const SUBJECT_BINDING_HMAC_FILENAME: &str = "subject-binding-hmac-key";
 
@@ -90,6 +154,7 @@ const TOKEN_ENTROPY_BYTES: usize = 32;
 pub fn run(command: KeygenCommand) -> Result<ExitCode> {
     match command {
         KeygenCommand::Signing(args) => run_keypair(
+            generate_p256_keypair()?,
             &args.out_dir,
             args.public_out.as_deref(),
             SIGNING_PRIVATE_FILENAME,
@@ -98,10 +163,18 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
         KeygenCommand::Secret(args) => run_secret(&args),
         KeygenCommand::Token(args) => run_token(&args),
         KeygenCommand::Holder(args) => run_keypair(
+            generate_p256_keypair()?,
             &args.out_dir,
             args.public_out.as_deref(),
             HOLDER_PRIVATE_FILENAME,
             HOLDER_PUBLIC_FILENAME,
+        ),
+        KeygenCommand::ClientAssertion(args) => run_keypair(
+            generate_client_assertion_keypair(args.algorithm)?,
+            &args.out_dir,
+            args.public_out.as_deref(),
+            args.algorithm.private_filename(),
+            args.algorithm.public_filename(),
         ),
     }
 }
@@ -115,6 +188,7 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
 pub(crate) fn generate_scaffold_key_material(out_dir: &Path) -> Result<()> {
     ensure_private_dir(out_dir)?;
     run_keypair_impl(
+        generate_p256_keypair()?,
         out_dir,
         None,
         SIGNING_PRIVATE_FILENAME,
@@ -143,6 +217,7 @@ pub(crate) fn generate_dev_keypair(
 ) -> Result<(PathBuf, PathBuf)> {
     ensure_private_dir(out_dir)?;
     run_keypair_impl(
+        generate_p256_keypair()?,
         out_dir,
         None,
         private_filename,
@@ -156,39 +231,17 @@ pub(crate) fn generate_dev_keypair(
     ))
 }
 
-fn run_keypair(
-    out_dir: &Path,
-    public_out: Option<&Path>,
-    private_filename: &str,
-    public_filename: &str,
-) -> Result<ExitCode> {
-    run_keypair_impl(
-        out_dir,
-        public_out,
-        private_filename,
-        public_filename,
-        true,
-        PUBLIC_FILE_MODE,
-    )
+/// Both halves of one generated keypair, rendered as the files a keypair
+/// command writes.
+struct KeypairFiles {
+    private_json: Zeroizing<String>,
+    public_json: String,
+    kid: String,
 }
 
-fn run_keypair_impl(
-    out_dir: &Path,
-    public_out: Option<&Path>,
-    private_filename: &str,
-    public_filename: &str,
-    report: bool,
-    public_file_mode: u32,
-) -> Result<ExitCode> {
-    let private_path = out_dir.join(private_filename);
-    let public_path = public_out
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| out_dir.join(public_filename));
-
-    // Every target path is known up front, so the whole batch can be checked
-    // for collisions before anything is written.
-    reject_existing(&[&private_path, &public_path])?;
-
+/// Generate the P-256 ES256 pair the service signing key, the holder binding
+/// key, and a scaffolded project's key material all use.
+fn generate_p256_keypair() -> Result<KeypairFiles> {
     let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
     let point = signing_key.verifying_key().to_encoded_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed P-256 point has x"));
@@ -222,19 +275,131 @@ fn run_keypair_impl(
     }))
     .context("failed to render the public JWK")?;
 
+    Ok(KeypairFiles {
+        private_json,
+        public_json,
+        kid,
+    })
+}
+
+/// Generate the pair a source signs its client assertion with.
+///
+/// Generation, and the `kid` that is the thumbprint of the public half, belong
+/// to `registry-platform-crypto`: the key is produced by the same backend that
+/// will sign with it, and validated by the crate that defines what a usable JWK
+/// is.
+fn generate_client_assertion_keypair(algorithm: ClientAssertionAlgorithm) -> Result<KeypairFiles> {
+    let private = registry_platform_crypto::generate_private_jwk(algorithm.generated())
+        .context("failed to generate the client-assertion key")?;
+    let kid = private
+        .kid
+        .clone()
+        .context("generated key carries no kid")?;
+    let public_json = serde_json::to_string_pretty(&private.public())
+        .context("failed to render the public JWK")?;
+
+    Ok(KeypairFiles {
+        private_json: render_private_jwk(&private)?,
+        public_json,
+        kid,
+    })
+}
+
+/// Render a private JWK, secret members included, as the file the runtime
+/// reads.
+///
+/// `PrivateJwk` serializes its public half only, deliberately, so the private
+/// file is assembled here rather than through that impl.
+fn render_private_jwk(jwk: &PrivateJwk) -> Result<Zeroizing<String>> {
+    let mut members = Map::new();
+    members.insert("kty".to_owned(), Value::String(jwk.kty.clone()));
+    // Each secret member below is copied into a `serde_json::Value::String`
+    // whose heap buffer this crate does not zeroize, unlike the `PrivateJwk` it
+    // is copied from and the `Zeroizing` output. Accepted: serde_json owns the
+    // escaping, and the copies are short-lived, but they are not wiped.
+    for (name, value) in [
+        ("crv", jwk.crv.as_deref()),
+        ("n", jwk.n.as_deref()),
+        ("e", jwk.e.as_deref()),
+        ("d", jwk.d.as_deref()),
+        ("x", jwk.x.as_deref()),
+        ("y", jwk.y.as_deref()),
+        ("p", jwk.p.as_deref()),
+        ("q", jwk.q.as_deref()),
+        ("dp", jwk.dp.as_deref()),
+        ("dq", jwk.dq.as_deref()),
+        ("qi", jwk.qi.as_deref()),
+        ("alg", jwk.alg.as_deref()),
+        ("kid", jwk.kid.as_deref()),
+    ] {
+        if let Some(value) = value {
+            members.insert(name.to_owned(), Value::String(value.to_owned()));
+        }
+    }
+
+    Ok(Zeroizing::new(
+        serde_json::to_string_pretty(&Value::Object(members))
+            .context("failed to render the private JWK")?,
+    ))
+}
+
+fn run_keypair(
+    keypair: KeypairFiles,
+    out_dir: &Path,
+    public_out: Option<&Path>,
+    private_filename: &str,
+    public_filename: &str,
+) -> Result<ExitCode> {
+    run_keypair_impl(
+        keypair,
+        out_dir,
+        public_out,
+        private_filename,
+        public_filename,
+        true,
+        PUBLIC_FILE_MODE,
+    )
+}
+
+fn run_keypair_impl(
+    keypair: KeypairFiles,
+    out_dir: &Path,
+    public_out: Option<&Path>,
+    private_filename: &str,
+    public_filename: &str,
+    report: bool,
+    public_file_mode: u32,
+) -> Result<ExitCode> {
+    let private_path = out_dir.join(private_filename);
+    let public_path = public_out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| out_dir.join(public_filename));
+
+    // Every target path is known up front, so the whole batch can be checked
+    // for collisions before anything is written.
+    reject_existing(&[&private_path, &public_path])?;
+
     // Self-check: a key this tool cannot parse back is not fit to ship.
-    PrivateJwk::parse(&private_json).context("generated private JWK failed validation")?;
-    PublicJwk::parse(&public_json).context("generated public JWK failed validation")?;
+    PrivateJwk::parse(&keypair.private_json).context("generated private JWK failed validation")?;
+    PublicJwk::parse(&keypair.public_json).context("generated public JWK failed validation")?;
 
     ensure_private_dir(out_dir)?;
     ensure_parent_dir(&public_path)?;
-    write_owner_file(&private_path, private_json.as_bytes(), PRIVATE_FILE_MODE)?;
-    write_owner_file(&public_path, public_json.as_bytes(), public_file_mode)?;
+    write_owner_file(
+        &private_path,
+        keypair.private_json.as_bytes(),
+        PRIVATE_FILE_MODE,
+    )?;
+    write_owner_file(
+        &public_path,
+        keypair.public_json.as_bytes(),
+        public_file_mode,
+    )?;
 
     if report {
         println!("wrote {}", private_path.display());
         println!("wrote {}", public_path.display());
-        println!("kid: {kid}");
+        println!("kid: {}", keypair.kid);
     }
 
     Ok(ExitCode::SUCCESS)
