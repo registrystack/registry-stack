@@ -4,13 +4,11 @@
 Language Server Protocol. It discovers the bounded authoring surface rooted at
 `registry-stack.yaml` and indexes:
 
-- registry, integration, entity, service, consultation, claim, credential-profile, fixture, and
-  environment definitions;
+- registry, integration, entity, service, consultation, fixture, and environment definitions;
 - integration and entity aliases across the project manifest, their definition files, and
   environment files;
-- consultation integration references, records-service entity references, credential-profile
-  claim references, direct claim-output consultation references, and fixture expected-claim
-  references.
+- consultation integration references, records-service entity references, and environment
+  integration and entity bindings.
 
 It provides go to definition, find references, workspace symbols, document symbols, and errors for
 missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, completion,
