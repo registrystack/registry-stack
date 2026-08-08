@@ -79,8 +79,9 @@ runtime.
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
-OpenAPI authoring workspaces, and drives fixture runs for complete deployment
-projects. It delegates runtime evaluation, signing, bundle validation, and
+OpenAPI authoring workspaces, writes the project-local editor schema mappings
+an adopter's YAML tooling reads, and drives fixture runs for complete
+deployment projects. It delegates runtime evaluation, signing, bundle validation, and
 fixture evaluation to the `evidence` binary, and reuses
 `registry-evidence-client` and `registry-evidence-verifier` for relying-party
 request preparation and offline response verification. It adds no Evidence
@@ -174,6 +175,20 @@ The last check holds the configuration reference in exact parity with the
 frozen `bundle.schema.yaml` and `runtime.schema.yaml` grammars. After changing
 a contract, run it with `--write` to regenerate the key-path blocks in
 `CONFIG.md`, then document each new key in the prose above them.
+
+The authoring-form JSON Schemas under
+`crates/registry-evidencectl/schemas/authoring/` are adopter tooling, not part
+of the frozen Version 1 contract set, so they carry their own gate:
+
+```bash
+products/evidence/scripts/check-authoring-schema.sh
+```
+
+Regenerate them with the generator the gate runs, never by hand:
+
+```bash
+cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+```
 
 Evidence client bindings, from `crates/registry-evidence-client-node`:
 

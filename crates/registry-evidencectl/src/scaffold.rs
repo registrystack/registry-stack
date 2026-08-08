@@ -14,7 +14,7 @@ use std::{
 use anyhow::{bail, Context as _};
 use clap::{Args, ValueEnum};
 
-use crate::{keygen, suggest};
+use crate::{keygen, suggest, tooling_editor};
 
 const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
 
@@ -91,6 +91,13 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
 
     keygen::generate_scaffold_key_material(&staged_root.join("secrets"))
         .context("generating unbound local authoring key material")?;
+
+    // Schema mappings belong to a project from its first minute, so that the
+    // editor an adopter writes their first question in already knows the form.
+    // Staging is the only place this can run without a conflict check that
+    // could refuse: nothing else has ever written here.
+    tooling_editor::setup_project_editor(staged_root)
+        .context("configuring project-local editor schema mappings")?;
 
     fs::set_permissions(staged_root, fs::Permissions::from_mode(0o755))
         .with_context(|| format!("setting permissions on {}", staged_root.display()))?;
