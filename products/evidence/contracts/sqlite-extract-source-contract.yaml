@@ -101,6 +101,7 @@ extract:
     form: One regular file. A symbolic link and a non-regular file are refused at startup.
     writability: A file this process could write is refused at startup, and a file on a read-only filesystem satisfies the check outright.
     digest: The file is digested at startup in bounded chunks with identity checks bracketing the read, and the digest enters the computed runtime revision under source-extract/<profile>. There is no byte cap, because an extract is a register rather than an artifact.
+    still_bound: The digest and the SQLite open are not the same moment, because the bundle, the kernel, and the audit log are read in between. The file identity the digest was taken over is checked again once the connections are open, so a path refreshed inside that window fails startup rather than serving bytes the runtime revision does not name. This narrows the window rather than closing it, and it does not replace the deployment guarantee stated under connection.immutability.
     bundle_revision: The extract is not part of the bundle hash. Republishing one leaves a pinned bundle revision unchanged, which is why publication metadata and a declared maximum age are mandatory rather than advisory.
   connection:
     uri_parameters: [mode=ro, immutable=1]

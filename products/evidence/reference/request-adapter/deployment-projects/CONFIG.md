@@ -721,6 +721,14 @@ as a new file, mount it read-only, and restart. Startup digests each bound file
 into the runtime digest, so a replacement shows up in the digest instead of
 passing silently.
 
+Digesting the file and opening it are not the same moment: the bundle, the
+kernel, and the audit log are read in between. Startup therefore checks once
+more, after the connections are open, that the bound path still names the file
+it digested, and refuses to start if it does not. A refresh that lands mid
+startup fails the deployment instead of answering from bytes the runtime
+revision does not name. That narrows the window rather than closing it, so
+publishing to a new path and restarting remains the supported workflow.
+
 Startup opens one connection for each `concurrencyLimit` permit, reads the
 metadata, and runs the statement against the real extract. A statement whose
 result columns disagree with `columns`, a parameter no binding supplies, and a

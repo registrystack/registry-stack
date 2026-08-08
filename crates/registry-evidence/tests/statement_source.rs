@@ -16,7 +16,8 @@ use registry_evidence::rhai_runtime::{
 };
 use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::source::{
-    PreparedSourceRequest, ResolvedSourceSelector, SourceError, SourceExecutor, StatementInputs,
+    PreparedSourceRequest, ResolvedSourceSelector, SourceError, SourceExecutor, StatementExtract,
+    StatementInputs,
 };
 use registry_evidence::source_sqlite::{cause, EXTRACT_METADATA_TABLE};
 use rusqlite::Connection;
@@ -212,7 +213,7 @@ fn compile(
         &BTreeMap::new(),
         Some(StatementInputs {
             statement_sql,
-            extract_path,
+            extract: extract_path.map(StatementExtract::Fixture),
         }),
         secrets(directory),
     )

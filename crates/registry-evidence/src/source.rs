@@ -65,6 +65,10 @@ const MISSING_PREPARED_PARAMETER: &str =
 const STATEMENT_ARTIFACT_UNREADABLE: &str = "the statement artifact is not readable UTF-8 text";
 const STATEMENT_EXTRACT_UNBOUND: &str =
     "the deployment binds no file for the extract profile this statement reads";
+/// Stands in if a rebinding refusal ever stops naming its own cause, so the
+/// diagnostic degrades rather than disappears.
+const STATEMENT_EXTRACT_REBOUND: &str =
+    "the source extract no longer matches the file the deployment digested";
 
 /// A role-bound selector that has already passed authentication,
 /// authorization, exact-field, type, and size validation.
@@ -181,10 +185,21 @@ fn map_statement_error(error: SqliteSourceError) -> SourceError {
         SqliteSourceError::Unavailable => return SourceError::StatementUnavailable,
     };
     match cause {
-        Some(cause::EXTRACT_UNAVAILABLE | cause::NO_METADATA_TABLE | cause::MALFORMED_METADATA) => {
-            SourceError::ExtractUnavailable(fault)
-        }
+        // A metadata read that overran its bound is a fact about the extract,
+        // not about the statement, and it is raised only while a source opens,
+        // so it joins the other ways an extract can be unusable.
+        Some(
+            cause::EXTRACT_UNAVAILABLE
+            | cause::NO_METADATA_TABLE
+            | cause::MALFORMED_METADATA
+            | cause::METADATA_BUDGET_EXCEEDED,
+        ) => SourceError::ExtractUnavailable(fault),
         Some(cause::EXTRACT_TOO_OLD) => SourceError::ExtractTooOld(fault),
+        // The statement transport refuses an oversized result while it collects
+        // one, ahead of the serialized check below. It is the same refusal, so
+        // it keeps the same category and the audit record an adopter reads does
+        // not depend on which of the two measured it.
+        Some(cause::RESPONSE_TOO_LARGE) => SourceError::ResponseTooLarge,
         Some(cause::MISSING_PARAMETER) => SourceError::StatementParameter(fault),
         Some(cause::STEP_BUDGET_EXCEEDED | cause::TIME_BUDGET_EXCEEDED) => {
             SourceError::StatementBudget(fault)
@@ -238,8 +253,31 @@ struct StatementTransport {
 pub struct StatementInputs<'a> {
     /// The reviewed statement, read from the bundle artifact the source names.
     pub statement_sql: &'a str,
-    /// The file the runtime document bound the source's extract profile to.
-    pub extract_path: Option<&'a Path>,
+    /// The extract the statement reads, absent where none was bound.
+    pub extract: Option<StatementExtract<'a>>,
+}
+
+/// The extract a statement source reads, and how strongly it is bound.
+///
+/// The two arms differ in what came before them, which is why they are not one
+/// path. A bound extract was validated and digested while a runtime document
+/// was loaded, so opening it can be held to the identity that capture was taken
+/// over. A fixture extract is materialized from the seed a fixture states, into
+/// a directory the harness owns for the length of the run, so there is no
+/// earlier capture to hold it to and nothing else can name it.
+#[derive(Clone, Copy)]
+pub enum StatementExtract<'a> {
+    Bound(&'a SourceExtract),
+    Fixture(&'a Path),
+}
+
+impl<'a> StatementExtract<'a> {
+    fn path(self) -> &'a Path {
+        match self {
+            Self::Bound(extract) => extract.path(),
+            Self::Fixture(path) => path,
+        }
+    }
 }
 
 /// Bind one source to what a statement transport needs from outside its own
@@ -269,7 +307,7 @@ pub fn statement_inputs<'a>(
                 SchemaFault::because(STATEMENT_ARTIFACT_UNREADABLE),
             ))
         })?;
-    let extract_path = match extracts {
+    let extract = match extracts {
         Some(extracts) => {
             let profile = source.extract_profile().ok_or(SourceError::InvalidPlan)?;
             let extract = extracts.get(profile).ok_or_else(|| {
@@ -278,13 +316,13 @@ pub fn statement_inputs<'a>(
                     SchemaFault::because(STATEMENT_EXTRACT_UNBOUND),
                 ))
             })?;
-            Some(extract.path())
+            Some(StatementExtract::Bound(extract))
         }
         None => None,
     };
     Ok(Some(StatementInputs {
         statement_sql,
-        extract_path,
+        extract,
     }))
 }
 
@@ -910,11 +948,32 @@ impl StatementTransport {
         // rather than at the first request. Without an extract there is no
         // schema to check against, so what is settleable without data is
         // settled here instead of going unchecked.
-        let extract = match inputs.extract_path {
-            Some(path) => Some(
-                SqliteExtractSource::open(source, inputs.statement_sql, path)
-                    .map_err(map_statement_error)?,
-            ),
+        let extract = match inputs.extract {
+            Some(bound) => {
+                let opened = SqliteExtractSource::open(source, inputs.statement_sql, bound.path())
+                    .map_err(map_statement_error)?;
+                // Digesting the file and opening it are not the same moment:
+                // the bundle, the kernel, and the audit log are read in
+                // between. A publisher refreshing the bound path inside that
+                // window would hand SQLite a file that passed none of the
+                // checks the capture made, including the writability refusal
+                // that is what makes `immutable=1` a checked fact. Asking the
+                // capture again, now that the connections are open, keeps that
+                // a startup failure. A fixture extract has no earlier capture
+                // and no other namer, so there is nothing to ask.
+                if let StatementExtract::Bound(extract) = bound {
+                    extract.confirm_still_bound().map_err(|error| {
+                        let cause = error
+                            .artifact_fault()
+                            .map_or(STATEMENT_EXTRACT_REBOUND, |fault| fault.fault().cause());
+                        SourceError::ExtractUnavailable(ArtifactFault::new(
+                            configured_request.statement.as_str(),
+                            SchemaFault::because(cause),
+                        ))
+                    })?;
+                }
+                Some(opened)
+            }
             None => {
                 check_statement_offline(source, inputs.statement_sql)
                     .map_err(map_statement_error)?;
@@ -2792,6 +2851,25 @@ mod tests {
             "the cache deadline outlives the token by about the round trip: \
              deadline is {:?} past the anchor, round trip took {elapsed:?}",
             expires_at.saturating_duration_since(before + Duration::from_secs(1))
+        );
+    }
+
+    /// Which category a statement failure lands in decides which audit record
+    /// an adopter reads. An oversized result is a response-size refusal, not a
+    /// statement-result one, whichever of the two bounds measured it.
+    #[test]
+    fn an_oversized_statement_result_maps_to_the_response_size_refusal() {
+        let fault =
+            |cause| ArtifactFault::new("queries/residence-region.sql", SchemaFault::because(cause));
+        assert_eq!(
+            map_statement_error(SqliteSourceError::Statement(fault(
+                cause::RESPONSE_TOO_LARGE
+            ))),
+            SourceError::ResponseTooLarge
+        );
+        assert_eq!(
+            map_statement_error(SqliteSourceError::Statement(fault(cause::TOO_MANY_ROWS))),
+            SourceError::StatementResult(fault(cause::TOO_MANY_ROWS))
         );
     }
 }

@@ -53,7 +53,7 @@ use registry_evidence::{
     source::{
         project_fixture_response, statement_inputs, MaterializedSourceRequest,
         PreparedSourceRequest, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
-        StatementInputs,
+        StatementExtract, StatementInputs,
     },
     source_sqlite::{cause as sqlite_cause, check_statement_offline, materialize_seed_extract},
     trace::{json_type, name_list, object_keys, FixtureReport, FixtureTrace, Stage, StageStatus},
@@ -1922,7 +1922,7 @@ fn reference_statement_executor(
         source,
         &bundle.config.source_selector_sets(source_id),
         Some(StatementInputs {
-            extract_path: Some(&extract.path),
+            extract: Some(StatementExtract::Fixture(&extract.path)),
             ..inputs
         }),
         secrets,

@@ -2499,6 +2499,16 @@ impl SqliteRequest {
             if name == RESERVED_SQL_PARAMETER {
                 return invalid("statement parameter name is reserved by the runtime");
             }
+            // A prepared name travels back from the preparation script, and the
+            // preparation ABI admits 64 bytes of parameter name, half of what a
+            // binding key may carry. A longer prepared name is a deployment that
+            // loads and can never execute: a script returning the name is
+            // refused by the ABI, and a script omitting it leaves the parameter
+            // unfilled. A selector binding is filled from the request and never
+            // crosses that boundary, so it keeps the full key bound.
+            if matches!(binding, SqliteParameterBinding::Prepared {}) && name.len() > 64 {
+                return invalid("prepared statement parameter name is too long to be prepared");
+            }
             binding.validate()?;
         }
         if let Some(prepare_script) = &self.prepare_script {
@@ -2653,8 +2663,9 @@ impl SqliteParameterBinding {
 /// settled anywhere else in the source, so they are settled here: how many
 /// entries the script may return, and how large one entry's value may be.
 /// Nothing further needs a bound, because an integer and a boolean are
-/// fixed-width and a parameter name is already held to the declared
-/// `parameterBindings` keys.
+/// fixed-width, and a returned parameter is only usable under a name the
+/// source declares as a prepared `parameterBindings` key, which
+/// [`SqliteRequest::validate`] holds to the preparation ABI's own name bound.
 ///
 /// `kernel.rs` compiles these bounds into the script host beside the compiled
 /// script, the way it does for the HTTP transport's own [`PreparationLimits`],
@@ -4722,6 +4733,10 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The bound `SqliteRequest::validate` holds a prepared parameter name to,
+    // read from the preparation ABI itself so the two cannot drift apart
+    // unnoticed.
+    use crate::rhai_runtime::MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES;
 
     /// Borrow the base URL of a parsed fixture's first source.
     ///
@@ -5241,6 +5256,51 @@ mod tests {
             )),
             "field value is not one of the accepted variants",
         );
+    }
+
+    /// A name one byte past the preparation ABI's own bound.
+    fn overlong_prepared_name() -> String {
+        format!("p{}", "a".repeat(MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES))
+    }
+
+    /// A prepared name is filled by a script across the preparation ABI, which
+    /// admits fewer bytes of name than a binding key may carry. A name in
+    /// between loads and can never execute, so it is refused where the author
+    /// can still act on it.
+    #[test]
+    fn a_prepared_statement_parameter_name_is_held_to_the_preparation_abi() {
+        let document = prepared_statement_document(true, Some(&preparation_limits(8, 1_024)));
+        let named = |name: &str| {
+            edited(
+                &document,
+                PREPARED_BINDING,
+                &format!("        {name}: {{kind: prepared}}\n"),
+            )
+        };
+        assert_eq!(
+            invalid_reason(&named(&overlong_prepared_name())),
+            "prepared statement parameter name is too long to be prepared",
+        );
+        EvidenceConfig::parse_yaml(
+            named(&"a".repeat(MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES)).as_bytes(),
+        )
+        .expect("a prepared name of exactly the preparation ABI bound is admitted");
+    }
+
+    /// A selector parameter is filled from the request and never crosses the
+    /// preparation ABI, so the prepared bound stays on prepared names alone.
+    #[test]
+    fn a_selector_statement_parameter_name_keeps_the_full_key_bound() {
+        let long_selector = edited(
+            &sqlite_source_document(),
+            SELECTOR_BINDING,
+            &format!(
+                "        {}: {{kind: selector, role: subject, profile: person-demographics-v1, field: given_name}}\n",
+                overlong_prepared_name(),
+            ),
+        );
+        EvidenceConfig::parse_yaml(long_selector.as_bytes())
+            .expect("a selector parameter name is bounded by the binding key alone");
     }
 
     #[test]

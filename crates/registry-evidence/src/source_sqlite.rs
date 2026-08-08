@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Row, Statement};
@@ -96,11 +96,14 @@ pub mod cause {
     pub const TIME_BUDGET_EXCEEDED: &str = "the statement exceeded its time budget";
     pub const TOO_MANY_ROWS: &str = "the result exceeded the declared row bound";
     pub const CELL_TOO_LARGE: &str = "a result value exceeded the declared cell size bound";
+    pub const RESPONSE_TOO_LARGE: &str = "the result exceeded the declared response size bound";
     pub const VALUE_TYPE_MISMATCH: &str = "a result value disagrees with its declared column type";
     pub const EXECUTION_FAILED: &str = "the statement failed while its result was read";
     pub const EXTRACT_UNAVAILABLE: &str = "the extract file could not be opened";
     pub const NO_METADATA_TABLE: &str = "the extract has no metadata table";
     pub const MALFORMED_METADATA: &str = "the extract metadata is malformed";
+    pub const METADATA_BUDGET_EXCEEDED: &str =
+        "reading the extract metadata exceeded the declared budget";
     pub const EXTRACT_TOO_OLD: &str = "the extract is older than the source allows";
 }
 
@@ -330,6 +333,12 @@ struct StatementPlan {
     parameters: Vec<BoundParameter>,
     maximum_rows: u64,
     maximum_cell_bytes: usize,
+    /// The same bound the caller measures the serialized response against, held
+    /// here so collection can refuse before the whole result exists. The bounds
+    /// above it are per row and per cell, and nothing bounds their product, so
+    /// at the schema maxima a result can reach a gibibyte before the caller ever
+    /// sees it.
+    maximum_response_bytes: usize,
     maximum_statement_steps: u64,
     timeout: Duration,
     maximum_extract_age_seconds: u64,
@@ -352,8 +361,11 @@ pub struct SqliteExtractSource {
     plan: Arc<StatementPlan>,
     metadata: ExtractMetadata,
     extract: JsonValue,
-    connections: Mutex<Vec<Connection>>,
-    concurrency: Semaphore,
+    /// The pool and its permits are shared with the blocking task that borrows
+    /// from them, because a caller that stops awaiting must not be able to carry
+    /// either away. See [`SqliteExtractSource::execute`].
+    connections: Arc<Mutex<Vec<Connection>>>,
+    concurrency: Arc<Semaphore>,
 }
 
 impl SqliteExtractSource {
@@ -380,7 +392,9 @@ impl SqliteExtractSource {
         }
         let first = connections.first().ok_or(SqliteSourceError::InvalidPlan)?;
 
-        let metadata = read_extract_metadata(first, &subject)?;
+        let timeout = Duration::from_millis(request.timeout_milliseconds);
+        let metadata =
+            read_extract_metadata(first, &subject, request.maximum_statement_steps, timeout)?;
         let parameters = verify_statement(first, request, statement_sql)?;
 
         let plan = StatementPlan {
@@ -391,16 +405,18 @@ impl SqliteExtractSource {
             maximum_rows: request.maximum_rows,
             maximum_cell_bytes: usize::try_from(request.maximum_cell_bytes)
                 .map_err(|_| SqliteSourceError::InvalidPlan)?,
+            maximum_response_bytes: usize::try_from(request.maximum_response_bytes)
+                .map_err(|_| SqliteSourceError::InvalidPlan)?,
             maximum_statement_steps: request.maximum_statement_steps,
-            timeout: Duration::from_millis(request.timeout_milliseconds),
+            timeout,
             maximum_extract_age_seconds,
         };
         Ok(Self {
             plan: Arc::new(plan),
             extract: metadata.as_json(),
             metadata,
-            connections: Mutex::new(connections),
-            concurrency: Semaphore::new(permits),
+            connections: Arc::new(Mutex::new(connections)),
+            concurrency: Arc::new(Semaphore::new(permits)),
         })
     }
 
@@ -431,30 +447,47 @@ impl SqliteExtractSource {
     /// reads no clock of its own beyond the monotonic one the time budget needs.
     ///
     /// The result is `{"rows": [...], "extract": {...}}`. Applying the
-    /// acquisition projection and the response size bound belongs to the
-    /// caller, which already does both for every transport.
+    /// acquisition projection belongs to the caller, which does it for every
+    /// transport, and so does the authoritative response size check, which
+    /// measures the serialized bytes. Collection here reads the same bound
+    /// against the text payload alone, which is only ever shorter, so it can
+    /// refuse sooner but never refuse a result the caller would accept.
+    ///
+    /// A caller may stop awaiting this at any point: the acquisition deadline
+    /// above it expires, or a client disconnects and the handler future is
+    /// dropped. A blocking task cannot be cancelled, so the connection and the
+    /// permit are given back from inside it rather than from the awaiting
+    /// caller's stack, where a cancellation would carry them away. Returning the
+    /// connection before releasing the permit is what keeps the two counts from
+    /// drifting apart: a permit is never issued for a connection that is not yet
+    /// back in the pool.
     pub async fn execute(
         &self,
         parameters: &BTreeMap<String, SelectorValue>,
         evaluation_instant: DateTime<Utc>,
     ) -> Result<JsonValue, SqliteSourceError> {
         let bindings = self.bind_values(parameters, evaluation_instant)?;
-        let permit = tokio::time::timeout(self.plan.timeout, self.concurrency.acquire())
-            .await
-            .map_err(|_| SqliteSourceError::Timeout)?
-            .map_err(|_| SqliteSourceError::Concurrency)?;
+        // An owned permit so the blocking task can hold it; a borrowed one would
+        // be tied to this future, which is the lifetime being escaped.
+        let permit = tokio::time::timeout(
+            self.plan.timeout,
+            Arc::clone(&self.concurrency).acquire_owned(),
+        )
+        .await
+        .map_err(|_| SqliteSourceError::Timeout)?
+        .map_err(|_| SqliteSourceError::Concurrency)?;
         let connection = self.take_connection()?;
         let plan = Arc::clone(&self.plan);
+        let connections = Arc::clone(&self.connections);
 
-        let (connection, outcome) = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             let outcome = run_statement(&connection, &plan, &bindings);
-            (connection, outcome)
+            return_connection(&connections, connection);
+            drop(permit);
+            outcome
         })
         .await
         .map_err(|_| SqliteSourceError::Unavailable)?;
-
-        self.return_connection(connection)?;
-        drop(permit);
 
         let rows = outcome.map_err(|cause| self.plan.fault(cause))?;
         let mut result = JsonMap::new();
@@ -488,21 +521,32 @@ impl SqliteExtractSource {
         Ok(bound)
     }
 
+    /// Take the connection this request's permit stands for.
+    ///
+    /// A poisoned lock is recovered rather than refused, which is the same
+    /// choice [`return_connection`] makes: the only operations this pool has are
+    /// a push and a pop, so a panic elsewhere cannot have left it half-written,
+    /// and refusing to touch it would strand every connection in it.
     fn take_connection(&self) -> Result<Connection, SqliteSourceError> {
         self.connections
             .lock()
-            .map_err(|_| SqliteSourceError::Unavailable)?
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
             .ok_or(SqliteSourceError::Unavailable)
     }
+}
 
-    fn return_connection(&self, connection: Connection) -> Result<(), SqliteSourceError> {
-        self.connections
-            .lock()
-            .map_err(|_| SqliteSourceError::Unavailable)?
-            .push(connection);
-        Ok(())
-    }
+/// Put a connection back where the next admitted request will find it.
+///
+/// This is a free function rather than a method because it runs inside the
+/// blocking task, which holds no reference to the source. A poisoned lock is
+/// recovered here rather than propagated, because dropping the connection is
+/// exactly the pool drain this path exists to prevent.
+fn return_connection(connections: &Mutex<Vec<Connection>>, connection: Connection) {
+    connections
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(connection);
 }
 
 /// Build an extract file from a reviewed text seed.
@@ -656,10 +700,22 @@ fn install_authorizer(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 /// The extract's reserved metadata table, read before any row of data is.
+///
+/// Nothing requires the reserved object to be an ordinary table: a view reads
+/// as metadata just as well, and a view over a nonterminating recursive query
+/// would otherwise step forever and hang startup with nothing to say about it.
+/// So this read carries the same declared step and time bounds the statement
+/// itself runs under, and reports its own cause when it exceeds them.
 fn read_extract_metadata(
     connection: &Connection,
     subject: &str,
+    maximum_statement_steps: u64,
+    timeout: Duration,
 ) -> Result<ExtractMetadata, SqliteSourceError> {
+    let budget = install_progress_handler(connection, maximum_statement_steps, timeout)
+        // A connection that will not take a progress handler cannot be stepped
+        // under a bound, so it is not a connection this source can read from.
+        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
     let sql = format!("SELECT published_at, publisher, extract_id FROM {EXTRACT_METADATA_TABLE}");
     let mut statement = connection.prepare(&sql).map_err(|error| {
         // A missing table and a missing column are different problems for an
@@ -670,22 +726,31 @@ fn read_extract_metadata(
         }
     })?;
     let malformed = || extract_fault(subject, cause::MALFORMED_METADATA);
+    // A step that failed because a bound stopped it says nothing about whether
+    // the metadata is well formed, so the two are told apart.
+    let stepped = || match budget.load(Ordering::Relaxed) {
+        BUDGET_WITHIN => malformed(),
+        _ => extract_fault(subject, cause::METADATA_BUDGET_EXCEEDED),
+    };
 
     let mut rows = statement.raw_query();
-    let row = rows
-        .next()
-        .map_err(|_| malformed())?
-        .ok_or_else(malformed)?;
+    let row = rows.next().map_err(|_| stepped())?.ok_or_else(malformed)?;
     let published_at = metadata_field(row, 0, subject)?;
     let publisher = metadata_field(row, 1, subject)?;
     let extract_id = metadata_field(row, 2, subject)?;
-    if rows.next().map_err(|_| malformed())?.is_some() {
+    if rows.next().map_err(|_| stepped())?.is_some() {
         return Err(malformed());
     }
 
+    // The instant is truncated where it is parsed, so the instant the age bound
+    // is measured against is the one the response carries. A relying party
+    // recomputing the age from `/extract/publishedAt`, which is a projectable
+    // leaf and can be signed into an assertion, reaches the runtime's answer
+    // rather than one that disagrees by up to a second.
     let published_at = DateTime::parse_from_rfc3339(&published_at)
         .map_err(|_| malformed())?
-        .with_timezone(&Utc);
+        .with_timezone(&Utc)
+        .trunc_subsecs(0);
     Ok(ExtractMetadata::new(published_at, publisher, extract_id))
 }
 
@@ -790,21 +855,24 @@ const BUDGET_TIME: u8 = 2;
 /// returning `true` aborts the step. Both bounds are checked there.
 ///
 /// The handler is not cleared afterwards. Nothing steps this connection between
-/// executions, and the next execution installs its own handler before it
-/// prepares, so a handler left behind can never fire.
+/// executions, and every step this transport takes installs its own handler
+/// first, so a handler left behind can never fire.
+///
+/// The bounds arrive as values rather than as a [`StatementPlan`], because the
+/// extract's metadata is read at startup before the plan's parameters are known
+/// and that read is stepped under the same declared bounds.
 fn install_progress_handler(
     connection: &Connection,
-    plan: &StatementPlan,
+    maximum_statement_steps: u64,
+    timeout: Duration,
 ) -> Result<Arc<AtomicU8>, &'static str> {
     let outcome = Arc::new(AtomicU8::new(BUDGET_WITHIN));
     let observed = Arc::clone(&outcome);
     // A budget smaller than the interval would never be checked, so a small
     // budget shortens the interval to itself.
-    let interval = plan
-        .maximum_statement_steps
-        .clamp(1, PROGRESS_STEP_INTERVAL);
-    let budget = plan.maximum_statement_steps;
-    let deadline = Instant::now() + plan.timeout;
+    let interval = maximum_statement_steps.clamp(1, PROGRESS_STEP_INTERVAL);
+    let budget = maximum_statement_steps;
+    let deadline = Instant::now() + timeout;
     let mut consumed: u64 = 0;
     connection
         .progress_handler(
@@ -831,7 +899,7 @@ fn run_statement(
     plan: &StatementPlan,
     bindings: &[(usize, BoundValue)],
 ) -> Result<Vec<JsonValue>, &'static str> {
-    let budget = install_progress_handler(connection, plan)?;
+    let budget = install_progress_handler(connection, plan.maximum_statement_steps, plan.timeout)?;
     let mut statement = connection
         .prepare(&plan.sql)
         .map_err(|error| classify_prepare(&error).cause)?;
@@ -845,6 +913,9 @@ fn run_statement(
 
     let mut rows = statement.raw_query();
     let mut collected: Vec<JsonValue> = Vec::new();
+    // Text is the only value whose size a row bound and a cell bound do not
+    // already settle, so it is the only thing worth running a total on.
+    let mut text_bytes: usize = 0;
     loop {
         let row = match rows.next() {
             Ok(Some(row)) => row,
@@ -856,19 +927,35 @@ fn run_statement(
         if collected.len() as u64 >= plan.maximum_rows {
             return Err(cause::TOO_MANY_ROWS);
         }
-        collected.push(read_row(row, plan)?);
+        collected.push(read_row(row, plan, &mut text_bytes)?);
     }
     Ok(collected)
 }
 
-fn read_row(row: &Row<'_>, plan: &StatementPlan) -> Result<JsonValue, &'static str> {
+/// Read one row, and carry the running text total the response bound is read
+/// against.
+///
+/// `text_bytes` counts the text payload alone. Serializing the result adds key
+/// names, quotes, any escaping, and the extract block, so the total counted here
+/// is never more than the length the caller measures. Refusing on it can
+/// therefore only refuse sooner than the caller would, never differently, and a
+/// result the caller accepts is collected unchanged.
+fn read_row(
+    row: &Row<'_>,
+    plan: &StatementPlan,
+    text_bytes: &mut usize,
+) -> Result<JsonValue, &'static str> {
     let mut object = JsonMap::with_capacity(plan.columns.len());
     for (index, column) in plan.columns.iter().enumerate() {
-        let value = row.get_ref(index).map_err(|_| cause::EXECUTION_FAILED)?;
-        object.insert(
-            column.name.clone(),
-            read_value(value, column.value_type, plan.maximum_cell_bytes)?,
-        );
+        let raw = row.get_ref(index).map_err(|_| cause::EXECUTION_FAILED)?;
+        let value = read_value(raw, column.value_type, plan.maximum_cell_bytes)?;
+        if let JsonValue::String(text) = &value {
+            *text_bytes = text_bytes.saturating_add(text.len());
+            if *text_bytes > plan.maximum_response_bytes {
+                return Err(cause::RESPONSE_TOO_LARGE);
+            }
+        }
+        object.insert(column.name.clone(), value);
     }
     Ok(JsonValue::Object(object))
 }
@@ -1035,6 +1122,7 @@ mod tests {
         maximum_cell_bytes: u64,
         maximum_statement_steps: u64,
         timeout_milliseconds: u64,
+        maximum_response_bytes: u64,
         maximum_extract_age_seconds: u64,
     }
 
@@ -1047,6 +1135,7 @@ mod tests {
                 maximum_cell_bytes: 4096,
                 maximum_statement_steps: 100_000,
                 timeout_milliseconds: 10_000,
+                maximum_response_bytes: 65_536,
                 maximum_extract_age_seconds: 86_400,
             }
         }
@@ -1083,6 +1172,11 @@ mod tests {
             self
         }
 
+        fn response_bytes(mut self, maximum_response_bytes: u64) -> Self {
+            self.maximum_response_bytes = maximum_response_bytes;
+            self
+        }
+
         fn build(&self) -> SourceConfig {
             let Self {
                 columns,
@@ -1091,6 +1185,7 @@ mod tests {
                 maximum_cell_bytes,
                 maximum_statement_steps,
                 timeout_milliseconds,
+                maximum_response_bytes,
                 maximum_extract_age_seconds,
             } = self;
             let document = format!(
@@ -1110,7 +1205,7 @@ request:
   maximumStatementSteps: {maximum_statement_steps}
   projection: [/rows/*/id]
   timeoutMilliseconds: {timeout_milliseconds}
-  maximumResponseBytes: 65536
+  maximumResponseBytes: {maximum_response_bytes}
   concurrencyLimit: 2
 maximumExtractAgeSeconds: {maximum_extract_age_seconds}
 responseSchema: schemas/response.schema.yaml
@@ -1456,6 +1551,56 @@ factSchema: schemas/facts.schema.yaml
         assert_eq!(run_error(&source).await, cause::TIME_BUDGET_EXCEEDED);
     }
 
+    /// A caller may stop awaiting at any point, and both things a request holds
+    /// have to survive that: the connection it borrowed and the permit it was
+    /// admitted on. Losing the connection while the permit comes back drains the
+    /// pool by one slot per cancellation, and once it is empty the source
+    /// refuses every later request until it is restarted.
+    #[tokio::test]
+    async fn a_cancelled_request_gives_back_its_connection_and_its_permit() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = extract(&directory);
+        // The recursion depth is a parameter, so one source runs a statement
+        // slow enough to be cancelled mid-step and then one that answers at once.
+        let plan = Plan::default()
+            .columns("[{name: total, type: integer}]")
+            .bindings(&format!("{{depth: {}}}", selector_binding("given_name")))
+            .steps(1_000_000);
+        let source = open(
+            &plan,
+            "WITH RECURSIVE counter(n) AS (
+                 SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < :depth
+             ) SELECT COUNT(*) AS total FROM counter",
+            &path,
+        );
+        let depth =
+            |value: i64| BTreeMap::from([("depth".to_owned(), SelectorValue::Integer(value))]);
+
+        // One cancellation more than the two permits this plan declares, so a
+        // pool that loses a connection per cancellation is empty by the last.
+        for _ in 0..3 {
+            let cancelled = tokio::time::timeout(
+                Duration::from_millis(1),
+                source.execute(&depth(50_000_000), instant("2026-08-07T03:00:00Z")),
+            )
+            .await;
+            assert!(
+                cancelled.is_err(),
+                "the request resolved before its deadline, so either the statement \
+                 was too fast to cancel or the pool had already lost a connection"
+            );
+        }
+
+        // Admission waits out the cancelled runs, which end on their own step
+        // budget, so this asks for a permit and a connection that only a
+        // cancelled request giving both back can supply.
+        let answered = source
+            .execute(&depth(1), instant("2026-08-07T03:00:00Z"))
+            .await
+            .expect("a cancelled request left the pool usable");
+        assert_eq!(answered["rows"], json!([{"total": 1}]));
+    }
+
     #[tokio::test]
     async fn one_row_beyond_the_row_bound_is_refused() {
         let directory = TempDir::new().expect("a temporary directory");
@@ -1467,6 +1612,30 @@ factSchema: schemas/facts.schema.yaml
         let exact = Plan::default().rows(3);
         let source = open(&exact, "SELECT id FROM person ORDER BY id", &path);
         let result = run(&source, "the row bound admits its own count").await;
+        assert_eq!(
+            result["rows"],
+            json!([{"id": "p-1"}, {"id": "p-2"}, {"id": "p-3"}])
+        );
+    }
+
+    /// The response bound is measured while the result is collected, not only
+    /// once the whole result exists. A row bound and a cell bound bound each
+    /// value, never their product, so a bundle at the schema maxima could
+    /// otherwise assemble a result far past its declared ceiling before anyone
+    /// measured it.
+    #[tokio::test]
+    async fn a_result_beyond_the_response_bound_is_refused_as_it_is_collected() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = extract(&directory);
+        let plan = Plan::default().response_bytes(8);
+        let source = open(&plan, "SELECT id FROM person ORDER BY id", &path);
+        assert_eq!(run_error(&source).await, cause::RESPONSE_TOO_LARGE);
+
+        // The three identifiers are nine bytes of text between them, and the
+        // count is of text alone, so a bound of nine admits exactly them.
+        let exact = Plan::default().response_bytes(9);
+        let source = open(&exact, "SELECT id FROM person ORDER BY id", &path);
+        let result = run(&source, "the response bound admits its own size").await;
         assert_eq!(
             result["rows"],
             json!([{"id": "p-1"}, {"id": "p-2"}, {"id": "p-3"}])
@@ -1678,6 +1847,75 @@ factSchema: schemas/facts.schema.yaml
         assert_eq!(
             open_error(&Plan::default(), "SELECT id FROM person", &path),
             cause::MALFORMED_METADATA
+        );
+    }
+
+    /// Nothing makes the reserved metadata object a table, and a view over a
+    /// nonterminating recursive query is a read that never ends. Startup has to
+    /// refuse it and say so rather than hang with nothing to report.
+    #[test]
+    fn a_metadata_view_that_never_terminates_is_refused() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = build_extract(
+            &directory,
+            &format!(
+                "CREATE VIEW {EXTRACT_METADATA_TABLE} AS
+                 WITH RECURSIVE forever(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM forever)
+                 SELECT '2026-08-07T02:00:00Z' AS published_at,
+                        'urn:example:residence-register' AS publisher,
+                        CAST(MAX(n) AS TEXT) AS extract_id
+                 FROM forever;
+                 {EXTRACT_SCHEMA}"
+            ),
+        );
+        assert_eq!(
+            open_error(
+                &Plan::default().steps(1_000),
+                "SELECT id FROM person",
+                &path
+            ),
+            cause::METADATA_BUDGET_EXCEEDED
+        );
+    }
+
+    /// The publication instant is truncated where it is parsed, so the instant
+    /// the age bound is measured against is the instant the response carries and
+    /// a relying party recomputing the age cannot reach a different answer.
+    #[tokio::test]
+    async fn a_fractional_publication_instant_is_compared_as_it_is_emitted() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = extract_with_metadata(
+            &directory,
+            "INSERT INTO evidence_extract VALUES \
+             ('2026-08-07T02:00:00.750Z', 'urn:example:residence-register', '2026-08-07-full');",
+        );
+        let source = open(
+            &Plan::default(),
+            "SELECT id FROM person ORDER BY id LIMIT 1",
+            &path,
+        );
+        let result = run(&source, "the statement is answered").await;
+        assert_eq!(
+            result["extract"]["publishedAt"],
+            json!("2026-08-07T02:00:00Z")
+        );
+        assert_eq!(
+            source.extract_metadata().published_at(),
+            instant("2026-08-07T02:00:00Z")
+        );
+
+        // The default bound is one day, measured from the emitted second: that
+        // second exactly is within it, and the one after is not.
+        assert_eq!(
+            source.validate_extract_age(instant("2026-08-08T02:00:00Z")),
+            Ok(())
+        );
+        assert_eq!(
+            source
+                .validate_extract_age(instant("2026-08-08T02:00:01Z"))
+                .err()
+                .and_then(|error| error.cause()),
+            Some(cause::EXTRACT_TOO_OLD)
         );
     }
 
