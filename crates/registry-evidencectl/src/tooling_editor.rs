@@ -42,7 +42,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::Args;
-use registry_evidence_authoring::PROJECT_MARKER_FILE;
+use registry_evidence_authoring::{
+    layout::{OPENAPI_FILE, QUESTIONS_DIRECTORY},
+    PROJECT_MARKER_FILE,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -214,7 +217,7 @@ pub fn run(args: EditorArgs) -> Result<ExitCode> {
 /// publication faults. A faulted run is rolled back to what preflight saw.
 pub fn setup_project_editor(project_directory: &Path) -> Result<EditorSetupReport> {
     let root = canonical_root(project_directory)?;
-    require_regular_project_marker(&root)?;
+    require_authoring_project_root(&root)?;
     let files = editor_files()?;
     let prior = managed_prior_editor(&root, &files)?;
 
@@ -288,17 +291,45 @@ fn canonical_root(root: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to canonicalize {}", root.display()))
 }
 
-/// The marker is what makes this a project rather than any directory, and this
-/// command writes into whatever it is pointed at, so it asks first.
-fn require_regular_project_marker(root: &Path) -> Result<()> {
+/// What makes this a project rather than any directory, and this command writes
+/// into whatever it is pointed at, so it asks first.
+///
+/// The marker is the direct answer, and one that is present must be a plain
+/// file. A root that carries none is answered by the pair every authoring
+/// project has always carried, one OpenAPI description and a directory of
+/// questions, because a project the compiler accepts must not have to be
+/// migrated before an editor will read it.
+fn require_authoring_project_root(root: &Path) -> Result<()> {
     let path = root.join(PROJECT_MARKER_FILE);
-    let metadata = fs::symlink_metadata(&path).with_context(|| {
-        format!("project root must contain a regular {PROJECT_MARKER_FILE}; run `evidencectl new` first")
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("project root must contain a regular non-symlink {PROJECT_MARKER_FILE}");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            bail!("project root must contain a regular non-symlink {PROJECT_MARKER_FILE}")
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if carries_authored_pair(root) {
+                Ok(())
+            } else {
+                bail!("project root must contain a regular {PROJECT_MARKER_FILE}, or the {OPENAPI_FILE} and {QUESTIONS_DIRECTORY} directory an authoring project carries; run `evidencectl new` first")
+            }
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to stat project marker {}", path.display()))
+        }
     }
-    Ok(())
+}
+
+/// Whether a root carries the authored pair an Evidence project has held since
+/// before the marker existed.
+///
+/// A symbolic link at either name declares nothing, whatever it points at: a
+/// link is how a directory borrows a shape it does not have, and a borrowed
+/// shape must not anchor a root this command then writes files into.
+fn carries_authored_pair(root: &Path) -> bool {
+    fs::symlink_metadata(root.join(OPENAPI_FILE))
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+        && fs::symlink_metadata(root.join(QUESTIONS_DIRECTORY))
+            .is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
 fn editor_files() -> Result<Vec<EditorFile>> {
@@ -1016,9 +1047,7 @@ fn display_paths(paths: &BTreeSet<PathBuf>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_evidence_authoring::{
-        default_project_marker_document, layout::QUESTIONS_DIRECTORY,
-    };
+    use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
     const MANAGED_FILES: [&str; 6] = [
@@ -1304,7 +1333,8 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_without_the_marker_is_refused_before_anything_is_written() {
+    fn a_directory_with_neither_the_marker_nor_the_authored_pair_is_refused_before_anything_is_written(
+    ) {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let bare = temporary.path().join("not-a-project");
         fs::create_dir(&bare).expect("bare directory creates");
@@ -1313,6 +1343,47 @@ mod tests {
         assert!(format!("{error:#}").contains(PROJECT_MARKER_FILE));
         assert!(!bare.join(EDITOR_ROOT).exists());
         assert!(!bare.join(".vscode").exists());
+    }
+
+    #[test]
+    fn a_root_carrying_the_authored_pair_without_a_marker_is_configured() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = temporary.path().join("unmarked-project");
+        fs::create_dir(&project).expect("project directory creates");
+        fs::write(project.join(OPENAPI_FILE), "openapi: 3.1.0\n").expect("description writes");
+        fs::create_dir(project.join(QUESTIONS_DIRECTORY)).expect("question directory creates");
+
+        let report = setup_project_editor(&project).expect("editor setup passes");
+
+        assert_eq!(report.status, "configured");
+        let mut written = report.files.clone();
+        written.sort();
+        assert_eq!(written, MANAGED_FILES);
+        for relative in MANAGED_FILES {
+            assert!(
+                project.join(relative).is_file(),
+                "{relative} was not written"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_openapi_description_does_not_declare_a_root() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let described = temporary.path().join("described.openapi.yaml");
+        fs::write(&described, "openapi: 3.1.0\n").expect("description writes");
+        let borrower = temporary.path().join("not-a-project");
+        fs::create_dir(&borrower).expect("bare directory creates");
+        std::os::unix::fs::symlink(&described, borrower.join(OPENAPI_FILE))
+            .expect("symlinked description");
+        fs::create_dir(borrower.join(QUESTIONS_DIRECTORY)).expect("question directory creates");
+
+        let error =
+            setup_project_editor(&borrower).expect_err("a borrowed description declares nothing");
+        assert!(format!("{error:#}").contains(PROJECT_MARKER_FILE));
+        assert!(!borrower.join(EDITOR_ROOT).exists());
+        assert!(!borrower.join(".vscode").exists());
     }
 
     #[cfg(unix)]
