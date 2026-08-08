@@ -80,6 +80,14 @@ impl EvidenceProject {
     }
 }
 
+/// The text a fixture writes to disk: its cursor markers removed and nothing else changed.
+///
+/// A test that hands a fixture to the authoring library rather than to the index needs the
+/// document an author would have written, which is this and not the marked-up constant.
+pub fn without_cursors(text: &str) -> String {
+    strip_cursors(text).0
+}
+
 /// The text without its cursor markers, and where each marker pointed.
 fn strip_cursors(text: &str) -> (String, BTreeMap<String, Position>) {
     let mut stripped = String::with_capacity(text.len());
@@ -136,8 +144,14 @@ pub fn without(files: &[ProjectFile], path: &str) -> Vec<ProjectFile> {
 
 /// The worked referenced-form project the edge tests start from: one question that reads a named
 /// source, the source's own selector, adapters, and schemas, and one access policy that admits the
-/// question. It is the shape `registry-evidencectl`'s own handoff fixture stages, so a document
-/// the editor accepts here is a document that compiler has accepted.
+/// question.
+///
+/// Every test below leans on this project being one the compiler accepts, so the part of that
+/// claim which can be executed here is executed:
+/// `the_shared_fixture_questions_are_ones_the_authoring_form_accepts` hands [`QUESTION`] to the
+/// same deserializer and the same checks `registry-evidencectl` reads a question with. The
+/// remaining documents are paired by citation, because the rules that judge them are the
+/// compiler's own and this crate must not depend on it.
 pub fn adult_status_project() -> Vec<ProjectFile> {
     referenced_form_project(
         OPENAPI,
@@ -195,6 +209,39 @@ governance:
   disclosureFamilies: [urn:example:disclosure-families:adult-status]
 "#;
 
+/// The subject block [`QUESTION`] writes, so the rewrite below has something to replace.
+const SINGULAR_SUBJECT: &str = concat!(
+    "subject:\n",
+    "  role: subject\n",
+    "  selector: person_id\n",
+    "  profile: <|subject-profile|>person-reference-v1\n",
+);
+
+/// The same subject declared in the plural form the authoring form also allows, with a second
+/// subject beside it. Only the first is offered by a selector input of the source, so the second is
+/// declared for the derivation, which is what the compiler asks of a subject the source does not
+/// carry.
+const PLURAL_SUBJECTS: &str = concat!(
+    "subjects:\n",
+    "  - role: subject\n",
+    "    selector: person_id\n",
+    "    profile: <|subject-profile|>person-reference-v1\n",
+    "  - role: guardian\n",
+    "    selector: person_id\n",
+    "    profile: <|guardian-profile|>person-reference-v1\n",
+    "    derivation: true\n",
+);
+
+/// The shared question with its subject written in the plural form.
+pub fn question_with_plural_subjects() -> String {
+    let written = QUESTION.replace(SINGULAR_SUBJECT, PLURAL_SUBJECTS);
+    assert_ne!(
+        written, QUESTION,
+        "the shared question writes the singular subject block this rewrites"
+    );
+    written
+}
+
 pub const DERIVATION: &str = "fn answer(facts, selectors, context) {\n    #{is_adult: true}\n}\n";
 
 pub const SOURCE: &str = r#"transport: http-json
@@ -210,7 +257,7 @@ request:
       alternatives:
         - profile: <|alternative-profile|>person-reference-v1
           fields: [person_id]
-  prepareScript: adapters/people-prepare.rhai
+  prepareScript: <|prepare-script|>adapters/people-prepare.rhai
   adapterParameters: {requestedFields: [date_of_birth], resultLimit: 2}
   adapterParametersSchema: <|parameters-schema|>schemas/people-parameters.schema.yaml
   preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
@@ -220,13 +267,18 @@ request:
   maximumResponseBytes: 65536
   concurrencyLimit: 8
 responseSchema: <|response-schema|>schemas/people-response.schema.yaml
-extractScript: adapters/people-extract.rhai
+extractScript: <|extract-script|>adapters/people-extract.rhai
 factSchema: <|fact-schema|>schemas/people-facts.schema.yaml
 "#;
 
 pub const SELECTOR: &str = "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n";
 
 pub const SCHEMA: &str = "type: object\nadditionalProperties: false\n";
+
+/// The same schema in JSON. A source's own artifacts are copied into the bundle byte for byte
+/// rather than parsed, so the compiler reads one wherever the source points and whatever it is
+/// written in.
+pub const SCHEMA_JSON: &str = "{\"type\": \"object\", \"additionalProperties\": false}\n";
 
 pub const ADAPTER: &str = "fn prepare(selectors, context) {\n    #{query: [], body: #{}}\n}\n";
 

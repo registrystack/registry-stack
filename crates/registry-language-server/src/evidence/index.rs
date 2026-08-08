@@ -11,12 +11,20 @@
 //! OpenAPI description: `source.operation` with `source.facts[].path`, and `subject.selector` with
 //! `source.collectionBounds`. Their targets are leaves of a published operation rather than names
 //! another authored document declares, so nothing here could resolve them honestly.
+//!
+//! A third is absent for a different reason. A source names the scripts that prepare its request
+//! and extract its facts, `request.prepareScript` and `extractScript`, and the compiler reads both
+//! files. The reference vocabulary has no kind for an authored script, and calling one a schema or
+//! a derivation would put a word in front of the author that means another part of the form, so the
+//! two pointers are left alone until there is a kind that names them.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
 };
 
+use registry_evidence_authoring::layout::SCHEMAS_DIRECTORY;
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Range};
 
 use crate::{
@@ -30,6 +38,12 @@ use crate::{
     },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
+
+/// Where a source keeps the scripts and schemas its own traffic uses, beside
+/// [`SCHEMAS_DIRECTORY`]. The authoring library names the second of the two directories the
+/// compiler reads a source's artifacts from, so the first is spelled here beside the rule that
+/// needs it.
+const ADAPTERS_DIRECTORY: &str = "adapters";
 
 pub(crate) fn build_index(
     root: &Path,
@@ -47,6 +61,7 @@ pub(crate) fn build_index(
         diagnostics: Vec::new(),
         referenced_files: BTreeSet::new(),
     };
+    let read_sources = sources_questions_read(root, parsed);
 
     for (path, document) in parsed {
         let Some(relative) = path.strip_prefix(root).ok() else {
@@ -67,7 +82,9 @@ pub(crate) fn build_index(
                         .extend(question_shape_diagnostics(path, source, document));
                 }
             }
-            DocumentRole::Source => builder.walk_source(path, name, &document.value),
+            DocumentRole::Source => {
+                builder.walk_source(path, name, &document.value, read_sources.contains(name));
+            }
             DocumentRole::Selector => builder.define(
                 SymbolKey::global(EvidenceKind::SelectorProfile, name),
                 None,
@@ -190,7 +207,18 @@ impl IndexBuilder<'_> {
     ///
     /// Nothing inside a source document names it: the project reads a source by its file, which is
     /// also how a question spells it, so the symbol is anchored at the start of the file.
-    fn walk_source(&mut self, path: &Path, name: &str, value: &YamlValue) {
+    ///
+    /// What it names is only reported when a question reads it. The compile walks the questions and
+    /// pulls each one's source out of the set it loaded, so a source no question names is never
+    /// looked inside: the build accepts a project holding one that is half written, and the editor
+    /// resolves its names for navigation without saying anything about them.
+    fn walk_source(
+        &mut self,
+        path: &Path,
+        name: &str,
+        value: &YamlValue,
+        read_by_a_question: bool,
+    ) {
         self.define(
             SymbolKey::global(EvidenceKind::Source, name),
             None,
@@ -202,10 +230,11 @@ impl IndexBuilder<'_> {
         for input in sequence(request.and_then(|request| request.get("selectorInputs"))) {
             for alternative in sequence(input.get("alternatives")) {
                 if let Some(profile) = alternative.get_scalar("profile") {
-                    self.refer(
+                    self.add_reference(
                         SymbolQuery::global(EvidenceKind::SelectorProfile, profile.value.as_str()),
                         path,
                         profile.range,
+                        read_by_a_question,
                     );
                 }
             }
@@ -214,11 +243,11 @@ impl IndexBuilder<'_> {
         if let Some(schema) =
             request.and_then(|request| request.get_scalar("adapterParametersSchema"))
         {
-            self.refer_to_file(path, schema, EvidenceKind::SchemaFile);
+            self.refer_to_source_artifact(path, schema, read_by_a_question);
         }
         for pointer in ["responseSchema", "factSchema"] {
             if let Some(schema) = value.get_scalar(pointer) {
-                self.refer_to_file(path, schema, EvidenceKind::SchemaFile);
+                self.refer_to_source_artifact(path, schema, read_by_a_question);
             }
         }
     }
@@ -273,13 +302,13 @@ impl IndexBuilder<'_> {
         );
     }
 
-    /// Records a pointer at another file, and defines what it points at when a file of that role is
-    /// really there.
+    /// Records a pointer at another document of the authoring form, and defines what it points at
+    /// when a document of that role is really there.
     ///
-    /// The pointer is the name: the project spells these targets as paths, so `Find references` on a
-    /// schema collects every document that wrote that path. A target the layout does not recognise,
-    /// or that no file sits at, defines nothing and leaves the reference unresolved, which is the
-    /// sentence the author needs and the outcome the compiler reaches by trying to read the file.
+    /// These targets are spelled the way the form spells the document itself, and the compiler
+    /// resolves them the same way: a derivation is `derivations/<name>.rhai`, an answer schema is
+    /// `schemas/<name>.yaml`, a fixture file is `fixtures/<name>.yaml`. A target written any other
+    /// way is one the compiler refuses too.
     fn refer_to_file(&mut self, path: &Path, pointer: &YamlScalar, kind: EvidenceKind) {
         self.refer(
             SymbolQuery::global(kind, pointer.value.as_str()),
@@ -294,6 +323,40 @@ impl IndexBuilder<'_> {
         if document_role(relative) != Some(role) {
             return;
         }
+        self.define_pointed_file(kind, pointer, relative);
+    }
+
+    /// Records a pointer at one of a source's own artifacts, which is read by a rule of its own.
+    ///
+    /// A question's answer schema is a document of the authoring form and is spelled like one. A
+    /// source's artifacts are not: the compiler asks only that the path be `adapters/<file>` or
+    /// `schemas/<file>`, imposes no extension, and copies the file into the bundle byte for byte
+    /// rather than reading it. So a schema written as JSON, or kept beside the scripts that use it,
+    /// is one the build accepts, and resolving these pointers through the layout of authored
+    /// documents would draw an error over a project that compiles.
+    fn refer_to_source_artifact(&mut self, path: &Path, pointer: &YamlScalar, reported: bool) {
+        self.add_reference(
+            SymbolQuery::global(EvidenceKind::SchemaFile, pointer.value.as_str()),
+            path,
+            pointer.range,
+            reported,
+        );
+
+        let relative = Path::new(pointer.value.as_str());
+        if !is_source_artifact(relative) {
+            return;
+        }
+        self.define_pointed_file(EvidenceKind::SchemaFile, pointer, relative);
+    }
+
+    /// Defines the file a pointer names, once a file the server may open really sits there.
+    ///
+    /// The pointer is the name: the project spells these targets as paths, so `Find references` on
+    /// a schema collects every document that wrote that path, and two documents pointing at one
+    /// file define it once rather than reporting each other as duplicates. A path no file sits at
+    /// defines nothing and leaves the reference unresolved, which is the sentence the author needs
+    /// and the outcome the compiler reaches by trying to read the file.
+    fn define_pointed_file(&mut self, kind: EvidenceKind, pointer: &YamlScalar, relative: &Path) {
         let target = self.root.join(relative);
         if !crate::safety::is_safe_authored_file(self.root, &target) {
             return;
@@ -367,6 +430,40 @@ impl IndexBuilder<'_> {
 /// the authoring form gives it, so only the last extension comes off.
 fn document_name(relative: &Path) -> Option<&str> {
     relative.file_stem()?.to_str()
+}
+
+/// The sources some question reads, by the name the project spells them under.
+///
+/// The compile walks the questions and pulls each one's source out of the set of documents it
+/// loaded, so this is the set of sources anything checks. A source outside it is loaded, read far
+/// enough to see that it is an object under a usable name, and never opened again.
+fn sources_questions_read(
+    root: &Path,
+    parsed: &BTreeMap<PathBuf, ParsedDocument>,
+) -> BTreeSet<String> {
+    parsed
+        .iter()
+        .filter(|(path, _)| {
+            path.strip_prefix(root).ok().and_then(document_role) == Some(DocumentRole::Question)
+        })
+        .filter_map(|(_, document)| {
+            document
+                .value
+                .get("source")
+                .and_then(|source| source.get_scalar("ref"))
+        })
+        .map(|source| source.value.clone())
+        .collect()
+}
+
+/// Whether a path is one the compiler reads a source's own artifact from: two ordinary components
+/// whose first is [`ADAPTERS_DIRECTORY`] or [`SCHEMAS_DIRECTORY`], and any extension at all.
+fn is_source_artifact(relative: &Path) -> bool {
+    let components = relative.components().collect::<Vec<_>>();
+    let [Component::Normal(directory), Component::Normal(_)] = components.as_slice() else {
+        return false;
+    };
+    *directory == OsStr::new(ADAPTERS_DIRECTORY) || *directory == OsStr::new(SCHEMAS_DIRECTORY)
 }
 
 /// The role of the document a reference of this kind points at, for the kinds a document names by
