@@ -387,7 +387,7 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
 
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
-        Err(code) => return problem_response(code, &operation),
+        Err(code) => return problem_response(code, "authentication", &operation),
     };
     // Strict media negotiation resolves the requested response format before
     // the body is read and long before credential acquisition or source
@@ -395,17 +395,19 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
     // decide authorization later.
     let format = match resolve_response_format(request.headers()) {
         Ok(format) => format,
-        Err(code) => return problem_response(code, &operation),
+        Err(code) => return problem_response(code, "response-format", &operation),
     };
     if !has_exact_content_type(request.headers(), JSON_MEDIA_TYPE)
         || content_length_exceeds(request.headers(), state.maximum_request_bytes)
     {
-        return problem_response(ProblemCode::MalformedRequest, &operation);
+        return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation);
     }
 
     let admission_budget = match remaining(state.request_timeout, started) {
         Some(remaining) => remaining,
-        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     let request_slot = match tokio::time::timeout(
         admission_budget,
@@ -415,13 +417,15 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
     {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) | Err(_) => {
-            return problem_response(ProblemCode::ServiceUnavailable, &operation)
+            return problem_response(ProblemCode::ServiceUnavailable, "admission", &operation)
         }
     };
 
     let body_budget = match remaining(state.request_timeout, started) {
         Some(remaining) => remaining,
-        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     let body = match tokio::time::timeout(
         body_budget,
@@ -430,12 +434,16 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
     .await
     {
         Ok(Ok(body)) => body,
-        Ok(Err(_)) => return problem_response(ProblemCode::MalformedRequest, &operation),
-        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        Ok(Err(_)) => {
+            return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation)
+        }
+        Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     let evidence_request = match parse_evidence_request(&body) {
         Ok(request) => request,
-        Err(code) => return problem_response(code, &operation),
+        Err(code) => return problem_response(code, "request-shape", &operation),
     };
 
     // The tracker-owned task, rather than this client-bound handler, owns the
@@ -472,7 +480,13 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
     });
     let result = match evaluation.await {
         Ok(result) => result,
-        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        Err(_) => {
+            return problem_response(
+                ProblemCode::ServiceUnavailable,
+                "evaluation-task",
+                &operation,
+            )
+        }
     };
 
     match result {
@@ -518,14 +532,16 @@ async fn discover_evidence(
     let started = Instant::now();
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
-        Err(code) => return problem_response(code, &operation),
+        Err(code) => return problem_response(code, "authentication", &operation),
     };
     if request.uri().query().is_some() || content_length_exceeds(request.headers(), 0) {
-        return problem_response(ProblemCode::MalformedRequest, &operation);
+        return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation);
     }
     let admission_budget = match remaining(state.request_timeout, started) {
         Some(remaining) => remaining,
-        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     let _request_slot = match tokio::time::timeout(
         admission_budget,
@@ -535,33 +551,43 @@ async fn discover_evidence(
     {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) | Err(_) => {
-            return problem_response(ProblemCode::ServiceUnavailable, &operation)
+            return problem_response(ProblemCode::ServiceUnavailable, "admission", &operation)
         }
     };
     let body_budget = match remaining(state.request_timeout, started) {
         Some(remaining) => remaining,
-        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     match tokio::time::timeout(body_budget, to_bytes(request.into_body(), 0)).await {
         Ok(Ok(body)) if body.is_empty() => {}
         Ok(Ok(_)) | Ok(Err(_)) => {
-            return problem_response(ProblemCode::MalformedRequest, &operation)
+            return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation)
         }
-        Err(_) => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     }
     let discovery_budget = match remaining(state.request_timeout, started) {
         Some(remaining) => remaining,
-        None => return problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
     };
     match tokio::time::timeout(discovery_budget, state.runtime.discover(&access_token)).await {
         Ok(Ok(definitions)) => {
             match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &definitions) {
                 Some(response) => response,
-                None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+                None => problem_response(
+                    ProblemCode::ServiceUnavailable,
+                    "release-serialization",
+                    &operation,
+                ),
             }
         }
         Ok(Err(failure)) => runtime_failure_response(failure, &operation),
-        Err(_) => problem_response(ProblemCode::ServiceUnavailable, &operation),
+        Err(_) => problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation),
     }
 }
 
@@ -580,6 +606,7 @@ async fn openapi(request: Request<Body>) -> Response {
         ),
         None => problem_response(
             ProblemCode::ServiceUnavailable,
+            "openapi-document",
             &operation_id(request.extensions()),
         ),
     }
@@ -589,7 +616,9 @@ async fn ready(State(state): State<Arc<ServerState>>, request: Request<Body>) ->
     let operation = operation_id(request.extensions());
     match tokio::time::timeout(state.request_timeout, state.runtime.ready()).await {
         Ok(true) => static_json_response(StatusCode::OK, r#"{"status":"ready"}"#),
-        Ok(false) | Err(_) => problem_response(ProblemCode::ServiceUnavailable, &operation),
+        Ok(false) | Err(_) => {
+            problem_response(ProblemCode::ServiceUnavailable, "not-ready", &operation)
+        }
     }
 }
 
@@ -597,7 +626,11 @@ async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> 
     let operation = operation_id(request.extensions());
     match serialize_response(StatusCode::OK, JWKS_MEDIA_TYPE, state.runtime.jwks()) {
         Some(response) => response,
-        None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => problem_response(
+            ProblemCode::ServiceUnavailable,
+            "release-serialization",
+            &operation,
+        ),
     }
 }
 
@@ -620,7 +653,11 @@ async fn jwt_vc_issuer_metadata(
     };
     match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &metadata) {
         Some(response) => response,
-        None => problem_response(ProblemCode::ServiceUnavailable, &operation),
+        None => problem_response(
+            ProblemCode::ServiceUnavailable,
+            "release-serialization",
+            &operation,
+        ),
     }
 }
 
@@ -633,6 +670,7 @@ struct JwtVcIssuerMetadata<'a> {
 async fn unknown_route(request: Request<Body>) -> Response {
     problem_response(
         ProblemCode::MalformedRequest,
+        "unknown-route",
         &operation_id(request.extensions()),
     )
 }
@@ -715,24 +753,29 @@ fn remaining(limit: Duration, started: Instant) -> Option<Duration> {
 }
 
 fn runtime_failure_response(failure: RuntimeFailure, operation: &str) -> Response {
-    let mut response = problem_response(failure.problem(), operation);
-    // Stashed the same way `problem_response` stashes the public `ProblemCode`,
-    // so the observation layer can read the runtime's internal failure
-    // category back without reparsing public bytes.
-    response
-        .extensions_mut()
-        .insert(observability::FailureCategory(failure.category()));
-    response
+    problem_response(failure.problem(), failure.category(), operation)
 }
 
-fn problem_response(code: ProblemCode, operation: &str) -> Response {
+/// Build one problem response, recording the internal category that caused it.
+///
+/// The category is an argument rather than something a caller may add
+/// afterwards so that the compiler, not reviewer discipline, keeps the
+/// operational log's placeholder meaning exactly one thing: a request that
+/// raised no failure. It matters most under the coarse public codes, where
+/// several unrelated internal steps share `service_unavailable` and the
+/// category is the only field that separates them.
+fn problem_response(code: ProblemCode, category: &'static str, operation: &str) -> Response {
     let body = code.body(operation);
     let mut response = serialize_response(code.status(), PROBLEM_MEDIA_TYPE, &body)
         .unwrap_or_else(|| empty_response(StatusCode::INTERNAL_SERVER_ERROR));
-    // The observation layer reads the code from here rather than from the
-    // response body, so the operational record names the same reviewed error
-    // category the caller was given without reparsing public bytes.
+    // The observation layer reads the code and the category from here rather
+    // than from the response body, so the operational record names the same
+    // reviewed error category the caller was given without reparsing public
+    // bytes.
     response.extensions_mut().insert(code);
+    response
+        .extensions_mut()
+        .insert(observability::FailureCategory(category));
     if code == ProblemCode::AuthenticationFailed {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
@@ -991,6 +1034,7 @@ mod tests {
     async fn problem_responses_have_closed_media_and_challenge_headers() {
         let authentication = problem_response(
             ProblemCode::AuthenticationFailed,
+            "authentication",
             "01K1EVIDENCEOPERATION0000000",
         );
         assert_eq!(authentication.status(), StatusCode::UNAUTHORIZED);
@@ -1005,11 +1049,38 @@ mod tests {
             Some(&HeaderValue::from_static("Bearer"))
         );
 
-        let rate = problem_response(ProblemCode::RateLimited, "01K1EVIDENCEOPERATION0000000");
+        let rate = problem_response(
+            ProblemCode::RateLimited,
+            "rate-limit",
+            "01K1EVIDENCEOPERATION0000000",
+        );
         assert_eq!(rate.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             rate.headers().get(RETRY_AFTER),
             Some(&HeaderValue::from_static(RETRY_AFTER_SECONDS))
+        );
+    }
+
+    /// Every refused request names an internal category, not just the runtime's.
+    ///
+    /// The operational log reserves its placeholder for a request that raised no
+    /// failure, so an operator reads a present category as "this failed here".
+    /// A boundary rejection that left the placeholder in place would make the
+    /// same string mean two opposite things, and the coarse public codes are
+    /// exactly where the category is the only signal that separates causes.
+    #[tokio::test]
+    async fn every_refusal_carries_an_internal_category() {
+        let boundary = problem_response(
+            ProblemCode::ServiceUnavailable,
+            "time-budget",
+            "01K1EVIDENCEOPERATION0000000",
+        );
+        assert_eq!(
+            boundary
+                .extensions()
+                .get::<observability::FailureCategory>()
+                .map(|category| category.0),
+            Some("time-budget")
         );
     }
 
