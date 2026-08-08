@@ -110,6 +110,45 @@ active segment while the service runs: the runtime recognizes a segment by its
 `<auditStorage.path>.<sequence>` name, and a rename outside that namespace produces a silent fork
 on the next restart rather than a rotation.
 
+### Ship Evidence Gateway audit records off host
+
+An external receiver is a mirror of the local chain, not a replacement for it.
+Evidence Gateway recovers its chain head from local segments at startup and holds that head in
+process memory, so a write-only remote sink cannot supply the previous hash a restart needs.
+Ship copies and keep the local audit path as the system of record.
+
+A shipper reads the same directory the runtime writes, so two rules keep it from corrupting the
+chain it is copying.
+
+- Copy sealed segments, never move them, and leave the newest sealed segment in place.
+  When the runtime opens the audit path it derives the next sequence number from the newest sealed
+  segment still on disk.
+  A restart after a shipper deleted that segment normally fails closed, because the active segment's
+  first record names a predecessor the remaining sealed tail no longer matches.
+  Nothing catches it when the active segment is empty at that restart, the state every rotation
+  leaves behind until the next record arrives: startup accepts the older sealed tail, and a later
+  rotation seals a fresh segment under the sequence number the shipped-away segment already used.
+  Local verification stays clean, since the sealed numbering is still dense, and cold storage ends up
+  holding two files named `<auditStorage.path>.00000001` that hold different records and claim the
+  same predecessor.
+- Never point a shipper at the active segment or at `<auditStorage.path>.lock`.
+  Any external replacement or modification of either makes readiness and later appends fail closed.
+
+Archive the oldest sealed segments first, and verify before removing anything:
+
+```sh
+evidence verify-audit --runtime /etc/registry-evidence/runtime.yaml
+cp /var/lib/registry-evidence/audit/evidence.jsonl.00000001 "$ARCHIVE/"
+rm /var/lib/registry-evidence/audit/evidence.jsonl.00000001
+```
+
+The `evidence_audit_segments` and `evidence_audit_bytes` gauges described in
+[Metrics reference](../../products/registry-evidence/operator-contract/#metrics-reference) are the archival
+signal. Both are recomputed by walking the audit directory, so they fall when an operator archives
+sealed segments and rise again as the chain grows. Audit bytes that grow without bound are a
+shipper that stopped, which is the condition worth alerting on. Neither gauge observes the
+receiver: they report what is still on local disk, never what external storage accepted.
+
 Registry Mint's durable state is its governed signer configuration and public keys, the client
 registration files under `clients.directory`, and the segmented audit chain. The external Transit
 service retains the strict-mode private key. Onboarding, offboarding, and caller key
