@@ -827,8 +827,8 @@ lifecycle: the telemetry listener cannot outlive a failed evidence listener.
 
 The listener serves `GET /metrics` and answers every other path with `404`,
 including the evidence routes. The exposition is Prometheus text format,
-declared as `Content-Type: text/plain; version=0.0.4`. Two series are
-published:
+declared as `Content-Type: text/plain; version=0.0.4`. Two request-boundary
+series are published:
 
 | Series | Type | Meaning |
 |---|---|---|
@@ -904,19 +904,35 @@ boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
 
 The two request-boundary series above describe the HTTP boundary only. Version
-1 publishes no source-call, signing, credential-acquisition, or audit-sink
-series. A slow or failing upstream source is visible only as evidence-request
-duration and as the problem code the boundary returned; audit, signing, and
+1 publishes no source-call, signing, or credential-acquisition series. A slow
+or failing upstream source is visible only as evidence-request duration and as
+the problem code the boundary returned; signing, audit-chain, and
 source-credential health are reported by `/ready` rather than by telemetry.
 
-A third series, `evidence_rate_limiter_tracked_keys`, is also published on the
-same listener: a gauge reporting the current number of tracked rate-limit
-keys. It carries none of the four request-boundary labels, since it reports a
-process-wide capacity fact rather than a per-request outcome. Operators should
-alert on it approaching the 100,000-key ceiling described under
+Three unlabeled gauges are published on the same listener. None carries any of
+the four request-boundary labels, since each reports a process-wide or on-disk
+fact rather than a per-request outcome, and each is resampled immediately
+before every scrape:
+
+| Series | Type | Meaning |
+|---|---|---|
+| `evidence_rate_limiter_tracked_keys` | gauge | Pseudonym keys currently tracked by the rate limiter |
+| `evidence_audit_segments` | gauge | Audit chain segments on disk, sealed and active |
+| `evidence_audit_bytes` | gauge | Bytes occupied by the audit chain across every segment |
+
+Operators should alert on `evidence_rate_limiter_tracked_keys` approaching the
+100,000-key ceiling described under
 [requester authority and purpose](#requester-authority-and-purpose), since a
 deployment at that ceiling refuses new principals with a capacity error rather
 than degrading gracefully.
+
+The two audit gauges are computed by walking the audit directory rather than by
+counting appends, so they fall when an operator archives sealed segments and
+rise again as the chain grows. Rotation never deletes a sealed segment, so
+nothing in the runtime bounds that growth, and audit bytes that grow without
+bound are the signal that whatever archives or ships them has stopped. Neither
+gauge observes an external receiver: both report what is on local disk, never
+what any off-host copy accepted.
 
 ## Startup and readiness
 
