@@ -418,6 +418,15 @@ fn map_signing_error(err: SigningError) -> SdJwtError {
     }
 }
 
+// This parser recognizes EdDSA, ES256, and RS256, a narrower set than
+// `SdJwtIssuer::issue` can emit through `self.signer.algorithm().jwa_name()`,
+// which also covers ES384 and RS384. The gap is unreachable: this parser's only
+// caller is `require_holder_proof_algorithm`, which is pinned to
+// `HOLDER_PROOF_ALLOWED_ALGORITHM = SigningAlgorithm::EdDsa`, so a header naming
+// an algorithm this function does not recognize is rejected here, and a header
+// naming any algorithm other than EdDSA is rejected by the pin regardless of
+// whether this function would have parsed it. Widening the holder-proof pin to
+// accept another algorithm must add the matching arm here first.
 fn signing_algorithm_from_jwa(alg: &str) -> Option<SigningAlgorithm> {
     match alg {
         "EdDSA" => Some(SigningAlgorithm::EdDsa),
@@ -1097,6 +1106,26 @@ mod tests {
             .expect_err("EdDSA header must not verify with an ES256 cnf key");
         validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now)
             .expect_err("EdDSA header must not verify with an ES256 resolved key");
+    }
+
+    #[test]
+    fn holder_proof_rejects_correctly_signed_non_eddsa_proof_because_the_holder_proof_pin_is_eddsa_only(
+    ) {
+        let holder = PrivateJwk::parse(P256_JWK).expect("p256 holder");
+        let now = 1_700_000_000;
+        let claim_set = claim_set();
+        let bindings = bindings(&claim_set);
+        let proof = sign_jwt_with_private(
+            json!({"alg": "ES256", "typ": "kb+jwt", "kid": "did:web:issuer.test#p256-key-1"}),
+            proof_payload(now, "proof-jti-es256"),
+            &holder,
+        )
+        .expect("proof signs with its own ES256 key");
+
+        validate_holder_proof(&proof, &holder.public(), &bindings, &policy(), now).expect_err(
+            "HOLDER_PROOF_ALLOWED_ALGORITHM pins holder proofs to EdDSA even for a \
+             correctly self-signed ES256 proof",
+        );
     }
 
     #[test]
