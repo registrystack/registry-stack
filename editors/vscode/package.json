@@ -67,7 +67,7 @@
     "package:dev": "npm run check && npm run compile && vsce package --no-dependencies --out registry-stack-dev.vsix && npm run verify:package",
     "verify:package": "node scripts/verify-vsix.cjs registry-stack-dev.vsix",
     "pretest": "npm run compile && npm run compile-tests",
-    "test:unit": "npm run compile-unit-tests && node --test out/unit/test/unit/projectRoot.test.js",
+    "test:unit": "npm run compile-unit-tests && node --test out/unit/test/unit/projectRoot.test.js out/unit/test/unit/serverCommand.test.js",
     "test": "npm run test:unit && vscode-test",
     "vscode:prepublish": "npm run compile"
   },

@@ -9,6 +9,7 @@
   },
   "include": [
     "src/projectRoot.ts",
+    "src/serverCommand.ts",
     "test/unit/**/*.ts"
   ]
 }

@@ -61,8 +61,10 @@ selected, not a platform server binary. Its server discovery order is: the expli
 `registryStack.languageServer.path` setting, the installer-selected CLI,
 `registry-language-server` on `PATH`, a matching `registryctl` on `PATH`, then a matching
 `evidencectl` on `PATH`. Every tier but the standalone server runs `<cli> tooling language-server`.
-A manually packaged VSIX omits the local path metadata and retains the PATH-based discovery
-behavior.
+A CLI found on `PATH` is asked whether it hosts the server before it is used, so one built before
+the subcommand existed is passed over rather than taken as the answer, and the CLI behind it is
+still reached. A manually packaged VSIX omits the local path metadata and retains the PATH-based
+discovery behavior.
 
 ## Manual packaging
 

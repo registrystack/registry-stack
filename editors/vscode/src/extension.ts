@@ -11,6 +11,7 @@ import {
 } from 'vscode-languageclient/node';
 
 import { isProjectRoot } from './projectRoot.js';
+import { findLanguageServerOnPath, isExecutableFile } from './serverCommand.js';
 
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
@@ -152,9 +153,6 @@ function resolveServerCommand(
     return { command: resolved, args: [] };
   }
 
-  const executable = process.platform === 'win32'
-    ? 'registry-language-server.exe'
-    : 'registry-language-server';
   const packagedCli = findPackagedRegistryStackCli(context);
   if (packagedCli !== undefined) {
     return {
@@ -162,21 +160,9 @@ function resolveServerCommand(
       args: ['tooling', 'language-server'],
     };
   }
-  const standalone = findExecutableOnPath(executable);
-  if (standalone !== undefined) {
-    return { command: standalone, args: [] };
-  }
-  const registryctl = findExecutableOnPath(
-    process.platform === 'win32' ? 'registryctl.exe' : 'registryctl',
-  );
-  if (registryctl !== undefined) {
-    return { command: registryctl, args: ['tooling', 'language-server'] };
-  }
-  const evidencectl = findExecutableOnPath(
-    process.platform === 'win32' ? 'evidencectl.exe' : 'evidencectl',
-  );
-  if (evidencectl !== undefined) {
-    return { command: evidencectl, args: ['tooling', 'language-server'] };
+  const onPath = findLanguageServerOnPath();
+  if (onPath !== undefined) {
+    return onPath;
   }
   throw new Error(
     'No Registry Stack language server was found. Reinstall the integration with a matching registryctl or evidencectl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl or evidencectl to PATH so it can run "<cli> tooling language-server".',
@@ -192,34 +178,6 @@ function findPackagedRegistryStackCli(context: vscode.ExtensionContext): string 
     }
   } catch {
     // Manual packages intentionally omit installer metadata and continue with PATH discovery.
-  }
-  return undefined;
-}
-
-function isExecutableFile(candidate: string): boolean {
-  try {
-    if (!fs.statSync(candidate).isFile()) {
-      return false;
-    }
-    if (process.platform !== 'win32') {
-      fs.accessSync(candidate, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function findExecutableOnPath(executable: string): string | undefined {
-  const pathEntries = process.env.PATH?.split(path.delimiter) ?? [];
-  for (const entry of pathEntries) {
-    if (entry === '') {
-      continue;
-    }
-    const candidate = path.join(entry, executable);
-    if (isExecutableFile(candidate)) {
-      return candidate;
-    }
   }
   return undefined;
 }

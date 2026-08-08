@@ -31,19 +31,21 @@ projects automatically. For an existing project, refresh its version-matched sch
 registryctl -C /path/to/registry-stack-project tooling editor
 ```
 
-Install the `registryctl` version that matches this source checkout, then install an integration
-once from the repository root:
+Install the `registryctl` or `evidencectl` version that matches this source checkout, then install
+an integration once from the repository root:
 
 ```console
 ./editors/install.sh vscode
 ./editors/install.sh zed
 ```
 
-The installer verifies the `registryctl` version and embedded language server without reading or
-changing a project. VS Code is packaged and installed into the active profile. Pass
+The installer verifies a CLI's version and embedded language server without reading or changing a
+project. It tries `registryctl` first and `evidencectl` next, and a candidate that fails either
+check does not stop the one behind it, so an Evidence adopter holding an older `registryctl` still
+installs. VS Code is packaged and installed into the active profile. Pass
 `--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
-`registryctl` path, so an already-running VS Code process does not need to inherit the installer's
-`PATH`. Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
+CLI path, so an already-running VS Code process does not need to inherit the installer's `PATH`.
+Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
 
 The installer does not trust a project or approve a development extension. Those decisions stay
 with the user. Pass `--open <existing-directory>` only as a convenience to open a directory after

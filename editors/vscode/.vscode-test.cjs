@@ -21,6 +21,11 @@ const languageServer = path.resolve(__dirname, '../../target/debug/registry-lang
 const registryctlWrapper = path.join(testRunDirectory, 'registryctl');
 const pathBinDirectory = path.join(testRunDirectory, 'path-bin');
 const evidencectlWrapper = path.join(pathBinDirectory, 'evidencectl');
+// An Evidence adopter can hold a registryctl built before the language server
+// was hosted in it. It stands ahead of evidencectl on PATH and must not be
+// taken for an answer, so the PATH tier is exercised against the shape that
+// once hid the CLI standing behind it.
+const legacyRegistryctlWrapper = path.join(pathBinDirectory, 'registryctl');
 const installerMetadata = path.join(__dirname, 'dist', 'registry-stack-cli-path');
 fs.mkdirSync(projectAlpha, { recursive: true });
 fs.mkdirSync(projectBeta, { recursive: true });
@@ -28,6 +33,7 @@ fs.mkdirSync(path.join(projectEvidence, 'selectors'), { recursive: true });
 fs.mkdirSync(pathBinDirectory, { recursive: true });
 writeToolingLanguageServerWrapper(registryctlWrapper);
 writeToolingLanguageServerWrapper(evidencectlWrapper);
+writeLegacyWrapper(legacyRegistryctlWrapper);
 fs.mkdirSync(path.dirname(installerMetadata), { recursive: true });
 fs.writeFileSync(installerMetadata, `${registryctlWrapper}\n`);
 fs.writeFileSync(
@@ -60,13 +66,26 @@ function writeToolingLanguageServerWrapper(wrapperPath) {
     wrapperPath,
     [
       '#!/bin/sh',
-      'if [ "$#" -ne 2 ] || [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
+      'if [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
+      '  exit 64',
+      'fi',
+      '# The capability probe the extension makes before it starts a candidate',
+      '# found on PATH. A real CLI answers it from the same subcommand.',
+      'if [ "$#" -eq 3 ] && [ "$3" = "--help" ]; then',
+      '  exit 0',
+      'fi',
+      'if [ "$#" -ne 2 ]; then',
       '  exit 64',
       'fi',
       `exec ${shellQuote(languageServer)}`,
       '',
     ].join('\n'),
   );
+  fs.chmodSync(wrapperPath, 0o755);
+}
+
+function writeLegacyWrapper(wrapperPath) {
+  fs.writeFileSync(wrapperPath, ['#!/bin/sh', 'exit 64', ''].join('\n'));
   fs.chmodSync(wrapperPath, 0o755);
 }
 

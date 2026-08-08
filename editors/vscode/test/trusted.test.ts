@@ -61,9 +61,10 @@ suite('Registry Stack extension', () => {
     await assertWorkspaceSymbolAbsent('gamma-registry');
 
     // Deleting the installer metadata and restarting proves the PATH
-    // fallback tier genuinely works: registryctl is intentionally kept off
-    // PATH in this test fixture, so once the packaged-CLI metadata is gone,
-    // every folder can only be served by the evidencectl found on PATH.
+    // fallback tier genuinely works: the registryctl that serves the metadata
+    // route is kept off PATH, and the registryctl that is on PATH refuses the
+    // subcommand, so once the packaged-CLI metadata is gone every folder can
+    // only be served by the evidencectl standing behind it.
     fs.rmSync(path.resolve(__dirname, '../../dist/registry-stack-cli-path'), { force: true });
     await vscode.commands.executeCommand('registryStack.restartLanguageServer');
     await assertWorkspaceSymbol('alpha-reloaded');
