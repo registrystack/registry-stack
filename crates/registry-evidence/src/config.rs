@@ -5831,16 +5831,20 @@ outboundTls:
             (
                 "",
                 Some("requirement acquisition kind is not a declared bundle capability"),
-                true,
+                false,
             ),
             // Writing the list out and declaring nothing says what silence
-            // says. The loader refuses the requirement for the same reason and
-            // the published contract accepts the document, so neither half of
-            // the closed surface is stricter than the other.
+            // says, and the contract refuses both for the same reason it
+            // refuses silence. The published contract is what an author
+            // validates against before deploying, so a document it certifies
+            // has to be one startup can serve; a gated kind whose capability
+            // is undeclared is the one cross-declaration relation a schema can
+            // state, and leaving it to the loader alone would certify a bundle
+            // that cannot serve.
             (
                 "acquisitionCapabilities: []\n",
                 Some("requirement acquisition kind is not a declared bundle capability"),
-                true,
+                false,
             ),
             (
                 "acquisitionCapabilities: [search-then-fetch-sets]\n",
