@@ -455,6 +455,9 @@ impl IndexBuilder<'_> {
                 range,
             },
             reports_unresolved: true,
+            // No field of a manifest is narrower than the kind it holds: a name of the right kind,
+            // declared anywhere the manifest reaches, is a name that field may hold.
+            offers: None,
         });
     }
 }

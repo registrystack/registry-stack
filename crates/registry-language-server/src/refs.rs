@@ -344,6 +344,27 @@ pub(crate) struct IndexedReference {
     /// that navigation works from it without putting a second error on one mistake. It never means
     /// the reference is allowed to dangle.
     pub(crate) reports_unresolved: bool,
+    /// The names this field will actually take, where its kind does not say it all. `None` is every
+    /// name of the kind, which is what almost every field takes.
+    ///
+    /// A field's kind answers "what sort of thing goes here", and for most fields that is the whole
+    /// rule. A few fields are narrower than their kind for a reason the kind cannot carry: the
+    /// compiler resolves an operation identifier across every HTTP method and then refuses one that
+    /// is not a `get`; a derivation file belongs to the one question that names it; an answer's
+    /// schema is spelled as a document of the authoring form where a source's artifact is not. What
+    /// they have in common is that the name is what decides, so [`Self::target`] having dropped the
+    /// name is exactly what loses the rule.
+    ///
+    /// Resolution is deliberately not narrowed by this. The editor may stay quiet where the compiler
+    /// refuses and must never speak where the compiler accepts, so a name outside this list still
+    /// resolves, still navigates, and still draws its card: telling an author that a `post` their
+    /// description really publishes does not exist is a sentence the compiler never prints. What
+    /// this bounds is only what the editor volunteers, so that it stops handing an author a name it
+    /// knows the compiler will refuse.
+    ///
+    /// The list is built by the walker that recorded the reference, so every rule inside one stays
+    /// with the family that has it and nothing here has to know which family that is.
+    pub(crate) offers: Option<Arc<BTreeSet<String>>>,
 }
 
 /// One place whose candidates come from somewhere other than the symbol table, and what they are.
@@ -600,6 +621,12 @@ impl ProjectIndex {
     /// scope it holds it in; dropping the name from that query and keeping the rest turns "what does
     /// this resolve to" into "what could this have been", which is the question a list answers.
     ///
+    /// Dropping the name is also what loses every rule the name decides, so a field narrower than
+    /// its kind hands back the names it will take in [`IndexedReference::offers`] and this keeps to
+    /// them. That narrowing belongs here and not in navigation: a list is the editor volunteering a
+    /// name, and volunteering one the compiler is known to refuse is the editor walking an author
+    /// into a failure it could see coming.
+    ///
     /// Nothing here reports anything, and nothing here reads a file. A position holding neither a
     /// reference nor a recorded set of choices is offered nothing, which includes every position in
     /// a document the loader kept out of the project.
@@ -609,7 +636,12 @@ impl ProjectIndex {
                 .symbols
                 .iter()
                 .filter(|symbol| {
-                    symbol.resolvable && self.query_can_offer(&reference.target, &symbol.key)
+                    symbol.resolvable
+                        && self.query_can_offer(&reference.target, &symbol.key)
+                        && reference
+                            .offers
+                            .as_ref()
+                            .is_none_or(|offers| offers.contains(&symbol.name))
                 })
                 .map(|symbol| CompletionCandidate {
                     label: symbol.name.clone(),
@@ -660,9 +692,8 @@ impl ProjectIndex {
                 reference.target.scope.as_deref(),
             );
             for symbol in definitions {
-                markdown.push_str("\n\nDefined in `");
-                markdown.push_str(&bounded_span(&self.relative(&symbol.location.path)));
-                markdown.push('`');
+                markdown.push_str("\n\nDefined in ");
+                markdown.push_str(&code_span(&self.relative(&symbol.location.path)));
             }
             return Some(HoverText {
                 markdown: bounded_hover(&markdown),
@@ -725,6 +756,9 @@ impl ProjectIndex {
 
     /// [`Self::query_can_resolve_to`] without the name: everything a reference of this shape is
     /// allowed to hold, rather than the one thing it does hold.
+    ///
+    /// Kind and scope only. Whatever the name itself decides went out with the name, and comes back
+    /// through [`IndexedReference::offers`] for the fields that have such a rule.
     fn query_can_offer(&self, query: &SymbolQuery, key: &SymbolKey) -> bool {
         query.kind == key.kind
             && query
@@ -875,9 +909,25 @@ fn scope_suffix(kind: SymbolKind, scope: Option<&str>) -> String {
 /// which is not what a message wants around a name it quotes mid-sentence.
 fn headline(kind: SymbolKind, name: &str, scope: Option<&str>) -> String {
     let scope = scope
-        .map(|scope| format!(" in {} `{}`", kind.scope_label(), bounded_span(scope)))
+        .map(|scope| format!(" in {} {}", kind.scope_label(), code_span(scope)))
         .unwrap_or_default();
-    format!("**{}** `{}`{}", kind.label(), bounded_span(name), scope)
+    format!("**{}** {}{}", kind.label(), code_span(name), scope)
+}
+
+/// One piece of author-written text, drawn as the code span a card quotes it in.
+///
+/// Two adjacent backticks are not an empty code span. They are a backtick string of length two, and
+/// nothing of length two closes it, so a client draws both of them literally and the card ends up
+/// saying something the author did not write. An empty name is one `evidence check` rejects, so this
+/// only has to be honest about it rather than hide it: a span holding one space is drawn as a span
+/// holding one space, which is what a name with nothing in it looks like.
+fn code_span(value: &str) -> String {
+    let span = bounded_span(value);
+    if span.is_empty() {
+        "` `".to_owned()
+    } else {
+        format!("`{span}`")
+    }
 }
 
 /// One piece of text an author wrote, made safe to draw inside the code span a card quotes it in.
@@ -903,18 +953,35 @@ fn bounded_span(value: &str) -> String {
 /// why it has a ceiling of its own rather than either of the two above.
 const MAX_HOVER_CHARS: usize = 4096;
 
-/// One card cut to that ceiling.
+/// One card cut to that ceiling, at the last whole line that fits.
 ///
 /// Unlike [`bounded`], this leaves control characters alone, because the newlines separating the
 /// lines of a card are its own. Every piece of author-written text inside one has already been
-/// through [`bounded_span`], which replaced both the control characters and the one markdown
-/// character that would have let the author draw the rest of the card.
+/// through [`code_span`], which replaced both the control characters and the one markdown character
+/// that would have let the author draw the rest of the card.
+///
+/// The cut lands on a line boundary rather than on the ceiling itself, so a card that does not fit
+/// is still the lines it is written in: every line the reader is shown is a whole one, and the mark
+/// that says lines were dropped is a line of its own. Cutting mid-line is not an injection, because
+/// a code span left unclosed is drawn as the backtick it is, but it would leave the reader a half
+/// sentence that reads as a whole one.
+///
+/// What comes back is at most the ceiling in card, plus the break and the mark that say it was cut,
+/// the same shape the two ceilings above have: the bound is on what the card is allowed to say, not
+/// on the three characters saying it stopped.
 fn bounded_hover(markdown: &str) -> String {
-    let mut bounded = markdown.chars().take(MAX_HOVER_CHARS).collect::<String>();
-    if markdown.chars().count() > MAX_HOVER_CHARS {
-        bounded.push('…');
+    if markdown.chars().count() <= MAX_HOVER_CHARS {
+        return markdown.to_owned();
     }
-    bounded
+    let ceiling = markdown
+        .char_indices()
+        .nth(MAX_HOVER_CHARS)
+        .map_or(markdown.len(), |(index, _)| index);
+    let kept = markdown[..ceiling]
+        .rfind('\n')
+        .map_or(&markdown[..ceiling], |newline| &markdown[..newline])
+        .trim_end_matches('\n');
+    format!("{kept}\n\n…")
 }
 
 /// One name an author wrote, made safe to quote inside a message and cut to the width of a name.
@@ -933,14 +1000,14 @@ pub(crate) fn bounded_message(message: &str) -> String {
     bounded(message, 1024)
 }
 
-/// What both ceilings share: a control character becomes one no terminal obeys, and text that does
-/// not fit ends in the mark that says so.
+/// What both ceilings share: a character that carries an instruction becomes one that carries none,
+/// and text that does not fit ends in the mark that says so.
 fn bounded(value: &str, max_chars: usize) -> String {
     let mut bounded = value
         .chars()
         .take(max_chars)
         .map(|character| {
-            if character.is_control() {
+            if character.is_control() || is_display_directive(character) {
                 '�'
             } else {
                 character
@@ -951,6 +1018,38 @@ fn bounded(value: &str, max_chars: usize) -> String {
         bounded.push('…');
     }
     bounded
+}
+
+/// The instructions a display obeys that [`char::is_control`] does not name.
+///
+/// Rust's `is_control` is Unicode general category `Cc`, which is what a *terminal* acts on. Both
+/// surfaces this server writes to are drawn rather than printed: a diagnostic is text a client lays
+/// out, and a card is markup a client renders. Those obey a second set. The reordering characters
+/// are `Cf`, and one inside a name rewrites the sentence quoting it, so a message can be made to
+/// read as its own opposite while the name it names stays intact. The two separators are `Zl` and
+/// `Zp`, and one inside a name breaks a message across lines where the message has no break. The
+/// invisible ones have no width at all, so two names that differ only by one draw as a single name
+/// and the reader has no way to see which is which.
+///
+/// `rustc` refuses the reordering half in a source literal for the same reason, under
+/// `text_direction_codepoint_in_literal`. A name carrying any of these is a name `evidence check`
+/// rejects, because the authoring form accepts only lowercase ASCII in a name; the editor still has
+/// to say so before anyone runs the compiler, which is the whole reason it cannot assume the
+/// compiler's answer. Replacing them costs nothing an author can write correctly.
+///
+/// What this does not buy, and must not be read as buying: two names that differ by a Cyrillic and a
+/// Latin `a` still draw as one card, and no substitution can tell them apart. The compiler stays the
+/// authority on whether two names are one name.
+fn is_display_directive(character: char) -> bool {
+    matches!(
+        character,
+        // Reordering: the marks, the embeddings and overrides, the isolates, and the pops.
+        '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        // Separators: LINE SEPARATOR and PARAGRAPH SEPARATOR.
+        | '\u{2028}'..='\u{2029}'
+        // Invisible: soft hyphen, the zero-width space and joiners, word joiner, byte-order mark.
+        | '\u{00ad}' | '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}'
+    )
 }
 
 fn range_contains(range: Range, position: Position) -> bool {
@@ -1043,15 +1142,79 @@ mod tests {
     /// A card is cut at its own ceiling and keeps the newlines that lay it out. Nothing an author
     /// writes reaches one without going through [`bounded_value`] first, so the only control
     /// characters a card can hold are the ones this crate put there.
+    ///
+    /// The cut lands on a line boundary, so every line the reader is shown is one this crate wrote
+    /// whole: the last kept line is a complete `Defined in` line rather than a prefix of one, and
+    /// the mark saying lines were dropped is a line of its own.
     #[test]
     fn a_card_is_cut_at_its_ceiling_and_keeps_the_lines_it_is_written_in() {
         let card = format!("**source** `x`{}", "\n\nDefined in `y`".repeat(500));
         assert!(card.chars().count() > MAX_HOVER_CHARS);
 
         let bounded = bounded_hover(&card);
-        assert_eq!(bounded.chars().count(), MAX_HOVER_CHARS + 1);
-        assert!(bounded.ends_with('…'));
-        assert!(bounded.contains('\n'));
+        assert!(bounded.chars().count() <= MAX_HOVER_CHARS + 3);
+        assert!(bounded.ends_with("\n\n…"));
+        for line in bounded.lines().filter(|line| !line.is_empty()) {
+            assert!(
+                line == "**source** `x`" || line == "Defined in `y`" || line == "…",
+                "a cut card kept a partial line: {line:?}"
+            );
+        }
         assert_eq!(bounded_hover("**source** `x`"), "**source** `x`");
+    }
+
+    /// A card with one line and nothing else to cut still keeps a whole line when it does not fit,
+    /// because there is no boundary to fall back to and the ceiling is what is left.
+    #[test]
+    fn a_card_of_one_long_line_is_cut_at_the_ceiling_itself() {
+        let card = format!("**source** `{}`", "x".repeat(MAX_HOVER_CHARS));
+        let bounded = bounded_hover(&card);
+        assert_eq!(bounded.chars().count(), MAX_HOVER_CHARS + 3);
+        assert!(bounded.ends_with("\n\n…"));
+    }
+
+    /// The characters a display obeys and a terminal does not. A name carrying one is a name the
+    /// authoring form refuses, and the editor draws its card before anyone runs the compiler, so it
+    /// cannot leave the reordering to be discovered by the compiler's answer.
+    #[test]
+    fn text_that_reaches_a_message_is_stripped_of_what_a_display_obeys() {
+        assert_eq!(bounded_value("a\u{202e}b"), "a�b");
+        assert_eq!(bounded_value("a\u{2066}b\u{2069}"), "a�b�");
+        assert_eq!(bounded_value("a\u{061c}b"), "a�b");
+        assert_eq!(bounded_value("a\u{200e}b\u{200f}"), "a�b�");
+        assert_eq!(bounded_value("a\u{2028}b\u{2029}"), "a�b�");
+        assert_eq!(bounded_value("a\u{00ad}b\u{feff}"), "a�b�");
+        assert_eq!(bounded_value("a\u{200b}b\u{200c}c\u{200d}d"), "a�b�c�d");
+        assert_eq!(bounded_value("a\u{2060}b"), "a�b");
+        assert_eq!(bounded_message("a\u{202e}b"), "a�b");
+
+        // Every one of the twenty, and nothing outside them: an ordinary name is left alone.
+        assert_eq!(
+            ('\u{0}'..='\u{ffff}')
+                .filter(|character| is_display_directive(*character))
+                .count(),
+            20
+        );
+        assert_eq!(bounded_value("person.adult-status"), "person.adult-status");
+    }
+
+    /// A name with nothing in it is quoted as a span the reader can see, because two adjacent
+    /// backticks are a backtick string nothing closes and both are drawn as themselves.
+    #[test]
+    fn an_empty_name_is_quoted_as_a_span_that_closes() {
+        assert_eq!(code_span(""), "` `");
+        assert_eq!(code_span("a"), "`a`");
+        assert_eq!(
+            headline(SymbolKind::Evidence(EvidenceKind::Question), "", None),
+            "**question** ` `"
+        );
+        assert_eq!(
+            headline(
+                SymbolKind::Evidence(EvidenceKind::Concept),
+                "person.adult-status",
+                Some("adult")
+            ),
+            "**concept** `person.adult-status` in question `adult`"
+        );
     }
 }

@@ -50,11 +50,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
+    mem,
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
 use registry_evidence_authoring::{
-    layout::SCHEMAS_DIRECTORY, model::Question, validate::collection_pointers,
+    layout::SCHEMAS_DIRECTORY,
+    model::Question,
+    validate::{collection_pointers, validate_answer_schema_path},
 };
 use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 
@@ -66,7 +70,8 @@ use crate::{
     },
     refs::{
         bounded_value, EvidenceKind, IndexedChoices, IndexedDiagnostic, IndexedLocation,
-        IndexedProject, IndexedReference, IndexedSymbol, SymbolKey, SymbolQuery, DOCUMENT_START,
+        IndexedProject, IndexedReference, IndexedSymbol, SymbolKey, SymbolKind, SymbolQuery,
+        DOCUMENT_START,
     },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
@@ -90,6 +95,9 @@ pub(crate) fn build_index(
         diagnostics: Vec::new(),
         choices: Vec::new(),
         referenced_files: BTreeSet::new(),
+        narrowed: Vec::new(),
+        operations_published_under_get: BTreeSet::new(),
+        derivation_claims: BTreeMap::new(),
     };
     let read_sources = sources_questions_read(root, parsed);
     // The one project file the loader leaves on disk, read once for the whole build. Every operation
@@ -104,6 +112,11 @@ pub(crate) fn build_index(
                 description.path(),
                 operation.range,
             );
+            if operation.key.method == "GET" {
+                builder
+                    .operations_published_under_get
+                    .insert(operation_id.to_owned());
+            }
         }
     }
 
@@ -160,6 +173,7 @@ pub(crate) fn build_index(
     for path in dropped {
         builder.define_by_its_place(path);
     }
+    builder.narrow_offers();
 
     IndexedProject {
         symbols: builder.symbols,
@@ -180,6 +194,35 @@ struct IndexBuilder<'a> {
     /// The files already defined by a pointer at them, so two documents pointing at one schema
     /// define it once rather than reporting each other as duplicates.
     referenced_files: BTreeSet<SymbolKey>,
+    /// The references whose field takes fewer names than its kind holds, each one paired with the
+    /// reason. They are recorded rather than resolved on the spot because two of the three reasons
+    /// can only be read once every document has been walked: which schema files the project has, and
+    /// which derivations another question already claims.
+    narrowed: Vec<(usize, Narrowing)>,
+    /// The operation identifiers the description publishes under `get`, which is the only method a
+    /// question may name.
+    operations_published_under_get: BTreeSet<String>,
+    /// For each derivation file the project spells, the questions that spell it. A file one question
+    /// claims is a file no other question may name.
+    derivation_claims: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Why a field takes fewer names than its kind holds.
+///
+/// Each variant is a rule the compiler applies to the *name* rather than to its kind, so the kind
+/// alone cannot answer what belongs in the field. None of them becomes a diagnostic: the editor
+/// declines to volunteer a name it knows the compiler refuses, and leaves refusing to the compiler.
+enum Narrowing {
+    /// A question's `source.operation`. The compiler resolves an identifier across all eight methods
+    /// and only then refuses one that resolved to something other than a `get`, so the operation is
+    /// a real symbol with a real definition and only the offer is narrower.
+    PublishedUnderGet,
+    /// An answer's `schema`, which the authoring form spells as one `schemas/<name>.yaml` document.
+    /// A source's artifact shares this kind and is spelled far more loosely, so the kind holds names
+    /// this field refuses.
+    SpelledAsAnAnswerSchema,
+    /// A question's `derivation`, which no other question may name.
+    ClaimedByNoOtherQuestion { question: String },
 }
 
 impl IndexBuilder<'_> {
@@ -240,12 +283,28 @@ impl IndexBuilder<'_> {
                 );
             }
             if let Some(schema) = answer.get_scalar("schema") {
-                self.refer_to_file(path, schema, EvidenceKind::SchemaFile);
+                self.refer_to_file(
+                    path,
+                    schema,
+                    EvidenceKind::SchemaFile,
+                    Some(Narrowing::SpelledAsAnAnswerSchema),
+                );
             }
         }
 
         if let Some(derivation) = value.get_scalar("derivation") {
-            self.refer_to_file(path, derivation, EvidenceKind::DerivationFile);
+            self.derivation_claims
+                .entry(derivation.value.clone())
+                .or_default()
+                .insert(name.to_owned());
+            self.refer_to_file(
+                path,
+                derivation,
+                EvidenceKind::DerivationFile,
+                Some(Narrowing::ClaimedByNoOtherQuestion {
+                    question: name.to_owned(),
+                }),
+            );
         }
 
         for allowed in scalars(value.get("disclosure").and_then(|value| value.get("allow"))) {
@@ -269,7 +328,7 @@ impl IndexBuilder<'_> {
             // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
             // reads the same file while it writes the bundle, and the `evidence` binary refuses a
             // fixtures artifact whose path is not under `fixtures/` when it reads that bundle back.
-            self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile);
+            self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile, None);
         }
     }
 
@@ -314,10 +373,16 @@ impl IndexBuilder<'_> {
         // both come from the reference machinery: `unique_operation`
         // (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses those two cases with one
         // sentence, and it is the same condition.
-        self.refer(
+        // The offer is narrower than the resolution on purpose. `unique_operation` looks across every
+        // method the description publishes, and `question_operation`
+        // (`crates/registry-evidencectl/src/authoring.rs:1543-1551`) then refuses a resolved
+        // operation whose method is not `get`, with a sentence about the method. So the editor must
+        // keep finding an operation published under `post`, and must not propose one.
+        self.refer_narrowed(
             SymbolQuery::global(EvidenceKind::Operation, operation_id),
             path,
             written.range,
+            Narrowing::PublishedUnderGet,
         );
         // What the rungs below need, taken now: reading the response leaves needs the description
         // itself, and holding on to the resolved operation would keep it borrowed.
@@ -582,12 +647,18 @@ impl IndexBuilder<'_> {
     /// resolves them the same way: a derivation is `derivations/<name>.rhai`, an answer schema is
     /// `schemas/<name>.yaml`, a fixture file is `fixtures/<name>.yaml`. A target written any other
     /// way is one the compiler refuses too.
-    fn refer_to_file(&mut self, path: &Path, pointer: &YamlScalar, kind: EvidenceKind) {
-        self.refer(
-            SymbolQuery::global(kind, pointer.value.as_str()),
-            path,
-            pointer.range,
-        );
+    fn refer_to_file(
+        &mut self,
+        path: &Path,
+        pointer: &YamlScalar,
+        kind: EvidenceKind,
+        narrowing: Option<Narrowing>,
+    ) {
+        let target = SymbolQuery::global(kind, pointer.value.as_str());
+        match narrowing {
+            Some(narrowing) => self.refer_narrowed(target, path, pointer.range, narrowing),
+            None => self.refer(target, path, pointer.range),
+        }
 
         let Some(role) = referenced_file_role(kind) else {
             return;
@@ -694,6 +765,22 @@ impl IndexBuilder<'_> {
         self.add_reference(target, path, range, false);
     }
 
+    /// Records a reference the author picks from fewer names than its kind holds.
+    ///
+    /// Resolution is unchanged: the reference reaches every name of its kind, so a name the compiler
+    /// refuses still finds its definition and still reports what is wrong with it where it is
+    /// written. Only what the editor volunteers is narrowed.
+    fn refer_narrowed(
+        &mut self,
+        target: SymbolQuery,
+        path: &Path,
+        range: Range,
+        narrowing: Narrowing,
+    ) {
+        self.add_reference(target, path, range, true);
+        self.narrowed.push((self.references.len() - 1, narrowing));
+    }
+
     fn add_reference(
         &mut self,
         target: SymbolQuery,
@@ -708,7 +795,58 @@ impl IndexBuilder<'_> {
                 range,
             },
             reports_unresolved,
+            offers: None,
         });
+    }
+
+    /// Reads each recorded narrowing into the names its field will actually take.
+    ///
+    /// This runs once, after the last document, because two of the three sets are project-wide: the
+    /// answer schemas are the schema files this project has, and a derivation is offered only where
+    /// no other question already claims it.
+    fn narrow_offers(&mut self) {
+        let published_under_get = Arc::new(mem::take(&mut self.operations_published_under_get));
+        // A source's artifact and an answer's schema share one kind, because they name one file and
+        // `Find references` on that file must collect both. The form spells them differently, so the
+        // pool an answer picks from is the part of that kind the form's own rule accepts.
+        let answer_schemas = Arc::new(
+            self.defined_names(EvidenceKind::SchemaFile)
+                .filter(|name| validate_answer_schema_path(name).is_empty())
+                .collect::<BTreeSet<_>>(),
+        );
+        let derivations = self
+            .defined_names(EvidenceKind::DerivationFile)
+            .collect::<BTreeSet<_>>();
+
+        for (reference, narrowing) in mem::take(&mut self.narrowed) {
+            let offers = match narrowing {
+                Narrowing::PublishedUnderGet => Arc::clone(&published_under_get),
+                Narrowing::SpelledAsAnAnswerSchema => Arc::clone(&answer_schemas),
+                // Usually empty, and honestly so: a derivation is defined by a question pointing at
+                // it, so almost every name of this kind is a name some question has already
+                // claimed. An empty list beats one whose every entry walks the author into
+                // `each question must name its own derivation file`.
+                Narrowing::ClaimedByNoOtherQuestion { question } => Arc::new(
+                    derivations
+                        .iter()
+                        .filter(|name| {
+                            self.derivation_claims
+                                .get(*name)
+                                .is_none_or(|claims| claims.iter().all(|claim| *claim == question))
+                        })
+                        .cloned()
+                        .collect(),
+                ),
+            };
+            self.references[reference].offers = Some(offers);
+        }
+    }
+
+    fn defined_names(&self, kind: EvidenceKind) -> impl Iterator<Item = String> + '_ {
+        self.symbols
+            .iter()
+            .filter(move |symbol| symbol.kind == SymbolKind::Evidence(kind))
+            .map(|symbol| symbol.name.clone())
     }
 
     fn report(&mut self, path: &Path, range: Range, code: &str, message: String) {
