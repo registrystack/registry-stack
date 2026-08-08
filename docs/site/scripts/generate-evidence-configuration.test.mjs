@@ -266,12 +266,96 @@ test('an `if`/`then` rule binds a key conditionally without binding what it reac
   // through it to bound a key below, so its presence is not conditional.
   assert.equal(byPath.get('service').required, 'yes');
   assert.equal(byPath.get('service.providerId').required, 'yes');
-  // The pattern binds in one case only, so it reads as one alternative beside
-  // the bound that always applies rather than as a bound every document meets.
-  assert.deepEqual(byPath.get('service.providerId').constraints, [
-    ['maxLength: 512', 'pattern: ^https://'],
-    ['maxLength: 512'],
+  // The pattern binds in one case only, so it is reported as a further
+  // tightening rather than as an alternative to the bound that always applies.
+  assert.deepEqual(byPath.get('service.providerId').constraints, [['maxLength: 512']]);
+  assert.deepEqual(byPath.get('service.providerId').conditional_constraints, [
+    ['pattern: ^https://'],
   ]);
+});
+
+test('a condition tightens the alternatives rather than standing beside them', () => {
+  // Two independent axes bound one key: the alternatives it always chooses
+  // between, and a rule that narrows whichever one was chosen. Listing them
+  // side by side would offer the unbounded case as a third choice, so a reader
+  // would think any value passes.
+  const fields = collectFields({
+    type: 'object',
+    required: ['baseUrl'],
+    properties: {
+      kind: { enum: ['none', 'token'] },
+      baseUrl: {
+        oneOf: [
+          { type: 'string', pattern: '^https://' },
+          { type: 'string', pattern: '^http://127' },
+        ],
+      },
+    },
+    if: { required: ['kind'], properties: { kind: { const: 'none' } } },
+    then: { properties: { baseUrl: { pattern: '^http://127\\.0\\.0\\.1:[0-9]+$' } } },
+  });
+  const field = fields.find((entry) => entry.key_path === 'baseUrl');
+  assert.deepEqual(field.constraints, [['pattern: ^https://'], ['pattern: ^http://127']]);
+  assert.deepEqual(field.conditional_constraints, [
+    ['pattern: ^http://127\\.0\\.0\\.1:[0-9]+$'],
+  ]);
+  // The silent side of the condition adds no bound, and saying so beside the
+  // alternatives is what made the key read as unbounded.
+  assert.ok(!field.constraints.some((group) => group.length === 0));
+});
+
+test('an array whose contents the grammar fixes reports that bound', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      formats: {
+        type: 'array',
+        minItems: 1,
+        contains: { const: 'signed-jws' },
+        items: { enum: ['signed-jws', 'unsigned', 'sd-jwt-vc'] },
+      },
+      capabilities: { type: 'array', items: { enum: ['search-then-fetch-set'] } },
+      either: { type: 'array', contains: { enum: ['a', 'b'] } },
+    },
+    if: { required: ['formats'], properties: { formats: { minItems: 2 } } },
+    then: { properties: { capabilities: { contains: { const: 'search-then-fetch-set' } } } },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // Without this, the entry says `minItems: 1` and the reader concludes any one
+  // format will do, when the grammar rejects a list without the signed form.
+  assert.deepEqual(byPath.get('formats').constraints, [
+    ['contains: signed-jws', 'minItems: 1'],
+  ]);
+  assert.deepEqual(byPath.get('either').constraints, [['contains: a | b']]);
+  // The same keyword under a condition belongs with the other conditional
+  // bounds, so an empty list still reads as valid outside the condition.
+  assert.deepEqual(byPath.get('capabilities').constraints, []);
+  assert.deepEqual(byPath.get('capabilities').conditional_constraints, [
+    ['contains: search-then-fetch-set'],
+  ]);
+});
+
+test('a contents bound this walk cannot state is an error rather than a silent omission', () => {
+  // Dropping it would publish a page that accepts an array the grammar rejects,
+  // which is the defect the keyword was added to fix.
+  assert.throws(
+    () =>
+      collectFields({
+        type: 'object',
+        properties: { items: { type: 'array', contains: { type: 'object' } } },
+      }),
+    /contains/,
+  );
+  assert.throws(
+    () =>
+      collectFields({
+        type: 'object',
+        properties: {
+          items: { type: 'array', contains: { const: 'a' }, minContains: 2 },
+        },
+      }),
+    /minContains/,
+  );
 });
 
 test('a value a condition fixes is named as narrowing the set, not folded into it', () => {

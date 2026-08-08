@@ -20,7 +20,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-export const FORMAT_VERSION = '1.2';
+export const FORMAT_VERSION = '1.3';
 
 export const CONTRACTS = [
   {
@@ -113,6 +113,36 @@ function constraintsOf(schema, prefix = '') {
   );
 }
 
+// `contains` bounds what an array must hold rather than counting or measuring
+// it, so it needs a reading of its own. Leaving it out publishes an array bound
+// the grammar enforces but the page denies: a list satisfying every printed
+// bound and omitting the mandated item is rejected at startup. The contracts
+// state it only over a fixed value, so a shape this cannot put into one line is
+// an error rather than a quiet omission.
+function containsConstraints(schema, keyPath) {
+  if (!Object.hasOwn(schema, 'contains')) {
+    return [];
+  }
+  const where = keyPath === '' ? 'the document root' : keyPath;
+  for (const keyword of ['minContains', 'maxContains']) {
+    if (Object.hasOwn(schema, keyword)) {
+      throw new Error(`${keyword} at ${where} needs a reading this generator does not have`);
+    }
+  }
+  const subschema = schema.contains;
+  const fixed =
+    subschema !== null && typeof subschema === 'object' && !Array.isArray(subschema)
+      ? [
+          ...(Object.hasOwn(subschema, 'const') ? [subschema.const] : []),
+          ...(Array.isArray(subschema.enum) ? subschema.enum : []),
+        ]
+      : [];
+  if (fixed.length === 0) {
+    throw new Error(`contains at ${where} fixes no value, so it cannot be stated as a bound`);
+  }
+  return [`contains: ${fixed.map(describeValue).join(' | ')}`];
+}
+
 // Bounds a map places on the key a deployment writes. These contracts state
 // them as a reference to the shared identifier definition, so reading the
 // `propertyNames` node itself would report nothing.
@@ -157,7 +187,7 @@ function occurrenceOf(schema, keyPath, kind, required, state) {
     types: declared.length > 0 ? declared : fixed.map(jsonTypeOf),
     required,
     values: fixed.map(describeValue),
-    constraints: constraintsOf(schema),
+    constraints: [...constraintsOf(schema), ...containsConstraints(schema, keyPath)],
     // Which alternative branches were taken to reach this node. Occurrences
     // sharing a key apply together; occurrences under different branches of
     // one combinator are alternatives.
@@ -436,6 +466,12 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 // reached without choosing a branch hold under every alternative, so they join
 // each group; printing one flat union instead would read as a conjunction and
 // describe a value no alternative accepts.
+//
+// Only the alternatives a document always chooses between belong here. A rule
+// that binds under a condition is a second, independent axis: it tightens
+// whichever alternative was chosen rather than offering another one, and
+// flattening the two axes together lists the case where the rule is silent as a
+// choice of its own, so a bounded key reads as unbounded.
 function constraintAlternatives(occurrences) {
   const shared = occurrences
     .filter((occurrence) => occurrence.variantKey === '')
@@ -468,6 +504,25 @@ function constraintAlternatives(occurrences) {
     return distinct[0].length > 0 ? distinct : [];
   }
   return distinct;
+}
+
+// Bounds an `if`/`then`/`else` rule adds on top of whatever alternative a
+// deployment took. A clause that adds none contributes nothing: these are
+// already reported as applying only where the rule does, so naming the silent
+// case would repeat what the column heading says.
+function conditionalConstraints(occurrences) {
+  const byVariant = new Map();
+  for (const occurrence of occurrences) {
+    if (!occurrence.fromCondition || occurrence.constraints.length === 0) {
+      continue;
+    }
+    byVariant.set(occurrence.variantKey, [
+      ...(byVariant.get(occurrence.variantKey) ?? []),
+      ...occurrence.constraints,
+    ]);
+  }
+  const groups = [...byVariant.values()].map(uniqueSorted);
+  return [...new Map(groups.map((group) => [JSON.stringify(group), group])).values()];
 }
 
 function merge(occurrences) {
@@ -503,7 +558,10 @@ function merge(occurrences) {
         : 'no',
     values,
     values_conditional: narrowedByCondition,
-    constraints: constraintAlternatives(occurrences),
+    constraints: constraintAlternatives(
+      occurrences.filter((occurrence) => !occurrence.fromCondition),
+    ),
+    conditional_constraints: conditionalConstraints(occurrences),
     description: occurrences.find((occurrence) => occurrence.description)?.description ?? null,
     runtime_validation:
       occurrences.find((occurrence) => occurrence.runtime_validation)?.runtime_validation ?? null,
