@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-08"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -386,17 +386,31 @@ These are non-goals for this version. None of them should be read into a Registr
 conformance claim:
 
 - A credential lifecycle: Evidence Gateway's SD-JWT VC output is a second serialization of the same
-  stateless assertion under a frozen profile. There is no issuance session, holder binding
-  ceremony, status list, revocation, presentation verification, or persisted credential state,
-  and an optional caller-supplied holder key is echoed unverified into a confirmation claim
-  rather than proved.
+  stateless assertion. There is no issuance session, credential offer, status list, revocation,
+  reissuance, persisted credential state, or OID4VCI endpoint of any kind, in either subject
+  binding mode. Under the default audience-scoped mode there is no holder binding ceremony either,
+  and an optional caller-supplied holder key is echoed unverified into a confirmation claim rather
+  than proved. A requirement that declares the holder-bound mode adds a proof of possession the
+  relying party checks at presentation, and nothing else: the service appends no key-binding JWT,
+  issues no challenge, and retains no presentation or replay state.
 - Delegated or federated evaluation between peers: no service in this model evaluates a
   question on another deployment's behalf, and there is no trust-chain discovery, peer
   registry, or cross-institution evaluation route.
 - Identity resolution: lookup is match, no-match, or ambiguous. Evidence Gateway is not an
   identity-resolution or record-linkage engine and returns no candidate material.
-- Cross-verifier credential use: the subject binding is audience-scoped, so an assertion is
-  meaningful to one relying party and correlatable across none.
+- Cross-verifier credential use under the default binding mode: an audience-scoped subject binding
+  makes an assertion meaningful to one relying party and correlatable across none. A requirement
+  that declares the holder-bound mode opts out of this non-goal deliberately, and accepts the
+  correlation that follows: holder key reuse links a holder across every verifier that sees it,
+  and the service can neither prevent nor detect that. Batch issuance under distinct keys reduces
+  the deterministic key-based link; it does not make credentials unlinkable, because members still
+  share an issuance timestamp, purpose, requirement, Evidence Type, configuration revision, and
+  disclosed values.
+- Replay prevention at presentation: a relying party verifying a key-binding JWT compares the
+  nonce from the challenge it issued, and comparing a nonce is not consuming it. The same
+  presentation bytes verify again under the same stateless policy. RFC 9901 section 7.3 places the
+  challenge lifecycle in the surrounding protocol, so issuing a nonce, retaining it, and retiring
+  it are the relying party's own duties.
 - Full external-policy interoperability: governed Relay PDP enforcement covers only the one
   supported PDP profile (`registry-evidence-gateway-pdp/v1`). This legacy identifier belongs to
   Relay and does not name or connect to Evidence Gateway. It is not dynamic external policy

@@ -343,6 +343,7 @@ export default defineConfig({
                 { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Enable SD-JWT VC in a deployment', slug: 'configure/enable-sd-jwt-vc' },
+                { label: 'Request a holder-bound credential', slug: 'tutorials/request-a-holder-bound-credential' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },

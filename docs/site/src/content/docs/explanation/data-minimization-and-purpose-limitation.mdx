@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-08"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -85,7 +85,10 @@ disclosure at all, so there is no request-time negotiation to review.
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
 form* its fact takes: a boolean, a code from a reviewed codelist, a bounded number, a date or time
 bucket, an audience-scoped opaque reference, or a reviewed closed structure. The set of forms is
-closed at eleven. The answer carries a value for each declared concept and nothing else, and the
+closed at eleven, and a requirement issuing under the holder-bound subject binding mode may use
+nine of them: the two entity-reference forms take the audience as a derivation input, so a
+holder-bound requirement declaring either is refused at startup rather than served with a
+degenerate reference. The answer carries a value for each declared concept and nothing else, and the
 assertion schema rejects additional properties.
 For a reviewer, this moves the disclosure decision from request time, where a caller could argue
 for more, to authoring and review time, where an operator justifies it once and can be held to it.
@@ -103,9 +106,26 @@ present a subset. A value uses one disclosure by default. A governed structured 
 place each direct field in a separate disclosure while keeping nested field values atomic. Two
 limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
 receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
-Evidence Gateway also performs no presentation-side verification, no key-binding JWT validation, and no
-wallet interaction, and the profile excludes OID4VCI in every part. A caller may supply a holder
-public key that Evidence Gateway echoes into the `cnf` claim for a relying party to check itself.
+Evidence Gateway also runs no wallet interaction and speaks no part of OID4VCI. Under the default
+audience-scoped binding mode a caller may supply a holder public key that Evidence Gateway echoes
+into the `cnf` claim for a relying party to check itself, and nothing verifies it.
+
+A requirement may instead declare the holder-bound subject binding mode, which changes what the
+credential is bound to and moves the audience check from issuance to presentation. The service
+still issues no key-binding JWT and holds no presentation state; verification is a relying-party
+act, performed by the portable verifier or the `evidence verify-presentation` operator command.
+For minimization the mode is a trade rather than a gain: the same holder key, trust domain,
+purpose, subject role, selector profile, and selector values yield the same binding for every
+verifier, so a holder who reuses one key is correlatable across the verifiers it presents to.
+Holder-bound issuance also refuses the two entity-reference value forms, and a holder-bound
+assertion carries neither an audience nor the request nonce, because it names no relying party to
+echo them to.
+
+Purpose behaves the same way on both sides of the boundary. A relying party compares the issuance
+purpose as signed provenance: it records why the assertion was produced and licenses, limits, or
+authorizes nothing about what the relying party may now do with it. Under the holder-bound mode
+that record is also disclosed to every verifier the credential reaches, and it is a
+low-cardinality attribute, so treat it as visible rather than internal.
 
 A further minimization detail guards against a subtler leak.
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into

@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-08"
 doc_type: specification
 doc_id: RS-PR-EVIDENCE
 category: normative
@@ -49,9 +49,10 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
     to refine a numbered RS-ARC-G requirement; adding that mapping is a separate normative
     decision. */}
 
-{/* TODO[evidence]: src/data/standards.yaml records sd-jwt-vc, cccev, openapi, and json-schema
-    without listing registry-evidence under `used_by`. The register entries need an Evidence Gateway row
-    before this page's standards claims are traceable from the register itself. */}
+{/* TODO[evidence]: src/data/standards.yaml now lists registry-evidence under `used_by` for
+    sd-jwt-vc, with Evidence-owned evidence links and the two subject binding modes described in its
+    notes. The cccev, openapi, and json-schema entries still record no Evidence Gateway row, so this
+    page's claims against those three are not yet traceable from the register itself. */}
 
 ## Version history
 
@@ -62,6 +63,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
 | 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
 | 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
+| 0.6.0 | 2026-08-08 | draft | Added Section 7.3, the holder-bound subject binding mode, its batch release envelope, and relying-party presentation verification (REQ-PR-EVIDENCE-060 through REQ-PR-EVIDENCE-069). Scoped REQ-PR-EVIDENCE-024, REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-040, and REQ-PR-EVIDENCE-041 to the audience-scoped mode without renumbering them. |
 
 ## 1. Scope and references
 
@@ -73,9 +75,12 @@ This specification covers Evidence Gateway's externally observable protocol beha
 - The closed request contract and the request nonce.
 - Evaluation, the four coequal acceptance definitions, and the output gate.
 - Disclosure minimization, subject binding, and the combined-bundle disclosure surface.
-- The three response formats: the signed JSON Web Signature (JWS) assertion, the separately typed
-  unsigned envelope, and the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
-  same assertion.
+- The four response formats: the signed JSON Web Signature (JWS) assertion, the separately typed
+  unsigned envelope, the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
+  same assertion, and the batch envelope that carries one holder-bound credential per presented
+  holder key.
+- The two subject binding modes, and the relying-party presentation verification the holder-bound
+  mode requires.
 - The problem contract, including existence collapse.
 - The authorization-refusal gate and the two authorized-material audit gates.
 - The immutability of deployment input.
@@ -92,17 +97,23 @@ This specification does not define:
 - Deployment duties: Supported deployment shape, secret and key custody, readiness, audit storage,
   and rotation belong to `products/evidence/OPERATOR-CONTRACT.md`.
 - Verifier procedure: The relying-party policy document and the offline `evidence verify` command are
-  specified by `products/evidence/contracts/verification-policy.schema.yaml`.
+  specified by `products/evidence/contracts/verification-policy.schema.yaml`. The holder-bound
+  policy document and the offline `evidence verify-presentation` command are specified by
+  `products/evidence/contracts/holder-bound-verification-policy.schema.yaml`. Neither command
+  accepts the other's document.
 
 Evidence Gateway Version 1 has explicit non-goals, recorded in
 `products/evidence/contracts/README.md` and `products/evidence/README.md`.
 It stops before documents, credential issuance protocols and credential lifecycle, status lists and
-revocation, OpenID for Verifiable Credential Issuance (OID4VCI) in any part, presentation-side
-verification, replay or nonce state beyond the stateless request-nonce echo, server-issued
-challenges, federation, delegated agents, workflow, public or federated catalogs, runtime bundle
-mutation, source planning, multi-source fulfillment, and an application database.
+revocation, OpenID for Verifiable Credential Issuance (OID4VCI) in any part, service-held replay,
+challenge, or presentation state, server-issued challenges, federation, delegated agents, workflow,
+public or federated catalogs, runtime bundle mutation, source planning, multi-source fulfillment,
+and an application database.
 The SD-JWT VC output is a second encoding of one stateless assertion under a frozen profile; it is
 never a credential lifecycle.
+Presentation-side verification is a relying-party act, not a service surface: Section 7.3 specifies
+what a relying party verifies for a holder-bound credential, and Evidence Gateway itself appends no
+key-binding JWT, issues no challenge, and holds no presentation state.
 Registry Relay's protocol is specified by RS-PR-RELAY; it does not govern Evidence Gateway, and Evidence Gateway
 inherits no requirement from it.
 
@@ -292,11 +303,16 @@ Subject selector profiles and selector values MUST NOT appear in evidence.
 The disclosed content is the declared supported values for the selected requirement, never the source
 record (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
-REQ-PR-EVIDENCE-024: A subject MUST appear only as a role-bound, audience-scoped opaque binding.
-The binding MUST be a domain-separated keyed derivation over the audience, purpose, role, profile,
-binding-key version, and complete canonical selector bundle, so it is not globally linkable across
-relying parties or purposes
+REQ-PR-EVIDENCE-024: A subject MUST appear only as a role-bound opaque binding.
+The binding MUST be a domain-separated keyed derivation over one binding scope, the purpose, role,
+profile, binding-key version, operator trust domain, and complete canonical selector bundle.
+Under the default audience-scoped mode the binding scope is the audience, so the binding is not
+globally linkable across relying parties or purposes
 (`products/evidence/contracts/evidence.schema.yaml`, invariant `V1-I17`).
+A requirement declaring the holder-bound mode under Section 7.3 takes the holder key thumbprint as
+its binding scope instead, and REQ-PR-EVIDENCE-061 states the linkability that mode accepts.
+Under either mode the derivation MUST be keyed by a deployment secret, so a relying party cannot
+recompute a binding and MUST pin the expected bindings from independent trusted state.
 
 REQ-PR-EVIDENCE-025: The complete enabled bundle MUST be reviewed as one disclosure surface.
 Individually safe definitions MUST be rejected when their combination reconstructs a protected value,
@@ -379,17 +395,21 @@ signature, or a JWS-shaped unsigned object.
 REQ-PR-EVIDENCE-037: The SD-JWT VC format MUST be a serialization of the same Version 1 assertion and
 MUST NOT introduce a credential lifecycle.
 Everything before serialization is the unchanged path: one authorization decision, fixed source
-execution, bounded derivation, output validation, audience-scoped subject binding, and the same
-durable access and disclosure-release audit ordering
+execution, bounded derivation, output validation, subject binding under the requirement's declared
+mode, and the same durable access and disclosure-release audit ordering
 (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
 
 REQ-PR-EVIDENCE-038: The profile non-goals in
 `products/evidence/contracts/sd-jwt-vc-profile.yaml` MUST NOT be implemented, stubbed,
 feature-flagged, or left as an extension seam.
-They include OID4VCI in any part, persistent issuance state, status lists and revocation,
-presentation-side verification and key-binding JWT validation, wallet onboarding and attestation,
-holder-scoped or cross-verifier subject identifiers, and reissuance, refresh, batch issuance, or
-persistent credential identifiers.
+Under both subject binding modes they include OID4VCI in any part, persistent issuance state,
+status lists and revocation, server-side challenge, presentation, or replay state, wallet
+onboarding and attestation, holder key generation, holding, escrow, or recovery by the service, and
+reissuance, refresh, or persistent credential identifiers.
+Under the audience-scoped mode they additionally include holder-scoped or cross-verifier subject
+identifiers, batch issuance, and presentation-side verification of any kind; Section 7.3 states
+those three as the declared, separately permitted behavior of the holder-bound mode, and
+REQ-PR-EVIDENCE-069 keeps every other non-goal in force there.
 
 REQ-PR-EVIDENCE-039: The credential claim set MUST be closed.
 The always-disclosed claims, root-value disclosure rule, optional direct-field disclosure for a
@@ -400,18 +420,136 @@ Nested field values remain atomic, and the complete structured value MUST pass i
 before serialization.
 The issuer MUST NOT append a key-binding JWT.
 
-REQ-PR-EVIDENCE-040: A holder confirmation claim MUST be present only when the caller supplied a
-holder public key in the request, and Evidence Gateway MUST NOT validate a presentation.
+REQ-PR-EVIDENCE-040: Under the audience-scoped mode a holder confirmation claim MUST be present only
+when the caller supplied a holder public key in the request, and Evidence Gateway MUST NOT validate
+a presentation.
 The accepted key type and the prohibited private members are fixed by
 `products/evidence/contracts/request.schema.yaml` and
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`; a key carrying any private member, a
 non-allowlisted algorithm, or an unparseable body MUST fail before credential acquisition or source
-access.
+access, under either mode.
+REQ-PR-EVIDENCE-063 states where a confirmation claim is instead required.
 
-REQ-PR-EVIDENCE-041: The credential's subject binding MUST remain audience-scoped, so the credential
-is meaningful only to the relying party named in the assertion's audience.
+REQ-PR-EVIDENCE-041: Under the audience-scoped mode the credential's subject binding MUST remain
+audience-scoped, so the credential is meaningful only to the relying party named in the assertion's
+audience.
 Adopter-facing material MUST state this limit rather than implying a general multi-verifier
 credential (`products/evidence/contracts/sd-jwt-vc-profile.yaml`).
+A requirement declaring the holder-bound mode is the one exception, permitted only under Section
+7.3, and adopter-facing material for such a requirement MUST state the correlation that mode
+accepts rather than presenting it as unlinkable.
+
+### 7.3 Holder-bound subject binding
+
+This section states the second subject binding mode. Its governing contracts are
+`products/evidence/contracts/holder-bound-profile.yaml`, which is `frozen` because every negative
+test it names resolves to an executable test, and
+`products/evidence/contracts/holder-bound-verification-policy.schema.yaml`, a JSON Schema document
+that carries no status field of its own.
+A deployment that declares no requirement under this mode is unaffected by every requirement in
+this section.
+
+REQ-PR-EVIDENCE-060: The subject binding mode MUST be declared by the requirement inside the
+immutable bundle, from a vocabulary closed at `audience-scoped` and `holder-bound`.
+The mode MUST have no default: absence means `audience-scoped`, and no caller input, header, or
+negotiated media type MAY select a mode
+(`products/evidence/contracts/holder-bound-profile.yaml`).
+
+REQ-PR-EVIDENCE-061: A holder-bound binding MUST derive under its own domain constant, taking the
+RFC 7638 SHA-256 thumbprint of the holder public JWK as its binding scope rather than the JWK
+bytes, and MUST emit into the one existing `urn:evidence:subject` namespace.
+The trust domain and binding-key version MUST remain inputs, so one holder key under two
+deployments never yields one binding.
+The audience MUST NOT be an input, and the consequence MUST be stated rather than mitigated: the
+same holder key, purpose, role, selector profile, and selector values yield the same binding for
+every caller and every verifier, holder key reuse is a correlator Evidence Gateway can neither
+prevent nor detect, and a binding is a persistent pseudonym for that tuple.
+
+REQ-PR-EVIDENCE-062: A holder-bound assertion MUST be released only when the immutable bundle
+declares the mode on the requirement and the one complete matched grant permits the mode
+explicitly.
+Permitting a response format MUST NOT imply permitting a binding mode.
+The formats such a requirement may serve MUST be the intersection of the bundle's permission, that
+grant's permission, and the mode's own allowlist, which is the SD-JWT VC serialization and the
+batch envelope.
+A request outside that intersection MUST be refused through the ordinary format denial, which MUST
+NOT reveal which layer withheld it
+(`products/evidence/contracts/holder-bound-profile.yaml`).
+
+REQ-PR-EVIDENCE-063: A request against a holder-bound requirement MUST carry at least one holder
+public key; a single-credential request is an array of one, and the credential's confirmation claim
+MUST be present.
+Keys MUST be distinct by RFC 7638 thumbprint, and a repeated thumbprint MUST be refused before
+source access.
+The count MUST be bounded by the ceiling the immutable bundle declares.
+These checks MUST run after entitlement matching and after the format gate and before selector
+resolution, so the endpoint never becomes an unauthenticated oracle for which requirements exist,
+which mode each carries, or how large a batch the deployment serves.
+The holder key thumbprint MAY reach subject-binding derivation and MUST NOT reach authorization,
+selectors, scripts, source requests, or audit.
+
+REQ-PR-EVIDENCE-064: A holder-bound assertion MUST carry neither the audience nor the request
+nonce, because it names no relying party to echo them to; the two payload members MUST be present
+together or absent together
+(`products/evidence/contracts/holder-bound-profile.yaml`).
+A holder-bound requirement MUST NOT declare the `audience-scoped-entity-reference` or
+`entity-reference-list` value form, because both take the audience as a derivation input, and a
+bundle declaring either MUST refuse during runtime binding, before the listener binds, with a
+value-free cause.
+
+REQ-PR-EVIDENCE-065: A batch release MUST be one authorization decision, one source acquisition,
+and one derivation, then one credential member per distinct holder key.
+Each member MUST carry its own subject binding, confirmation key, identifier, and independent
+disclosure salts.
+A failure on any member MUST release nothing, with no partial batch and no per-member fallback, and
+the whole release MUST be recorded by exactly one terminal disclosure-release event.
+The envelope is issuance-only and MUST NOT be an input to verification
+(`products/evidence/contracts/holder-bound-profile.yaml`).
+Adopter-facing material MUST state that a batch reduces deterministic key-based linkability and
+does not make credentials unlinkable: members share an issuance timestamp, purpose, requirement,
+Evidence Type, configuration revision, and disclosed values, and the issuer knows one requester
+submitted the keys together.
+
+REQ-PR-EVIDENCE-066: Evidence Gateway MUST NOT append a key-binding JWT under either mode.
+An issued holder-bound credential ends in the trailing tilde marking an absent key-binding JWT.
+A presentation is the compact serialization with the holder's key-binding JWT after the last tilde
+and no trailing tilde, so an issued credential and a presentation are mutually exclusive shapes,
+and a stored credential offered as a presentation MUST be refused rather than verified without
+possession.
+
+REQ-PR-EVIDENCE-067: Presentation verification MUST fail closed and MUST verify the key-binding JWT
+before any policy comparison runs, so a failed possession proof never becomes an oracle for a
+policy expectation.
+An absent, malformed, or unverifiable key-binding JWT, a signer other than the confirmation key, a
+header member outside the closed allowlist, and a mismatched challenge audience, nonce, or
+presentation digest MUST each report the one `key-binding` failure class.
+A presentation whose issuer signature verifies and whose key binding does not MUST be rejected and
+MUST NOT be reported as an issuer-only success.
+A mode mismatch MUST be rejected in both directions and reported as the one generic policy class
+(`products/evidence/contracts/holder-bound-verification-policy.schema.yaml`).
+
+REQ-PR-EVIDENCE-068: A relying party MUST pin the expected role-bound subject bindings from
+independent trusted state and MUST NOT appear to recompute them.
+An expected holder key thumbprint is OPTIONAL and authenticates a pre-established holder; it MUST
+NOT be presented as what proves possession, which is the key-binding signature over the
+credential's own confirmation key.
+The relying party asserts the presentation audience and nonce in its own challenge, and neither is
+issuer-signed.
+The expected issuance purpose MUST be compared as signed issuance provenance: it records why the
+assertion was produced and authorizes, limits, or licenses no downstream use.
+
+REQ-PR-EVIDENCE-069: A verified key-binding JWT proves that the presenter held the confirmation
+key's private key when that JWT was signed, over exactly the presented bytes, for the audience and
+nonce the relying party chose, and proves nothing else.
+Comparing a nonce is not consuming it: the same presentation bytes verify again under the same
+stateless policy, and RFC 9901 Section 7.3 places the challenge lifecycle in the surrounding
+protocol.
+Adopter-facing material MUST NOT describe any behavior in this section as replay prevention, and
+MUST NOT claim full SD-JWT VC or OID4VCI conformance.
+Every profile non-goal in `products/evidence/contracts/holder-bound-profile.yaml` MUST NOT be
+implemented, stubbed, feature-flagged, or left as an extension seam; a holder-bound credential is
+usable by whoever holds it and the matching private key until `validUntil` passes, with no status
+list, no revocation, and no expiry beyond it.
 
 ## 8. Problem reporting
 
@@ -559,11 +697,26 @@ It MUST send no authentication header.
 These constraints are stated so a reader does not infer a capability from the route list or the
 credential format that the frozen Version 1 contracts do not provide.
 
-- Credential lifecycle: The SD-JWT VC output adds a response format only. No offer, code, nonce,
-  status, revocation, presentation verification, or persisted credential state exists
-  (REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038).
-- Cross-verifier use: The credential subject binding is audience-scoped, so it is meaningful to one
-  relying party and correlatable across none (REQ-PR-EVIDENCE-041).
+- Credential lifecycle: The SD-JWT VC output adds a response format only. No offer, code, status,
+  revocation, reissuance, or persisted credential state exists under either subject binding mode,
+  and no service-side challenge or presentation state exists either
+  (REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-069).
+- Cross-verifier use: Under the default mode the credential subject binding is audience-scoped, so
+  it is meaningful to one relying party and correlatable across none (REQ-PR-EVIDENCE-041). A
+  requirement declaring the holder-bound mode accepts the opposite trade, and holder key reuse
+  correlates a holder across every verifier that sees it (REQ-PR-EVIDENCE-061).
+- Batch linkability: A batch reduces deterministic key-based linkability and does not make
+  credentials unlinkable; members share an issuance timestamp, purpose, requirement, Evidence Type,
+  configuration revision, and disclosed values (REQ-PR-EVIDENCE-065).
+- Possession, not freshness: A verified key-binding JWT proves possession at signing time over the
+  presented bytes. Comparing a challenge nonce is not consuming it, nothing in this specification is
+  replay prevention, and the challenge lifecycle belongs to the relying party
+  (REQ-PR-EVIDENCE-069).
+- Holder-bound contract maturity: `products/evidence/contracts/holder-bound-profile.yaml` is
+  `frozen`, and every negative test it names resolves to an executable test.
+  `products/evidence/contracts/holder-bound-verification-policy.schema.yaml` is a JSON Schema
+  document that carries no status field, so it declares no lifecycle status of its own and none
+  should be inferred for it.
 - Nonce semantics: The request nonce is uninterpreted correlation data. Reuse is not rejected, and
   the nonce is not replay prevention (REQ-PR-EVIDENCE-014).
 - Unsigned output: Transport-authenticated convenience only, never later-verifiable evidence and
@@ -636,8 +789,21 @@ An Evidence Gateway deployment conforms to this specification when it:
   (REQ-PR-EVIDENCE-033, REQ-PR-EVIDENCE-034, REQ-PR-EVIDENCE-035, REQ-PR-EVIDENCE-036);
 - serializes SD-JWT VC as the same assertion under the frozen profile, implements none of its
   non-goals, closes the claim set, embeds a holder key only when supplied, and keeps the binding
-  audience-scoped (REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-039,
+  audience-scoped unless a requirement declares otherwise (REQ-PR-EVIDENCE-037,
+  REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-039,
   REQ-PR-EVIDENCE-040, REQ-PR-EVIDENCE-041);
+- declares any holder-bound subject binding on the requirement from the closed two-value vocabulary,
+  derives it under its own domain constant from the holder key thumbprint, requires both bundle and
+  grant permission separately from format permission, bounds and deduplicates the presented keys
+  after the authorization and format gates, omits the audience and request nonce, refuses the
+  entity-reference value forms, and releases a batch as one all-or-nothing decision with one
+  terminal audit event (REQ-PR-EVIDENCE-060, REQ-PR-EVIDENCE-061, REQ-PR-EVIDENCE-062,
+  REQ-PR-EVIDENCE-063, REQ-PR-EVIDENCE-064, REQ-PR-EVIDENCE-065);
+- appends no key-binding JWT, keeps an issued credential and a presentation mutually exclusive
+  shapes, and states presentation verification as a relying-party act that fails closed, checks key
+  binding before any policy comparison, pins expected subject bindings from independent trusted
+  state, and claims possession rather than freshness, replay prevention, or external conformance
+  (REQ-PR-EVIDENCE-066, REQ-PR-EVIDENCE-067, REQ-PR-EVIDENCE-068, REQ-PR-EVIDENCE-069);
 - reports failures as closed problem documents, collapses unresolved classes, refuses unacceptable
   negotiation before source access, and bounds retry hints (REQ-PR-EVIDENCE-042,
   REQ-PR-EVIDENCE-043, REQ-PR-EVIDENCE-044, REQ-PR-EVIDENCE-045);
@@ -666,8 +832,10 @@ Each standard's adoption mode and scope are documented in the
 
 This specification is `verified`: its requirements cite inspectable frozen contracts, generated
 artifacts, implementation tests, or operator material, per RS-DOC REQ-DOC-014.
-The standards register does not yet list `registry-evidence` under the entries this page references;
-that evidence gap remains marked with an author comment in the source of this page.
+The standards register lists `registry-evidence` under its SD-JWT VC entry, with Evidence-owned
+evidence links; it does not yet carry an Evidence Gateway row under the CCCEV, OpenAPI, and JSON
+Schema entries this page also references, and that remaining gap is marked with an author comment in
+the source of this page.
 
 - The frozen source contracts live in `products/evidence/contracts/`, indexed by
   `products/evidence/contracts/README.md`. Each requirement in Sections 2 through 11 names the file

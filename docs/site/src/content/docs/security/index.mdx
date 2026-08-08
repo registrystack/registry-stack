@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-platform
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-08"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -36,6 +36,8 @@ evidence](openssf-evidence/).
 | Person-level access is written to an audit log | Built in (fail-closed is yours to switch on) |
 | Three disclosure modes, with `redacted` revealing neither value nor answer | Built in |
 | Selective-disclosure SD-JWT VC serialization of an assertion | Built in (a second encoding, not a credential lifecycle) |
+| Holder-bound subject binding, proven at presentation by a key-binding JWT | Declared per requirement, verified by the relying party (frozen profile) |
+| Replay prevention for a presented credential | Not provided anywhere; the challenge lifecycle is the relying party's |
 | Token issuers authenticate their clients by asymmetric client assertion | Built in |
 | Hardened HTTP headers and outbound-traffic limits | Recommended, confirm your build applies them |
 | Key custody, retention, isolation, TLS, rate limiting | Your deployment's job |
@@ -77,12 +79,29 @@ signed artifact without holding a credential of its own (REQ-SEC-G-007).
 Evidence Gateway can serialize the same signed assertion as an SD-JWT VC, where the signed body carries
 hashes of each disclosable field rather than the values.
 That is a second encoding of one response, not a credential lifecycle: there is no issuance
-session, holder-binding ceremony, status list, revocation, or presentation verification.
-A request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence Gateway issues no
-key-binding JWT, requires none, and verifies none, so `cnf` is an unverified caller-supplied
-convenience for whatever presentation layer the operator runs elsewhere.
-The subject identifier stays an audience-scoped pseudonym, so the same person requested for a
-different audience yields a different identifier.
+session, credential offer, status list, revocation, reissuance, or persisted credential state, and
+no part of OID4VCI.
+A requirement in the immutable bundle declares which of two subject binding modes it issues under.
+The vocabulary is closed at two values and has no default, and no caller input selects a mode.
+
+By default the binding is audience-scoped: the subject identifier is a pseudonym derived over the
+audience, so the same person requested for a different audience yields a different identifier. A
+request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence Gateway binds
+nothing to it and verifies nothing, so `cnf` is an unverified caller-supplied convenience for
+whatever presentation layer the operator runs elsewhere.
+
+A requirement may instead declare the holder-bound mode, where the binding derives from the RFC
+7638 thumbprint of the holder key rather than from the audience, `cnf` is required, and the
+audience check moves from issuance to presentation. Possession is then proven by a key-binding JWT
+under RFC 9901 section 4.3, which the relying party verifies. The service still issues no
+key-binding JWT, holds no challenge or presentation state, and runs no presentation endpoint;
+verification is a relying-party act, offered as the portable verifier library and the
+`evidence verify-presentation` operator command. Reviewers should read three consequences
+together: the mode accepts cross-verifier correlation through holder key reuse, which the service
+can neither prevent nor detect; comparing a challenge nonce is not consuming it, so nothing here
+is replay prevention; and the mode's profile is frozen, a status it carries only because every
+negative test it names resolves to an executable test.
+[Known limitations](../explanation/known-limitations/) states both modes side by side.
 
 Where a deployment has no identity provider, Registry Mint issues the access tokens Evidence Gateway
 verifies. Mint authenticates each registered client with an asymmetric client assertion, checked
