@@ -3220,6 +3220,70 @@ async fn a_private_key_jwt_source_signs_the_configured_assertion_audience() {
     );
 }
 
+/// The default audience is the token endpoint, and it is subject to the same
+/// Simple String Comparison as a configured one: what the server compares
+/// against is the endpoint it published, which is the spelling the operator
+/// copied into the bundle. Deriving the default from the parsed URL instead of
+/// the configured bytes silently sends something else, because parsing drops a
+/// default port and resolves dot segments.
+///
+/// The reported spelling is `https://issuer.invalid:443/token`, whose port a
+/// parser drops. A loopback mock cannot be reached on the default port, so this
+/// exercises the same normalization step through a dot segment, which the
+/// parser resolves away while the request still arrives at `/token`.
+#[tokio::test]
+async fn an_unstated_assertion_audience_is_the_token_endpoint_as_configured() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "synthetic-access-token",
+            "token_type": "Bearer",
+            "expires_in": 300
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_root, secrets) = resolver(&[
+        ("oauth-client-id", "synthetic-client"),
+        ("oauth-client-key", CLIENT_ASSERTION_PRIVATE_JWK),
+    ]);
+    let configured_endpoint = format!("{}/issued/../token", server.uri());
+    let source = fixed_source(
+        &server.uri(),
+        json!({
+            "kind": "oauth2-client-credentials",
+            "tokenEndpoint": configured_endpoint,
+            "clientIdRef": "secret:file/oauth-client-id",
+            "clientAssertionKeyRef": "secret:file/oauth-client-key",
+            "maximumCacheSeconds": 60
+        }),
+    );
+    SourceExecutor::new(&source, secrets)
+        .expect("assertion executor builds")
+        .credentials_ready()
+        .await
+        .expect("the token request succeeds");
+
+    let requests = server.received_requests().await.expect("request journal");
+    let token_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/token")
+        .expect("the token request was recorded");
+    let form = encoded_parameters(&token_request.body);
+    let assertion = form
+        .iter()
+        .find_map(|(name, value)| (name == "client_assertion").then_some(value.as_str()))
+        .expect("the form carries an assertion");
+    let claims = decode_jws_segment(assertion.split('.').collect::<Vec<_>>()[1]);
+    assert_eq!(
+        claims["aud"],
+        json!(configured_endpoint),
+        "the default audience was normalized instead of sent as configured"
+    );
+}
+
 /// A key the runtime cannot read is a credential failure, and it has to be one
 /// before anything reaches the authorization server: a token request built
 /// without client authentication would put the bare client identifier on the

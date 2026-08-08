@@ -249,10 +249,10 @@ operator-chosen identifier. Each assertion carries a fresh `jti` and expires wit
 an authorization server that refuses replays has an identifier to record
 (`crates/registry-platform-authcommon/src/client_assertion.rs`).
 
-Evidence Gateway sets the assertion's `aud` to the configured `tokenEndpoint`, which is the value
-SMART App Launch requires. RFC 7523 section 3 asks only that the audience identify the authorization
-server and says the token endpoint URL MAY be used, so a server that expects a different identifier
-states it in `clientAssertionAudience`:
+Evidence Gateway sets the assertion's `aud` to `tokenEndpoint` exactly as the bundle spells it, which
+is the value SMART App Launch requires. RFC 7523 section 3 asks only that the audience identify the
+authorization server and says the token endpoint URL MAY be used, so a server that expects a
+different identifier states it in `clientAssertionAudience`:
 
 ```yaml
 authentication:

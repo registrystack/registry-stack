@@ -406,7 +406,8 @@ not configurable, and the assertion lifetime is fixed rather than governed. A
 key the runtime cannot read fails the request before any token call.
 
 `clientAssertionAudience` is the assertion's `aud` claim, and it defaults to
-`tokenEndpoint`, which is the value SMART on FHIR Backend Services requires.
+`tokenEndpoint` exactly as the bundle spells it, which is the value SMART on
+FHIR Backend Services requires.
 State it only for a server that expects an identifier it is not reached at: one
 behind a proxy, or one naming its issuer. RFC 7523 section 3 asks only that the
 value identify the authorization server, says the token endpoint URL MAY be

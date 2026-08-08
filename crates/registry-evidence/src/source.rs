@@ -885,6 +885,15 @@ fn compile_authentication(
             maximum_cache_seconds,
             assumed_lifetime_seconds,
         } => {
+            // The audience the assertion falls back to is the endpoint as the
+            // operator wrote it, not as a parser renders it. RFC 7523 section 3
+            // has the server compare `aud` by Simple String Comparison against
+            // the endpoint it published, and parsing drops a default port and
+            // resolves dot segments, so the parsed form can differ from the
+            // spelling the operator copied from that server. A configured
+            // `clientAssertionAudience` already travels byte for byte for this
+            // reason; the default it stands in for has to do the same.
+            let configured_token_endpoint = token_endpoint.as_str();
             let token_endpoint = validate_url(token_endpoint, false)?;
             if token_endpoint.query().is_some() {
                 return Err(SourceError::InvalidPlan);
@@ -908,7 +917,7 @@ fn compile_authentication(
                     key_ref: key_ref.clone(),
                     audience: client_assertion_audience
                         .clone()
-                        .unwrap_or_else(|| token_endpoint.as_str().to_owned()),
+                        .unwrap_or_else(|| configured_token_endpoint.to_owned()),
                 },
                 _ => return Err(SourceError::InvalidPlan),
             };
