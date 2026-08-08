@@ -244,6 +244,56 @@ fn a_question_the_deserializer_cannot_read_is_reported_once_and_still_names_itse
     );
 }
 
+/// A question the deserializer cannot read says nothing about the names it spells.
+///
+/// The compiler reaches a question's cross-file checks through `compile_question_plan`, which runs
+/// on a question the form has already accepted, so a source that is not there is not a second
+/// sentence: it is a name inside a document whose shape is what the author has to fix first.
+/// Answering one mistake with two sentences puts the author's attention on a field that may well be
+/// correct once the shape is.
+#[test]
+fn a_question_the_deserializer_cannot_read_says_nothing_about_the_names_it_spells() {
+    let text = QUESTION
+        .replace("    type: boolean\n", "    type: mystery\n")
+        .replace("<|source-ref|>people", "ledger");
+
+    let (_project, reported) = question_project(&text);
+
+    assert_eq!(
+        reported
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_deref().unwrap_or("<no code>"))
+            .collect::<Vec<_>>(),
+        vec!["evidence/question-shape"],
+        "{reported:?}"
+    );
+}
+
+/// The document that admits such a question still finds it.
+///
+/// What a question file declares is the name its path gives it, and that is not gated on anything
+/// written inside it. Silencing the names a malformed question spells must not silence the name it
+/// is: an access policy admitting a question whose document is right there has nothing wrong with
+/// it, and telling it the question is missing would be the diagnostic this whole surface refuses to
+/// draw.
+#[test]
+fn an_access_policy_admitting_a_question_the_deserializer_cannot_read_is_told_nothing() {
+    let text = QUESTION
+        .replace("    type: boolean\n", "    type: mystery\n")
+        .replace("<|source-ref|>people", "ledger");
+    let project = EvidenceProject::new(&replacing(&adult_status_project(), QUESTION_PATH, &text));
+
+    let index = project.index();
+    let reported = index.diagnostics();
+
+    assert!(
+        reported
+            .iter()
+            .all(|diagnostic| diagnostic.path != project.path(ACCESS_POLICY_PATH)),
+        "the policy still finds the question it admits: {reported:?}"
+    );
+}
+
 /// The policy the whole channel is held to: every Evidence diagnostic is an error, and every one
 /// names the rule behind it so a client can silence one rule instead of the server. Nothing
 /// advisory, nothing informational, nothing an author is invited to disagree with.

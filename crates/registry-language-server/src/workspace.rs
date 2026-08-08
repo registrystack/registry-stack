@@ -1483,10 +1483,37 @@ mod tests {
     /// A question pointing at a derivation and a fixture no directory of the project holds.
     ///
     /// Both pointers are unresolved, so a root reading this text says two things about it, and a
-    /// root that no longer holds the file says nothing at all.
+    /// root that no longer holds the file says nothing at all. The question is written in full
+    /// because that is what makes it say them: the names inside a question the authoring form
+    /// refuses are resolved for navigation and reported to nobody, so a stub here would prove the
+    /// silence this fixture exists to tell apart from the real one.
     fn question_naming_absent_files(name: &str) -> String {
         format!(
-            "version: 1\nid: {name}\nderivation: derivations/{name}.rhai\ngovernance:\n  fixtures: fixtures/{name}.yaml\n"
+            r#"id: {name}
+question: Is the person at least 18 years old?
+purpose: fixture-eligibility
+subject:
+  role: subject
+  selector: person_id
+source:
+  ref: people
+answers:
+  - concept: is_adult
+    id: urn:example:concepts:is-adult
+    type: boolean
+derivation: derivations/{name}.rhai
+disclosure:
+  allow: [is_adult]
+governance:
+  requirement: urn:example:requirements:{name}:v1
+  kind: criterion
+  referenceFrameworks: [urn:example:frameworks:{name}:v1]
+  evidenceType: urn:example:evidence-types:{name}:v1
+  validitySeconds: 86400
+  observationTimezone: Etc/UTC
+  fixtures: fixtures/{name}.yaml
+  disclosureFamilies: [urn:example:disclosure-families:{name}]
+"#
         )
     }
 

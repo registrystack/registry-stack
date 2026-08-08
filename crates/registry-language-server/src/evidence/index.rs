@@ -124,12 +124,21 @@ pub(crate) fn build_index(
         };
         match role {
             DocumentRole::Question => {
-                builder.walk_question(path, name, &document.value);
-                if let Some(source) = documents.get(path) {
-                    let reading = read_question(path, source, document);
-                    let validated = reading.validated;
+                // The document is read before it is walked, because what the walk reports depends
+                // on the answer. A question the form refuses is one sentence, at the field that
+                // holds the departure, and the names it spells are walked for navigation and
+                // reported to nobody. A root holding no text for a document reads nothing, and the
+                // names in it are reported as they always were.
+                let reading = documents
+                    .get(path)
+                    .map(|source| read_question(path, source, document));
+                let accepted = reading
+                    .as_ref()
+                    .is_none_or(|reading| reading.validated.is_some());
+                builder.walk_question(path, name, &document.value, accepted);
+                if let Some(reading) = reading {
                     builder.diagnostics.extend(reading.diagnostics);
-                    if let Some(question) = validated {
+                    if let Some(question) = reading.validated {
                         builder.walk_openapi_edges(
                             path,
                             name,
@@ -225,7 +234,15 @@ impl IndexBuilder<'_> {
     /// that is the name every other document spells and the name the compiler reads it by. When the
     /// two disagree the mismatch is reported here, on the `id`, and the rest of the project keeps
     /// resolving against the file while the author fixes the one document that is wrong.
-    fn walk_question(&mut self, path: &Path, name: &str, value: &YamlValue) {
+    ///
+    /// `reported` is whether the form accepted this question, which is the condition
+    /// `compile_question_plan` reads it under: the compiler reaches a question's cross-file checks
+    /// only for a question it has already accepted, so a question it refuses spells names the editor
+    /// resolves for navigation and says nothing about. What the file declares is not gated on it.
+    /// The question is the name its path gives it whatever is written inside, so an access policy
+    /// admitting a question whose document is present and malformed is not told the question is
+    /// missing.
+    fn walk_question(&mut self, path: &Path, name: &str, value: &YamlValue, reported: bool) {
         let written = value.get_scalar("id");
         self.define(
             SymbolKey::global(EvidenceKind::Question, name),
@@ -243,10 +260,11 @@ impl IndexBuilder<'_> {
 
         for subject in subjects(value) {
             if let Some(profile) = subject.get_scalar("profile") {
-                self.refer(
+                self.add_reference(
                     SymbolQuery::global(EvidenceKind::SelectorProfile, profile.value.as_str()),
                     path,
                     profile,
+                    reported,
                 );
             }
         }
@@ -255,10 +273,11 @@ impl IndexBuilder<'_> {
             .get("source")
             .and_then(|source| source.get_scalar("ref"))
         {
-            self.refer(
+            self.add_reference(
                 SymbolQuery::global(EvidenceKind::Source, source.value.as_str()),
                 path,
                 source,
+                reported,
             );
         }
 
@@ -280,6 +299,7 @@ impl IndexBuilder<'_> {
                     schema,
                     EvidenceKind::SchemaFile,
                     Some(Narrowing::SpelledAsAnAnswerSchema),
+                    reported,
                 );
             }
         }
@@ -296,6 +316,7 @@ impl IndexBuilder<'_> {
                 Some(Narrowing::ClaimedByNoOtherQuestion {
                     question: name.to_owned(),
                 }),
+                reported,
             );
         }
 
@@ -320,7 +341,7 @@ impl IndexBuilder<'_> {
             // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
             // reads the same file while it writes the bundle, and the `evidence` binary refuses a
             // fixtures artifact whose path is not under `fixtures/` when it reads that bundle back.
-            self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile, None);
+            self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile, None, reported);
         }
     }
 
@@ -375,6 +396,7 @@ impl IndexBuilder<'_> {
             path,
             written,
             Narrowing::PublishedUnderGet,
+            true,
         );
         // What the rungs below need, taken now: reading the response leaves needs the description
         // itself, and holding on to the resolved operation would keep it borrowed.
@@ -646,11 +668,12 @@ impl IndexBuilder<'_> {
         pointer: &YamlScalar,
         kind: EvidenceKind,
         narrowing: Option<Narrowing>,
+        reported: bool,
     ) {
         let target = SymbolQuery::global(kind, pointer.value.as_str());
         match narrowing {
-            Some(narrowing) => self.refer_narrowed(target, path, pointer, narrowing),
-            None => self.refer(target, path, pointer),
+            Some(narrowing) => self.refer_narrowed(target, path, pointer, narrowing, reported),
+            None => self.add_reference(target, path, pointer, reported),
         }
 
         let Some(role) = referenced_file_role(kind) else {
@@ -769,8 +792,9 @@ impl IndexBuilder<'_> {
         path: &Path,
         at: &YamlScalar,
         narrowing: Narrowing,
+        reported: bool,
     ) {
-        self.add_reference(target, path, at, true);
+        self.add_reference(target, path, at, reported);
         self.narrowed.push((self.references.len() - 1, narrowing));
     }
 
