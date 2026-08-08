@@ -13,7 +13,7 @@ use std::{
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::{
@@ -51,7 +51,7 @@ use registry_evidence::{
     source::{
         project_fixture_response, ResolvedSourceSelector, SourceError, SourceExecutor, SourceStatus,
     },
-    trace::{json_type, name_list, object_keys, FixtureTrace, Stage, StageStatus},
+    trace::{json_type, name_list, object_keys, FixtureReport, FixtureTrace, Stage, StageStatus},
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_report,
         EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument, VerificationError,
@@ -110,6 +110,12 @@ enum Command {
         /// an exit code, or a message.
         #[arg(long)]
         explain: bool,
+        /// Render the `--explain` trace for a machine reader instead of a
+        /// person. The JSON form is the whole of standard output, so the
+        /// summary line's verdict and evaluated-case count move inside the
+        /// document rather than trailing it.
+        #[arg(long, value_enum, requires = "explain")]
+        explain_format: Option<ExplainFormat>,
     },
     /// Internal Evidencectl seam for bundle-only semantic validation.
     #[command(hide = true)]
@@ -167,6 +173,16 @@ enum Command {
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
     LocalAuditLastOperation,
+}
+
+/// Who the `--explain` trace is rendered for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+enum ExplainFormat {
+    /// Aligned per-stage blocks for a person.
+    #[default]
+    Text,
+    /// One JSON document for a machine reader.
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,7 +283,11 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::Evaluate { fixture, explain } => {
+        Command::Evaluate {
+            fixture,
+            explain,
+            explain_format,
+        } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
@@ -286,7 +306,20 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 if let Err(error) = &summary {
                     trace.fail(error.0);
                 }
-                print!("{}", trace.render());
+                match explain_format.unwrap_or_default() {
+                    ExplainFormat::Text => print!("{}", trace.render()),
+                    // The JSON document is the whole of standard output, so the
+                    // summary line below is not printed in this form and the
+                    // count it carries moves inside the document. A reader pipes
+                    // the output without stripping a trailing human line. The
+                    // exit code and the operator message on standard error are
+                    // the same in both forms.
+                    ExplainFormat::Json => {
+                        println!("{}", fixture_report_json(&trace, summary.as_ref())?);
+                        summary?;
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                }
             }
             println!(
                 "Evidence fixture passed ({} evaluated cases)",
@@ -889,6 +922,40 @@ fn audit_verification_failure(error: EvidenceAuditError) -> (String, CliError) {
     }
 }
 
+/// Render one fixture run as the single JSON document the JSON form prints.
+///
+/// The verdict comes from the run's own result rather than from the trace, so a
+/// document can never report a pass the command did not report.
+fn fixture_report_json(
+    trace: &FixtureTrace,
+    summary: Result<&FixtureSummary, &CliError>,
+) -> Result<String, CliError> {
+    let report = FixtureReport {
+        passed: summary.is_ok(),
+        evaluated_cases: summary.ok().map(|summary| summary.evaluated_cases),
+        trace,
+    };
+    serde_json::to_string_pretty(&report)
+        .map_err(|_| CliError("fixture trace is not representable"))
+}
+
+/// The run-time diagnostic surfaces a fixture's own canaries are checked against.
+///
+/// Rendered whether or not the operator asked for the trace. A check that only
+/// ran under `--explain` would leave the leak it exists to catch sitting in
+/// every run nobody explained.
+///
+/// Both rendered forms are taken. They carry the same strings today, so this is
+/// not redundancy against a leak but against drift: a field that becomes
+/// serialized but not rendered, or the reverse, stays covered without anyone
+/// having to remember to widen the check.
+fn explain_surfaces(trace: &FixtureTrace) -> Result<Vec<String>, CliError> {
+    Ok(vec![
+        trace.render(),
+        serde_json::to_string(trace).map_err(|_| CliError("fixture trace is not representable"))?,
+    ])
+}
+
 async fn evaluate_fixture(
     bundle: &Arc<Bundle>,
     kernel: &OfflineKernel,
@@ -1140,7 +1207,12 @@ async fn evaluate_fixture(
             "fixture case has no closed Version 1 evaluation form",
         ));
     }
-    validate_privacy_expectation(object, requirement, &successful_values)?;
+    validate_privacy_expectation(
+        object,
+        requirement,
+        &successful_values,
+        &explain_surfaces(trace)?,
+    )?;
     Ok(summary)
 }
 
@@ -2009,7 +2081,12 @@ async fn evaluate_reference_fixture(
         trace.pass_case();
     }
 
-    validate_reference_privacy(fixture, requirement, &successful_values)?;
+    validate_reference_privacy(
+        fixture,
+        requirement,
+        &successful_values,
+        &explain_surfaces(trace)?,
+    )?;
     Ok(summary)
 }
 
@@ -2770,6 +2847,7 @@ fn validate_reference_privacy(
     fixture: &JsonMap<String, Value>,
     requirement: &registry_evidence::config::RequirementConfig,
     successful_values: &[Value],
+    diagnostics: &[String],
 ) -> Result<(), CliError> {
     let source = fixture
         .get("privacyExpectation")
@@ -2803,7 +2881,7 @@ fn validate_reference_privacy(
             .collect::<Vec<_>>(),
         "successfulValues": successful_values,
     });
-    validate_privacy_projection(&expectation, &projection)
+    validate_privacy_projection(&expectation, &projection, diagnostics)
 }
 
 const FIXTURE_PURPOSE_FAILURE: &str = "fixture does not select one of the requirement's purposes";
@@ -3179,6 +3257,7 @@ fn validate_privacy_expectation(
     fixture: &serde_json::Map<String, Value>,
     requirement: &registry_evidence::config::RequirementConfig,
     successful_values: &[Value],
+    diagnostics: &[String],
 ) -> Result<(), CliError> {
     let expectation = fixture
         .get("privacy_expectation")
@@ -3194,12 +3273,19 @@ fn validate_privacy_expectation(
             .collect::<Vec<_>>(),
         "successfulValues": successful_values,
     });
-    validate_privacy_projection(expectation, &projection)
+    validate_privacy_projection(expectation, &projection, diagnostics)
 }
 
+/// Check one run's disclosure and diagnostics against the fixture's own canaries.
+///
+/// `diagnostics` carries the surfaces this run built at run time. It is separate
+/// from the fixed templates below because those are the only two forms the
+/// argument that they are safe rests on being static; anything assembled while
+/// the run proceeds has to be handed in and read.
 fn validate_privacy_projection(
     expectation: &serde_json::Map<String, Value>,
     projection: &Value,
+    diagnostics: &[String],
 ) -> Result<(), CliError> {
     let mut disclosed_strings = Vec::new();
     collect_strings(projection, &mut disclosed_strings);
@@ -3214,18 +3300,29 @@ fn validate_privacy_projection(
             return Err(CliError("fixture prohibited disclosure is present"));
         }
     }
-    // CLI diagnostics are structurally static (`CliError(&'static str)`) and
+    // Operator messages are structurally static (`CliError(&'static str)`) and
     // the success line contains counts only. Still exercise every declared
     // diagnostic canary against the exact dynamic-free output templates so a
     // future template change cannot silently weaken this fixture assertion.
+    //
+    // The explained trace is the one diagnostic assembled while the run
+    // proceeds, so it is read rather than argued about: a stage note or detail
+    // that ever interpolated a document value would fail the fixture that
+    // declared that value. The trace handed in is the one the run just built,
+    // which reaches this check having settled every case the fixture declares,
+    // including the cases whose expected outcome is a no-match, a source
+    // failure, or a refused injected value. Those are what exercise the
+    // failure-shaped stage lines.
+    static TEMPLATES: [&str; 2] = [
+        "Evidence fixture passed (0 evaluated cases)",
+        "evidence: fixture evaluation failed",
+    ];
     for prohibited in expectation_strings(expectation, "diagnostics_exclude")? {
-        if [
-            "Evidence fixture passed (0 evaluated cases)",
-            "evidence: fixture evaluation failed",
-        ]
-        .iter()
-        .any(|surface| surface.contains(prohibited))
-        {
+        let disclosed = TEMPLATES.iter().any(|surface| surface.contains(prohibited))
+            || diagnostics
+                .iter()
+                .any(|surface| surface.contains(prohibited));
+        if disclosed {
             return Err(CliError("fixture prohibited diagnostic is present"));
         }
     }
@@ -3941,6 +4038,7 @@ mod tests {
             validate_privacy_projection(
                 expectation.as_object().expect("expectation object"),
                 &projection,
+                &[],
             ),
             Ok(())
         );
@@ -3949,6 +4047,7 @@ mod tests {
         assert!(validate_privacy_projection(
             expectation.as_object().expect("expectation object"),
             &leaking,
+            &[],
         )
         .is_err());
 
@@ -3956,8 +4055,88 @@ mod tests {
         assert!(validate_privacy_projection(
             expectation.as_object().expect("expectation object"),
             &leaking_key,
+            &[],
         )
         .is_err());
+    }
+
+    #[test]
+    fn privacy_expectations_check_the_explained_trace_the_run_would_print() {
+        let expectation = serde_json::json!({
+            "evidence_contains": [],
+            "evidence_excludes": [],
+            "diagnostics_exclude": ["selector-value"]
+        });
+        let expectation = expectation.as_object().expect("expectation object");
+        let projection = serde_json::json!({});
+
+        let mut safe = FixtureTrace::default();
+        safe.begin_case("positive");
+        safe.record(
+            Stage::Extract,
+            StageStatus::Ok,
+            "fact keys [\"date_of_birth\"]",
+        );
+        safe.pass_case();
+        assert_eq!(
+            validate_privacy_projection(
+                expectation,
+                &projection,
+                &explain_surfaces(&safe).expect("the trace renders"),
+            ),
+            Ok(())
+        );
+
+        // A stage note that interpolated a protected value rather than its
+        // shape is what this canary exists to catch.
+        let mut leaking = FixtureTrace::default();
+        leaking.begin_case("positive");
+        leaking.record(
+            Stage::Extract,
+            StageStatus::Ok,
+            "matched the record for selector-value",
+        );
+        leaking.pass_case();
+        assert_eq!(
+            validate_privacy_projection(
+                expectation,
+                &projection,
+                &explain_surfaces(&leaking).expect("the trace renders"),
+            ),
+            Err(CliError("fixture prohibited diagnostic is present"))
+        );
+
+        // The same holds for a value that reaches a detail line, a case
+        // identifier, or the failure attributed to a case.
+        for leaking in [
+            {
+                let mut trace = FixtureTrace::default();
+                trace.begin_case("positive");
+                trace.record_with(
+                    Stage::Extract,
+                    StageStatus::NoMatch,
+                    "no match",
+                    vec!["searched for selector-value".to_owned()],
+                );
+                trace.pass_case();
+                trace
+            },
+            {
+                let mut trace = FixtureTrace::default();
+                trace.begin_case("selector-value");
+                trace.pass_case();
+                trace
+            },
+        ] {
+            assert_eq!(
+                validate_privacy_projection(
+                    expectation,
+                    &projection,
+                    &explain_surfaces(&leaking).expect("the trace renders"),
+                ),
+                Err(CliError("fixture prohibited diagnostic is present"))
+            );
+        }
     }
 
     #[test]

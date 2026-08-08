@@ -927,7 +927,11 @@ evidence evaluate --fixture "<path>"
 `evaluate` also accepts `--explain`, which prints the stages each fixture case
 reached beside the unchanged result. It is offline-only, reports member names,
 counts, identifiers, and declared forms rather than any value, and alters no
-outcome, exit code, or message. See the fixture reference for what it prints.
+outcome, exit code, or message. Adding `--explain-format json` renders the same
+trace as one JSON document, which then is the whole of standard output: the
+summary line's verdict and evaluated-case count move inside the document rather
+than trailing it, and the exit code and the operator message on standard error
+are unchanged. See the fixture reference for what it prints.
 
 All commands accept `--runtime <absolute-path>`. The same path may be supplied
 through `REGISTRY_EVIDENCE_RUNTIME`; the reference default is

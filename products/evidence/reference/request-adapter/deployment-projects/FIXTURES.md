@@ -247,3 +247,19 @@ the response members the extraction script actually saw, which is the whole
 diagnosis when a script recognized nothing in a response it was given. An
 output-gate rejection lists each declared concept, its form, and whether it is
 required, which is what the gate checked the derived values against.
+
+Adding `--explain-format json` renders the same trace for a machine reader.
+The document is the whole of standard output, so it pipes without a trailing
+summary line to strip, and the verdict and evaluated-case count that line
+carries move inside it as `passed` and `evaluatedCases`. The exit code and the
+operator message on standard error are the same in both forms.
+
+```sh
+evidence evaluate --fixture "<path>" --explain --explain-format json \
+  | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
+```
+
+A fixture's own `diagnosticsExclude` canaries are checked against both
+rendered forms of the trace on every run, so a stage line that ever
+interpolated a protected value instead of its shape fails the fixture that
+declared that value.

@@ -109,6 +109,24 @@ pub struct FixtureTrace {
     pub cases: Vec<CaseTrace>,
 }
 
+/// One fixture run rendered for a machine reader.
+///
+/// The JSON form of `--explain` writes this document and nothing else, so a
+/// reader pipes stdout without stripping a trailing human summary line. The
+/// verdict and the evaluated-case count that the text mode prints on that line
+/// move inside the document instead, and the trace flattens in beside them so
+/// `cases` is the same value the text renderer reads.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureReport<'a> {
+    pub passed: bool,
+    /// Absent when the run failed before it reached a count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluated_cases: Option<usize>,
+    #[serde(flatten)]
+    pub trace: &'a FixtureTrace,
+}
+
 /// The case a failure is attributed to when it happened outside every case.
 const FIXTURE_SCOPE: &str = "(fixture)";
 
@@ -378,6 +396,44 @@ mod tests {
             .find("detail")
             .expect("the detail column is found");
         assert_eq!(note_column, detail_column);
+    }
+
+    #[test]
+    fn a_passing_report_carries_the_verdict_and_the_count_the_summary_line_prints() {
+        let trace = passing_case();
+        let report = FixtureReport {
+            passed: true,
+            evaluated_cases: Some(13),
+            trace: &trace,
+        };
+        let serialized = serde_json::to_value(&report).expect("the report is representable");
+
+        assert_eq!(serialized["passed"], serde_json::json!(true));
+        assert_eq!(serialized["evaluatedCases"], serde_json::json!(13));
+        // Flattened, not nested: the trace's own `cases` array stays the top
+        // level key a reader walks.
+        assert_eq!(serialized["cases"][0]["id"], serde_json::json!("positive"));
+    }
+
+    #[test]
+    fn a_failing_report_omits_the_count_and_keeps_the_message_on_the_case_that_failed() {
+        let mut trace = FixtureTrace::default();
+        trace.begin_case("no-match");
+        trace.record(Stage::Extract, StageStatus::NoMatch, "no match");
+        trace.fail("fixture kernel failure did not match its public problem");
+        let report = FixtureReport {
+            passed: false,
+            evaluated_cases: None,
+            trace: &trace,
+        };
+        let serialized = serde_json::to_value(&report).expect("the report is representable");
+
+        assert_eq!(serialized["passed"], serde_json::json!(false));
+        assert_eq!(serialized.get("evaluatedCases"), None);
+        assert_eq!(
+            serialized["cases"][0]["failure"],
+            serde_json::json!("fixture kernel failure did not match its public problem")
+        );
     }
 
     #[test]

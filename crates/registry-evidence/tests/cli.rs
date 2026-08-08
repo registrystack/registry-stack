@@ -159,9 +159,11 @@ fn explaining_a_passing_fixture_keeps_its_exit_code_and_keeps_its_summary_line()
 fn an_explained_fixture_run_discloses_no_protected_selector_value() {
     let deployment = Deployment::stage("adult-status");
     let passing = deployment.evaluate(&["--explain"]);
+    let passing_json = deployment.evaluate(&["--explain", "--explain-format", "json"]);
     state_an_impossible_lookup(&deployment);
     let failing = deployment.evaluate(&["--explain"]);
-    for output in [&passing, &failing] {
+    let failing_json = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+    for output in [&passing, &passing_json, &failing, &failing_json] {
         let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
         for protected in ["Amina", "Diallo", "2000-01-01", "fixture-source-canary"] {
             assert!(
@@ -240,6 +242,105 @@ fn the_fixture_trace_is_offline_only_and_no_other_subcommand_accepts_it() {
             "{command} did not reject the flag during parsing: {stderr}"
         );
     }
+}
+
+/// The JSON form is the whole of standard output, so a reader can pipe it.
+///
+/// The summary line is what would otherwise trail the document, so its absence
+/// is asserted rather than assumed, and the count it carries is asserted in the
+/// place it moved to.
+#[test]
+fn explaining_a_passing_fixture_as_json_prints_one_document_and_no_summary_line() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+    assert!(output.status.success(), "explained evaluation failed");
+    assert!(
+        output.stderr.is_empty(),
+        "explained evaluation wrote stderr"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("Evidence fixture passed"),
+        "the JSON document trails the human summary line: {stdout}"
+    );
+
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(true));
+    assert_eq!(report["evaluatedCases"], json!(13));
+    assert_eq!(report["cases"][0]["id"], json!("positive"));
+    assert_eq!(report["cases"][0]["stages"][0]["stage"], json!("prepare"));
+    assert_eq!(report["cases"][0]["stages"][0]["status"], json!("ok"));
+    let cases = report["cases"].as_array().expect("cases is an array");
+    assert_eq!(cases.len(), 13, "the document dropped cases");
+    assert!(
+        cases.iter().all(|case| case.get("failure").is_none()),
+        "a passing run reported a failed case"
+    );
+}
+
+/// The JSON form changes what stdout carries and nothing else.
+#[test]
+fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_message() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(false));
+    assert_eq!(
+        report.get("evaluatedCases"),
+        None,
+        "a failed run reported an evaluated-case count"
+    );
+
+    let failed = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case.get("failure").is_some())
+        .expect("the document names the case that failed");
+    assert_eq!(failed["id"], json!("no-match"));
+    assert_eq!(
+        failed["failure"],
+        json!("fixture kernel failure did not match its public problem")
+    );
+    let extract = failed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("the document carries the stage the case stopped at");
+    assert_eq!(extract["status"], json!("no-match"));
+    assert_eq!(
+        extract["details"],
+        json!(["response keys available [\"total\"]"])
+    );
+}
+
+/// Asking for a format without asking for the trace is a mistake, not a no-op.
+#[test]
+fn the_json_trace_format_is_rejected_without_the_trace_it_formats() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain-format", "json"]);
+    assert!(
+        !output.status.success(),
+        "a format without a trace was accepted"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a rejected invocation wrote stdout"
+    );
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert!(
+        stderr.contains("--explain"),
+        "the rejection never named the flag it needs: {stderr}"
+    );
 }
 
 #[test]
