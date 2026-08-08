@@ -17,67 +17,106 @@ use serde_json::{json, Value};
 /// document value fails loudly instead of quietly.
 const CANARY: &str = "s3cr3t-canary-value";
 
+/// One shipped reference deployment project, staged for the real binary.
+///
+/// Its fixtures take the reference evaluation path rather than the acceptance
+/// path, and they are the fixtures an adopter's own project resembles, so
+/// behavior that differs between the two paths is proven on both.
+struct ReferenceProject {
+    root: tempfile::TempDir,
+}
+
+impl ReferenceProject {
+    fn stage() -> Self {
+        let root = tempfile::tempdir().expect("temporary deployment");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
+        );
+        copy_tree(&project.join("bundle"), &root.path().join("bundle"));
+        let bundle_configuration = root.path().join("bundle/evidence.yaml");
+        let bundle_document =
+            fs::read_to_string(&bundle_configuration).expect("read bundle document");
+        fs::write(
+            &bundle_configuration,
+            bundle_document.replacen(
+                "assuranceProfile: evidence-grade",
+                "assuranceProfile: local",
+                1,
+            ),
+        )
+        .expect("select local assurance for the isolated CLI test");
+        let secret_root = root.path().join("secrets");
+        fs::create_dir(&secret_root).expect("create private secret root");
+        fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+            .expect("set private secret-root mode");
+
+        stage_reference_secrets(&secret_root);
+
+        let runtime =
+            fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+        let bundle_path = root.path().join("bundle");
+        let bundle_directory = bundle_path.to_str().expect("temporary path is UTF-8");
+        let audit_path = root.path().join("audit.jsonl");
+        let runtime = runtime
+            .replacen("/etc/registry-evidence/bundle", bundle_directory, 1)
+            .replacen(
+                "/run/secrets/registry-evidence",
+                secret_root.to_str().expect("temporary path is UTF-8"),
+                1,
+            )
+            .replacen(
+                "/var/lib/registry-evidence/audit/evidence.jsonl",
+                audit_path.to_str().expect("temporary path is UTF-8"),
+                1,
+            )
+            .replacen(
+                "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+                "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+                1,
+            );
+        fs::write(root.path().join("runtime.yaml"), runtime).expect("stage runtime");
+        Self { root }
+    }
+
+    /// Rewrite the first occurrence of one passage in a staged project file.
+    fn replace(&self, relative: &str, from: &str, to: &str) {
+        let path = self.root.path().join(relative);
+        let text = fs::read_to_string(&path).expect("read staged project file");
+        assert!(text.contains(from), "{relative} does not contain {from:?}");
+        fs::write(&path, text.replacen(from, to, 1)).expect("write staged project file");
+    }
+
+    /// Run against the project with the immutable modes the runtime demands.
+    ///
+    /// The modes are restored before the caller asserts anything, so a failed
+    /// assertion still leaves a tree the temporary directory can remove.
+    fn sealed<T>(&self, run: impl FnOnce(&Path) -> T) -> T {
+        let bundle = self.root.path().join("bundle");
+        let runtime = self.root.path().join("runtime.yaml");
+        set_tree_mode(&bundle, 0o555, 0o444);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o444))
+            .expect("set immutable runtime mode");
+        let outcome = run(&runtime);
+        set_tree_mode(&bundle, 0o755, 0o644);
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o644))
+            .expect("restore runtime mode");
+        outcome
+    }
+}
+
 #[test]
 fn actual_binary_checks_and_evaluates_an_immutable_project() {
-    let staged = tempfile::tempdir().expect("temporary deployment");
-    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence",
-    );
-    copy_tree(&project.join("bundle"), &staged.path().join("bundle"));
-    let bundle_configuration = staged.path().join("bundle/evidence.yaml");
-    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
-    fs::write(
-        &bundle_configuration,
-        bundle_document.replacen(
-            "assuranceProfile: evidence-grade",
-            "assuranceProfile: local",
-            1,
-        ),
-    )
-    .expect("select local assurance for the isolated CLI test");
-    let secret_root = staged.path().join("secrets");
-    fs::create_dir(&secret_root).expect("create private secret root");
-    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
-        .expect("set private secret-root mode");
-
-    stage_reference_secrets(&secret_root);
-
-    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
-    let bundle_path = staged.path().join("bundle");
-    let bundle_directory = bundle_path.to_str().expect("temporary path is UTF-8");
-    let audit_path = staged.path().join("audit.jsonl");
-    let runtime = runtime
-        .replacen("/etc/registry-evidence/bundle", bundle_directory, 1)
-        .replacen(
-            "/run/secrets/registry-evidence",
-            secret_root.to_str().expect("temporary path is UTF-8"),
-            1,
+    let project = ReferenceProject::stage();
+    let (check, evaluate) = project.sealed(|runtime| {
+        (
+            invoke(runtime, &["check"]),
+            invoke(
+                runtime,
+                &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
+            ),
         )
-        .replacen(
-            "/var/lib/registry-evidence/audit/evidence.jsonl",
-            audit_path.to_str().expect("temporary path is UTF-8"),
-            1,
-        )
-        .replacen(
-            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
-            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
-            1,
-        );
-    let runtime_path = staged.path().join("runtime.yaml");
-    fs::write(&runtime_path, runtime).expect("stage runtime");
-    set_tree_mode(&bundle_path, 0o555, 0o444);
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
-        .expect("set immutable runtime mode");
+    });
 
-    let check = invoke(&runtime_path, &["check"]);
-    let evaluate = invoke(
-        &runtime_path,
-        &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
-    );
-
-    set_tree_mode(&bundle_path, 0o755, 0o644);
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644))
-        .expect("restore runtime mode");
     assert_success(
         &check,
         "Evidence deployment ",
@@ -87,6 +126,608 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         &evaluate,
         "Evidence fixture passed (",
         " evaluated cases)\n",
+    );
+}
+
+/// The reference path has to explain itself as well as the acceptance path does.
+///
+/// A reference case that records only the form it was written in says a case
+/// was read, never how far it got, which is the whole of what the trace is for.
+#[test]
+fn explaining_a_reference_project_fixture_traces_how_far_each_case_reached() {
+    let project = ReferenceProject::stage();
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    assert!(
+        output.status.success(),
+        "explained evaluation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(true));
+
+    let cases = report["cases"].as_array().expect("cases is an array");
+    assert!(!cases.is_empty(), "the document carried no case");
+    for case in cases {
+        let reached = stage_names(case);
+        assert!(
+            reached.len() > 1,
+            "case {} recorded only {reached:?}, so the trace never says how far it got",
+            case["id"]
+        );
+    }
+
+    // The cases that run the pipeline record the pipeline, so a reader is
+    // promised no stage the reference path declines to report.
+    let resolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the fixture states a resolving case");
+    for stage in [
+        "prepare", "acquire", "extract", "derive", "validate", "sign",
+    ] {
+        assert!(
+            stage_names(resolved).contains(&stage),
+            "a resolving reference case never recorded {stage}: {:?}",
+            stage_names(resolved)
+        );
+    }
+
+    // An unresolved case reports the unresolved outcome on the stage that
+    // reached it, exactly as the acceptance path does.
+    let unresolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("no-match"))
+        .expect("the fixture states an unresolved case");
+    let extract = unresolved["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("an unresolved case records its extraction");
+    assert_eq!(extract["status"], json!("no-match"));
+}
+
+/// A reference case that fails at its source says so on the acquisition.
+///
+/// A response the source contract refuses is an acquisition that was reached
+/// and failed. Reporting only the preparation before it reads as though the
+/// case never got as far as calling its source, which is the opposite of what
+/// the reader needs from precisely this failure.
+#[test]
+fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
+    let project = ReferenceProject::stage();
+    project.replace(
+        "bundle/fixtures/adult-status-cases.yaml",
+        "  - id: positive\n    response:\n      total: 1\n",
+        "  - id: positive\n    response:\n      errors: [source-refused]\n      total: 1\n",
+    );
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    assert!(
+        !output.status.success(),
+        "the refused response was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: reference fixture source projection failed\n"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let refused = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the refused case is traced");
+    let acquire = refused["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("acquire"))
+        .expect("a case refused at its source records its acquisition");
+    assert_eq!(acquire["status"], json!("failed"));
+}
+
+/// A chained acquisition is traced stage by stage, not as one acquisition.
+///
+/// The whole reason this acquisition kind exists is that it makes several calls
+/// in a fixed order, each reading only what an earlier one produced. A trace
+/// that reported the chain as a single step would drop exactly the fact a
+/// reader needs from it: which call the case got to, and which one stopped it.
+#[test]
+fn explaining_a_chained_acquisition_traces_every_planned_stage() {
+    let deployment = Deployment::stage("surviving-spouse-status");
+    // The operator half of the acquisition gate. The bundle names the kind it
+    // needs; without this the deployment is refused before any case runs.
+    deployment.append(
+        "runtime.yaml",
+        "acquisitionCapabilities: [search-then-fetch-set]\n",
+    );
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+
+    assert!(
+        output.status.success(),
+        "explained evaluation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let cases = report["cases"].as_array().expect("cases is an array");
+
+    // The search and both members, each acquired and each extracted, before the
+    // one derivation that sees them together.
+    let resolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the fixture states a resolving case");
+    assert_eq!(
+        stage_names(resolved),
+        vec![
+            "prepare", "acquire", "extract", "acquire", "extract", "acquire", "extract", "derive",
+            "validate", "expect", "sign",
+        ],
+        "a resolving chained case did not record every planned stage"
+    );
+
+    // A member whose response the declared projection refuses stops the chain at
+    // its acquisition, so the trace names the call that was refused and never
+    // reports the stages after it as reached.
+    let refused = cases
+        .iter()
+        .find(|case| case["id"] == json!("negative-union-register-unresolved"))
+        .expect("the fixture states a case whose first member answers nothing");
+    assert_eq!(
+        stage_outcomes(refused),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "failed"),
+            ("expect", "ok"),
+        ],
+        "the chain did not stop on the member whose response was refused"
+    );
+
+    // A member that answers, but resolves no unique record for the reference the
+    // search produced, stops the chain one stage later: the response is acquired
+    // and the extraction is what fails.
+    let stopped = cases
+        .iter()
+        .find(|case| case["id"] == json!("negative-death-register-unresolved"))
+        .expect("the fixture states a case whose second member does not resolve");
+    assert_eq!(
+        stage_outcomes(stopped),
+        vec![
+            ("prepare", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "ok"),
+            ("extract", "ok"),
+            ("acquire", "ok"),
+            ("extract", "failed"),
+            ("expect", "ok"),
+        ],
+        "the chain did not stop on the member that resolved nothing"
+    );
+
+    // An unresolved search is a settled outcome rather than an inconsistency,
+    // and it is reported as one on the stage that reached it.
+    let unresolved = cases
+        .iter()
+        .find(|case| case["id"] == json!("ambiguous"))
+        .expect("the fixture states an unresolved search");
+    let extract = unresolved["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("an unresolved search records its extraction");
+    assert_eq!(extract["status"], json!("ambiguous"));
+}
+
+/// The stages one traced case recorded, each with the status it reached.
+fn stage_outcomes(case: &Value) -> Vec<(&str, &str)> {
+    case["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .map(|stage| {
+            (
+                stage["stage"].as_str().expect("a stage is named"),
+                stage["status"].as_str().expect("a stage has a status"),
+            )
+        })
+        .collect()
+}
+
+/// The stages one traced case recorded, in the order it recorded them.
+fn stage_names(case: &Value) -> Vec<&str> {
+    case["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("a stage is named"))
+        .collect()
+}
+
+/// The exact unexplained success output of the acceptance fixture.
+///
+/// It is pinned as one literal rather than a prefix and a suffix, because the
+/// property under test is that asking for no trace produces this and nothing
+/// else. A shape assertion would pass with a trace printed in the middle.
+const UNEXPLAINED_SUCCESS: &str = "Evidence fixture passed (13 evaluated cases)\n";
+
+/// The message the mutated acceptance fixture fails with, trace or no trace.
+const MUTATED_FIXTURE_FAILURE: &str =
+    "evidence: fixture kernel failure did not match its public problem\n";
+
+/// Turn one acceptance case into a case whose stated outcome cannot happen.
+///
+/// The record is absent, so the lookup can only be unresolved, while the case
+/// now claims a unique match. This is the ordinary authoring mistake `--explain`
+/// exists for: the fixed message names the contract that broke, and only the
+/// trace can say the extraction never found a record to begin with.
+fn state_an_impossible_lookup(deployment: &Deployment) {
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "{id: no-match, source: {total: 0}, expected_lookup: no_match,",
+        "{id: no-match, source: {total: 0}, expected_lookup: match,",
+    );
+}
+
+#[test]
+fn an_unexplained_fixture_run_prints_the_summary_line_and_nothing_else() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&[]);
+    assert!(output.status.success(), "fixture evaluation failed");
+    assert!(output.stderr.is_empty(), "fixture evaluation wrote stderr");
+    assert_eq!(
+        std::str::from_utf8(&output.stdout).expect("stdout is UTF-8"),
+        UNEXPLAINED_SUCCESS
+    );
+}
+
+#[test]
+fn explaining_a_passing_fixture_keeps_its_exit_code_and_keeps_its_summary_line() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain"]);
+    assert!(output.status.success(), "explained evaluation failed");
+    assert!(
+        output.stderr.is_empty(),
+        "explained evaluation wrote stderr"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        stdout.ends_with(UNEXPLAINED_SUCCESS),
+        "the summary line changed: {stdout}"
+    );
+    assert!(stdout.contains("case: positive\n"), "{stdout}");
+    assert!(stdout.contains("-> case passed\n"), "{stdout}");
+    for stage in [
+        "prepare", "acquire", "extract", "derive", "validate", "expect", "sign",
+    ] {
+        assert!(stdout.contains(stage), "the trace never named {stage}");
+    }
+}
+
+/// The trace names shapes, never values.
+///
+/// The acceptance fixture states the selector values its diagnostics may never
+/// disclose. They are synthetic, but a trace that reprints them is a trace that
+/// would reprint a real one from a bundle authored the same way.
+#[test]
+fn an_explained_fixture_run_discloses_no_protected_selector_value() {
+    let deployment = Deployment::stage("adult-status");
+    let passing = deployment.evaluate(&["--explain"]);
+    let passing_json = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+    state_an_impossible_lookup(&deployment);
+    let failing = deployment.evaluate(&["--explain"]);
+    let failing_json = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+    for output in [&passing, &passing_json, &failing, &failing_json] {
+        let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+        for protected in ["Amina", "Diallo", "2000-01-01", "fixture-source-canary"] {
+            assert!(
+                !stdout.contains(protected),
+                "the trace disclosed protected input {protected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn explaining_a_failing_fixture_shows_where_the_case_stopped_and_keeps_its_message() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("Evidence fixture passed"),
+        "a failed run announced success: {stdout}"
+    );
+    assert!(stdout.contains("case: no-match\n"), "{stdout}");
+    assert!(stdout.contains("extract    no-match"), "{stdout}");
+    assert!(
+        stdout.contains("response keys available [\"total\"]"),
+        "the trace never named the response shape the script saw: {stdout}"
+    );
+    // The expectation comparison is what rejected this case, so its own stage
+    // reports the rejection. A satisfied expectation printed immediately above
+    // `case failed` would point a reader away from the stage that failed.
+    assert!(
+        stdout.contains("expect     failed"),
+        "the stage that rejected the case reported success: {stdout}"
+    );
+    assert!(
+        stdout
+            .contains("-> case failed: fixture kernel failure did not match its public problem\n"),
+        "{stdout}"
+    );
+    // The cases before the mutated one are reported as reached and passed, so
+    // the trace says how far the run got and not only where it stopped.
+    assert!(stdout.contains("case: positive\n"), "{stdout}");
+}
+
+/// A fixture cannot forge trace lines through its own case identifiers.
+///
+/// The identifier is interpolated into the rendered text trace, so a control
+/// character in one would let a fixture write lines that read as stages the run
+/// never reached. It is refused where the identifier is validated rather than
+/// escaped where it is rendered: the readable form stays readable, and the
+/// forgery has nowhere to start.
+#[test]
+fn a_case_identifier_carrying_a_control_character_is_refused() {
+    let deployment = Deployment::stage("adult-status");
+    // Appended rather than substituted: the bundle's category coverage reads
+    // the identifiers, so a case renamed outright is refused before evaluation
+    // and the identifier check is never reached.
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "{id: negative-false-is-success,",
+        "{id: \"negative-false-is-success\\n  sign       ok         forged\",",
+    );
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(
+        !output.status.success(),
+        "the forged identifier was accepted"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: fixture case identifier is invalid\n"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("forged"),
+        "the forged stage line reached the trace: {stdout}"
+    );
+}
+
+/// A run that fails is checked against its own canaries before it is read.
+///
+/// The failing run is the one whose trace an operator reads, so it is the one
+/// the canaries most need to cover. Checking only a run that settled every case
+/// would leave the diagnostic nobody guards being exactly the diagnostic
+/// everybody reads.
+#[test]
+fn a_failing_run_is_refused_when_its_trace_holds_a_declared_canary() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    // The unresolved lookup names the response members the extraction script
+    // saw, and the fixture now declares one of those names protected.
+    deployment.replace(
+        "bundle/fixtures/cases.yaml",
+        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary]",
+        "diagnostics_exclude: [Amina, Diallo, '2000-01-01', fixture-source-canary, total]",
+    );
+    let output = deployment.evaluate(&["--explain"]);
+
+    assert!(!output.status.success(), "the leaking run passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        "evidence: fixture prohibited diagnostic is present\n"
+    );
+    // The refusal has to come before the render. A trace reported as prohibited
+    // and printed anyway would disclose the value the canary named.
+    assert!(
+        output.stdout.is_empty(),
+        "a prohibited trace was printed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_failing_fixture_run_is_unchanged_when_no_trace_is_asked_for() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&[]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "an unexplained failure wrote stdout"
+    );
+}
+
+/// The trace is an offline fixture diagnostic and reaches nothing else.
+///
+/// `serve` is the case that matters: a running service must have no way to be
+/// asked for a per-case breakdown of an evaluation.
+#[test]
+fn the_fixture_trace_is_offline_only_and_no_other_subcommand_accepts_it() {
+    let deployment = Deployment::stage("adult-status");
+    for command in ["serve", "check", "verify-audit"] {
+        let output = invoke(&deployment.path("runtime.yaml"), &[command, "--explain"]);
+        assert!(
+            !output.status.success(),
+            "{command} accepted the fixture trace flag"
+        );
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert!(
+            stderr.contains("unexpected argument '--explain'"),
+            "{command} did not reject the flag during parsing: {stderr}"
+        );
+    }
+}
+
+/// The JSON form is the whole of standard output, so a reader can pipe it.
+///
+/// The summary line is what would otherwise trail the document, so its absence
+/// is asserted rather than assumed, and the count it carries is asserted in the
+/// place it moved to.
+#[test]
+fn explaining_a_passing_fixture_as_json_prints_one_document_and_no_summary_line() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+    assert!(output.status.success(), "explained evaluation failed");
+    assert!(
+        output.stderr.is_empty(),
+        "explained evaluation wrote stderr"
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(
+        !stdout.contains("Evidence fixture passed"),
+        "the JSON document trails the human summary line: {stdout}"
+    );
+
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(true));
+    assert_eq!(report["evaluatedCases"], json!(13));
+    assert_eq!(report["cases"][0]["id"], json!("positive"));
+    assert_eq!(report["cases"][0]["stages"][0]["stage"], json!("prepare"));
+    assert_eq!(report["cases"][0]["stages"][0]["status"], json!("ok"));
+    let cases = report["cases"].as_array().expect("cases is an array");
+    assert_eq!(cases.len(), 13, "the document dropped cases");
+    assert!(
+        cases.iter().all(|case| case.get("failure").is_none()),
+        "a passing run reported a failed case"
+    );
+}
+
+/// The JSON form changes what stdout carries and nothing else.
+#[test]
+fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_message() {
+    let deployment = Deployment::stage("adult-status");
+    state_an_impossible_lookup(&deployment);
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+
+    assert!(!output.status.success(), "the mutated fixture passed");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
+        MUTATED_FIXTURE_FAILURE
+    );
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(false));
+    assert_eq!(
+        report.get("evaluatedCases"),
+        None,
+        "a failed run reported an evaluated-case count"
+    );
+
+    let failed = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case.get("failure").is_some())
+        .expect("the document names the case that failed");
+    assert_eq!(failed["id"], json!("no-match"));
+    assert_eq!(
+        failed["failure"],
+        json!("fixture kernel failure did not match its public problem")
+    );
+    let extract = failed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("extract"))
+        .expect("the document carries the stage the case stopped at");
+    assert_eq!(extract["status"], json!("no-match"));
+    assert_eq!(
+        extract["details"],
+        json!(["response keys available [\"total\"]"])
+    );
+    let expect = failed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("expect"))
+        .expect("the document carries the expectation comparison");
+    assert_eq!(
+        expect["status"],
+        json!("failed"),
+        "the stage that rejected the case reported success"
+    );
+
+    // A case the comparison accepted still reports a satisfied expectation, so
+    // the failed status above distinguishes cases rather than marking them all.
+    let passed = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case["id"] == json!("positive"))
+        .expect("the document carries the cases that passed");
+    let satisfied = passed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("expect"))
+        .expect("a passing case carries its expectation comparison");
+    assert_eq!(satisfied["status"], json!("ok"));
+}
+
+/// Asking for a format without asking for the trace is a mistake, not a no-op.
+#[test]
+fn the_json_trace_format_is_rejected_without_the_trace_it_formats() {
+    let deployment = Deployment::stage("adult-status");
+    let output = deployment.evaluate(&["--explain-format", "json"]);
+    assert!(
+        !output.status.success(),
+        "a format without a trace was accepted"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a rejected invocation wrote stdout"
+    );
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert!(
+        stderr.contains("--explain"),
+        "the rejection never named the flag it needs: {stderr}"
     );
 }
 
@@ -1425,6 +2066,16 @@ outboundTls:
     fn check(&self) -> Output {
         self.seal();
         let output = invoke(&self.path("runtime.yaml"), &["check"]);
+        self.unseal();
+        output
+    }
+
+    /// Evaluate the staged bundle's own fixture, with any extra arguments.
+    fn evaluate(&self, arguments: &[&str]) -> Output {
+        let mut invocation = vec!["evaluate", "--fixture", "fixtures/cases.yaml"];
+        invocation.extend_from_slice(arguments);
+        self.seal();
+        let output = invoke(&self.path("runtime.yaml"), &invocation);
         self.unseal();
         output
     }

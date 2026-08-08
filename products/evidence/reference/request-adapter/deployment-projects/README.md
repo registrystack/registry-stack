@@ -26,7 +26,9 @@ validation, Evidence construction, ephemeral signing, JWS verification,
 privacy, and failure contracts. It intentionally does not authenticate a JWT,
 resolve deployment credentials, write audit, start HTTP, or contact the source;
 package and HTTP-path tests cover those runtime boundaries. An adopter must run
-the same fixtures with `evidence evaluate` before deployment.
+the same fixtures with `evidence evaluate` before deployment, and can add
+`--explain` to a run that failed to see how far each case got, described in
+[Explaining a failing run](FIXTURES.md#explaining-a-failing-run).
 
 ## Projects
 

@@ -67,6 +67,34 @@ evidencectl fixtures run --project "<evidence-project>" --json > fixture-report.
 Treat any failed case, missing reference, unknown field, or unsupported expectation as a failed
 build input. Do not convert a real failure into an ignored case.
 
+## Read a failed case
+
+A failure names the contract that broke, which says a case failed but not where it stopped. Ask the
+run to explain itself:
+
+```sh
+evidencectl fixtures run --project "<evidence-project>" --explain
+```
+
+Each fixture's trace is relayed with its step: one line per case, then one line per stage that case
+reached, with the status it reached it at. The last line of a failed case is the one to read first.
+An unresolved lookup lists the response members the extraction script actually saw, and an
+output-gate rejection lists each declared concept and its required form.
+
+To explain one fixture on its own, or to keep the trace as a document, run `evidence evaluate`
+directly:
+
+```sh
+evidence --runtime "<evidence-project>/runtime.yaml" \
+  evaluate --fixture "bundle/fixtures/<cases>.yaml" --explain --explain-format json
+```
+
+The trace reports shapes: member names, counts, and identifiers. It never prints a response, fact,
+derived, or selector value, and a run whose trace holds a value the fixture declared under
+`privacy_expectation.diagnostics_exclude` is refused before the trace is printed. The flag changes
+no outcome, exit code, or message, and it is offline only: a served request is diagnosed from its
+public problem and the audit chain instead.
+
 ## Check the deployable inputs
 
 Run `evidence check` against the runtime file you plan to deploy:

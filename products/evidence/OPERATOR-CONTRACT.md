@@ -547,8 +547,17 @@ invalid-selector failures remain operational-only and create no native audit
 event.
 
 Operational logs contain route templates, operation identifiers, duration,
-status category, and safe internal error categories only. Request bodies,
-selector profile identifiers and values, source requests and responses,
+status category, the public problem code, and safe internal error categories
+only. The internal category is narrower than the public problem code but is
+drawn from the same kind of fixed, closed set of service-chosen strings. It
+names the internal step that failed, never what that step saw, and it carries
+no counts. A record that was not found and a record that matched more than once
+share one category, so the category is never a way to tell them apart. A
+missing required fact and an inconsistent derivation input do keep separate
+categories: separating those two is what lets an operator repair a deployment,
+and the public problem code reports both as the same shape regardless. A
+request that raises no failure logs a fixed placeholder in its place. Request
+bodies, selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
 excluded from logs, metrics, traces, snapshots, panics, and errors.
 
@@ -917,6 +926,15 @@ Before production exposure, the operator runs:
 evidence check
 evidence evaluate --fixture "<path>"
 ```
+
+`evaluate` also accepts `--explain`, which prints the stages each fixture case
+reached beside the unchanged result. It is offline-only, reports member names,
+counts, identifiers, and declared forms rather than any value, and alters no
+outcome, exit code, or message. Adding `--explain-format json` renders the same
+trace as one JSON document, which then is the whole of standard output: the
+summary line's verdict and evaluated-case count move inside the document rather
+than trailing it, and the exit code and the operator message on standard error
+are unchanged. See the fixture reference for what it prints.
 
 All commands accept `--runtime <absolute-path>`. The same path may be supplied
 through `REGISTRY_EVIDENCE_RUNTIME`; the reference default is

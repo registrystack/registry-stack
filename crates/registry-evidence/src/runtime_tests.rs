@@ -657,7 +657,8 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
                 "operation",
                 "duration_ms",
                 "status",
-                "error"
+                "error",
+                "category"
             ])
         );
         assert!(fields["duration_ms"].is_u64());
@@ -672,9 +673,15 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
     assert_eq!(served[0]["fields"]["route"], json!("/health"));
     assert_eq!(served[0]["fields"]["status"], json!("success"));
     assert_eq!(served[0]["fields"]["error"], json!("none"));
+    // A successful request raises no runtime failure, so it logs the fixed
+    // placeholder rather than omitting the field.
+    assert_eq!(served[0]["fields"]["category"], json!("none"));
     assert_eq!(served[1]["fields"]["route"], json!("/v1/evidence"));
     assert_eq!(served[1]["fields"]["status"], json!("client_error"));
     assert_eq!(served[1]["fields"]["error"], json!("authentication_failed"));
+    // The runtime's internal classification for this rejection, distinct from
+    // (and narrower than) the public problem code above.
+    assert_eq!(served[1]["fields"]["category"], json!("authentication"));
 
     // No token, selector value, purpose, or requirement identity reaches an
     // operational record this crate emits.
@@ -692,6 +699,56 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
             "an operational log disclosed {canary}"
         );
     }
+}
+
+/// The runtime computes a safe internal failure category for every failure;
+/// the observation layer must not let the HTTP boundary discard it before a
+/// served request is logged. A no-matching-record outcome and an ambiguous
+/// outcome are two different unresolved classes that `runtime.rs` deliberately
+/// collapses onto one category so the public contract carries no existence
+/// oracle (security invariant V1-I16); this proves that collapse holds at the
+/// log boundary too, not only at the `RuntimeFailure` type boundary.
+#[test]
+fn operational_logs_carry_the_runtime_failure_category_and_still_collapse_unresolved_classes() {
+    let emitted = capture_evidence_logs(|| async {
+        let fixture = acceptance_runtime().await;
+        let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+        let parent_token = access_token(Some(parent_grant_claims()));
+
+        for response in [
+            json!({"total": 0, "records": []}),
+            json!({"total": 2, "records": [{}, {}]}),
+        ] {
+            mount_parent_source(&fixture.server, response).await;
+            let failed = http
+                .post("/v1/evidence")
+                .add_header("authorization", format!("Bearer {parent_token}"))
+                .json(&parent_request())
+                .await;
+            assert_eq!(
+                failed.status_code(),
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "an unresolved record is publicly reported as unavailable evidence"
+            );
+            fixture.server.reset().await;
+        }
+    });
+
+    let served: Vec<&Value> = emitted
+        .iter()
+        .filter(|record| record["target"] == json!(REQUEST_LOG_TARGET))
+        .collect();
+    assert_eq!(served.len(), 2, "one operational record per served request");
+    for record in &served {
+        assert_eq!(record["fields"]["error"], json!("evidence_not_available"));
+        assert_eq!(record["fields"]["category"], json!("evidence-unavailable"));
+    }
+    // A no-match failure and an ambiguous-match failure log the identical
+    // category: the log record does not become a way to tell them apart.
+    assert_eq!(
+        served[0]["fields"]["category"],
+        served[1]["fields"]["category"]
+    );
 }
 
 /// Counters describe traffic. They must say how the boundary behaved without

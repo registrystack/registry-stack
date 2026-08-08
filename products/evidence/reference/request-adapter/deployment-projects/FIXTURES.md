@@ -226,3 +226,50 @@ under `expected`:
 
 The harness may report the case id, stage, expected type, actual type, and a
 value-free mismatch code. It must not print the mismatching protected value.
+
+## Explaining a failing run
+
+A fixture failure names the contract that broke and nothing else, which says
+that a case failed but never which one or why. `evidence evaluate --fixture
+<path> --explain` additionally prints, for every case, the stages it reached
+and how each one ended.
+
+The trace reports shapes only, within the value-free allowance above: response
+and fact member names, response and value counts, source and concept
+identifiers, and the declared form a concept requires. It never prints a
+response value, a fact value, a derived value, or a selector value. It is
+offline-only and no other subcommand accepts the flag; `serve` cannot reach
+it. It changes no outcome, exit code, or message, and without the flag the
+command's output is unchanged.
+
+The line that ends a case is the one to read first. An unresolved lookup lists
+the response members the extraction script actually saw, which is the whole
+diagnosis when a script recognized nothing in a response it was given. An
+output-gate rejection lists each declared concept, its form, and whether it is
+required, which is what the gate checked the derived values against.
+
+Adding `--explain-format json` renders the same trace for a machine reader.
+The document is the whole of standard output, so it pipes without a trailing
+summary line to strip, and the verdict and evaluated-case count that line
+carries move inside it as `passed` and `evaluatedCases`. The exit code and the
+operator message on standard error are the same in both forms.
+
+```sh
+evidence evaluate --fixture "<path>" --explain --explain-format json \
+  | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
+```
+
+`evidencectl fixtures run --project <candidate> --explain` asks the same of
+every fixture a project references and relays each trace verbatim: under the
+step line in the human report, and as that fixture's `trace` string under
+`--json`. The driver asks for the text form only, because the case count it
+totals is read from the summary line the structured form replaces. Run
+`evidence evaluate` against one fixture directly for the document itself.
+
+A fixture's own `diagnosticsExclude` canaries are checked against both
+rendered forms of the trace on every run, including a run that stopped on an
+error, so a stage line that ever interpolated a protected value instead of its
+shape fails the fixture that declared that value before the trace is printed.
+Case identifiers are part of that surface: the trace puts one on a line of its
+own, so an identifier carrying a control character is refused rather than
+rendered.

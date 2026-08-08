@@ -158,6 +158,33 @@ response, so timing and status code do not reveal which condition occurred
 (`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
 [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
 
+### Offline fixture reproduction
+
+A reproduction that fails names the contract that broke, which says a case failed but not what
+stage it stopped at. Ask the Evidence Gateway fixture run to explain itself:
+
+```sh
+evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml" --explain
+evidencectl fixtures run --project "<candidate>" --explain
+```
+
+The trace records, for every case, each stage it reached (`prepare`, `acquire`, `extract`,
+`derive`, `validate`, `construct`, `sign`, `expect`) and the status it reached that stage at, so a
+case that stopped before its stated outcome says where. `--explain-format json` renders the same
+trace as one document (`crates/registry-evidence/src/trace.rs`).
+
+An acquisition that makes several calls records `acquire` and `extract` once per call, in the
+order the plan runs them, and names each call by its role in the plan (`search`, `fetch`,
+`member`). A chained case that stopped reports the call it reached, not the chain as one step.
+
+The trace reports shapes only: member names, counts, and identifiers, never a response, fact,
+derived, or selector value. Each fixture states what must never appear in its own trace, and a run
+whose trace holds one of those values is refused before the trace is printed, including a run that
+stopped on an error.
+
+The flag is offline only. A served request has no equivalent: diagnose it from its public problem
+and the keyed audit chain.
+
 ### Stale materialization
 
 Check restricted `relay.refresh_health`, the last successful load, consecutive failures, and

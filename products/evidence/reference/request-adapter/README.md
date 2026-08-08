@@ -49,7 +49,9 @@ provider can satisfy the Version 1 request and cardinality boundary.
    complete immutable bundle and runtime bindings.
 10. Run `evidence evaluate --runtime <absolute-runtime-yaml> --fixture
     <bundle-relative-fixture-path>` for every referenced fixture before
-    deployment.
+    deployment. Add `--explain` to a run that failed to see the stages each
+    case reached and how each one ended, described in
+    [Explaining a failing run](deployment-projects/FIXTURES.md#explaining-a-failing-run).
 11. Promote the same reviewed bundle through staging and production using
     environment-specific runtime files and secret mounts. Follow the complete
     [authoring and production-build workflow](deployment-projects/CONFIG.md#authoring-and-production-build-workflow).

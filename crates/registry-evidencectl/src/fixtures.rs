@@ -31,13 +31,23 @@ pub struct RunArgs {
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
+
+    /// Ask `evidence` to explain each evaluation, and relay the trace it prints.
+    ///
+    /// The trace can name what a source returned, so it is relayed only when it
+    /// is asked for. For the structured form, run `evidence evaluate --explain
+    /// --explain-format json` against the fixture directly.
+    #[arg(long)]
+    pub explain: bool,
 }
 
-/// The result of one `evidence` invocation: whether it exited zero, when it did
-/// not its captured stderr for the operator to read, and, for a fixture run,
-/// how many cases that fixture evaluated.
+/// The result of one `evidence` invocation: whether it exited zero, what it
+/// printed on standard output, when it failed its captured stderr for the
+/// operator to read, and, for a fixture run, how many cases that fixture
+/// evaluated.
 struct StepOutcome {
     passed: bool,
+    stdout: String,
     stderr: Option<String>,
     evaluated_cases: Option<usize>,
 }
@@ -58,6 +68,10 @@ struct FixtureReport {
     /// Absent when the fixture failed, or when `evidence` reported no count.
     #[serde(skip_serializing_if = "Option::is_none")]
     evaluated_cases: Option<usize>,
+    /// What `evidence evaluate --explain` printed, verbatim, and only when a
+    /// trace was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,16 +114,20 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let mut fixtures = Vec::new();
     if check_passed {
         for fixture_path in &fixture_paths {
-            let outcome = run_evidence_step(
-                &evidence_bin,
-                &runtime_path,
-                &["evaluate", "--fixture", fixture_path],
-            );
+            let mut evaluate = vec!["evaluate", "--fixture", fixture_path.as_str()];
+            if args.explain {
+                // The text form only. The case count is read from the summary
+                // line `evidence` prints beside the trace, and the structured
+                // form prints the document instead of that line.
+                evaluate.push("--explain");
+            }
+            let outcome = run_evidence_step(&evidence_bin, &runtime_path, &evaluate);
             fixtures.push(FixtureReport {
                 path: fixture_path.clone(),
                 passed: outcome.passed,
                 stderr: outcome.stderr,
                 evaluated_cases: outcome.evaluated_cases,
+                trace: args.explain.then_some(outcome.stdout),
             });
         }
     }
@@ -295,18 +313,24 @@ fn run_evidence_step(evidence_bin: &Path, runtime_path: &Path, args: &[&str]) ->
     let mut command = Command::new(evidence_bin);
     command.arg("--runtime").arg(runtime_path).args(args);
     match command.output() {
-        Ok(output) if output.status.success() => StepOutcome {
-            passed: true,
-            stderr: None,
-            evaluated_cases: evaluated_cases(&String::from_utf8_lossy(&output.stdout)),
-        },
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            StepOutcome {
+                passed: true,
+                evaluated_cases: evaluated_cases(&stdout),
+                stdout,
+                stderr: None,
+            }
+        }
         Ok(output) => StepOutcome {
             passed: false,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
             evaluated_cases: None,
         },
         Err(error) => StepOutcome {
             passed: false,
+            stdout: String::new(),
             stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
             evaluated_cases: None,
         },
@@ -344,6 +368,11 @@ fn print_diagnostics(report: &RunReport, to_stderr: bool) {
             line.push_str(&format!(" ({cases} cases)"));
         }
         lines.push(line);
+        // The trace comes before the diagnostic, the order `evidence` itself
+        // prints them in: how far the run got, then what stopped it.
+        if let Some(trace) = fixture.trace.as_deref() {
+            lines.extend(indented(Some(trace)));
+        }
         if !fixture.passed {
             lines.extend(indented(fixture.stderr.as_deref()));
         }

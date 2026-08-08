@@ -22,6 +22,7 @@ pub mod selector;
 pub mod server;
 pub mod signing;
 pub mod source;
+pub mod trace;
 pub mod values;
 
 /// The response formats, their payload contract, and the strict verifier are

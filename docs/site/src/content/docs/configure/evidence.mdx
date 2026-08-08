@@ -258,10 +258,19 @@ opening the audit chain or contacting a source. `evidence evaluate` replays one 
 cases through the reviewed adapter, derivation, and output gate, with no source and no network
 involved.
 
+A fixture failure names the contract that broke and nothing else, so it says a case failed but not
+which stage it stopped at. Add `--explain` to print, for every case, the stages it reached and how
+each one ended, and `--explain-format json` to render the same trace as one document for a CI job
+(`crates/registry-evidence/src/trace.rs`). The trace reports member names, counts, and identifiers,
+never a response, fact, derived, or selector value, and each fixture's own
+`diagnostics_exclude` canaries are checked against it before it is printed. The flag is offline
+only: `evidence serve` has no equivalent.
+
 `evidencectl fixtures run --project <dir>` drives both commands across a complete deployment
 project: it runs `check`, then `evaluate` against every fixture path the bundle's requirements
 reference, and reports `PASS` or `FAIL` per step
-(`crates/registry-evidencectl/src/fixtures.rs`). The incomplete workspace created by
+(`crates/registry-evidencectl/src/fixtures.rs`). Add `--explain` to relay each fixture's trace with
+its step, or as that fixture's `trace` field under `--json`. The incomplete workspace created by
 `evidencectl new` has no bundle, runtime, or fixture cases, so it cannot pass this gate. After an
 operator supplies those deployment artifacts, both `check` and `fixtures run` must pass before
 `evidence serve` runs the revision.

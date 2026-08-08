@@ -74,6 +74,7 @@ entries:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: request_parts_debug_redacts_query_and_body_values}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value}
+      - {file: crates/registry-evidence/tests/cli.rs, name: a_failing_run_is_refused_when_its_trace_holds_a_declared_canary}
   - id: sec-unresolved-public-collapse
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
