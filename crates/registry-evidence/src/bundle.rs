@@ -832,12 +832,50 @@ fn capture_source_extract(path: &Path) -> Result<SourceExtract, BundleError> {
         filesystem_read_only,
         "the source extract the runtime file names is writable",
     )?;
+    refuse_uncheckpointed_sidecars(path)?;
     let (digest, identity) = digest_stable_file(path, &metadata, filesystem_read_only)?;
     Ok(SourceExtract {
         path: path.to_path_buf(),
         digest,
         identity,
     })
+}
+
+/// The files SQLite writes beside a database and reads back to complete it.
+///
+/// A `-shm` is deliberately absent. It is shared memory rather than content,
+/// and one can survive a clean checkpoint and close, so its presence says
+/// nothing about whether the snapshot is whole.
+const EXTRACT_SIDECAR_SUFFIXES: [&str; 2] = ["-wal", "-journal"];
+
+/// Refuse an extract published with the sidecar that completes it.
+///
+/// `immutable=1` tells SQLite to skip change detection, and skipping change
+/// detection also skips these files. A `-wal` holding committed frames is read
+/// straight past, so the deployment answers from the last checkpoint while
+/// every other reader of the same file sees newer rows. A `-journal` left by a
+/// writer that died mid-transaction is worse: an ordinary read-only opener
+/// refuses such a file because it cannot perform the rollback, while an
+/// immutable opener reads the rows that transaction never committed as though
+/// they were authoritative.
+///
+/// An extract is a published snapshot, so a sidecar is a publishing mistake
+/// rather than a state to interpret, and this makes it a startup refusal
+/// instead of a silent one. It detects that mistake rather than preventing it:
+/// a sidecar appearing after this check belongs to the deployment's own
+/// guarantee that nothing else changes the mounted file, and a publisher who
+/// copies only the main file out of a live database leaves no sidecar to find.
+fn refuse_uncheckpointed_sidecars(path: &Path) -> Result<(), BundleError> {
+    for suffix in EXTRACT_SIDECAR_SUFFIXES {
+        let mut sidecar = path.to_path_buf().into_os_string();
+        sidecar.push(suffix);
+        if fs::symlink_metadata(PathBuf::from(sidecar)).is_ok() {
+            return Err(invalid_artifact(
+                "the source extract the runtime file names has an uncheckpointed sidecar",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Digest one file without holding it in memory.
@@ -4553,6 +4591,37 @@ outboundTls:
                 "the source extract the runtime file names is writable"
             )
         );
+
+        // The sidecars are written plain rather than locked: what is refused is
+        // that they are there at all, whatever they permit.
+        for suffix in EXTRACT_SIDECAR_SUFFIXES {
+            let with_sidecar = load_with_extract(|root| {
+                let path = locked_extract(&root.join("published.sqlite"), b"extract");
+                let mut sidecar = path.clone().into_os_string();
+                sidecar.push(suffix);
+                fs::write(PathBuf::from(sidecar), b"pending").expect("write the sidecar");
+                path
+            })
+            .expect_err("an extract published with a sidecar");
+            assert_eq!(
+                named_refusal(&with_sidecar),
+                (
+                    EXTRACT_ARTIFACT,
+                    "the source extract the runtime file names has an uncheckpointed sidecar"
+                )
+            );
+        }
+
+        // A `-shm` alone survives a clean checkpoint and close, so it says
+        // nothing about the snapshot and is not refused.
+        load_with_extract(|root| {
+            let path = locked_extract(&root.join("checkpointed.sqlite"), b"extract");
+            let mut shared = path.clone().into_os_string();
+            shared.push("-shm");
+            fs::write(PathBuf::from(shared), b"shared").expect("write the shared-memory file");
+            path
+        })
+        .expect("an extract beside a leftover shared-memory file loads");
     }
 
     /// The statement executor opens the extract `immutable=1`, so the file

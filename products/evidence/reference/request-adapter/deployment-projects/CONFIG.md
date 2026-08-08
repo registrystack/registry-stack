@@ -840,8 +840,9 @@ unixepoch
 The time functions in that list are denied for one reason: the deployment has
 exactly one clock, and it is the runtime's evaluation instant. Where the
 statement names the reserved parameter `evidence_now`, Rust binds that instant
-as fixed-width RFC 3339 UTC text with milliseconds, so text stored in the same
-form orders lexically the way it orders in time. A bundle cannot bind the name
+as fixed-width RFC 3339 UTC text in whole seconds, the same rendering the
+assertion reports, so `WHERE valid_until >= :evidence_now` against text stored
+as `2026-08-08T03:00:00Z` compares the way it reads. A bundle cannot bind the name
 itself; startup rejects a `parameterBindings` entry that uses it. One clock is
 what makes a pinned fixture run reproduce exactly: the same extract and the same
 pinned instant give the same rows on every run and on every host.
@@ -864,6 +865,17 @@ the `evidence_extract` row, make the file read-only, and give it a name that
 identifies the snapshot. Selecting only the columns an assertion needs at
 conversion time is worth doing, because a column that is not in the extract
 cannot be disclosed by any later mistake.
+
+Publish one whole file. The immutable open that lets the runtime trust the
+snapshot is also an open that skips SQLite's sidecars, so committed rows sitting
+in a `-wal` would be read straight past, and a `-journal` left behind by a writer
+that died mid-transaction would be read as though the rows it never committed
+were real. Startup refuses an extract with either file beside it. `VACUUM INTO`
+and `.dump` both produce a checkpointed single file, so a deployment following
+the table above is already there; copying a directory, or globbing
+`registry.db*`, is what lands in the refusal. Copying the main file alone out of
+a database that is still being written leaves nothing beside it to find, which is
+why this is an obligation on the publisher and not only a check.
 
 ### Requirement derivation selector inputs
 

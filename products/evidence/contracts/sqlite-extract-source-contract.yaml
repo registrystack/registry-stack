@@ -57,7 +57,7 @@ evidence_data_request:
   reserved_parameter:
     name: evidence_now
     rule: The runtime has one clock. The whole SQLite clock function family is denied by the authorizer, so a statement cannot read a clock of its own, and the runtime binds its evaluation instant to the reserved name instead.
-    value: The same evaluation instant the acquisition carries, as fixed-width RFC 3339 UTC text with milliseconds and a Z offset, so a statement comparing it against stored text orders lexically the way it orders in time.
+    value: The same evaluation instant the acquisition carries, as fixed-width RFC 3339 UTC text in whole seconds with a Z offset, so a statement comparing it against stored text orders lexically the way it orders in time. It is the rendering the assertion reports, character for character, so a statement compared against text stored to the second is not defeated by a longer form that sorts after every value of that second.
     bundle_authority: A bundle that declares the reserved name as a parameter binding is refused. The name is available to the statement and to no one else.
   adapter_parameters:
     count: {range: [0, 64]}
@@ -102,6 +102,7 @@ extract:
     writability: A file this process could write is refused at startup, and a file on a read-only filesystem satisfies the check outright.
     digest: The file is digested at startup in bounded chunks with identity checks bracketing the read, and the digest enters the computed runtime revision under source-extract/<profile>. There is no byte cap, because an extract is a register rather than an artifact.
     still_bound: The digest and the SQLite open are not the same moment, because the bundle, the kernel, and the audit log are read in between. The file identity the digest was taken over is checked again once the connections are open, so a path refreshed inside that window fails startup rather than serving bytes the runtime revision does not name. This narrows the window rather than closing it, and it does not replace the deployment guarantee stated under connection.immutability.
+    checkpointed: A published extract is one whole file. An extract with a write-ahead log or a rollback journal beside it is refused at startup, because immutable=1 skips change detection and therefore skips those files. Committed frames in a log are read straight past, and a journal left by a writer that died mid-transaction is read as though the rows it never committed were authoritative, where an ordinary read-only opener refuses the file outright. A leftover shared-memory file is not refused, because one survives a clean checkpoint and says nothing about the snapshot. This detects a publishing mistake rather than preventing one, since a publisher who copies only the main file out of a live database leaves nothing beside it to find, which is why publishing a checkpointed single file is stated as an obligation and not only checked.
     bundle_revision: The extract is not part of the bundle hash. Republishing one leaves a pinned bundle revision unchanged, which is why publication metadata and a declared maximum age are mandatory rather than advisory.
   connection:
     uri_parameters: [mode=ro, immutable=1]
