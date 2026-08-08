@@ -14,7 +14,7 @@ mod support;
 use std::path::PathBuf;
 
 use registry_evidence_authoring::{
-    model::Question, testing::ProjectFile, validate::validate_question,
+    layout::MAX_QUESTION_BYTES, model::Question, testing::ProjectFile, validate::validate_question,
 };
 use registry_language_server::{EvidenceKind, SymbolKind};
 use support::{
@@ -902,6 +902,46 @@ fn a_question_that_stops_parsing_still_answers_the_access_policy() {
         definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
         vec![project.path(QUESTION_PATH)]
     );
+}
+
+/// A question the loader could not read is still a question the project holds, and the documents
+/// that name it still find it.
+///
+/// A question past the byte ceiling the authoring form sets for one is dropped with a sentence of
+/// its own, and that sentence is the whole of what the author has to act on. Reporting every access
+/// policy that admits it as naming an unknown question would send them to documents that are
+/// correct, and in a project where the question is widely admitted the second sentence would
+/// outnumber the first. A question is named by its file, so the name is still there to resolve
+/// against once the text is gone.
+#[test]
+fn a_question_the_loader_could_not_read_still_answers_for_its_name() {
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        QUESTION_PATH,
+        &question_past_its_ceiling(),
+    ));
+    let index = project.index();
+
+    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
+    assert_eq!(
+        diagnostic.message,
+        format!("This question exceeds the {MAX_QUESTION_BYTES}-byte limit the editor indexes")
+    );
+    assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
+    assert_eq!(
+        definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
+        vec![project.path(QUESTION_PATH)]
+    );
+}
+
+/// The shared question grown past the ceiling the authoring form sets for a question, and past
+/// nothing else: a document over 64 KiB and under the workspace-wide megabyte is the one the two
+/// limits disagree about.
+fn question_past_its_ceiling() -> String {
+    let mut written = QUESTION.to_owned();
+    written.push('#');
+    written.push_str(&" ".repeat(MAX_QUESTION_BYTES as usize));
+    written
 }
 
 /// The shared question with a structured answer, which is the only answer kind that names a schema.

@@ -363,8 +363,19 @@ impl ProjectIndex {
             .filter_map(|(path, document)| document.syntax_error.map(|range| (path.clone(), range)))
             .collect::<BTreeMap<_, _>>();
 
+        // The documents this root holds no text for, each one already carrying the sentence that
+        // says why. A path is one of these exactly when something reported it and nothing read it,
+        // which is the only place that pairing is known: the loader and the watcher both admit a
+        // document or report it, never both.
+        let dropped = diagnostics
+            .iter()
+            .map(|diagnostic| &diagnostic.path)
+            .filter(|path| !documents.contains_key(*path))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
         let (symbols, references, semantic_diagnostics) =
-            family.build_index(&root, documents, &parsed);
+            family.build_index(&root, documents, &parsed, &dropped);
 
         let mut index = Self {
             root,

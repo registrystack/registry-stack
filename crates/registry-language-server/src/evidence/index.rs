@@ -49,6 +49,7 @@ pub(crate) fn build_index(
     root: &Path,
     documents: &BTreeMap<PathBuf, String>,
     parsed: &BTreeMap<PathBuf, ParsedDocument>,
+    dropped: &BTreeSet<PathBuf>,
 ) -> (
     Vec<IndexedSymbol>,
     Vec<IndexedReference>,
@@ -102,6 +103,10 @@ pub(crate) fn build_index(
             | DocumentRole::OpenApi
             | DocumentRole::Derivation => {}
         }
+    }
+
+    for path in dropped {
+        builder.define_by_its_place(path);
     }
 
     (builder.symbols, builder.references, builder.diagnostics)
@@ -349,6 +354,31 @@ impl IndexBuilder<'_> {
         self.define_pointed_file(EvidenceKind::SchemaFile, pointer, relative);
     }
 
+    /// Defines what a document declares by sitting where it does, for a document this root holds no
+    /// text for.
+    ///
+    /// A file past its ceiling, one that is not valid UTF-8, one the server could not open, and the
+    /// first file of a directory that overflows are all documents the project has and the editor
+    /// could not read. Each one is already reported once, on itself, with the reason and the fix.
+    /// Leaving its name undefined would report it a second time on every document that spells it,
+    /// which are documents with nothing wrong: an access policy admitting a question would be told
+    /// the question does not exist. So the name is taken from the path, which the authoring form
+    /// makes the name anyway, and the definition is anchored at the start of the file the author has
+    /// to open. Nothing here reads the file: a document with no text has no `id` to check, no
+    /// references to record, and no shape to judge, and its own sentence stands.
+    fn define_by_its_place(&mut self, path: &Path) {
+        let Some(relative) = path.strip_prefix(self.root).ok() else {
+            return;
+        };
+        let Some(kind) = document_role(relative).and_then(named_by_its_file) else {
+            return;
+        };
+        let Some(name) = document_name(relative) else {
+            return;
+        };
+        self.define(SymbolKey::global(kind, name), None, path, DOCUMENT_START);
+    }
+
     /// Defines the file a pointer names, once a file the server may open really sits there.
     ///
     /// The pointer is the name: the project spells these targets as paths, so `Find references` on
@@ -421,6 +451,27 @@ impl IndexBuilder<'_> {
             code: Some(code.to_owned()),
             message,
         });
+    }
+}
+
+/// What a document of this role declares just by sitting where it does, for the roles the authoring
+/// form names by their file.
+///
+/// A schema, a fixture, and a derivation are missing because the document that points at one defines
+/// it, under the path that pointer spells, and that happens whether or not this root reads the file.
+/// The marker declares the root rather than a name, and the OpenAPI description belongs to the phase
+/// that reads published operations.
+fn named_by_its_file(role: DocumentRole) -> Option<EvidenceKind> {
+    match role {
+        DocumentRole::Question => Some(EvidenceKind::Question),
+        DocumentRole::Source => Some(EvidenceKind::Source),
+        DocumentRole::Selector => Some(EvidenceKind::SelectorProfile),
+        DocumentRole::AccessPolicy => Some(EvidenceKind::AccessPolicy),
+        DocumentRole::Schema
+        | DocumentRole::Fixture
+        | DocumentRole::Derivation
+        | DocumentRole::Marker
+        | DocumentRole::OpenApi => None,
     }
 }
 

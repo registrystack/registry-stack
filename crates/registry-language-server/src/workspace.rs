@@ -3,7 +3,7 @@
 //! and index each root keeps.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -158,11 +158,18 @@ impl ProjectFamily {
     /// questions. The tree gives a name its position, and it gives it whether or not the rest of the
     /// document is finished. The text is what a deserializer reads, and Evidence checks a question's
     /// shape by handing that text to the authoring library rather than by restating its rules here.
+    ///
+    /// `dropped` names the project's own documents this root holds no text for, each one already
+    /// reported for its own reason. A family whose documents are named by where they sit can still
+    /// answer for those names, so one unreadable file stays one sentence instead of one sentence per
+    /// document that spells it. Relay is not such a family: a Relay name is written inside the
+    /// document, so a path there declares nothing on its own.
     pub(crate) fn build_index(
         self,
         root: &Path,
         documents: &BTreeMap<PathBuf, String>,
         parsed: &BTreeMap<PathBuf, ParsedDocument>,
+        dropped: &BTreeSet<PathBuf>,
     ) -> (
         Vec<IndexedSymbol>,
         Vec<IndexedReference>,
@@ -170,7 +177,7 @@ impl ProjectFamily {
     ) {
         match self {
             Self::Relay => relay::build_index(root, parsed),
-            Self::Evidence => evidence::build_index(root, documents, parsed),
+            Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
         }
     }
 
@@ -595,6 +602,7 @@ mod tests {
     use tower_lsp_server::ls_types::Position;
 
     use super::*;
+    use crate::refs::DOCUMENT_START;
 
     const MANIFEST: &str = "version: 1\nregistry: { id: demo }\nservices: {}\n";
     /// Enough of a question for the tests here, which are about which root owns which file. What a
@@ -1148,18 +1156,24 @@ mod tests {
     fn an_open_buffer_past_its_role_s_ceiling_is_dropped_and_reported() {
         let temp = TempDir::new().unwrap();
         let (mut state, question) = evidence_root_with_a_question(temp.path());
-        assert!(state
-            .index
-            .workspace_symbols("adult-status")
-            .iter()
-            .any(|symbol| symbol.name == "adult-status"));
+        let written = state.index.workspace_symbols("adult-status");
+        assert_eq!(written.len(), 1);
+        assert_ne!(
+            written[0].location.range, DOCUMENT_START,
+            "a question the root reads is anchored at the identifier it writes"
+        );
 
         state.update(question.clone(), oversized_question(), 2);
 
         assert!(!state.documents.contains_key(&question));
-        assert!(
-            state.index.workspace_symbols("adult-status").is_empty(),
-            "the index must not answer from text the buffer no longer holds"
+        let declared = state.index.workspace_symbols("adult-status");
+        assert_eq!(
+            declared
+                .iter()
+                .map(|symbol| symbol.location.range)
+                .collect::<Vec<_>>(),
+            vec![DOCUMENT_START],
+            "the file still declares the question, and nothing is answered from the text the buffer no longer holds"
         );
         assert_eq!(
             ceiling_messages(&state),
