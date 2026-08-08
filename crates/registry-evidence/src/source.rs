@@ -748,6 +748,27 @@ impl SourceExecutor {
         }
     }
 
+    /// Whether this source already reads an extract older than its bundle
+    /// allows, at the instant asked.
+    ///
+    /// Deliberately not a readiness input, and readiness does not call it. Every
+    /// replica mounts the same extract, so failing readiness on its age would
+    /// drain the whole deployment at once for a cause that leaving rotation
+    /// cannot fix, and would withhold the requirements on other transports that
+    /// are still perfectly servable. The same reasoning keeps an unreachable
+    /// issuer key set out of readiness. This exists so the answer can be said
+    /// out loud at startup, while an operator is still watching, rather than
+    /// being discovered one refused request at a time.
+    pub fn extract_is_stale(&self, instant: DateTime<Utc>) -> bool {
+        match &self.transport {
+            SourceTransport::Http(_) => false,
+            SourceTransport::Statement(statement) => statement
+                .extract
+                .as_ref()
+                .is_some_and(|extract| extract.validate_extract_age(instant).is_err()),
+        }
+    }
+
     /// The HTTP transport's concurrency boundary, for the tests that occupy it.
     #[cfg(test)]
     fn http_concurrency(&self) -> &Semaphore {

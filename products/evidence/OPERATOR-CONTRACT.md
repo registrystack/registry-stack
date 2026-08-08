@@ -1038,6 +1038,20 @@ fails when a required local runtime or bundle input, selector binding,
 credential, CA binding, audit dependency, or signing dependency is absent,
 mutable, or invalid.
 
+A statement source holds no credential, so readiness has nothing to check for
+one and passes it. In particular, how old its mounted extract is never decides
+readiness. An extract past its source's `maximumExtractAgeSeconds` refuses every
+evaluation that reads it, with `dependency_unavailable` at the boundary and the
+`source-extract-stale` audit category, while `/ready` stays `200` and the
+requirements on other sources keep being served. This is the same standing an
+unreachable `jwksUri` has, and for the same reason: every replica mounts the
+same file, so removing one from rotation cures nothing and removing all of them
+turns one stale file into a full outage. Startup names a source whose extract is
+already too old in the log, so alert on that line and on the audit category, not
+on readiness. The cure is to publish a fresh extract and restart, which is also
+why an already-stale extract does not refuse startup: a restart racing a
+republish would otherwise crashloop.
+
 The access-token issuer's `jwksUri` is retrieved once at startup and again on
 each readiness check, subject to the verifier cache lifecycle and a short
 suppression interval after a failure. Both report and neither refuses: a
