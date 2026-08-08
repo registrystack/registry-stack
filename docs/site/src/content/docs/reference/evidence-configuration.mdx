@@ -1,6 +1,6 @@
 ---
 title: Evidence Gateway configuration reference
-description: Generated key-path reference for the frozen Evidence Gateway bundle and runtime configuration grammars.
+description: Generated key-path reference for the frozen Evidence Gateway configuration grammars and for the authoring form an adopter writes.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,29 +14,44 @@ wide: true
 
 import EvidenceConfigurationReference from '../../../components/EvidenceConfigurationReference.astro';
 
-This generated reference lists every key path an Evidence Gateway deployment may write, in the
-two frozen Version 1 configuration grammars: the deployment bundle and the runtime configuration.
+This generated reference lists every key path an Evidence Gateway deployment may write, in the two
+frozen Version 1 configuration grammars: the deployment bundle and the runtime configuration. It
+also lists the authoring form an adopter writes before a deployment project exists: one question
+document and one project marker.
 
-Each entry reports only what the grammar itself proves: the value type, whether the key is
-required, the fixed values it accepts, the bounds it enforces, and the grammar's own description
+Each entry reports only what the schema itself proves: the value type, whether the key is
+required, the fixed values it accepts, the bounds it enforces, and the schema's own description
 of what the key decides. Read an entry to confirm a key exists, spell the key correctly, and stay
 inside its accepted values.
 
 ## Contract status
 
+Two kinds of schema are published here, and they carry different promises. Every section on this
+page states which it is.
+
+| Schema | Status | Source |
+| ------ | ------ | ------ |
+| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | `products/evidence/contracts/*.schema.yaml` |
+| `questions/<name>.yaml`, `evidence-project.yaml` | Adopter tooling, not frozen | `crates/registry-evidencectl/schemas/authoring/*.schema.json` |
+
 - Status: current, pre-1.0
-- Reference format: `1.0`
+- Reference format: `1.1`
 - Generator: `npm run generate` in `docs/site`
-- Source: `products/evidence/contracts/bundle.schema.yaml` and
-  `products/evidence/contracts/runtime.schema.yaml`
 - Coverage gate: `products/evidence/scripts/check-config-key-paths.sh`
 
-The two contracts are the authority. JSON Schema validation and the runtime's own checks decide
-whether a configuration is accepted; this page never adds a rule of its own, and it does not
-inspect a deployment, live configuration, environment variables, or secret stores.
+The two frozen contracts are the authority for a deployment. JSON Schema validation and the
+runtime's own checks decide whether a configuration is accepted; this page never adds a rule of
+its own, and it does not inspect a deployment, live configuration, environment variables, or
+secret stores.
 
-The coverage gate holds the same key paths in exact parity with the product's configuration
-guide, so a key cannot reach one artifact and quietly skip the others.
+The authoring schemas are generated from the `registry-evidence-authoring` model that
+`evidencectl` and the language server share, so an editor's idea of the form and the command
+line's idea of the form come from one place. They sit outside the frozen Version 1 contract set
+and may change with the tooling that generates them. A question document these schemas accept
+still has to compile, and compiling is where the frozen contract applies.
+
+The coverage gate holds every schema's key paths in exact parity with the product reference that
+explains it, so a key cannot reach one artifact and quietly skip the others.
 
 ## Notation
 
@@ -71,17 +86,20 @@ two origin patterns, and a source authenticating with `none` must further match 
 loopback pattern printed below them.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
-    products/evidence/contracts/*.schema.yaml. Run npm run generate from docs/site. */}
+    products/evidence/contracts/*.schema.yaml and
+    crates/registry-evidencectl/schemas/authoring/*.schema.json.
+    Run npm run generate from docs/site. */}
 
 <EvidenceConfigurationReference />
 
 ## What this page does not carry
 
-Each description here states what one key decides, in the sentence the grammar itself carries. It
+Each description here states what one key decides, in the sentence the schema itself carries. It
 cannot show you how the keys fit together, walk you through authoring a bundle, or explain why a
-deployment is shaped the way it is. For that, read the configuration guide in
-`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`, which documents the
-same key paths in the context of a whole deployment project.
+deployment is shaped the way it is. For that, read the guide each section names: the deployment
+grammar is explained in `products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`
+and the authoring form in `products/evidence/reference/authoring-projects/CONFIG.md`, both of which
+document the same key paths in the context of a whole project.
 
 A key path that this page lists is not a deployment that runs. Schema validity is one gate.
 Runtime, bundle, secret, and audit posture is a separate gate that `evidencectl doctor` reports,
