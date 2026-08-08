@@ -103,8 +103,8 @@ properties:
   metricsListener:
     description: >-
       Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment
-      serves no metrics endpoint, which is the default. It is a separate binding from the
-      evidence listener and is not described by the public evidence contract.
+      serves no metrics endpoint, which is the default. This listener is a separate binding from
+      the evidence listener and is not described by the public evidence contract.
     type: object
     additionalProperties: false
     required:

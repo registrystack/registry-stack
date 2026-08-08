@@ -3048,7 +3048,7 @@
           "required": false,
           "values": null,
           "constraints": [],
-          "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. It is a separate binding from the evidence listener and is not described by the public evidence contract.",
+          "description": "Optional operator-only telemetry listener serving GET /metrics. Absent means the deployment serves no metrics endpoint, which is the default. This listener is a separate binding from the evidence listener and is not described by the public evidence contract.",
           "runtime_validation": "Rejected at startup when bindHost and port together repeat the evidence listener binding."
         },
         {
