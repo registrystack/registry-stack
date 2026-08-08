@@ -5,9 +5,13 @@ Status: Adopter tooling, outside the frozen Version 1 contract set
 The authoring form is what an adopter writes before a deployment project
 exists: one marker document that names the project root, and one YAML document
 per question. `evidencectl` compiles those documents into the
-`bundle/evidence.yaml` and `runtime.yaml` grammar that
+`bundle/evidence.yaml` grammar that
 [the deployment configuration reference](../request-adapter/deployment-projects/CONFIG.md)
-describes. This page documents the input, not the output.
+describes. A local compile synthesizes a loopback `runtime.yaml` beside that
+bundle so the project can be run on the author's machine, while a production
+build writes the bundle alone and copies the `runtime.yaml` of the deployment
+target it is given, so nothing on this page reaches a deployed process's
+runtime. This page documents the input, not the output.
 
 The two are not the same promise. The deployment grammar is the frozen Version
 1 configuration contract. The authoring form is adopter tooling:
@@ -97,7 +101,7 @@ disclosure:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `id` | yes | The question's local name. Lowercase local identifier. |
+| `id` | yes | The question's local name, which must equal the stem of the document's own filename, so `id: adult-status` is read from `questions/adult-status.yaml`. Lowercase local identifier. |
 | `purpose` | yes | The purpose a caller must state to receive this answer. Lowercase local identifier. |
 | `question` | yes | The question in words, for a human reviewing the project. Non-empty, at most 512 bytes, no control characters. |
 
@@ -146,7 +150,7 @@ projects out of the response.
 | `source.ref` | one of the two | The name of a definition under `sources/`. A question using `ref` declares no `facts` and no `collectionBounds`. |
 | `source.operation` | one of the two | One `operationId` from `source.openapi.yaml`. Non-empty, at most 256 bytes, no control characters. |
 | `source.facts` | with `operation` | 1 to 16 values projected out of the response. |
-| `source.collectionBounds` | with `operation` | Up to 16 pointers, each bounding one array the facts walk into. |
+| `source.collectionBounds` | with a collection | Up to 16 pointers, each bounding one array the facts walk into. |
 
 Declaring both forms, or neither, is rejected.
 
@@ -188,7 +192,10 @@ source:
     /events: 4
 ```
 
-A question with no collection to bound writes `collectionBounds: {}`.
+The declared pointers and the collections the facts reach are compared as sets,
+so a bound that is missing and a bound nothing reaches are both rejected, and
+both are named. A question whose facts visit no collection therefore writes
+`collectionBounds: {}` or leaves the key out.
 
 ### Answers
 
@@ -250,7 +257,7 @@ responseFormats: [signed-jws, sd-jwt-vc]
 
 | Key | Required | Meaning |
 |---|---|---|
-| `derivation` | yes | The Rhai program that turns facts into concepts, under `derivations/`. |
+| `derivation` | yes | The Rhai program that turns facts into concepts, under `derivations/`. Each question names its own file; two questions pointing at one program is rejected. |
 
 `crates/registry-evidence-authoring/src/derivation.rs` compiles the program
 without running it and holds it to three rules: function names are unique, the
@@ -273,8 +280,10 @@ fn answer(facts, selectors, context) {
 Omitting it lets `evidencectl` invent disposable
 `urn:registrystack:evidence:local:` identifiers, a UTC observation timezone,
 and a 300 second validity, which are usable for a fixture run and refused for a
-deployment. Each key becomes the `requirements[]` key of the same name in
-`bundle/evidence.yaml`.
+deployment. Six of these keys become the `requirements[]` key of the same name
+in `bundle/evidence.yaml`. The other two are renamed: `governance.requirement`
+becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
+`requirements[].disclosureGuard.families`.
 
 | Key | Required | Meaning |
 |---|---|---|
