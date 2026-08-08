@@ -84,9 +84,19 @@ root to and accepts whatever the upward walk reaches; a session whose declared f
 resolve on this filesystem accepts nothing.
 
 Only regular files in the documented project layouts are indexed. Symbolic links, files outside the
-project root, unrelated YAML files, and documents past the per-role byte ceiling are ignored. This
-keeps editor analysis inside the same bounded authoring surface as `registryctl` and
-`evidencectl`.
+project root, unrelated YAML files, and documents past the per-role byte ceiling are ignored, and
+those ceilings are the authoring form's own rather than the editor's, so a document `evidencectl`
+refuses for its size is one the editor refuses for the same size. How many documents a directory
+contributes is bounded only where the authoring form bounds it: an Evidence root stops at the 128
+documents the form allows in `questions/` and in `access/policies/`, while `sources/` and
+`selectors/`, the other two directories it reads documents from, are read whole at up to 1 MiB a
+document, and a Relay root bounds no directory at all and holds every document to 1 MiB. One root
+therefore holds roughly the bytes of the directories it reads, and a session holds that for up to 32
+roots, so a project with a very large `selectors/` directory can exhaust the server's memory as its
+root is indexed. That is the price of the rule behind it: a ceiling only the editor applies would
+draw an unresolved reference over a project that builds. Open files are not part of the growth. Each
+document is read and closed as the scan reaches it, so a session keeps the same handful of
+descriptors open whatever the size of the project.
 
 ## Parsing
 

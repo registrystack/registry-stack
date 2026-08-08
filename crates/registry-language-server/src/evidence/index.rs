@@ -6,6 +6,10 @@
 //! policy that admits a question the project does not hold. The editor draws them earlier, on text
 //! that has not been saved yet, and says the same thing about them. It never draws one the compiler
 //! would accept, because a diagnostic an author cannot act on teaches them to ignore the channel.
+//! Two rules hold that property where it is hardest to keep: a document this root could not read
+//! still declares the name its path gives it, so the documents spelling that name are not told it
+//! is missing, and a source no question reads has its names resolved for navigation and reported to
+//! nobody, because nothing in the build looks inside it either.
 //!
 //! Two families of edge are deliberately absent, and belong to the phase that reads the project's
 //! OpenAPI description: `source.operation` with `source.facts[].path`, and `subject.selector` with
@@ -17,6 +21,26 @@
 //! files. The reference vocabulary has no kind for an authored script, and calling one a schema or
 //! a derivation would put a word in front of the author that means another part of the form, so the
 //! two pointers are left alone until there is a kind that names them.
+//!
+//! Five rules of the authoring form belong to the compiler alone, and every one of them leaves the
+//! editor quieter than the build rather than louder. A `sources/` or `selectors/` directory may
+//! hold only `<id>.yaml` files whose stem is a lowercase local identifier, so a `sources/README.md`
+//! or a `sources/People.yaml` is a project `registry-evidencectl` refuses, while a path is
+//! classified here by its directory and its `.yaml` extension and its stem is only ever read as a
+//! name. A selector profile has to carry a `fields` object and to declare the field the question
+//! selects its subject by, while `selectors/<profile>.yaml` resolves here as soon as a file sits
+//! there. A question's subject has to be one its source really uses, and its subjects have to
+//! select exactly one alternative for every role the source declares, which is a reading of two
+//! documents against each other that nothing here performs. An access policy has to name between
+//! one and the 128 questions the form allows, sorted and unique, and only the names themselves are
+//! resolved here. Every question has to name its own derivation file, which no single question
+//! shows: two questions pointing at one `derivations/shared.rhai` both resolve, because that file
+//! is defined once under the path they both spell.
+//!
+//! The five are recorded rather than closed, so a reader can tell a deliberate silence from a
+//! defect. Each one is a sentence the compiler gives the author anyway, and a rule drawn here on
+//! less than it needs is exactly the diagnostic over a project that builds that the paragraph above
+//! rules out.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -203,6 +227,12 @@ impl IndexBuilder<'_> {
             .get("governance")
             .and_then(|governance| governance.get_scalar("fixtures"))
         {
+            // `evidence/unknown-fixture-file` is paired with a compiler rule that sits two crates
+            // from here, so it does not read as an editor invention beside the ones it is listed
+            // with. `registry-evidencectl`'s check that this pointer is a project-relative
+            // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
+            // reads the same file while it writes the bundle, and the `evidence` binary refuses a
+            // fixtures artifact whose path is not under `fixtures/` when it reads that bundle back.
             self.refer_to_file(path, fixtures, EvidenceKind::FixtureFile);
         }
     }

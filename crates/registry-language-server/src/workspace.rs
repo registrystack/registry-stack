@@ -17,8 +17,14 @@ use crate::{
     yaml::ParsedDocument,
 };
 
-/// How many roots one session indexes. A client that reaches across many unrelated projects stops
-/// adding roots here instead of holding an unbounded part of the filesystem open.
+/// How many roots one session indexes.
+///
+/// This bounds the number of roots and nothing else. One root holds what its project holds: the
+/// roles the authoring form bounds in number stop where the form stops, every other directory the
+/// family reads is read whole, and each document in it may reach its role's byte ceiling, so a root
+/// costs roughly the bytes of the directories it reads. A client that reaches across many unrelated
+/// projects stops adding roots here, which keeps that cost multiplied by 32 rather than by whatever
+/// a session is pointed at.
 pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
 
 /// How many resolved paths one session remembers.
