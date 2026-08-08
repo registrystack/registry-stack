@@ -354,13 +354,17 @@ impl PrivateKeyJwt {
         // signature it discards could not be presented as a client assertion.
         let probe = registry_platform_crypto::sign(CLIENT_KEY_PROBE, &config.client_key)
             .map_err(|_| refuse("the client key cannot sign a client assertion"))?;
-        // Signing reads only the private half, so a JWK carrying one pair's `d`
-        // beside another pair's public fields signs perfectly well and produces
-        // assertions no server can verify: the public half an adopter registers
-        // is derived from those fields. Nothing downstream would catch it, since
-        // the server sees a valid signature over a key it was never given.
-        // Verifying the probe against this key's own public half is what proves
-        // the two belong together.
+        // A JWK carrying one pair's `d` beside another pair's public fields
+        // produces assertions no server can verify: the public half an adopter
+        // registers is derived from those fields, so the server would see a
+        // valid signature over a key it was never given. Verifying the probe
+        // against this key's own public half is what proves the two belong
+        // together.
+        //
+        // ES256 no longer reaches this, because importing a P-256 pair compares
+        // the two halves and the signing probe above already refused the key.
+        // EdDSA and RS256 import the private half alone and still sign happily,
+        // so the check stays.
         registry_platform_crypto::verify(CLIENT_KEY_PROBE, &probe, &config.client_key.public())
             .map_err(|_| refuse("the client key's halves belong to different key pairs"))?;
         // Ties the message below to the constant, so the constant cannot drift
@@ -817,6 +821,10 @@ mod tests {
     }
 
     /// The ES256 counterpart: `d` from one pair, `x` and `y` from another.
+    ///
+    /// Unlike its EdDSA sibling this one never signs, since importing a P-256
+    /// pair compares the halves. It is refused as a key that cannot sign rather
+    /// than as one whose probe fails to verify.
     fn mismatched_es256_client_key() -> PrivateJwk {
         let mut key = es256_client_key(Some(KEY_ID));
         let other = es256_client_key(None);
@@ -1579,7 +1587,7 @@ mod tests {
                 ),
             ),
             (
-                "the client key's halves belong to different key pairs",
+                "the client key cannot sign a client assertion",
                 config(
                     endpoint("https://tokens.example.org"),
                     mismatched_es256_client_key(),
