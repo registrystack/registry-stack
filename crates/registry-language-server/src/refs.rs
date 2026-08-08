@@ -777,11 +777,16 @@ mod tests {
         );
     }
 
-    /// The one kind whose duplicates another implementation already refuses, and the kinds this
-    /// index is the only one to see.
+    /// The two kinds whose duplicates this index leaves alone, and the kinds it is the only one to
+    /// see. A concept's duplicates the authoring library already refuses; an operation identifier
+    /// two operations publish is refused only where a question names it, so reporting it here would
+    /// underline a description the compiler builds.
+    /// `tests/evidence_openapi.rs::an_identifier_two_operations_publish_and_no_question_names_is_reported_nowhere`
+    /// holds the operation half of that end to end.
     #[test]
-    fn only_the_concept_leaves_its_duplicates_to_the_authoring_library() {
+    fn a_concept_and_an_operation_leave_their_duplicates_to_another_check() {
         assert!(!SymbolKind::Evidence(EvidenceKind::Concept).reports_duplicates());
+        assert!(!SymbolKind::Evidence(EvidenceKind::Operation).reports_duplicates());
         assert!(SymbolKind::Evidence(EvidenceKind::Question).reports_duplicates());
         assert!(SymbolKind::Relay(RelayKind::Consultation).reports_duplicates());
     }

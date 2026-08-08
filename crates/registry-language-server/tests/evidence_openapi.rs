@@ -22,7 +22,7 @@ mod support;
 use registry_evidence_authoring::{
     layout::MAX_OPENAPI_BYTES, marker::PROJECT_MARKER_FILE, testing::ProjectFile,
 };
-use registry_language_server::{IndexedDiagnostic, ProjectIndex};
+use registry_language_server::{EvidenceKind, IndexedDiagnostic, ProjectIndex, SymbolKind};
 use support::{
     adult_status_project, operation_question_project, replacing, without, EvidenceProject,
     OPENAPI_PATH, OPERATION_OPENAPI, OPERATION_QUESTION, QUESTION_PATH,
@@ -140,6 +140,62 @@ fn an_operation_identifier_two_operations_publish_is_reported() {
         diagnostic.code.as_deref(),
         Some("evidence/ambiguous-operation")
     );
+}
+
+/// The same description with no question naming the repeated identifier, which is a project the
+/// compiler builds and the editor must say nothing about.
+///
+/// `Description::published` (`crates/registry-language-server/src/evidence/openapi.rs:139`) yields a
+/// repeated `operationId` once per operation on purpose, and every published operation is defined
+/// as a symbol whether or not a question names it, so both definitions really are in the index.
+/// `unique_operation` (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses an
+/// ambiguous identifier only where a question spells it, so nothing refuses this description. The
+/// exemption in `SymbolKind::reports_duplicates` is what keeps the editor quiet over it, and this
+/// test fails if that exemption is removed.
+#[test]
+fn an_identifier_two_operations_publish_and_no_question_names_is_reported_nowhere() {
+    let described = OPERATION_OPENAPI.replace(
+        "paths:\n",
+        concat!(
+            "paths:\n",
+            "  /people:\n",
+            "    get:\n",
+            "      operationId: listPeople\n",
+            "      responses:\n",
+            "        '200':\n",
+            "          description: Every person\n",
+            "  /people/all:\n",
+            "    get:\n",
+            "      operationId: listPeople\n",
+            "      responses:\n",
+            "        '200':\n",
+            "          description: Every person, again\n",
+        ),
+    );
+    assert_ne!(
+        described, OPERATION_OPENAPI,
+        "the fixture must publish one identifier twice"
+    );
+    let project = EvidenceProject::new(&replacing(
+        &operation_question_project(),
+        OPENAPI_PATH,
+        &described,
+    ));
+    let index = project.index();
+
+    assert_eq!(
+        index
+            .symbols()
+            .iter()
+            .filter(|symbol| {
+                symbol.kind == SymbolKind::Evidence(EvidenceKind::Operation)
+                    && symbol.name == "listPeople"
+            })
+            .count(),
+        2,
+        "the description defines the repeated identifier twice, which is what makes it a duplicate"
+    );
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
 }
 
 /// An operationId on a method the compiler will not compile still resolves here.
