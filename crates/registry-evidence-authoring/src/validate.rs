@@ -506,3 +506,26 @@ pub fn valid_local_identifier(value: &str) -> bool {
 pub fn valid_field_name(value: &str) -> bool {
     valid_local_identifier(value)
 }
+
+/// The collections one fact path visits, as the pointers that name them.
+///
+/// A fact path walks into arrays by writing `*` for the element, so
+/// `/records/*/date_of_birth` visits the collection at `/records`, and each `*`
+/// contributes the pointer that stands before it: a path with two of them names
+/// the outer collection and the inner one, in that order. Those pointers are
+/// what an author bounds under `source.collectionBounds`, and reading a path for
+/// them is a rule of the authoring form rather than a step of any one caller's
+/// algorithm, which is why it is written here once. A path visiting no
+/// collection names none.
+#[must_use]
+pub fn collection_pointers(path: &str) -> Vec<String> {
+    let mut walked = Vec::new();
+    let mut collections = Vec::new();
+    for segment in path.split('/').skip(1) {
+        if segment == "*" {
+            collections.push(format!("/{}", walked.join("/")));
+        }
+        walked.push(segment);
+    }
+    collections
+}

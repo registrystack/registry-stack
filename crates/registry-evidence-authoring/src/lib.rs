@@ -44,5 +44,6 @@ pub use model::{
     QuestionSdJwtVcDisclosure, QuestionSource, QuestionSubject, RequirementKind,
 };
 pub use validate::{
-    question_subjects, valid_field_name, valid_local_identifier, validate_answer, validate_question,
+    collection_pointers, question_subjects, valid_field_name, valid_local_identifier,
+    validate_answer, validate_question,
 };
