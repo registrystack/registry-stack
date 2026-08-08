@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the Evidence configuration key-path parity check."""
 
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -227,26 +230,174 @@ class ParityTests(unittest.TestCase):
         problems = checker.compare(
             schema_paths={"a", "b"},
             documented_paths={"b", "c"},
-            label="runtime.schema.yaml",
+            label="products/evidence/contracts/runtime.schema.yaml",
+            reference="products/evidence/reference/one/CONFIG.md",
         )
         joined = "\n".join(problems)
         self.assertIn("a", joined)
         self.assertIn("c", joined)
-        self.assertIn("runtime.schema.yaml", joined)
+        self.assertIn("products/evidence/contracts/runtime.schema.yaml", joined)
+
+    def test_parity_names_the_reference_that_should_carry_the_path(self):
+        """More than one reference holds blocks, so a problem must say which."""
+        problems = checker.compare(
+            schema_paths={"a"},
+            documented_paths={"c"},
+            label="crates/example/schemas/question.schema.json",
+            reference="products/evidence/reference/authoring-projects/CONFIG.md",
+        )
+        self.assertEqual(len(problems), 2)
+        for problem in problems:
+            self.assertIn(
+                "products/evidence/reference/authoring-projects/CONFIG.md", problem
+            )
 
     def test_exact_parity_reports_nothing(self):
         self.assertEqual(
             checker.compare(
-                schema_paths={"a"}, documented_paths={"a"}, label="runtime.schema.yaml"
+                schema_paths={"a"},
+                documented_paths={"a"},
+                label="products/evidence/contracts/runtime.schema.yaml",
+                reference="products/evidence/reference/one/CONFIG.md",
             ),
             [],
         )
 
 
-class FrozenContractTests(unittest.TestCase):
-    """The real contracts must stay in parity with the committed reference."""
+class ContractAddressingTests(unittest.TestCase):
+    """Every entry addresses its own schema and its own reference."""
 
-    def test_committed_contracts_and_reference_agree(self):
+    def test_every_schema_and_reference_path_exists(self):
+        root = checker.repository_root()
+        for name, contract in checker.CONTRACTS.items():
+            with self.subTest(contract=name):
+                self.assertTrue((root / contract.schema).is_file(), contract.schema)
+                self.assertTrue(
+                    (root / contract.reference).is_file(), contract.reference
+                )
+
+    def test_every_marker_is_unique(self):
+        markers = [contract.marker for contract in checker.CONTRACTS.values()]
+        self.assertEqual(len(markers), len(set(markers)))
+
+    def test_the_frozen_contracts_and_the_authoring_schemas_split_references(self):
+        """The authoring form is adopter tooling, documented apart from the
+        frozen Version 1 grammar rather than beside it."""
+        frozen = {
+            contract.reference
+            for name, contract in checker.CONTRACTS.items()
+            if not name.startswith("authoring-")
+        }
+        authoring = {
+            contract.reference
+            for name, contract in checker.CONTRACTS.items()
+            if name.startswith("authoring-")
+        }
+        self.assertEqual(len(frozen), 1)
+        self.assertEqual(len(authoring), 1)
+        self.assertFalse(frozen & authoring)
+
+    def test_references_group_every_contract_under_its_own_file(self):
+        grouped = checker.references()
+        self.assertEqual(
+            sum(len(contracts) for contracts in grouped.values()),
+            len(checker.CONTRACTS),
+        )
+        for reference, contracts in grouped.items():
+            for contract in contracts:
+                self.assertEqual(contract.reference, reference)
+
+
+class PerEntryAddressingTests(unittest.TestCase):
+    """Schemas outside one directory, documented into more than one reference."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        self.write(
+            "contracts/first.schema.yaml",
+            "type: object\nproperties:\n  alpha:\n    type: string\n",
+        )
+        self.write(
+            "elsewhere/second.schema.json",
+            '{"type": "object", "properties": {"beta": {"type": "string"}}}\n',
+        )
+        self.write("one/CONFIG.md", self.reference("first-key-paths"))
+        self.write("two/CONFIG.md", self.reference("second-key-paths"))
+        self.contracts = {
+            "first": checker.Contract(
+                schema="contracts/first.schema.yaml",
+                reference="one/CONFIG.md",
+                marker="first-key-paths",
+            ),
+            "second": checker.Contract(
+                schema="elsewhere/second.schema.json",
+                reference="two/CONFIG.md",
+                marker="second-key-paths",
+            ),
+        }
+
+    def write(self, relative, text):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def reference(self, marker):
+        return (
+            "prose\n"
+            f"<!-- {marker}:start -->\n"
+            "```text\n"
+            "```\n"
+            f"<!-- {marker}:end -->\n"
+        )
+
+    def read(self, relative):
+        return (self.root / relative).read_text(encoding="utf-8")
+
+    def test_writing_fills_every_reference_from_its_own_schema(self):
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            self.assertTrue(checker.write_all(self.root))
+            self.assertEqual(checker.check_all(self.root), [])
+        self.assertIn("alpha", self.read("one/CONFIG.md"))
+        self.assertNotIn("beta", self.read("one/CONFIG.md"))
+        self.assertIn("beta", self.read("two/CONFIG.md"))
+        self.assertNotIn("alpha", self.read("two/CONFIG.md"))
+
+    def test_writing_twice_reports_no_further_change(self):
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            self.assertTrue(checker.write_all(self.root))
+            self.assertFalse(checker.write_all(self.root))
+
+    def test_a_json_schema_is_read_by_the_same_loader(self):
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            checker.write_all(self.root)
+        self.assertIn("beta", self.read("two/CONFIG.md"))
+
+    def test_drift_in_one_reference_names_that_reference_and_its_schema(self):
+        self.write("two/CONFIG.md", self.reference("second-key-paths"))
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            checker.write_all(self.root)
+            self.write("two/CONFIG.md", self.reference("second-key-paths"))
+            problems = checker.check_all(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("elsewhere/second.schema.json", problems[0])
+        self.assertIn("two/CONFIG.md", problems[0])
+        self.assertIn("beta", problems[0])
+
+    def test_a_missing_marker_names_the_schema_that_wanted_it(self):
+        with mock.patch.object(checker, "CONTRACTS", self.contracts):
+            checker.write_all(self.root)
+            self.write("two/CONFIG.md", "prose with no markers\n")
+            problems = checker.check_all(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("elsewhere/second.schema.json", problems[0])
+        self.assertIn("second-key-paths", problems[0])
+
+
+class CommittedParityTests(unittest.TestCase):
+    """Every committed schema must stay in parity with the reference it feeds."""
+
+    def test_committed_schemas_and_references_agree(self):
         problems = checker.check_all(checker.repository_root())
         self.assertEqual(problems, [], "\n".join(problems))
 
