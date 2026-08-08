@@ -49,14 +49,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::OsStr,
     mem,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use registry_evidence_authoring::{
-    layout::SCHEMAS_DIRECTORY,
     model::Question,
     validate::{collection_pointers, validate_answer_schema_path},
 };
@@ -65,7 +63,7 @@ use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 use crate::{
     evidence::{
         diagnostics::read_question,
-        layout::{document_role, DocumentRole},
+        layout::{document_role, is_source_artifact, DocumentRole},
         openapi::Description,
     },
     refs::{
@@ -75,12 +73,6 @@ use crate::{
     },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
-
-/// Where a source keeps the scripts and schemas its own traffic uses, beside
-/// [`SCHEMAS_DIRECTORY`]. The authoring library names the second of the two directories the
-/// compiler reads a source's artifacts from, so the first is spelled here beside the rule that
-/// needs it.
-const ADAPTERS_DIRECTORY: &str = "adapters";
 
 pub(crate) fn build_index(
     root: &Path,
@@ -911,16 +903,6 @@ fn sources_questions_read(
         })
         .map(|source| source.value.clone())
         .collect()
-}
-
-/// Whether a path is one the compiler reads a source's own artifact from: two ordinary components
-/// whose first is [`ADAPTERS_DIRECTORY`] or [`SCHEMAS_DIRECTORY`], and any extension at all.
-fn is_source_artifact(relative: &Path) -> bool {
-    let components = relative.components().collect::<Vec<_>>();
-    let [Component::Normal(directory), Component::Normal(_)] = components.as_slice() else {
-        return false;
-    };
-    *directory == OsStr::new(ADAPTERS_DIRECTORY) || *directory == OsStr::new(SCHEMAS_DIRECTORY)
 }
 
 /// The role of the document a reference of this kind points at, for the kinds a document names by

@@ -2,7 +2,10 @@
 //! What an authored file is, read from where it sits: the part a root-relative path plays in an
 //! Evidence authoring project, and the parts of a project the server must never open.
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+};
 
 use registry_evidence_authoring::{
     layout::{
@@ -151,6 +154,49 @@ pub(crate) const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
 /// standing over a project the compiler accepts.
 pub(crate) const AUTHORED_FILE_EXTENSIONS: &[&str] = &["yaml", "rhai"];
 
+/// Where a source keeps the scripts and schemas its own traffic uses, beside [`SCHEMAS_DIRECTORY`].
+/// The authoring library names the second of the two directories the compiler reads a source's
+/// artifacts from, so the first is spelled here beside the rule that needs it.
+const ADAPTERS_DIRECTORY: &str = "adapters";
+
+/// The project directories the compiler reads a source's own artifacts from. One table serves both
+/// the reading of such a path and the watcher registration that asks a client to report those
+/// files, so the two can never disagree about which directory means what.
+pub(crate) const SOURCE_ARTIFACT_DIRECTORIES: &[&str] = &[ADAPTERS_DIRECTORY, SCHEMAS_DIRECTORY];
+
+/// The globs a client is asked to report changes for: one per extension an authored document may
+/// carry, and one per directory a source's artifacts sit in.
+///
+/// The two halves are read from different tables because the form reads the two kinds of path
+/// differently. An authored document is found by its role, which is spelled with an extension, so
+/// its glob is that extension anywhere. A source's artifact is found by the directory it sits in
+/// and may carry any extension at all or none, so nothing about its name would cover it and only
+/// the directory does. Each glob's last segment is a single `*`, matching the rule in
+/// [`is_source_artifact`] that such a path is two components and not more.
+pub(crate) fn watched_globs() -> Vec<String> {
+    AUTHORED_FILE_EXTENSIONS
+        .iter()
+        .map(|extension| format!("**/*.{extension}"))
+        .chain(
+            SOURCE_ARTIFACT_DIRECTORIES
+                .iter()
+                .map(|directory| format!("**/{directory}/*")),
+        )
+        .collect()
+}
+
+/// Whether a path is one the compiler reads a source's own artifact from: two ordinary components
+/// whose first is in [`SOURCE_ARTIFACT_DIRECTORIES`], and any extension at all.
+pub(crate) fn is_source_artifact(relative: &Path) -> bool {
+    let components = relative.components().collect::<Vec<_>>();
+    let [Component::Normal(directory), Component::Normal(_)] = components.as_slice() else {
+        return false;
+    };
+    SOURCE_ARTIFACT_DIRECTORIES
+        .iter()
+        .any(|name| *directory == OsStr::new(name))
+}
+
 /// Where a project keeps its access policies, which sit one directory deeper than the rest.
 pub(crate) fn access_policies_directory(root: &Path) -> PathBuf {
     root.join(ACCESS_DIRECTORY).join(ACCESS_POLICIES_DIRECTORY)
@@ -257,6 +303,60 @@ mod tests {
                  {AUTHORED_FILE_EXTENSIONS:?}"
             );
         }
+    }
+
+    /// The same tie for the dependency no role covers. A source's artifact is read from the
+    /// directory it sits in and carries any extension at all, so nothing about its name says a
+    /// watcher hears about it and only the registration does. A path this rule accepts that no glob
+    /// covers is a file an author can create outside the editor while the report over the document
+    /// that points at it stands.
+    #[test]
+    fn every_source_artifact_path_is_covered_by_a_registered_glob() {
+        assert!(
+            !glob_covers("**/adapters/*", "adapters/nested/people.json"),
+            "a single `*` stands for one segment, which is what makes this table meaningful"
+        );
+
+        for path in [
+            "adapters/people-request.rhai",
+            "adapters/people-facts.json",
+            "adapters/people-facts",
+            "schemas/person.schema.yaml",
+            "schemas/person.schema.json",
+        ] {
+            assert!(is_source_artifact(Path::new(path)), "{path}");
+            let globs = watched_globs();
+            assert!(
+                globs.iter().any(|glob| glob_covers(glob, path)),
+                "{path} is read by the compiler and covered by no registered glob: {globs:?}"
+            );
+        }
+    }
+
+    /// Whether one registered glob covers a path. The patterns are the ones [`watched_globs`]
+    /// writes and nothing else: a `**/` prefix over segments holding at most one `*` each. A client
+    /// answers this question with its own matcher; what is asserted here is that the pattern names
+    /// the file at all.
+    fn glob_covers(pattern: &str, path: &str) -> bool {
+        let Some(tail) = pattern.strip_prefix("**/") else {
+            return false;
+        };
+        let segments = tail.split('/').collect::<Vec<_>>();
+        let names = path.split('/').collect::<Vec<_>>();
+        let Some(start) = names.len().checked_sub(segments.len()) else {
+            return false;
+        };
+        names[start..]
+            .iter()
+            .zip(segments)
+            .all(|(name, segment)| match segment.split_once('*') {
+                None => segment == *name,
+                Some((prefix, suffix)) => {
+                    name.len() >= prefix.len() + suffix.len()
+                        && name.starts_with(prefix)
+                        && name.ends_with(suffix)
+                }
+            })
     }
 
     #[test]

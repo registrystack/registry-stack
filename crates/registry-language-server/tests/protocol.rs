@@ -223,9 +223,10 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             .and_then(Value::as_str),
         Some("workspace/didChangeWatchedFiles")
     );
-    // Every authored extension gets its own glob, so a watched-file event fires for a Relay
-    // project document and for an Evidence derivation alike; a glob lost here is a family of file
-    // the server would stop hearing about.
+    // Every authored extension gets its own glob and so does every directory a source's artifacts
+    // sit in, so a watched-file event fires for a Relay project document, an Evidence derivation,
+    // and a schema written as JSON alike; a glob lost here is a family of file the server would
+    // stop hearing about.
     let watched_globs = registration
         .pointer("/params/registrations/0/registerOptions/watchers")
         .and_then(Value::as_array)
@@ -241,7 +242,12 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         watched_globs,
-        BTreeSet::from(["**/*.yaml".to_owned(), "**/*.rhai".to_owned()])
+        BTreeSet::from([
+            "**/*.yaml".to_owned(),
+            "**/*.rhai".to_owned(),
+            "**/adapters/*".to_owned(),
+            "**/schemas/*".to_owned(),
+        ])
     );
     send(
         &mut stdin,

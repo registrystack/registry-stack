@@ -26,7 +26,7 @@ use tower_lsp_server::{
 };
 
 use crate::{
-    evidence::layout::AUTHORED_FILE_EXTENSIONS,
+    evidence::layout::watched_globs,
     refs::{CompletionCandidate, IndexedLocation, IndexedSymbol},
     workspace::Workspace,
 };
@@ -246,14 +246,14 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _params: InitializedParams) {
         if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
-            // One glob per extension an authored document may carry, so a Relay project document
-            // (always `.yaml`) and an Evidence derivation (`.rhai`) both fire a watched-file event.
-            // Relay reads only `.yaml` project documents, and `"yaml"` is one of the extensions
-            // here, so this list still covers Relay's own watcher.
-            let watchers = AUTHORED_FILE_EXTENSIONS
-                .iter()
-                .map(|extension| FileSystemWatcher {
-                    glob_pattern: GlobPattern::String(format!("**/*.{extension}")),
+            // The globs cover every file an Evidence index resolves against, so a Relay project
+            // document (always `.yaml`), an Evidence derivation (`.rhai`), and a source's own
+            // artifact all fire a watched-file event. Relay reads only `.yaml` project documents,
+            // which the extension half covers, so this list still covers Relay's own watcher.
+            let watchers = watched_globs()
+                .into_iter()
+                .map(|glob| FileSystemWatcher {
+                    glob_pattern: GlobPattern::String(glob),
                     kind: None,
                 })
                 .collect();
