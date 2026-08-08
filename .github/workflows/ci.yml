@@ -458,6 +458,9 @@ jobs:
       - name: Reproduce Evidence generated contracts
         run: products/evidence/scripts/check-contracts.sh
 
+      - name: Reproduce the Evidence authoring schemas
+        run: products/evidence/scripts/check-authoring-schema.sh
+
       - name: Self-test the Evidence neutrality gate
         run: products/evidence/scripts/test-check-source-neutrality.sh
 
