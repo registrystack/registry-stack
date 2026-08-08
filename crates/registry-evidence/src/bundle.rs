@@ -188,6 +188,19 @@ fn unknown_file(candidate: &str, cause: &'static str) -> BundleError {
     }
 }
 
+/// A trust-profile binding fault, named by the profile the two files disagree
+/// on.
+///
+/// Both grammars validate a trust profile name as a local identifier before
+/// this runs, so the name is reviewed configuration rather than document
+/// content and printing it stays value-free.
+fn trust_profile_fault(profile: &str, cause: &'static str) -> BundleError {
+    BundleError::InvalidArtifact(ArtifactFault::new(
+        format!("trustProfiles/{profile}"),
+        SchemaFault::because(cause),
+    ))
+}
+
 /// The reviewed bundle-relative artifact grammar, as a printable-name test.
 fn safe_artifact_name(candidate: &str) -> bool {
     !candidate.is_empty()
@@ -2120,6 +2133,12 @@ fn validate_runtime_bindings(
             "the audit storage path must not resolve to configured secret material",
         ));
     }
+    // The binding is exact in both directions, but the two directions are
+    // different repairs in different files: a profile the bundle names and the
+    // runtime does not bind is missing trust material the deployment must add,
+    // while a profile the runtime binds that no source names is trust the
+    // deployment grants nobody asked for. One cause covering both leaves the
+    // operator to diff the two files by hand to learn which way round it went.
     let required = bundle
         .sources
         .iter()
@@ -2130,9 +2149,16 @@ fn validate_runtime_bindings(
         .trust_profiles
         .keys()
         .collect::<BTreeSet<_>>();
-    if required != configured {
-        return Err(invalid_artifact(
-            "runtime TLS trust profiles must exactly bind bundle source profiles",
+    if let Some(unbound) = required.difference(&configured).next() {
+        return Err(trust_profile_fault(
+            unbound,
+            "the runtime configuration does not bind a TLS trust profile a bundle source names",
+        ));
+    }
+    if let Some(unused) = configured.difference(&required).next() {
+        return Err(trust_profile_fault(
+            unused,
+            "the runtime configuration binds a TLS trust profile no bundle source names",
         ));
     }
     // The operator half of the acquisition gate, and the half that gates.
@@ -3783,6 +3809,65 @@ outboundTls:
         .expect("the acceptance bundle validates");
         validate_runtime_bindings(&frozen, &silent)
             .expect("a Version 1 bundle needs no operator capability");
+    }
+
+    /// The exact trust-profile binding can fail two ways, and the two are
+    /// different edits: the runtime is missing trust material a source needs,
+    /// or it carries trust material no source reaches. An operator told only
+    /// that the two sets differ has to diff them by hand to learn which, so
+    /// each direction states its own cause and names the profile it means.
+    #[test]
+    fn a_trust_profile_binding_refusal_names_its_direction_and_its_profile() {
+        const ACCEPTANCE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+
+        let naming = EvidenceConfig::parse_yaml(
+            ACCEPTANCE
+                .replace(
+                    "sources:\n  source-a:\n    transport: http-json\n",
+                    "sources:\n  source-a:\n    transport: http-json\n    tlsTrustProfile: internal-pki\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a bundle naming a trust profile validates");
+        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        let missing = validate_runtime_bindings(&naming, &silent)
+            .expect_err("a profile the runtime does not bind is refused");
+        let fault = missing
+            .artifact_fault()
+            .expect("the refusal names the profile");
+        assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
+        assert_eq!(
+            fault.fault().cause(),
+            "the runtime configuration does not bind a TLS trust profile a bundle source names"
+        );
+
+        let binding = RuntimeConfig::parse_yaml(
+            OPERATOR_RUNTIME_DOCUMENT
+                .replace(
+                    "  trustProfiles: {}\n",
+                    "  trustProfiles: {internal-pki: {caBundleFile: /etc/registry-evidence/internal-pki.pem}}\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a runtime binding a trust profile parses");
+        validate_runtime_bindings(&naming, &binding)
+            .expect("the deployment that bound the profile binds the bundle");
+
+        let frozen = EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes())
+            .expect("the acceptance bundle validates");
+        let unused = validate_runtime_bindings(&frozen, &binding)
+            .expect_err("a profile no source names is refused");
+        let fault = unused
+            .artifact_fault()
+            .expect("the refusal names the profile");
+        assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
+        assert_eq!(
+            fault.fault().cause(),
+            "the runtime configuration binds a TLS trust profile no bundle source names"
+        );
     }
 
     /// New operator surface must not move the revision of a deployment that did
