@@ -2611,11 +2611,12 @@
           "constraints": [
             [
               "maxLength: 512",
-              "minLength: 1"
+              "minLength: 1",
+              "pattern: \\S"
             ]
           ],
           "conditional_constraints": [],
-          "description": "Fixed `audience` form parameter sent with the token request, for an authorization server that keys the issued token to an audience the scope cannot express and returns an unusable token without it.",
+          "description": "Fixed `audience` form parameter sent with the token request, for an authorization server that keys the issued token to an audience the scope cannot express and returns an unusable token without it. Sent as it stands with no fallback, so a blank value is refused here rather than by the authorization server at readiness.",
           "runtime_validation": null
         },
         {

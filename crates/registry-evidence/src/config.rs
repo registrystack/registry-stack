@@ -2008,6 +2008,14 @@ impl SourceAuthentication {
                 }
                 if let Some(audience) = audience {
                     validate_string(audience, 1, 512, "OAuth audience")?;
+                    // The token request sends this value as it stands, with no
+                    // fallback, so a blank one asks the authorization server
+                    // for an audience named by spaces. Refusing it here names
+                    // the key the operator must correct; the server's refusal
+                    // arrives at readiness and names nothing.
+                    if audience.trim().is_empty() {
+                        return invalid("OAuth audience is blank");
+                    }
                 }
                 if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
                     validate_range(
@@ -5432,6 +5440,10 @@ mod tests {
             (Some("a"), true),
             (Some("a".repeat(512).as_str()), true),
             (Some(""), false),
+            // The token request sends this value as it stands, so a blank one
+            // asks the authorization server for an audience named by spaces.
+            // Refusing it here names the key; the server's refusal would not.
+            (Some("   "), false),
             (Some("a".repeat(513).as_str()), false),
             (None, true),
         ] {

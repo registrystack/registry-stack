@@ -986,10 +986,12 @@ $defs:
             description: >-
               Fixed `audience` form parameter sent with the token request, for an authorization
               server that keys the issued token to an audience the scope cannot express and
-              returns an unusable token without it.
+              returns an unusable token without it. Sent as it stands with no fallback, so a
+              blank value is refused here rather than by the authorization server at readiness.
             type: string
             minLength: 1
             maxLength: 512
+            pattern: \S
           credentialPlacement:
             description: >-
               Selects whether the client identifier and secret travel in the Authorization
