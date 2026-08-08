@@ -9,9 +9,9 @@ if (typeof vsixPath !== 'string' || vsixPath.length === 0) {
 
 const entries = execFileSync('unzip', ['-Z1', vsixPath], { encoding: 'utf8' }).split('\n');
 const requiredEntries = ['extension/package.json', 'extension/dist/extension.js'];
-const expectedRegistryctlPath = process.env.REGISTRY_STACK_EXPECT_REGISTRYCTL_PATH;
-if (expectedRegistryctlPath) {
-  requiredEntries.push('extension/dist/registryctl-path');
+const expectedCliPath = process.env.REGISTRY_STACK_EXPECT_CLI_PATH;
+if (expectedCliPath) {
+  requiredEntries.push('extension/dist/registry-stack-cli-path');
 }
 for (const entry of requiredEntries) {
   if (!entries.includes(entry)) {
@@ -29,13 +29,13 @@ if (bundle.includes('require("vscode-languageclient') || bundle.includes("requir
   throw new Error('VSIX leaves vscode-languageclient as an external runtime dependency');
 }
 
-if (expectedRegistryctlPath) {
-  const packagedRegistryctlPath = execFileSync(
+if (expectedCliPath) {
+  const packagedCliPath = execFileSync(
     'unzip',
-    ['-p', vsixPath, 'extension/dist/registryctl-path'],
+    ['-p', vsixPath, 'extension/dist/registry-stack-cli-path'],
     { encoding: 'utf8' },
   ).trim();
-  if (packagedRegistryctlPath !== expectedRegistryctlPath) {
-    throw new Error('VSIX does not contain the registryctl path selected by the installer');
+  if (packagedCliPath !== expectedCliPath) {
+    throw new Error('VSIX does not contain the CLI path selected by the installer');
   }
 }

@@ -24,6 +24,8 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "workspaceContains:registry-stack.yaml",
+    "workspaceContains:evidence-project.yaml",
+    "workspaceContains:source.openapi.yaml",
     "onCommand:registryStack.restartLanguageServer"
   ],
   "extensionKind": [
@@ -52,7 +54,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses the installer-selected registryctl when available, then searches PATH for registry-language-server or registryctl."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses the installer-selected registryctl or evidencectl when available, then searches PATH for registry-language-server, registryctl, or evidencectl."
         }
       }
     }

@@ -13,6 +13,15 @@ import {
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
 
+// Relay project root: a single manifest file.
+const RELAY_MARKER_FILE = 'registry-stack.yaml';
+// Evidence project root: the marker written by newer projects, or the
+// pre-marker pair of an OpenAPI description and a questions directory. This
+// mirrors declares_root() in crates/registry-language-server/src/evidence/mod.rs.
+const EVIDENCE_MARKER_FILE = 'evidence-project.yaml';
+const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
+const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(
     vscode.commands.registerCommand('registryStack.restartLanguageServer', async () => {
@@ -119,15 +128,37 @@ async function stopAll(): Promise<void> {
 
 function findProjectFolders(): vscode.WorkspaceFolder[] {
   return (vscode.workspace.workspaceFolders ?? []).filter((folder) => {
-    if (folder.uri.scheme !== 'file') {
-      return false;
-    }
-    try {
-      return fs.statSync(path.join(folder.uri.fsPath, 'registry-stack.yaml')).isFile();
-    } catch {
-      return false;
-    }
+    return folder.uri.scheme === 'file' && isProjectRoot(folder.uri.fsPath);
   });
+}
+
+function isProjectRoot(directory: string): boolean {
+  if (isFile(path.join(directory, RELAY_MARKER_FILE))) {
+    return true;
+  }
+  if (isFile(path.join(directory, EVIDENCE_MARKER_FILE))) {
+    return true;
+  }
+  return (
+    isFile(path.join(directory, EVIDENCE_OPENAPI_FILE)) &&
+    isDirectory(path.join(directory, EVIDENCE_QUESTIONS_DIRECTORY))
+  );
+}
+
+function isFile(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isDirectory(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function folderKey(folder: vscode.WorkspaceFolder): string {
@@ -160,10 +191,10 @@ function resolveServerCommand(
   const executable = process.platform === 'win32'
     ? 'registry-language-server.exe'
     : 'registry-language-server';
-  const packagedRegistryctl = findPackagedRegistryctl(context);
-  if (packagedRegistryctl !== undefined) {
+  const packagedCli = findPackagedRegistryStackCli(context);
+  if (packagedCli !== undefined) {
     return {
-      command: packagedRegistryctl,
+      command: packagedCli,
       args: ['tooling', 'language-server'],
     };
   }
@@ -177,13 +208,19 @@ function resolveServerCommand(
   if (registryctl !== undefined) {
     return { command: registryctl, args: ['tooling', 'language-server'] };
   }
+  const evidencectl = findExecutableOnPath(
+    process.platform === 'win32' ? 'evidencectl.exe' : 'evidencectl',
+  );
+  if (evidencectl !== undefined) {
+    return { command: evidencectl, args: ['tooling', 'language-server'] };
+  }
   throw new Error(
-    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl tooling language-server".',
+    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl or evidencectl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl or evidencectl to PATH so it can run "<cli> tooling language-server".',
   );
 }
 
-function findPackagedRegistryctl(context: vscode.ExtensionContext): string | undefined {
-  const metadataPath = context.asAbsolutePath(path.join('dist', 'registryctl-path'));
+function findPackagedRegistryStackCli(context: vscode.ExtensionContext): string | undefined {
+  const metadataPath = context.asAbsolutePath(path.join('dist', 'registry-stack-cli-path'));
   try {
     const candidate = fs.readFileSync(metadataPath, 'utf8').trim();
     if (candidate !== '' && path.isAbsolute(candidate) && isExecutableFile(candidate)) {
