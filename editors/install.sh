@@ -10,6 +10,7 @@ readonly REPO_ROOT="${REGISTRY_STACK_INSTALLER_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 readonly EXTENSION_ID="registrystack.registry-stack"
 REGISTRY_STACK_CLI_NAME=''
 REGISTRY_STACK_CLI_PATH=''
+REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
 
 usage() {
   cat <<'EOF'
@@ -78,15 +79,18 @@ workspace_version() {
 
 registry_stack_cli_version() {
   local version_output
-  version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" ||
-    fail "could not run ${REGISTRY_STACK_CLI_NAME} --version"
+  version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" || {
+    REGISTRY_STACK_CLI_CANDIDATE_ERROR="could not run ${REGISTRY_STACK_CLI_NAME} --version"
+    return 1
+  }
   case "${version_output}" in
     "${REGISTRY_STACK_CLI_NAME} "*)
       version_output="${version_output#* }"
       printf '%s\n' "${version_output%% *}"
       ;;
     *)
-      fail "unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
+      REGISTRY_STACK_CLI_CANDIDATE_ERROR="unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
+      return 1
       ;;
   esac
 }
@@ -100,37 +104,57 @@ canonical_open_path() {
 }
 
 verify_registry_stack_cli() {
-  # registryctl is tried first so a Relay adopter, who has never heard of
-  # evidencectl, sees no change from before this fallback existed.
-  if command -v registryctl >/dev/null 2>&1; then
-    REGISTRY_STACK_CLI_NAME='registryctl'
-  elif command -v evidencectl >/dev/null 2>&1; then
-    REGISTRY_STACK_CLI_NAME='evidencectl'
-  else
-    fail "required external command 'registryctl' or 'evidencectl' was not found on PATH"
-  fi
-  REGISTRY_STACK_CLI_PATH="$(external_command_path "${REGISTRY_STACK_CLI_NAME}")"
-
   local expected_version
-  local installed_version
   expected_version="$(workspace_version)"
   [[ -n "${expected_version}" ]] ||
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
-  installed_version="$(registry_stack_cli_version)"
 
-  # registryctl and evidencectl ship from this same workspace and share its
-  # version. A CLI built from a source checkout reports a development version
-  # of the workspace version it was built from, so both spellings match this
-  # checkout. Only the version itself has to agree.
-  if [[ "${installed_version}" != "${expected_version}" &&
-    "${installed_version}" != "${expected_version}-dev" ]]; then
-    fail "this checkout is ${expected_version} but ${REGISTRY_STACK_CLI_NAME} is ${installed_version}; install the matching ${REGISTRY_STACK_CLI_NAME}"
+  # registryctl is tried first so a Relay adopter, who has never heard of
+  # evidencectl, sees no change from before this fallback existed.
+  local -a candidate_names=(registryctl evidencectl)
+  local -a candidate_errors=()
+  local candidate_name
+
+  for candidate_name in "${candidate_names[@]}"; do
+    command -v "${candidate_name}" >/dev/null 2>&1 || continue
+    REGISTRY_STACK_CLI_NAME="${candidate_name}"
+    REGISTRY_STACK_CLI_PATH="$(external_command_path "${candidate_name}")"
+
+    local installed_version
+    if ! installed_version="$(registry_stack_cli_version)"; then
+      candidate_errors+=("${REGISTRY_STACK_CLI_CANDIDATE_ERROR}")
+      continue
+    fi
+
+    # registryctl and evidencectl ship from this same workspace and share its
+    # version. A CLI built from a source checkout reports a development version
+    # of the workspace version it was built from, so both spellings match this
+    # checkout. Only the version itself has to agree.
+    if [[ "${installed_version}" != "${expected_version}" &&
+      "${installed_version}" != "${expected_version}-dev" ]]; then
+      candidate_errors+=("this checkout is ${expected_version} but ${candidate_name} is ${installed_version}; install the matching ${candidate_name}")
+      continue
+    fi
+
+    if ! "${REGISTRY_STACK_CLI_PATH}" tooling language-server --help >/dev/null; then
+      candidate_errors+=("${candidate_name} ${installed_version} does not provide tooling language-server")
+      continue
+    fi
+
+    printf 'Using %s %s from %s\n' \
+      "${candidate_name}" "${installed_version}" "${REGISTRY_STACK_CLI_PATH}"
+    return 0
+  done
+
+  if ((${#candidate_errors[@]} == 0)); then
+    fail "required external command 'registryctl' or 'evidencectl' was not found on PATH"
   fi
 
-  "${REGISTRY_STACK_CLI_PATH}" tooling language-server --help >/dev/null ||
-    fail "${REGISTRY_STACK_CLI_NAME} ${installed_version} does not provide tooling language-server"
-  printf 'Using %s %s from %s\n' \
-    "${REGISTRY_STACK_CLI_NAME}" "${installed_version}" "${REGISTRY_STACK_CLI_PATH}"
+  local candidate_error
+  for candidate_error in "${candidate_errors[@]}"; do
+    printf 'error: %s\n' "${candidate_error}" >&2
+  done
+  exit 1
 }
 
 install_vscode() {

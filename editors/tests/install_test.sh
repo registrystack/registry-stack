@@ -219,6 +219,19 @@ fi
 assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0' "${mismatch_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
+# Both registryctl and evidencectl are on PATH and registryctl is the
+# version-mismatched one, so the installer must fall through to evidencectl
+# instead of aborting on registryctl's failure.
+reset_log
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
+both_present_output="${TEST_ROOT}/both-present-output"
+FAKE_REGISTRYCTL_VERSION=0.10.0 "${INSTALLER}" vscode > "${both_present_output}"
+assert_contains 'registryctl <--version>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <tooling>' "${COMMAND_LOG}"
+assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_contains 'Using evidencectl 0.16.3' "${both_present_output}"
+rm -f "${FAKE_BIN}/evidencectl"
+
 # A registryctl built from this checkout reports a development version, which
 # is the ordinary case for anyone running this installer from source.
 reset_log
