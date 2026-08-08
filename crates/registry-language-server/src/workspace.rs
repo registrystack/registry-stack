@@ -30,14 +30,6 @@ use crate::{
 /// a session is pointed at.
 pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
 
-/// How many resolved paths one session remembers.
-///
-/// The map spares a filesystem call for every document a session works with, which stays a small
-/// set even in a large project. It is a cache and not a record, so it stops growing here: a client
-/// that delivers a whole branch of changed files at once must not be able to make the server hold
-/// that branch's path set for the rest of the session.
-const MAX_INTERNED_PATHS: usize = 4096;
-
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
 /// What one family's loader found under a root: the documents it read, and the reasons it could
@@ -549,7 +541,6 @@ pub(crate) struct Workspace {
     folders_declared: bool,
     folders: Vec<PathBuf>,
     roots: BTreeMap<PathBuf, RootState>,
-    canonical_paths: BTreeMap<PathBuf, PathBuf>,
 }
 
 impl Workspace {
@@ -599,31 +590,14 @@ impl Workspace {
         Ok(())
     }
 
-    /// The canonical form of a path the server is about to store, remembered so later requests for
-    /// the same document resolve by lookup instead of by another filesystem call.
-    ///
-    /// Past [`MAX_INTERNED_PATHS`] the answer is still correct and only costs what it costs: a path
-    /// the map does not hold is resolved from the filesystem, which is what [`Self::resolve`] does
-    /// for every path a session has never stored.
-    pub(crate) fn intern(&mut self, path: &Path) -> PathBuf {
-        if let Some(canonical) = self.canonical_paths.get(path) {
-            return canonical.clone();
-        }
-        let canonical = canonical_path(path);
-        if self.canonical_paths.len() < MAX_INTERNED_PATHS {
-            self.canonical_paths
-                .insert(path.to_path_buf(), canonical.clone());
-        }
-        canonical
+    /// The canonical form of a path the server is about to store.
+    pub(crate) fn intern(&self, path: &Path) -> PathBuf {
+        canonical_path(path)
     }
 
-    /// The canonical form of a path a request names. Paths the server has stored resolve from the
-    /// map; anything else falls back to the filesystem.
+    /// The canonical form of a path a request names.
     pub(crate) fn resolve(&self, path: &Path) -> PathBuf {
-        self.canonical_paths
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| canonical_path(path))
+        canonical_path(path)
     }
 
     pub(crate) fn roots(&self) -> impl Iterator<Item = &RootState> {
@@ -1157,50 +1131,6 @@ mod tests {
             .workspace_symbols("renamed")
             .iter()
             .any(|symbol| symbol.name == "renamed"));
-    }
-
-    #[test]
-    fn a_stored_path_resolves_without_returning_to_the_filesystem() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let mut workspace = workspace_over(&[temp.path()]);
-
-        let as_the_client_sends_it = temp.path().join("registry-stack.yaml");
-        let canonical = workspace.intern(&as_the_client_sends_it);
-        assert_eq!(canonical, as_the_client_sends_it.canonicalize().unwrap());
-
-        fs::remove_file(&as_the_client_sends_it).unwrap();
-        assert_eq!(workspace.resolve(&as_the_client_sends_it), canonical);
-    }
-
-    /// The interned map stops growing, and a session that has filled it keeps answering.
-    ///
-    /// A client that watches a large repository can deliver an unbounded number of distinct paths
-    /// over one session, and every one of them is interned. The map is a cache and not a record, so
-    /// past the bound a path is resolved and not stored, and the size is the whole of the behaviour:
-    /// nothing an author sees changes, which is why it is read here directly.
-    #[test]
-    fn the_interned_paths_stop_at_the_cap_and_the_session_keeps_answering() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let entities = temp.path().join("entities");
-        fs::create_dir(&entities).unwrap();
-        let mut workspace = workspace_over(&[temp.path()]);
-
-        for index in 0..MAX_INTERNED_PATHS + 8 {
-            workspace.intern(&entities.join(format!("person-{index:05}.yaml")));
-        }
-
-        assert_eq!(workspace.canonical_paths.len(), MAX_INTERNED_PATHS);
-        let past_the_cap = entities.join(format!("person-{:05}.yaml", MAX_INTERNED_PATHS + 7));
-        assert_eq!(
-            workspace.resolve(&past_the_cap),
-            entities
-                .canonicalize()
-                .unwrap()
-                .join(past_the_cap.file_name().unwrap()),
-            "a path the map has no room for is still resolved, from the filesystem"
-        );
     }
 
     #[test]
