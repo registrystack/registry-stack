@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::Utc;
+use chrono::{SubsecRound as _, Utc};
 use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_crypto::{
     LocalJwkSigner, PrivateJwk, SigningProvider, TransitSigner, TransitSignerConfig,
@@ -833,7 +833,13 @@ impl EvidenceRuntime {
         // answer from, and the instant the assertion says it was observed at.
         // Reading the clock again anywhere below would let those three disagree
         // by however long acquisition took.
-        let observed_at = evaluation_time.unwrap_or_else(Utc::now);
+        //
+        // Truncated to the second here rather than where each answer is
+        // rendered, because the assertion reports whole seconds and a statement
+        // comparing the bound instant against stored text has to see the same
+        // characters. Truncating once, at the single read, is what keeps the
+        // three answers one instant rather than three roundings of it.
+        let observed_at = evaluation_time.unwrap_or_else(Utc::now).trunc_subsecs(0);
         let context = self
             .authenticator
             .authenticate(access_token)

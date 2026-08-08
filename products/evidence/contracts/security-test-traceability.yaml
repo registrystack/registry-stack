@@ -327,6 +327,7 @@ entries:
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_view_that_never_terminates_is_refused}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: one_row_beyond_the_row_bound_is_refused}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_value_beyond_the_cell_bound_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_cell_beyond_the_engine_limit_is_refused_before_it_is_read}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_result_beyond_the_response_bound_is_refused_as_it_is_collected}
       - {file: crates/registry-evidence/src/source.rs, name: an_oversized_statement_result_maps_to_the_response_size_refusal}
       - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_cancelled_request_gives_back_its_connection_and_its_permit}

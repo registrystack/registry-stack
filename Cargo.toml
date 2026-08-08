@@ -134,7 +134,7 @@ rhai = { version = "=1.25.1", features = ["sync", "serde"] }
 # `bundled` vendors the SQLite amalgamation, so a statement source needs no
 # system library. `hooks` carries the authorizer and the progress handler, which
 # are the statement source's safety boundary and its only real cancellation.
-rusqlite = { version = "0.40", default-features = false, features = ["bundled", "hooks"] }
+rusqlite = { version = "0.40", default-features = false, features = ["bundled", "hooks", "limits"] }
 rustix = { version = "1", features = ["fs", "process"] }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }

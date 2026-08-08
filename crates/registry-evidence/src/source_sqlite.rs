@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, ErrorCode, OpenFlags, Row, Statement};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
@@ -48,6 +49,26 @@ const PROGRESS_STEP_INTERVAL: u64 = 1_000;
 
 /// The largest metadata field an extract may declare.
 const MAXIMUM_METADATA_FIELD_BYTES: usize = 1_024;
+
+/// The engine's own ceiling on one value and one assembled record.
+///
+/// `maximumCellBytes` is checked against a value SQLite has already read out of
+/// the extract, so it decides what enters the response but not what enters
+/// memory. SQLite checks this limit against the length in the record header,
+/// before the payload is read, which makes it the only place a single oversized
+/// cell can be stopped without first allocating it. Its default is a gigabyte,
+/// so a mis-published extract carrying one enormous value in a selected column
+/// would otherwise move that value through the process, once per concurrent
+/// request, before the declared bound refused it.
+///
+/// This is a backstop rather than a restatement of the declared bound, which is
+/// why it is a constant and not derived from the request. The same limit caps
+/// bound parameter values, the startup metadata read, and the intermediate
+/// records a sort or a grouping assembles, so deriving it from
+/// `maximumCellBytes`, which may legally be as low as 1, would refuse ordinary
+/// statements. The value admits the largest result the configuration bounds
+/// allow, 64 columns of 65,536 bytes, with room to spare.
+const MAXIMUM_ENGINE_VALUE_BYTES: i32 = 8 * 1_024 * 1_024;
 
 /// SQL functions the authorizer refuses by name.
 ///
@@ -502,8 +523,13 @@ impl SqliteExtractSource {
         evaluation_instant: DateTime<Utc>,
     ) -> Result<Vec<(usize, BoundValue)>, SqliteSourceError> {
         // Fixed-width RFC 3339 UTC, so a statement that compares the instant
-        // against stored text orders lexically the way it orders in time.
-        let instant = evaluation_instant.to_rfc3339_opts(SecondsFormat::Millis, true);
+        // against stored text orders lexically the way it orders in time. Whole
+        // seconds, because this is the same rendering the assertion carries: a
+        // statement comparing the bound value against a stored `2026-08-08T03:00:00Z`
+        // sees the text the runtime reports, not a longer form that sorts after
+        // it. The runtime truncates the instant where it reads the clock, so in
+        // production this only chooses how an already-whole second is written.
+        let instant = evaluation_instant.to_rfc3339_opts(SecondsFormat::Secs, true);
         let mut bound = Vec::with_capacity(self.plan.parameters.len());
         for parameter in &self.plan.parameters {
             let value = if parameter.name == RESERVED_SQL_PARAMETER {
@@ -617,6 +643,9 @@ fn open_extract(uri: &str, subject: &str) -> Result<Connection, SqliteSourceErro
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let connection = Connection::open_with_flags(uri, flags)
+        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAXIMUM_ENGINE_VALUE_BYTES)
         .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
     install_authorizer(&connection)
         .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
@@ -1086,6 +1115,16 @@ fn classify_step(error: &rusqlite::Error, budget: &AtomicU8) -> &'static str {
         BUDGET_STEPS => cause::STEP_BUDGET_EXCEEDED,
         BUDGET_TIME => cause::TIME_BUDGET_EXCEEDED,
         _ => match error {
+            // `SQLITE_TOOBIG` while stepping is [`MAXIMUM_ENGINE_VALUE_BYTES`]
+            // refusing to materialize a value, so the row that carries it is
+            // over the cell bound whatever the declared bound happens to be.
+            // Only stepping may read the code this way: the same code at
+            // preparation time means the statement text was too long, which
+            // this cause would misname, so it is classified here rather than
+            // in the shared [`classify_failure`].
+            rusqlite::Error::SqliteFailure(failure, _) if failure.code == ErrorCode::TooBig => {
+                cause::CELL_TOO_LARGE
+            }
             rusqlite::Error::SqliteFailure(failure, message) => {
                 classify_failure(failure.code, message.as_deref())
             }
@@ -1653,6 +1692,41 @@ factSchema: schemas/facts.schema.yaml
         assert_eq!(run_error(&source).await, cause::CELL_TOO_LARGE);
     }
 
+    /// The declared bound is read against a value SQLite has already produced,
+    /// so on its own it cannot keep an enormous cell out of memory. This
+    /// statement asks for a single character of one, which SQLite answers
+    /// happily once the payload is resident. Without the engine limit it
+    /// succeeds and returns that character, having first pulled the whole cell
+    /// into the process; with it, the step that would read the payload refuses
+    /// on the length in the record header, before any of it is read.
+    #[tokio::test]
+    async fn a_cell_beyond_the_engine_limit_is_refused_before_it_is_read() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let oversized = format!(
+            "{EXTRACT_SCHEMA}
+             INSERT INTO person
+             SELECT 'p-big', 'nw', 1, 1.0, hex(zeroblob({}));",
+            MAXIMUM_ENGINE_VALUE_BYTES
+        );
+        let path = build_extract(
+            &directory,
+            &format!(
+                "CREATE TABLE {EXTRACT_METADATA_TABLE} \
+                 (published_at TEXT, publisher TEXT, extract_id TEXT);
+                 INSERT INTO {EXTRACT_METADATA_TABLE} VALUES \
+                 ('2026-08-07T02:00:00Z', 'urn:example:residence-register', '2026-08-07-full');
+                 {oversized}"
+            ),
+        );
+        let plan = Plan::default().columns("[{name: id, type: string}]");
+        let source = open(
+            &plan,
+            "SELECT substr(note, 1, 1) AS id FROM person WHERE id = 'p-big'",
+            &path,
+        );
+        assert_eq!(run_error(&source).await, cause::CELL_TOO_LARGE);
+    }
+
     #[test]
     fn the_declared_columns_must_match_the_result_columns() {
         let directory = TempDir::new().expect("a temporary directory");
@@ -1737,13 +1811,17 @@ factSchema: schemas/facts.schema.yaml
             "SELECT id, :evidence_now AS observed_at FROM person WHERE id = 'p-1'",
             &path,
         );
+        // A fractional instant, rendered as the whole second the assertion
+        // reports. A statement comparing the bound value against text stored to
+        // the second has to see the same characters, and a longer form would
+        // sort after every one of them.
         let result = source
-            .execute(&BTreeMap::new(), instant("2026-08-07T03:00:00Z"))
+            .execute(&BTreeMap::new(), instant("2026-08-07T03:00:00.750Z"))
             .await
             .expect("the statement reading the evaluation instant is answered");
         assert_eq!(
             result["rows"],
-            json!([{"id": "p-1", "observed_at": "2026-08-07T03:00:00.000Z"}])
+            json!([{"id": "p-1", "observed_at": "2026-08-07T03:00:00Z"}])
         );
     }
 
