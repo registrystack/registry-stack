@@ -8,6 +8,14 @@ description = "Evidence authoring form: the model an adopter writes and the chec
 repository.workspace = true
 publish = false
 
+# The generator for the committed authoring-form schemas. It is an example
+# rather than a binary because nothing but the drift gate and an author
+# regenerating the artifact ever runs it, and because `schemars` is optional:
+# `required-features` is what keeps a default build of this crate free of it.
+[[example]]
+name = "authoring-schema"
+required-features = ["schema"]
+
 [lints]
 workspace = true
 
@@ -27,3 +35,9 @@ serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+# The parity test compiles the generated schema and runs the corpus through it,
+# because a claim that the schema and the checks agree is worth only as much as
+# the validator that proves it. Test-only: no shipped code here validates JSON.
+jsonschema.workspace = true

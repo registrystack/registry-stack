@@ -26,6 +26,8 @@ pub mod layout;
 pub mod marker;
 pub mod model;
 pub mod openapi;
+#[cfg(feature = "schema")]
+pub mod schema;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod validate;

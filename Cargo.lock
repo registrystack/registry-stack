@@ -5607,6 +5607,7 @@ name = "registry-evidence-authoring"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "jsonschema 0.18.3",
  "rhai",
  "schemars 1.2.1",
  "serde",
