@@ -20,7 +20,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-export const FORMAT_VERSION = '1.1';
+export const FORMAT_VERSION = '1.2';
 
 export const CONTRACTS = [
   {
@@ -138,7 +138,7 @@ function propertyNameConstraints(document, schema) {
   ].sort();
 }
 
-function occurrenceOf(schema, keyPath, kind, required, variantPath) {
+function occurrenceOf(schema, keyPath, kind, required, state) {
   const fixed = [];
   if (Object.hasOwn(schema, 'const')) {
     fixed.push(schema.const);
@@ -161,56 +161,126 @@ function occurrenceOf(schema, keyPath, kind, required, variantPath) {
     // Which alternative branches were taken to reach this node. Occurrences
     // sharing a key apply together; occurrences under different branches of
     // one combinator are alternatives.
-    variantKey: variantPath.join('>'),
-    // Set when at least one alternative does not declare this key path at all.
+    variantKey: state.variantPath.join('>'),
+    // Set when the answer depends on which alternative a deployment takes,
+    // either because some alternative does not declare this key path at all or
+    // because only some of them require it.
     conditional: false,
     description: typeof schema.description === 'string' ? schema.description : null,
     runtime_validation:
       typeof schema['x-runtime-validation'] === 'string' ? schema['x-runtime-validation'] : null,
+    // An entry that carries no shape of its own. It records requiredness or the
+    // absence of a bound, and never brings a key path into the reference.
+    assertionOnly: false,
   };
+}
+
+function assertionOf(keyPath, kind, required, variantKey, conditional) {
+  return {
+    key_path: keyPath,
+    kind,
+    types: [],
+    required,
+    values: [],
+    constraints: [],
+    variantKey,
+    conditional,
+    description: null,
+    runtime_validation: null,
+    assertionOnly: true,
+  };
+}
+
+// The names a node requires, recorded at the key paths they name. The declaring
+// `properties` often sits on a different node: an alternative or a conditional
+// clause commonly states its whole shape with `required` alone, and reading
+// requiredness only where a property is declared reports such a key as never
+// required. `not` is deliberately not walked, so a name required inside one is
+// never mistaken for a requirement.
+function requiredAssertions(schema, prefix, state) {
+  if (!Array.isArray(schema.required)) {
+    return [];
+  }
+  return schema.required
+    .filter((name) => typeof name === 'string')
+    .map((name) =>
+      assertionOf(
+        prefix ? `${prefix}.${name}` : name,
+        'property',
+        true,
+        state.variantPath.join('>'),
+        false,
+      ),
+    );
+}
+
+// Which branches of one combinator declare a key path, and which require it.
+// Both are counted per branch rather than per occurrence, because a branch may
+// state the same key twice, once in `properties` and once in `required`.
+function branchCoverage(collected) {
+  const declaredIn = new Map();
+  const requiredIn = new Map();
+  for (const branchOccurrences of collected) {
+    const declared = new Set(branchOccurrences.map((entry) => entry.key_path));
+    const required = new Set(
+      branchOccurrences.filter((entry) => entry.required).map((entry) => entry.key_path),
+    );
+    for (const keyPath of declared) {
+      declaredIn.set(keyPath, (declaredIn.get(keyPath) ?? 0) + 1);
+    }
+    for (const keyPath of required) {
+      requiredIn.set(keyPath, (requiredIn.get(keyPath) ?? 0) + 1);
+    }
+  }
+  return { declaredIn, requiredIn };
 }
 
 // Each node records what it knows about the path it sits on, so a property
 // written as a `$ref` still reports the definition's type, values, and bounds,
 // and a path reached through several combinator branches reports all of them.
-function walk(document, schema, prefix, kind, required, occurrences, referenceStack, variantPath) {
+//
+// `state` carries the position rather than the shape: `referenceStack` stops a
+// recursive definition, `variantPath` names the alternatives taken to get here,
+// and `scope` is a stable node path so two independent conditions on one key
+// path do not collapse into a single alternative.
+function walk(document, schema, prefix, kind, required, occurrences, state) {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
     return;
   }
 
   if (prefix !== '') {
-    occurrences.push(occurrenceOf(schema, prefix, kind, required, variantPath));
+    occurrences.push(occurrenceOf(schema, prefix, kind, required, state));
   }
+  occurrences.push(...requiredAssertions(schema, prefix, state));
 
   if (Object.hasOwn(schema, '$ref')) {
     const reference = schema.$ref;
     // A recursive definition contributes its shape once. Re-entering it would
     // not terminate and shows the reader no key they have not already seen.
-    if (referenceStack.has(reference)) {
+    if (state.referenceStack.has(reference)) {
       return;
     }
-    walk(
-      document,
-      resolveReference(document, reference),
-      prefix,
-      kind,
-      required,
-      occurrences,
-      new Set([...referenceStack, reference]),
-      variantPath,
-    );
+    walk(document, resolveReference(document, reference), prefix, kind, required, occurrences, {
+      ...state,
+      referenceStack: new Set([...state.referenceStack, reference]),
+      scope: reference,
+    });
     return;
   }
 
   if (Array.isArray(schema.allOf)) {
-    for (const branch of schema.allOf) {
-      walk(document, branch, prefix, kind, required, occurrences, referenceStack, variantPath);
-    }
+    schema.allOf.forEach((branch, index) => {
+      walk(document, branch, prefix, kind, required, occurrences, {
+        ...state,
+        scope: `${state.scope}/allOf[${index}]`,
+      });
+    });
   }
 
   // `oneOf` and `anyOf` offer alternatives, so a key path only some branches
-  // declare cannot be reported as plainly required: a reader who writes every
-  // key marked required produces a document every alternative rejects.
+  // declare, or only some branches require, cannot be reported as plainly
+  // required: a reader who writes every key marked required produces a
+  // document every alternative rejects.
   for (const combinator of ['anyOf', 'oneOf']) {
     const branches = schema[combinator];
     if (!Array.isArray(branches) || branches.length === 0) {
@@ -218,27 +288,85 @@ function walk(document, schema, prefix, kind, required, occurrences, referenceSt
     }
     const collected = branches.map((branch, index) => {
       const branchOccurrences = [];
-      walk(
-        document,
-        branch,
-        prefix,
-        kind,
-        required,
-        branchOccurrences,
-        referenceStack,
-        [...variantPath, `${prefix}:${combinator}#${index}`],
-      );
+      const branchScope = `${state.scope}/${combinator}[${index}]`;
+      walk(document, branch, prefix, kind, required, branchOccurrences, {
+        ...state,
+        scope: branchScope,
+        variantPath: [...state.variantPath, branchScope],
+      });
       return branchOccurrences;
     });
-    const coverage = new Map();
-    for (const branchOccurrences of collected) {
-      for (const keyPath of new Set(branchOccurrences.map((entry) => entry.key_path))) {
-        coverage.set(keyPath, (coverage.get(keyPath) ?? 0) + 1);
-      }
-    }
+    const { declaredIn, requiredIn } = branchCoverage(collected);
     for (const branchOccurrences of collected) {
       for (const entry of branchOccurrences) {
-        if (coverage.get(entry.key_path) < branches.length) {
+        const declared = declaredIn.get(entry.key_path) ?? 0;
+        const requiredCount = requiredIn.get(entry.key_path) ?? 0;
+        if (declared < branches.length || (requiredCount > 0 && requiredCount < branches.length)) {
+          entry.conditional = true;
+        }
+        occurrences.push(entry);
+      }
+    }
+  }
+
+  // `if`/`then`/`else` states a rule that binds only when the condition holds,
+  // so what a clause adds is one case rather than a bound on every document.
+  // `if` asserts nothing about the document a deployment writes, only about
+  // which case applies, so it is not walked.
+  if (Object.hasOwn(schema, 'if')) {
+    const clauses = ['then', 'else'].map((clause) => {
+      const branch = schema[clause];
+      const clauseScope = `${state.scope}/${clause}`;
+      const clauseOccurrences = [];
+      if (branch !== null && typeof branch === 'object' && !Array.isArray(branch)) {
+        // The clause asserts nothing about the presence of the key it hangs
+        // off, so it starts from `false` rather than inheriting requiredness
+        // that belongs to the enclosing shape.
+        walk(document, branch, prefix, kind, false, clauseOccurrences, {
+          ...state,
+          scope: clauseScope,
+          variantPath: [...state.variantPath, clauseScope],
+        });
+      }
+      // A clause reaches the key it bounds by traversing the objects above it.
+      // Those intermediate entries assert nothing, so they neither offer an
+      // alternative nor make a key's presence depend on the condition.
+      return {
+        scope: clauseScope,
+        occurrences: clauseOccurrences.filter(
+          (entry) =>
+            entry.required ||
+            entry.constraints.length > 0 ||
+            entry.values.length > 0 ||
+            entry.types.length > 0,
+        ),
+      };
+    });
+
+    // A clause that is absent, or silent about a key path the other clause
+    // bounds, is still a shape a deployment may write. Without an entry
+    // standing for it, the other clause's bounds read as though they always
+    // applied, and a deployment outside the condition would be shown a bound it
+    // must not satisfy.
+    const kinds = new Map(
+      clauses.flatMap(({ occurrences: clauseOccurrences }) =>
+        clauseOccurrences.map((entry) => [entry.key_path, entry.kind]),
+      ),
+    );
+    for (const { scope, occurrences: clauseOccurrences } of clauses) {
+      const present = new Set(clauseOccurrences.map((entry) => entry.key_path));
+      for (const [keyPath, entryKind] of kinds) {
+        if (!present.has(keyPath)) {
+          clauseOccurrences.push(
+            assertionOf(keyPath, entryKind, false, [...state.variantPath, scope].join('>'), false),
+          );
+        }
+      }
+      for (const entry of clauseOccurrences) {
+        // Only a requirement the clause states makes a key's presence depend on
+        // the condition. A bound or a fixed value it adds becomes one
+        // alternative in the constraint and value columns instead.
+        if (entry.required) {
           entry.conditional = true;
         }
         occurrences.push(entry);
@@ -250,30 +378,18 @@ function walk(document, schema, prefix, kind, required, occurrences, referenceSt
     const requiredNames = new Set(Array.isArray(schema.required) ? schema.required : []);
     for (const [name, child] of Object.entries(schema.properties)) {
       const childPath = prefix ? `${prefix}.${name}` : name;
-      walk(
-        document,
-        child ?? {},
-        childPath,
-        'property',
-        requiredNames.has(name),
-        occurrences,
-        referenceStack,
-        variantPath,
-      );
+      walk(document, child ?? {}, childPath, 'property', requiredNames.has(name), occurrences, {
+        ...state,
+        scope: `${state.scope}/properties/${name}`,
+      });
     }
   }
 
   if (schema.items !== null && typeof schema.items === 'object' && !Array.isArray(schema.items)) {
-    walk(
-      document,
-      schema.items,
-      `${prefix}[]`,
-      'array_item',
-      false,
-      occurrences,
-      referenceStack,
-      variantPath,
-    );
+    walk(document, schema.items, `${prefix}[]`, 'array_item', false, occurrences, {
+      ...state,
+      scope: `${state.scope}/items`,
+    });
   }
 
   const additional = schema.additionalProperties;
@@ -293,23 +409,18 @@ function walk(document, schema, prefix, kind, required, occurrences, referenceSt
           required: false,
           values: [],
           constraints: nameConstraints,
-          variantKey: variantPath.join('>'),
+          variantKey: state.variantPath.join('>'),
           conditional: false,
           description: null,
           runtime_validation: null,
+          assertionOnly: false,
         });
       }
     }
-    walk(
-      document,
-      additional,
-      valuePath,
-      'map_value',
-      false,
-      occurrences,
-      referenceStack,
-      variantPath,
-    );
+    walk(document, additional, valuePath, 'map_value', false, occurrences, {
+      ...state,
+      scope: `${state.scope}/additionalProperties`,
+    });
   }
 }
 
@@ -335,23 +446,33 @@ function constraintAlternatives(occurrences) {
     ]);
   }
 
-  const groups = [...byVariant.values()]
-    .map((constraints) => uniqueSorted([...shared, ...constraints]))
-    .filter((group) => group.length > 0);
-  const distinct = [...new Map(groups.map((group) => [JSON.stringify(group), group])).values()];
-  if (distinct.length > 0) {
-    return distinct;
+  if (byVariant.size === 0) {
+    const only = uniqueSorted(shared);
+    return only.length > 0 ? [only] : [];
   }
-  const only = uniqueSorted(shared);
-  return only.length > 0 ? [only] : [];
+
+  const groups = [...byVariant.values()].map((constraints) =>
+    uniqueSorted([...shared, ...constraints]),
+  );
+  // An alternative that adds no bound is kept, because dropping it would make
+  // another alternative's bounds read as though they held under every
+  // alternative. Alternatives that land on the same bounds are one group.
+  const distinct = [...new Map(groups.map((group) => [JSON.stringify(group), group])).values()];
+  if (distinct.length === 1) {
+    return distinct[0].length > 0 ? distinct : [];
+  }
+  return distinct;
 }
 
 function merge(occurrences) {
   // One entry per key path. A path reached through several combinator branches
   // shows the union of the types and values those branches allow. It is
-  // `conditional` when some alternative does not declare it, `yes` only when
-  // every occurrence requires it.
-  const first = occurrences[0];
+  // `conditional` when the answer depends on the alternative taken, and
+  // otherwise `yes` as soon as anything requires it: what is left once the
+  // alternatives are accounted for is a conjunction, where one `required` is
+  // enough to make the key mandatory.
+  const shaped = occurrences.filter((occurrence) => !occurrence.assertionOnly);
+  const first = shaped[0] ?? occurrences[0];
   const conditional = occurrences.some((occurrence) => occurrence.conditional);
   return {
     key_path: first.key_path,
@@ -359,7 +480,7 @@ function merge(occurrences) {
     type: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.types)).join(' | ') || null,
     required: conditional
       ? 'conditional'
-      : occurrences.every((occurrence) => occurrence.required)
+      : occurrences.some((occurrence) => occurrence.required)
         ? 'yes'
         : 'no',
     values: uniqueSorted(occurrences.flatMap((occurrence) => occurrence.values)),
@@ -376,7 +497,11 @@ export function collectFields(document) {
     throw new Error('a contract must be a mapping');
   }
   const occurrences = [];
-  walk(document, document, '', null, false, occurrences, new Set(), []);
+  walk(document, document, '', null, false, occurrences, {
+    referenceStack: new Set(),
+    variantPath: [],
+    scope: '',
+  });
 
   const grouped = new Map();
   for (const occurrence of occurrences) {
@@ -389,6 +514,10 @@ export function collectFields(document) {
   }
   return [...grouped.keys()]
     .sort()
+    // A key path known only from a `required` name is not a key a deployment
+    // may write: nothing declares it. Reporting it would invent a row, and
+    // would put this walk out of parity with the check that owns the notation.
+    .filter((keyPath) => grouped.get(keyPath).some((occurrence) => !occurrence.assertionOnly))
     .map((keyPath) => merge(grouped.get(keyPath)))
     .map((field) => ({ ...field, values: field.values.length > 0 ? field.values : null }));
 }

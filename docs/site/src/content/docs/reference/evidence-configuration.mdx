@@ -25,7 +25,7 @@ inside its accepted values.
 ## Contract status
 
 - Status: current, pre-1.0
-- Reference format: `1.1`
+- Reference format: `1.2`
 - Generator: `npm run generate` in `docs/site`
 - Source: `products/evidence/contracts/bundle.schema.yaml` and
   `products/evidence/contracts/runtime.schema.yaml`
@@ -45,11 +45,22 @@ recursive definition, currently only nested adapter parameter values, appears on
 it re-enters itself.
 
 Where a key is reachable through several alternative shapes, the entry shows the union of the
-types and values those alternatives accept. Required reads **Conditional** when at least one
-alternative does not declare the key at all: it may be mandatory once you have chosen that
-alternative, and rejected under the others. Constraints are grouped per alternative and separated
-by *or*, because satisfying every printed bound at once can describe a value no alternative
-accepts.
+types and values those alternatives accept.
+
+Required reads **Conditional** when whether you may or must write the key depends on the rest of
+the document: some alternative does not declare it at all, only some alternatives require it, or a
+rule elsewhere in the contract requires it once a condition holds. It may be mandatory in one
+shape and rejected in another. Required reads **Yes** whenever some part of the contract requires
+the key outright, including where the requirement is stated away from the place the key is
+declared, and a rule that only tightens a required key's bounds does not soften that to
+Conditional.
+
+Constraints are grouped per alternative and separated by *or*, because satisfying every printed
+bound at once can describe a value no alternative accepts. A group reading *No bound* is an
+alternative the grammar leaves unbounded, and it is printed rather than dropped so the bounds
+beside it are not read as holding in every case. The groups are the bound sets the grammar offers,
+not an enumeration of every combination; consult the configuration guide for how one key's shape
+constrains another's.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
     products/evidence/contracts/*.schema.yaml. Run npm run generate from docs/site. */}

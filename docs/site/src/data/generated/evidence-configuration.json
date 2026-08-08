@@ -1,5 +1,5 @@
 {
-  "format_version": "1.1",
+  "format_version": "1.2",
   "generator": "docs/site/scripts/generate-evidence-configuration.mjs",
   "contracts": [
     {
@@ -13,7 +13,7 @@
           "key_path": "acquisitionCapabilities",
           "kind": "property",
           "type": "array",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
@@ -249,6 +249,16 @@
           "constraints": [
             [
               "maxLength: 512",
+              "pattern: ^(?:https://|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}$)",
+              "pattern: ^https?://"
+            ],
+            [
+              "maxLength: 512",
+              "pattern: ^https?://"
+            ],
+            [
+              "maxLength: 512",
+              "pattern: ^https://",
               "pattern: ^https?://"
             ]
           ],
@@ -264,6 +274,16 @@
           "constraints": [
             [
               "maxLength: 512",
+              "pattern: ^(?:https://|http://127\\.0\\.0\\.1:[1-9][0-9]{0,4}/\\.well-known/jwks\\.json$)",
+              "pattern: ^https?://"
+            ],
+            [
+              "maxLength: 512",
+              "pattern: ^https?://"
+            ],
+            [
+              "maxLength: 512",
+              "pattern: ^https://",
               "pattern: ^https?://"
             ]
           ],
@@ -567,7 +587,7 @@
           "key_path": "authorityProfiles.*.grants[].subjects[].valueClaims",
           "kind": "property",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
@@ -926,12 +946,13 @@
           "key_path": "requirements[].concepts[].constraints",
           "kind": "property",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
               "maxProperties: 0"
-            ]
+            ],
+            []
           ],
           "description": "Closed, form-specific bounds a derived value must satisfy before it is accepted into evidence; which keys apply is fixed entirely by the concept's `form`.",
           "runtime_validation": null
@@ -1152,7 +1173,7 @@
           "key_path": "requirements[].concepts[].form",
           "kind": "property",
           "type": "string",
-          "required": "no",
+          "required": "yes",
           "values": [
             "audience-scoped-entity-reference",
             "boolean",
@@ -1269,6 +1290,7 @@
               "maximum: 9007199254740991",
               "minimum: -9007199254740991"
             ],
+            [],
             [
               "maxItems: 64",
               "minItems: 1"
@@ -1592,7 +1614,7 @@
           "key_path": "requirements[].fixtures",
           "kind": "property",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
@@ -2030,6 +2052,11 @@
           "constraints": [
             [
               "format: uri",
+              "maxLength: 512",
+              "pattern: ^https://(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:]+\\])(?::[1-9][0-9]{0,4})?$"
+            ],
+            [
+              "format: uri",
               "maxLength: 512"
             ]
           ],
@@ -2377,6 +2404,7 @@
           "required": "conditional",
           "values": null,
           "constraints": [
+            [],
             [
               "pattern: ^https://[^?#]+$"
             ],
@@ -2436,6 +2464,10 @@
           "required": "yes",
           "values": null,
           "constraints": [
+            [
+              "pattern: ^http://(?:127\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\\[::1\\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+            ],
+            [],
             [
               "pattern: ^https://[^/?#]+$"
             ],
@@ -2683,7 +2715,7 @@
           "key_path": "sources.*.request.path",
           "kind": "property",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
@@ -2697,7 +2729,7 @@
           "key_path": "sources.*.request.pathBindings",
           "kind": "property",
           "type": "object",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [
@@ -2781,7 +2813,7 @@
           "key_path": "sources.*.request.pathTemplate",
           "kind": "property",
           "type": "string",
-          "required": "no",
+          "required": "conditional",
           "values": null,
           "constraints": [
             [

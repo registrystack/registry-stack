@@ -181,6 +181,114 @@ test('alternative branches report alternative constraint sets, not their union',
   assert.deepEqual(byPath.get('port').constraints, [['maximum: 65535', 'minimum: 1']]);
 });
 
+test('requiredness is read where a node states it, not only where the key is declared', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      concepts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['form'],
+          properties: { note: { type: 'string' } },
+          oneOf: [
+            { properties: { form: { const: 'presence' } } },
+            { properties: { form: { const: 'value' } } },
+          ],
+        },
+      },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // The `required` list sits on the item, and `properties.form` inside each
+  // alternative. Reading requiredness only where a key is declared reports a
+  // key every valid document must carry as one a deployment may leave out.
+  assert.equal(byPath.get('concepts[].form').required, 'yes');
+  assert.equal(byPath.get('concepts[].note').required, 'no');
+});
+
+test('a name required only inside `not` is not reported as required', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      request: {
+        type: 'object',
+        properties: { path: { type: 'string' }, pathTemplate: { type: 'string' } },
+        oneOf: [
+          { required: ['path'], not: { required: ['pathTemplate'] } },
+          { required: ['pathTemplate'], not: { required: ['path'] } },
+        ],
+      },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // Each name is required by one alternative and forbidden by the other.
+  // Counting the `not` would report both as required under every alternative.
+  assert.equal(byPath.get('request.path').required, 'conditional');
+  assert.equal(byPath.get('request.pathTemplate').required, 'conditional');
+});
+
+test('a required name that nothing declares does not become an entry of its own', () => {
+  const fields = collectFields({
+    type: 'object',
+    required: ['listener', 'absent'],
+    properties: { listener: { type: 'string' } },
+  });
+  // `absent` is a name the contract requires but never declares. Publishing a
+  // row for it would invent a key, and would put this walk out of parity with
+  // the check that owns the key-path notation.
+  assert.deepEqual(pathsOf(fields), ['listener']);
+});
+
+test('an `if`/`then` rule binds a key conditionally without binding what it reaches through', () => {
+  const fields = collectFields({
+    type: 'object',
+    required: ['service'],
+    properties: {
+      assuranceProfile: { enum: ['local', 'production'] },
+      service: {
+        type: 'object',
+        required: ['providerId'],
+        properties: { providerId: { type: 'string', maxLength: 512 } },
+      },
+      fixtures: { type: 'array', items: { type: 'string' } },
+    },
+    if: { required: ['assuranceProfile'], properties: { assuranceProfile: { const: 'production' } } },
+    then: {
+      required: ['fixtures'],
+      properties: { service: { properties: { providerId: { pattern: '^https://' } } } },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  // The rule requires `fixtures` only where the condition holds.
+  assert.equal(byPath.get('fixtures').required, 'conditional');
+  // `service` is required whatever the condition. The clause only reaches
+  // through it to bound a key below, so its presence is not conditional.
+  assert.equal(byPath.get('service').required, 'yes');
+  assert.equal(byPath.get('service.providerId').required, 'yes');
+  // The pattern binds in one case only, so it reads as one alternative beside
+  // the bound that always applies rather than as a bound every document meets.
+  assert.deepEqual(byPath.get('service.providerId').constraints, [
+    ['maxLength: 512', 'pattern: ^https://'],
+    ['maxLength: 512'],
+  ]);
+});
+
+test('an alternative that adds no bound stays visible beside one that does', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      bounded: { type: 'object', oneOf: [{ maxProperties: 0 }, { minProperties: 1 }] },
+      partly: { type: 'object', oneOf: [{ maxProperties: 0 }, {}] },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  assert.deepEqual(byPath.get('bounded').constraints, [['maxProperties: 0'], ['minProperties: 1']]);
+  // Dropping the unbounded alternative would print `maxProperties: 0` as
+  // though every document had to satisfy it.
+  assert.deepEqual(byPath.get('partly').constraints, [['maxProperties: 0'], []]);
+});
+
 test('allOf branches stay conjunctive', () => {
   const fields = collectFields({
     type: 'object',

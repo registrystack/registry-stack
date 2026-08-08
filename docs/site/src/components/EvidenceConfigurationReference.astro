@@ -119,13 +119,20 @@ const segments = (text: string) =>
                     field.constraints.map((group, index) => (
                       <>
                         {index > 0 && <p class="alternative">or</p>}
-                        <ul class="value-list">
-                          {group.map((constraint) => (
-                            <li>
-                              <code>{constraint}</code>
-                            </li>
-                          ))}
-                        </ul>
+                        {group.length > 0 ? (
+                          <ul class="value-list">
+                            {group.map((constraint) => (
+                              <li>
+                                <code>{constraint}</code>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          // An alternative the grammar leaves unbounded. Naming
+                          // it keeps the neighbouring bounds from reading as
+                          // though they held under every alternative.
+                          <p class="unbounded">No bound</p>
+                        )}
                       </>
                     ))
                   ) : (
@@ -198,6 +205,11 @@ const segments = (text: string) =>
     font-size: var(--sl-text-xs);
     font-style: italic;
     margin: 0.25rem 0;
+  }
+
+  .unbounded {
+    color: var(--sl-color-gray-2);
+    margin: 0;
   }
 
   .value-list code {
