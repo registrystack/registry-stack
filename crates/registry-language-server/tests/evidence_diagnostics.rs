@@ -12,10 +12,11 @@
 //!
 //! The diagnostics the index draws from one document's name for another are not paired here. The
 //! `evidence/unknown-*` codes and the two file-name codes are refused by `registry-evidencectl`,
-//! which depends on this crate, so a dependency the other way would be a cycle and there is nothing
-//! in this crate left to call. `tests/evidence_index.rs` holds each of those diagnostics to its own
-//! exact sentence, and names the refusal it stands for in prose; nothing executes that half of the
-//! pair, so the two implementations of those rules are held together by review.
+//! which depends on this crate: a dependency the other way is a cycle, and that crate builds a
+//! binary rather than a library, so there is nothing here to call. `tests/evidence_index.rs` holds
+//! each of those diagnostics to its own exact sentence and names the refusal it stands for in prose.
+//! Nothing executes that half of the pair, in either crate, so those rules are held to each other by
+//! review and the pairing belongs in `registry-evidencectl`'s own suite.
 
 mod support;
 
@@ -193,6 +194,8 @@ fn a_finding_that_quotes_a_long_name_reaches_the_editor_whole() {
         vec![("fact-combination", sentence.clone())],
         "the authoring library refuses this question"
     );
+    // Which edges a compact-form question draws is `evidence_index.rs`'s subject. What is asserted
+    // here is the sentence the finding carries, whole.
     let paired = reported
         .iter()
         .filter(|diagnostic| diagnostic.code.as_deref() == Some("evidence/fact-combination"))
