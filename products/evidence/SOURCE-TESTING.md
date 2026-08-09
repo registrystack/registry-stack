@@ -45,6 +45,34 @@ The product names identify compatibility-shaped test profiles. They do not
 promise a maintained vendor connector, reproduce a whole server, or certify
 support for every release and configuration.
 
+The optional source-batch optimization is a second execution strategy over an
+existing `http-json` row, not another compatibility profile. Its deterministic
+contract suite must prove:
+
+- bundle and runtime `source-batch` gates plus a complete fixed-path source
+  block are all required before the optimized strategy is selected, and an
+  incomplete two-author gate fails startup;
+- omission, path templates, SQLite, multi-stage acquisition, and an item count
+  above `maximumItems` select ordinary sequential execution before I/O;
+- the one optimized request reuses the ordinary method, origin,
+  authentication, headers, TLS, redirect, timeout, response, semaphore, and
+  preparation limits;
+- `prepare_batch` sees only ordered opaque slots, minimized selector objects,
+  and closed parameters;
+- batch projection and response-schema validation occur before
+  `extract_batch`, and each returned match satisfies the ordinary fact schema;
+- extraction returns an exact slot bijection, with reordering restored and
+  every missing, duplicate, extra, negative, non-integer, or out-of-range slot
+  rejected for the complete operation; and
+- no optimized failure retries through sequential fanout or releases a partial
+  response.
+
+At least one local HTTP mock must compare sequential and optimized evaluation
+of the same synthetic item set, including mixed and all-unavailable results,
+and assert equal ordered logical outcomes. No live demo is used to prove this
+strategy because a public endpoint's acceptance of a bulk request is not a
+stable dependency contract.
+
 They are test-only names. Production Rust, Cargo dependencies and features,
 public configuration schemas, routes, and CLI options contain no DHIS2 or
 OpenCRVS specialization. The compatibility test must fail if either product is

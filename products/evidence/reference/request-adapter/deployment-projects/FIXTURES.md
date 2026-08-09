@@ -166,6 +166,31 @@ that statement, which is where a case pins what a caller-supplied value became.
 The reserved `evidence_now` is bound by Rust at execution time and is not part
 of that map.
 
+### Request batches and fixture scope
+
+The project fixture remains one logical evidence evaluation per case. Adding an
+HTTP source `batch` block does not add request-batch members, opaque slots, or a
+second expected response vocabulary to this file. `evidence evaluate` continues
+to exercise the ordinary source contract for each case, which proves that the
+optimized source has a semantically complete sequential path and that omission
+or ineligibility can safely select it before I/O.
+
+The optimized lane is covered by the generic source and runtime contract tests.
+Those tests compile the batch scripts, invoke `prepare_batch` with one to
+sixteen ordered `{slot, selectors}` items, apply the ordinary preparation
+limits, pass a bounded projected response through the batch response schema,
+and require `extract_batch` to return an exact slot bijection over ordinary
+lookup results. They also prove strategy selection, no late fanout, ordered
+response restoration, all-unavailable success, and outer abort on every other
+failure.
+
+Production and evidence-grade fixture coverage is therefore unchanged: every
+requirement still needs its complete positive, negative, boundary, no-match,
+ambiguity, missing-data, and privacy cases on the ordinary path. A batch block
+adds no authority, disclosure shape, lookup outcome, or derivation behavior
+that could replace those cases. Its referenced scripts and schema must still
+exist, compile, and pass the bundle startup contract.
+
 ## Case input vocabulary
 
 Every case has a required `id` and exactly one of these ten tagged forms:
@@ -344,6 +369,9 @@ under `expected`:
 - no case performs more calls than its acquisition permits, follows pagination,
   redirects, retries, or response-provided URLs; single permits one and
   search-then-fetch permits at most its fixed two;
+- a source batch block does not change fixture semantics or bypass any ordinary
+  requirement case; optimized-call behavior is proven in the generic source
+  and runtime contract suite rather than represented by synthetic fixture keys;
 - an error, failed audit, failed output gate, or failed signing never returns an
   unsigned success;
 - expected facts and values are compared with redacted failure messages;

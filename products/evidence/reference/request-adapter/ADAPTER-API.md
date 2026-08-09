@@ -21,7 +21,7 @@ transport capability, source call, or script-selected behavior.
 ## Complete Version 1 surface
 
 This inventory is the complete adopter-facing Version 1 script surface. It
-defines all three entry points, every host-provided helper, the pinned Rhai
+defines all five entry points, every host-provided helper, the pinned Rhai
 syntax, result types, resource bounds, and forbidden constructs. Adopters do
 not need to inspect the Rust implementation to determine whether a script is
 supported.
@@ -31,10 +31,14 @@ prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> Request
 extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
+prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
+    -> RequestParts
+extract_batch(response: JSON, context: {parameters: map, slots: array<int>})
+    -> array<{slot: int, result: LookupResult}>
 ```
 
 Version 1 uses one shared deterministic helper catalogue for `prepare`,
-`extract`, and `derive`. The helpers are pure and provide no external
+`extract`, `prepare_batch`, `extract_batch`, and `derive`. The helpers are pure and provide no external
 authority. Capability separation instead comes from the values Rust supplies
 and the closed result validator for each entry point. For example, preparation
 receives no evaluation context or codelist handles, and `RequestParts` rejects
@@ -48,17 +52,22 @@ Rust invokes only the declared entry point.
 
 ## Entry points
 
-A source has two separately compiled adapter scripts, and each requirement has
-one separately compiled derivation script:
+An ordinary source has two separately compiled adapter scripts, and each
+requirement has one separately compiled derivation script. An optional HTTP
+batch block names two additional separately compiled scripts:
 
 ```text
 prepare(selectors: map, context: {parameters: map, prior_facts: map}) -> RequestParts
 extract(response: JSON, context: {parameters: map, prior_facts: map}) -> LookupResult
 derive(facts: map, selectors: map, evaluation_context: map)
     -> array<DerivedConceptValue>
+prepare_batch(items: array<{slot: int, selectors: map}>, context: {parameters: map})
+    -> RequestParts
+extract_batch(response: JSON, context: {parameters: map, slots: array<int>})
+    -> array<{slot: int, result: LookupResult}>
 ```
 
-- `prepare`, `extract`, and `derive` run with fresh state on every invocation.
+- All five entry points run with fresh state on every invocation.
 - Inputs are isolated per-invocation copies constructed by Rust. A script may
   mutate a local nested map, array, or string, but that mutation cannot affect
   the bundle, a later invocation, or the other adapter stage.
@@ -71,6 +80,16 @@ derive(facts: map, selectors: map, evaluation_context: map)
   `context.prior_facts` is empty for single and search stages and is exactly the
   schema-validated search FactSet for the fixed fetch stage.
 - Extraction receives neither selectors nor prepared request parts.
+- Batch preparation receives one to sixteen ordered exact maps with `slot` and
+  `selectors`, plus context with exactly `parameters`. Each opaque non-negative
+  integer slot is Rust-issued and carries correlation only. Each selectors map
+  is the ordinary minimized source input for that logical item.
+- Batch extraction receives the projected and schema-validated response plus
+  context with exactly `parameters` and `slots`. It receives neither selectors
+  nor prepared request parts and returns one exact `{slot, result}` map for
+  every supplied slot. Result order may differ. Rust restores request order and
+  rejects a missing, duplicate, extra, negative, non-integer, or out-of-range
+  slot as a source-protocol failure.
 - Derivation runs only for `match`, receives only the authorized roles and
   fields declared by the requirement's closed `derivation.selectorInputs`, and
   receives neither the source response nor prepared request parts. A
@@ -114,6 +133,12 @@ sources:
     responseSchema: schemas/source-a-response.schema.yaml
     extractScript: adapters/source-a-extract.rhai
     factSchema: schemas/source-a-facts.schema.yaml
+    batch:
+      maximumItems: 16
+      prepareScript: adapters/source-a-batch-prepare.rhai
+      extractScript: adapters/source-a-batch-extract.rhai
+      responseSchema: schemas/source-a-batch-response.schema.yaml
+      projection: [/results/*/slot, /results/*/outcome, /results/*/facts]
 requirements:
   - id: urn:example:requirement:relationship:v1
     derivation:
@@ -131,6 +156,15 @@ alternative must exactly match one declared requirement role, profile, and
 field set. Rust rejects a missing, surplus, unauthorized, or incompatible
 binding at startup. `prepareScript` and `extractScript` are symmetric,
 separately compiled entry points; neither is a transport plugin.
+
+The optional `batch` block is eligible only on a fixed-path `http-json` source
+under both bundle and runtime `source-batch` capability. Its scripts cannot
+change the ordinary source's method, origin, path, authentication, headers,
+TLS, redirect policy, timeout, response limit, concurrency semaphore, or
+preparation limits. Its response uses the batch projection and schema, but
+every match still validates against the ordinary `factSchema`. SQLite, path
+templates, multi-stage acquisitions, and batches above `maximumItems` use the
+ordinary entry points sequentially in request order.
 
 The ceiling of at most two minimally projected results, which lets one bounded
 request separate a unique match from ambiguity, is governed adapter policy. Its
@@ -653,6 +687,7 @@ configure stricter `RequestParts` limits:
 | Resource | Hard ceiling |
 |---|---:|
 | Combined normalized preparation input | 1,048,576 bytes |
+| Request-batch items or extraction slots | 16 |
 | Normalized `RequestParts` output | 65,536 bytes |
 | Query pairs | 64 |
 | Query name | 64 bytes |
@@ -696,6 +731,11 @@ An adapter failure after the access-attempt audit prevents credential use,
 source access, evidence construction, response protection, and disclosure as
 applicable to its pipeline position. There is no fallback request or fallback
 adapter.
+
+Once an optimized batch invocation begins, a preparation, source, projection,
+schema, extraction, slot, fact, or later failure aborts the outer request. It
+never falls back to ordinary per-item calls and never releases completed item
+results.
 
 Tests prove that a script cannot forge the host-private
 unavailable marker, use `Fn` or an anonymous function, interpolate an opaque

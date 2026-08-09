@@ -22,7 +22,7 @@ use url::Url;
 
 use crate::config::{
     ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
-    RuntimeConfig, SchemaFault, SelectorField, TextLocation,
+    RuntimeConfig, SchemaFault, SelectorField, TextLocation, SOURCE_BATCH_CAPABILITY,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -1047,7 +1047,7 @@ fn validate_file_closure(
 /// no statement contributes nothing for that role rather than a placeholder,
 /// so bundle closure stays exact in both directions.
 fn source_artifact_paths(source: &crate::config::SourceConfig) -> Vec<String> {
-    [
+    let mut paths = [
         source.statement(),
         source.prepare_script(),
         Some(source.extract_script()),
@@ -1058,7 +1058,15 @@ fn source_artifact_paths(source: &crate::config::SourceConfig) -> Vec<String> {
     .into_iter()
     .flatten()
     .map(|path| path.as_str().to_owned())
-    .collect()
+    .collect::<Vec<_>>();
+    if let Some(batch) = source.batch() {
+        paths.extend([
+            batch.prepare_script.as_str().to_owned(),
+            batch.extract_script.as_str().to_owned(),
+            batch.response_schema.as_str().to_owned(),
+        ]);
+    }
+    paths
 }
 
 /// Every concept the configuration declares, in configuration order.
@@ -1157,6 +1165,18 @@ fn load_scripts(
             source.extract_script().as_str(),
             ("extract", 2),
         )?;
+        if let Some(batch) = source.batch() {
+            insert_script_contract(
+                &mut expected,
+                batch.prepare_script.as_str(),
+                ("prepare_batch", 2),
+            )?;
+            insert_script_contract(
+                &mut expected,
+                batch.extract_script.as_str(),
+                ("extract_batch", 2),
+            )?;
+        }
     }
     for requirement in &config.requirements {
         insert_script_contract(
@@ -1309,7 +1329,10 @@ fn load_fact_schemas(
     let response_paths = config
         .sources
         .iter()
-        .map(|(_, source)| source.response_schema().as_str())
+        .flat_map(|(_, source)| {
+            std::iter::once(source.response_schema().as_str())
+                .chain(source.batch().map(|batch| batch.response_schema.as_str()))
+        })
         .collect::<BTreeSet<_>>();
     let mut paths = config
         .sources
@@ -1320,8 +1343,10 @@ fn load_fact_schemas(
                 Some(source.response_schema()),
                 source.adapter_parameters_schema(),
             ]
+            .into_iter()
+            .flatten()
+            .chain(source.batch().map(|batch| &batch.response_schema))
         })
-        .flatten()
         .map(|schema| schema.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     paths.extend(reviewed_schema_paths(all_concepts(config), files)?);
@@ -2484,6 +2509,16 @@ fn validate_runtime_bindings(
             ));
         }
     }
+    if bundle
+        .acquisition_capabilities
+        .iter()
+        .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
+        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY)
+    {
+        return Err(invalid_artifact(
+            "the runtime configuration does not enable an acquisition capability the bundle requires",
+        ));
+    }
     Ok(())
 }
 
@@ -3073,6 +3108,76 @@ mod tests {
 
         assert!(!before.is_empty(), "the fixture configures requirements");
         assert_eq!(before, after);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_batch_artifacts_change_bundle_and_requirement_revisions() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let config_path = directory.path().join(CONFIG_FILE);
+        let text = fs::read_to_string(&config_path).expect("configuration reads");
+        let text = text
+            .replacen(
+                "version: 1\n",
+                "version: 1\nacquisitionCapabilities: [source-batch]\n",
+                1,
+            )
+            .replace(
+                "    factSchema: schemas/facts.schema.yaml\n",
+                "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/total, /date_of_birth]\n",
+            );
+        fs::write(&config_path, text).expect("configuration writes");
+
+        let ordinary_prepare =
+            fs::read_to_string(directory.path().join("adapters/source-a-prepare.rhai"))
+                .expect("ordinary preparation reads");
+        fs::write(
+            directory.path().join("adapters/source-prepare-batch.rhai"),
+            ordinary_prepare.replacen("fn prepare(", "fn prepare_batch(", 1),
+        )
+        .expect("batch preparation writes");
+        let ordinary_extract = fs::read_to_string(directory.path().join("adapters/source-a.rhai"))
+            .expect("ordinary extraction reads");
+        fs::write(
+            directory.path().join("adapters/source-extract-batch.rhai"),
+            ordinary_extract.replacen("fn extract(", "fn extract_batch(", 1),
+        )
+        .expect("batch extraction writes");
+        fs::copy(
+            directory.path().join("schemas/response.schema.yaml"),
+            directory
+                .path()
+                .join("schemas/source-batch-response.schema.yaml"),
+        )
+        .expect("batch response schema writes");
+
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let before = Bundle::load(directory.path()).expect("batch bundle loads");
+        let requirement_id = before.config.requirements[0].id.clone();
+        let before_bundle = before.revision().to_owned();
+        let before_requirement = before
+            .configuration_revision(&requirement_id)
+            .expect("requirement revision exists")
+            .to_owned();
+
+        set_tree_mode(directory.path(), 0o755, 0o644);
+        let batch_prepare = directory.path().join("adapters/source-prepare-batch.rhai");
+        let source = fs::read_to_string(&batch_prepare).expect("batch preparation reads");
+        fs::write(
+            &batch_prepare,
+            format!("{source}\n// reviewed batch edit\n"),
+        )
+        .expect("batch preparation changes");
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let after = Bundle::load(directory.path()).expect("edited batch bundle loads");
+        assert_ne!(before_bundle, after.revision());
+        assert_ne!(
+            before_requirement,
+            after
+                .configuration_revision(&requirement_id)
+                .expect("requirement revision exists")
+        );
     }
 
     /// The same isolation for the configuration file itself, which is the churn
@@ -4118,6 +4223,36 @@ outboundTls:
         validate_runtime_bindings(&declared, &enabled)
             .expect("the deployment that enabled the kind binds the bundle");
 
+        let source_batch_document = std::str::from_utf8(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture is UTF-8")
+        .replacen(
+            "version: 1\n",
+            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+            1,
+        )
+        .replace(
+            "    factSchema: schemas/facts.schema.yaml\n",
+            "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/results/*]\n",
+        );
+        let source_batch = EvidenceConfig::parse_yaml(source_batch_document.as_bytes())
+            .expect("the source batch declaration validates");
+        assert_eq!(
+            refusal_cause(
+                validate_runtime_bindings(&source_batch, &silent)
+                    .expect_err("a silent deployment refuses source batching")
+            ),
+            "the runtime configuration does not enable an acquisition capability the bundle requires"
+        );
+        let source_enabled = RuntimeConfig::parse_yaml(
+            format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n")
+                .as_bytes(),
+        )
+        .expect("the source-batch operator runtime document parses");
+        validate_runtime_bindings(&source_batch, &source_enabled)
+            .expect("both authors enabled source batching");
+
         // A bundle acquiring through the frozen Version 1 forms asks the
         // operator for nothing, so every deployment that predates the gate
         // keeps binding exactly the bundles it already bound.
@@ -4228,6 +4363,14 @@ outboundTls:
             compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new(), &BTreeMap::new())
                 .expect("the runtime revision computes"),
             revision
+        );
+        let source_batch =
+            format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n");
+        assert_ne!(
+            compute_runtime_revision(source_batch.as_bytes(), &BTreeMap::new(), &BTreeMap::new())
+                .expect("the source-batch runtime revision computes"),
+            revision,
+            "the operator's source-batch authorization must affect runtime identity"
         );
     }
 

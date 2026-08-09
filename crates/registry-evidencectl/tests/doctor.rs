@@ -823,6 +823,37 @@ fn doctor_passes_once_the_deployment_enables_the_kind_the_bundle_requires() {
     );
 }
 
+#[test]
+fn doctor_reports_both_halves_of_the_source_batch_capability_gate() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    let bundle_path = project.join("bundle/evidence.yaml");
+    let mut bundle = fs::read_to_string(&bundle_path).expect("Evidence configuration");
+    bundle.push_str("sources:\n  registry-lookup:\n    batch: {}\n");
+    fs::write(&bundle_path, bundle).expect("declare a source batch block");
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a source batch block without its two-author gate:\n{stdout}"
+    );
+    for expected in [
+        "bundle/evidence.yaml: does not declare the source-batch acquisition capability a source batch block in it uses",
+        "runtime.yaml: does not enable the source-batch acquisition capability a source batch block in this bundle needs",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "doctor did not report {expected:?}:\n{stdout}"
+        );
+    }
+}
+
 /// A capability named twice enables nothing a single naming does not, so it
 /// reads as harmless. The runtime does not read it that way: it refuses the
 /// deployment because the list must be unique. Doctor reporting PASS on a

@@ -231,18 +231,20 @@ properties:
       $ref: '#/$defs/authority-profile'
   acquisitionCapabilities:
     description: >-
-      Gated acquisition kinds this bundle opts in to. The Version 1 forms are absent from
-      the vocabulary on purpose, because every bundle already had them; omission and an explicit
-      empty list both enable nothing.
+      Gated acquisition kinds and source-call optimizations this bundle opts in to. The original
+      Version 1 forms are absent from the vocabulary on purpose, because every bundle already had
+      them; omission and an explicit empty list both enable nothing.
     type: array
-    maxItems: 1
+    maxItems: 2
     uniqueItems: true
     items:
       description: >-
-        One gated acquisition kind this bundle declares, which is the bundle half of a two-sided
-        gate; a requirement using a kind absent here is rejected at startup.
+        One gated acquisition kind or source-call optimization this bundle declares, which is
+        the bundle half of a two-sided gate. A requirement using an absent kind is rejected at
+        startup; an absent optimization is never selected.
       enum:
         - search-then-fetch-set
+        - source-batch
   holderBoundBatchMaxSize:
     description: >-
       Ceiling on how many assertions one holder-bound release may carry. Omission means one,
@@ -826,6 +828,16 @@ $defs:
           satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates
           what the script returns, not what the source sent.
         $ref: '#/$defs/relative-path'
+      batch:
+        description: >-
+          Optional reviewed one-call optimization for the public multi-subject request batch.
+          It is eligible only for a `single` acquisition using this HTTP source's fixed `path`,
+          when the complete item set fits `maximumItems`, and when both bundle and runtime name
+          `source-batch` under `acquisitionCapabilities`. Omission selects ordinary sequential
+          execution. The block cannot change source, method, origin, path, authentication,
+          headers, TLS, redirect, timeout, response-byte, concurrency, or preparation-limit
+          authority.
+        $ref: '#/$defs/http-json-batch'
     allOf:
       - if:
           required:
@@ -847,6 +859,20 @@ $defs:
           not:
             required:
               - tlsTrustProfile
+      - if:
+          required:
+            - batch
+        then:
+          properties:
+            request:
+              required:
+                - path
+              not:
+                anyOf:
+                  - required:
+                      - pathTemplate
+                  - required:
+                      - pathBindings
   sqlite-extract-source:
     type: object
     additionalProperties: false
@@ -1120,6 +1146,55 @@ $defs:
             type: integer
             minimum: 1
             maximum: 86400
+  http-json-batch:
+    type: object
+    additionalProperties: false
+    required:
+      - maximumItems
+      - prepareScript
+      - extractScript
+      - responseSchema
+      - projection
+    properties:
+      maximumItems:
+        description: >-
+          Largest complete logical request batch this source accepts in one physical call. A
+          larger outer batch uses sequential execution from the start and is never split into
+          optimized sub-batches.
+        type: integer
+        minimum: 1
+        maximum: 16
+      prepareScript:
+        description: >-
+          Bundle-relative Rhai script implementing `prepare_batch/2` over ordered opaque slots
+          and minimized selectors. Its RequestParts output is checked under the ordinary
+          source request's preparationLimits before credentials are resolved.
+        $ref: '#/$defs/relative-path'
+      extractScript:
+        description: >-
+          Bundle-relative Rhai script implementing `extract_batch/2` over the projected,
+          schema-validated response. Rust requires one closed lookup result for every opaque
+          slot and rejects missing, duplicated, extra, negative, or out-of-range slots.
+        $ref: '#/$defs/relative-path'
+      responseSchema:
+        description: >-
+          Bundle-relative closed JSON Schema the batch projection must satisfy before
+          `extract_batch/2` runs. It governs only the optional optimized response and does not
+          replace the ordinary source responseSchema used by sequential execution.
+        $ref: '#/$defs/relative-path'
+      projection:
+        description: >-
+          Allowlist of response leaves Rust retains for optimized batch extraction under the
+          same extended JSON Pointer and projected-input bounds as ordinary extraction.
+        type: array
+        minItems: 1
+        maxItems: 64
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 2
+          maxLength: 256
+          pattern: ^/(?!/)([^/~]|~[01]|/|\*)+$
   fixed-request:
     type: object
     additionalProperties: false

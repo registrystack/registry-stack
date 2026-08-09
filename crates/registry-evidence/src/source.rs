@@ -238,6 +238,7 @@ struct HttpTransport {
     secrets: Arc<SecretResolver>,
     concurrency: Semaphore,
     concurrency_admission_timeout: Duration,
+    batch_projection: Option<ProjectionNode>,
 }
 
 /// One reviewed statement, and the extract it reads.
@@ -414,6 +415,23 @@ impl fmt::Debug for MaterializedSourceRequest {
 pub enum PreparedSourceRequest {
     Http(RequestParts),
     Statement(StatementParameters),
+}
+
+/// Validated output of the closed HTTP batch-preparation ABI.
+///
+/// Kept distinct from [`PreparedSourceRequest`] so an optimized request cannot
+/// accidentally enter a sequential execution path or vice versa.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSourceBatchRequest(RequestParts);
+
+impl PreparedSourceBatchRequest {
+    pub(crate) fn new(parts: RequestParts) -> Self {
+        Self(parts)
+    }
+
+    fn parts(&self) -> &RequestParts {
+        &self.0
+    }
 }
 
 impl PreparedSourceRequest {
@@ -691,6 +709,23 @@ impl SourceExecutor {
             .await
     }
 
+    /// Execute one already-selected optimized HTTP batch request.
+    ///
+    /// The call reuses the source's fixed origin, method, fixed path, headers,
+    /// authentication, timeout, response-size bound, and semaphore. It makes
+    /// one physical request through a client whose retry policy is `never`;
+    /// every failure returns directly to the caller and cannot fan out here.
+    pub async fn execute_batch(
+        &self,
+        request: &PreparedSourceBatchRequest,
+    ) -> Result<JsonValue, SourceError> {
+        let SourceTransport::Http(http) = &self.transport else {
+            return Err(SourceError::InvalidPlan);
+        };
+        let materialized = http.materialize_batch_request(request.parts())?;
+        http.execute_batch(&materialized).await
+    }
+
     pub async fn execute_with_prior_facts(
         &self,
         selectors: &[ResolvedSourceSelector],
@@ -720,6 +755,19 @@ impl SourceExecutor {
         request: &PreparedSourceRequest,
     ) -> Result<MaterializedSourceRequest, SourceError> {
         self.materialize_request_with_prior_facts(selectors, &BTreeMap::new(), request)
+    }
+
+    /// Materialize an optimized batch without credentials or I/O. This is
+    /// exposed for the source contract harness and follows the exact execution
+    /// path [`Self::execute_batch`] consumes.
+    pub fn materialize_batch_request(
+        &self,
+        request: &PreparedSourceBatchRequest,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
+        let SourceTransport::Http(http) = &self.transport else {
+            return Err(SourceError::InvalidPlan);
+        };
+        http.materialize_batch_request(request.parts())
     }
 
     pub fn materialize_request_with_prior_facts(
@@ -795,6 +843,7 @@ impl HttpTransport {
             tls_trust_profile,
             authentication: configured_authentication,
             request: configured_request,
+            batch,
             ..
         } = source
         else {
@@ -825,6 +874,10 @@ impl HttpTransport {
             base_url,
             &authentication,
         )?;
+        let batch_projection = batch
+            .as_deref()
+            .map(|batch| compile_projection(&batch.projection))
+            .transpose()?;
         let client = build_client(
             timeout,
             tls_trust_profile.as_deref(),
@@ -838,12 +891,33 @@ impl HttpTransport {
             secrets,
             concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
             concurrency_admission_timeout: timeout,
+            batch_projection,
         })
     }
 
     async fn execute(
         &self,
         materialized: &MaterializedSourceRequest,
+    ) -> Result<JsonValue, SourceError> {
+        self.execute_with_projection(materialized, &self.request.projection)
+            .await
+    }
+
+    async fn execute_batch(
+        &self,
+        materialized: &MaterializedSourceRequest,
+    ) -> Result<JsonValue, SourceError> {
+        let projection = self
+            .batch_projection
+            .as_ref()
+            .ok_or(SourceError::InvalidPlan)?;
+        self.execute_with_projection(materialized, projection).await
+    }
+
+    async fn execute_with_projection(
+        &self,
+        materialized: &MaterializedSourceRequest,
+        projection: &ProjectionNode,
     ) -> Result<JsonValue, SourceError> {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
@@ -874,7 +948,7 @@ impl HttpTransport {
             response,
             self.request.maximum_response_bytes,
             self.request.posture,
-            &self.request.projection,
+            projection,
         )
         .await
     }
@@ -892,6 +966,25 @@ impl HttpTransport {
         let url = self
             .request
             .materialize_url(&selectors, prior_facts, request_parts)?;
+        Ok(MaterializedSourceRequest::Http {
+            url,
+            body: request_parts.body.clone(),
+        })
+    }
+
+    fn materialize_batch_request(
+        &self,
+        request_parts: &RequestParts,
+    ) -> Result<MaterializedSourceRequest, SourceError> {
+        if self.batch_projection.is_none()
+            || matches!(self.request.method, HttpMethod::GET) && request_parts.body.is_some()
+            || !matches!(&self.request.path, SourcePath::Fixed(_))
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+        let url =
+            self.request
+                .materialize_url(&BTreeMap::new(), &BTreeMap::new(), request_parts)?;
         Ok(MaterializedSourceRequest::Http {
             url,
             body: request_parts.body.clone(),
@@ -2537,6 +2630,124 @@ mod tests {
         assert_eq!(
             parse_strict_json(br#"{"a":1,"a":2}"#),
             Err(SourceError::InvalidJson)
+        );
+    }
+
+    fn optimized_batch_executor(base_url: &str) -> SourceExecutor {
+        let source: SourceConfig = serde_json::from_value(json!({
+            "transport": "http-json",
+            "baseUrl": base_url,
+            "posture": "field-projected",
+            "authentication": {"kind": "none"},
+            "request": {
+                "method": "POST",
+                "path": "/batch-data",
+                "fixedHeaders": [{"name": "X-Fixed-Version", "value": "1"}],
+                "selectorInputs": [{
+                    "role": "subject",
+                    "alternatives": [{"profile": "record-v1", "fields": ["record_id"]}]
+                }],
+                "prepareScript": "adapters/prepare.rhai",
+                "adapterParameters": {},
+                "adapterParametersSchema": "schemas/parameters.schema.yaml",
+                "preparationLimits": {
+                    "query": "forbidden",
+                    "jsonBody": "required",
+                    "maximumJsonDepth": 8,
+                    "maximumCollectionItems": 16,
+                    "maximumStringBytes": 128,
+                    "maximumNormalizedBytes": 4096
+                },
+                "projection": ["/single"],
+                "redirects": "deny",
+                "timeoutMilliseconds": 1000,
+                "maximumResponseBytes": 4096,
+                "concurrencyLimit": 1
+            },
+            "responseSchema": "schemas/response.schema.yaml",
+            "extractScript": "adapters/extract.rhai",
+            "factSchema": "schemas/facts.schema.yaml",
+            "batch": {
+                "maximumItems": 2,
+                "prepareScript": "adapters/prepare-batch.rhai",
+                "extractScript": "adapters/extract-batch.rhai",
+                "responseSchema": "schemas/batch-response.schema.yaml",
+                "projection": ["/results/*"]
+            }
+        }))
+        .expect("batch source deserializes");
+        let secret_root = tempfile::tempdir().expect("temporary secret root");
+        let secrets = Arc::new(
+            SecretResolver::new([crate::secrets::SecretProvider::File], secret_root.path())
+                .expect("secret resolver builds"),
+        );
+        SourceExecutor::new(&source, secrets).expect("batch source executor builds")
+    }
+
+    fn prepared_batch_request() -> PreparedSourceBatchRequest {
+        PreparedSourceBatchRequest::new(RequestParts {
+            query: Vec::new(),
+            body: Some(json!({"items": [{"slot": 0, "record": "synthetic"}]})),
+        })
+    }
+
+    #[tokio::test]
+    async fn optimized_batch_execution_uses_one_fixed_physical_call() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/batch-data"))
+            .and(wiremock::matchers::header("x-fixed-version", "1"))
+            .and(wiremock::matchers::body_json(json!({
+                "items": [{"slot": 0, "record": "synthetic"}]
+            })))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "single": {"must": "not-use-the-sequential-projection"},
+                "results": [{"slot": 0, "value": "A"}],
+                "unselected": "discarded"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let executor = optimized_batch_executor(&server.uri());
+        assert_eq!(
+            executor
+                .execute_batch(&prepared_batch_request())
+                .await
+                .expect("one optimized call succeeds"),
+            json!({"results": [{"slot": 0, "value": "A"}]})
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request journal is available")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn optimized_batch_failure_is_not_retried_or_fanned_out() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/batch-data"))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let executor = optimized_batch_executor(&server.uri());
+        assert_eq!(
+            executor.execute_batch(&prepared_batch_request()).await,
+            Err(SourceError::Status(SourceStatus::ServerError))
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request journal is available")
+                .len(),
+            1,
+            "the source layer must neither retry nor fan out after a batch call begins"
         );
     }
 

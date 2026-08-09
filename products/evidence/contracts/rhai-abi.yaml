@@ -64,6 +64,51 @@ functions:
       - 'Fetch no-match or ambiguous after a unique search match is a dependency inconsistency, never a signed absence claim. Where the acquisition kind declares more than one fetch stage, it also ends the acquisition: the stages the bundle declares after it are not invoked, so an execution is always a prefix of the declared sequence.'
       - Extraction may map provider-owned cardinality from a count plus one minimized record, or at most two minimally projected records solely to detect ambiguity.
       - Extraction never chooses a candidate and never turns protocol inconsistency into a closed lookup outcome.
+  batch_preparation:
+    signature: prepare_batch(items, adapter_context) -> RequestParts
+    input:
+      items:
+        representation: ordered array of exact maps with keys slot and selectors
+        minimum_items: 1
+        maximum_items: 16
+        slot: A Rust-issued non-negative integer opaque to the script. Slots are unique, bounded, and supplied in increasing order. They correlate results only and carry no subject, requester, grant, or source meaning.
+        selectors: The ordinary minimized authorized selector object for that logical item, with exactly the roles, profiles, and fields declared by the source selectorInputs.
+      adapter_context:
+        exact_keys: [parameters]
+        parameters: A fresh copy of the same closed non-secret parameters supplied to ordinary preparation.
+      prohibited:
+        - request nonce, requester, actor, purpose, audience, authority, entitlement, or grant objects
+        - source origin, method, path, headers, credentials, TLS, proxy, timeout, redirect, pagination, concurrency, or request-count controls
+    output:
+      shape: The same exact RequestParts shape as prepare/2, with keys query and body.
+      validation: Rust applies the source request's ordinary preparationLimits and validates the complete normalized RequestParts before credential resolution.
+    rules:
+      - The script receives the complete item set selected before I/O and cannot split it, add an item, omit an item, or choose a second call.
+      - The complete serialized items plus context input is bounded by the ordinary 1048576-byte preparation input ceiling.
+      - Fixed method, origin, path, headers, authentication, TLS, redirect denial, response limit, timeout, concurrency semaphore, and request-count authority remain core-owned.
+  batch_extraction:
+    signature: extract_batch(projected_source_response, adapter_context) -> BatchLookupResults
+    input:
+      projected_source_response: Parsed JSON from the one completed optimized source call after the ordinary wire-response bound, the batch block's Rust-enforced projection, its responseSchema, and the 65536-byte projected-input bound have all passed.
+      adapter_context:
+        exact_keys: [parameters, slots]
+        parameters: A fresh copy of the same closed non-secret parameters supplied to batch preparation.
+        slots: The exact ordered array of opaque Rust-issued slots supplied to batch preparation. No selectors or prepared request parts are present.
+      prohibited:
+        - selectors, request nonces, or prepared request parts
+        - unprojected response fields
+        - request metadata, credentials, authority context, or a source client
+    output:
+      representation: array of exact maps with keys slot and result
+      minimum_items: 1
+      maximum_items: 16
+      slot: One opaque integer from adapter_context.slots.
+      result: The ordinary closed LookupResult union, exactly the match, no_match, or ambiguous shape defined for extract/2.
+      exact_bijection: Rust requires every input slot exactly once. Array order is not significant because Rust restores input order. A missing, duplicate, extra, negative, non-integer, or out-of-range slot rejects the complete optimized response as source_protocol_error.
+    rules:
+      - A match FactSet is validated independently against the ordinary source factSchema.
+      - no_match and ambiguous remain singular unavailable outcomes for their slots. A malformed member, invalid fact, or protocol inconsistency aborts the outer request.
+      - The script cannot create a retry, fanout, sequential fallback, partial release, or another source call.
   derivation:
     signature: derive(facts, declared_authorized_selectors, evaluation_context) -> ConceptValueSet
     input:
@@ -118,12 +163,14 @@ capabilities:
     - raw string literals, block and if expressions in operand position, and negative array indexing
   syntax_contract: The detailed pinned Rhai 1.25.1 syntax surface and forbidden constructs are defined by the trusted request-adapter API and enforced by startup compilation tests. Startup review also rewrites every index operand through a host-owned guard that rejects a negative index whether it is written literally or computed. The lexical restriction is an enforceable reviewed-language contract; the raw engine capability set remains the isolation boundary.
 lifecycle:
-  compilation: Startup only; each script must expose exactly one public entry point at the required arity before readiness.
+  compilation: Startup only; each ordinary script must expose exactly one public entry point at the required arity before readiness. Each batch block names distinct preparation and extraction scripts exposing exactly prepare_batch/2 and extract_batch/2 respectively.
   state: 'Fresh invocation state and fresh input copies; only the immutable schema-validated search FactSet crosses into a fetch stage, whole or projected onto the allowlist that stage declares, with no cross-request or cross-definition mutable state. One fetch stage never observes another fetch stage: facts flow forward from the search into each member and forward again into derivation, never sideways.'
   identity: Script path and exact bytes are covered by the governed bundle revision.
 failure:
   preparation: adapter_input_error
   extraction: source_protocol_error
+  batch_preparation: adapter_input_error
+  batch_extraction: source_protocol_error
   derivation: derivation_input_error
   unavailable: Host-private, unforgeable, and uncatchable required-value termination.
   observability: All failures map to closed value-free classes; raw Rhai errors and protected input or output material are absent from public problems and diagnostics.
