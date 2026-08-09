@@ -46,7 +46,7 @@ jobs:
       docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -249,7 +249,7 @@ jobs:
           fi
 
       - name: Upload verified promotion input
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-promotion-input-${{ github.run_id }}
           path: promotion/candidate
@@ -267,7 +267,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -275,7 +275,7 @@ jobs:
           submodules: false
 
       - name: Checkout exact tagged product source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           path: product-source
@@ -284,7 +284,7 @@ jobs:
           submodules: false
 
       - name: Download verified promotion input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-promotion-input-${{ github.run_id }}
           path: promotion
@@ -470,7 +470,7 @@ jobs:
           cp "${RUNNER_TEMP}/staged-draft.json" contract/draft-release.json
 
       - name: Upload draft reconciliation contract
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-draft-contract-${{ github.run_id }}
           path: contract
@@ -491,7 +491,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -499,13 +499,13 @@ jobs:
           submodules: false
 
       - name: Download verified candidate and draft contract
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*-input-${{ github.run_id }}
           path: inputs
 
       - name: Download exact draft contract
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-draft-contract-${{ github.run_id }}
           path: contract
@@ -587,7 +587,7 @@ jobs:
           fi
 
       - name: Log in for exact candidate promotion
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -646,7 +646,7 @@ jobs:
       packages: read
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -654,13 +654,13 @@ jobs:
           submodules: false
 
       - name: Download exact candidate and staged draft contract
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*-input-${{ github.run_id }}
           path: inputs
 
       - name: Download exact staged draft contract
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-draft-contract-${{ github.run_id }}
           path: contract
@@ -899,7 +899,7 @@ jobs:
             | jq -s 'sort_by(.name)' > contract/final-assets.json
 
       - name: Upload final reconciliation contract
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-final-contract-${{ github.run_id }}
           path: contract
@@ -921,13 +921,13 @@ jobs:
       contents: write
     steps:
       - name: Download exact candidate manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-promotion-input-${{ github.run_id }}
           path: promotion
 
       - name: Download exact final contract
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-final-contract-${{ github.run_id }}
           path: contract
