@@ -1,7 +1,7 @@
 # Evidence Implementation Approach
 
 Status: Approved Version 1 implementation schedule and Definition of Done
-Date: 2026-08-06
+Date: 2026-08-09
 
 Source-contract and local-smoke details: [SOURCE-TESTING.md](SOURCE-TESTING.md)
 
@@ -148,8 +148,8 @@ must use them:
 | Subject authority | Configured statutory-agency profile permits an authorized requester to use only named selector profiles and approved value origins |
 | Subject selector | Closed identifier or compound field set with deployment-defined names, scalar types, bounds, and fixed source placements |
 | Lookup outcome | Provider-owned `match`, `no_match`, or `ambiguous`; facts exist only on `match` |
-| Source | One fixed HTTP JSON data request using field projection and denied redirects |
-| Source authentication | Secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin |
+| Source | One fixed HTTP JSON data request using field projection and denied redirects, or one reviewed SQL statement over a read-only published SQLite extract |
+| Source authentication | HTTP uses secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local HTTP authoring may use no credential only at a canonical numeric-loopback origin. A SQLite extract has no source credential. |
 | Audit | `registry-platform-audit` JSONL sink on explicitly durable storage, fail-closed |
 | Signing | Flattened JWS JSON with one active ES256/P-256 key, RFC 7638 `kid`, explicit published and revoked sets, and a public JWKS endpoint |
 | Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it |
@@ -188,13 +188,15 @@ The production path is fixed:
    generic `503` instead.
 9. Durably write the access-attempt audit event with at most one scoped keyed
    pseudonym over each complete canonical role and selector bundle.
-10. Run bounded request preparation with only the source-required authorized
-   selectors and closed adapter parameters, then validate the complete
-   `RequestParts` result.
-11. Resolve the configured source credential. When required, acquire or reuse a
-   bounded OAuth 2.0 client-credentials token through the Rust-owned credential
-   provider.
-12. Execute the one Rust-owned evidence-data source request.
+10. Materialize the selected stage's transport input from only the
+    source-required authorized selectors, closed adapter parameters, and
+    allowed prior facts. Validate the complete HTTP `RequestParts` or SQLite
+    parameter map before touching the source.
+11. For HTTP only, resolve the configured source credential. When required,
+    acquire or reuse a bounded OAuth 2.0 client-credentials token through the
+    Rust-owned credential provider. A SQLite stage has no credential step.
+12. Execute the one Rust-owned evidence-data source operation: the fixed HTTP
+    exchange, or the reviewed statement against the bound read-only extract.
 13. Run bounded Rhai extraction and validate the closed `match`, `no_match`, or
     `ambiguous` result. Stop safely on either non-match outcome.
 14. On `match`, run bounded Rhai derivation with only its declared authorized
@@ -210,7 +212,7 @@ The production path is fixed:
     closed response-protection mode and a signing key id only for JWS.
 19. Return those exact pre-audited bytes with their exact media type.
 
-Any failure through request-parts validation in step 10 prevents credential
+Any failure through transport-input validation in step 10 prevents credential
 acquisition and source access. Any failure after source
 access prevents evidence release. Audit failure prevents the applicable refusal
 response, source access, or evidence response.
@@ -227,6 +229,8 @@ evidence.yaml
 adapters/
   source-a-prepare.rhai
   source-a-extract.rhai
+queries/
+  source-b.sql
 derivations/
   requirement-a.rhai
 schemas/
@@ -255,11 +259,15 @@ Bundle checking must validate:
 - closed derivation selector inputs that are exact subsets of the selected
   requirement roles and profiles;
 - fixed purposes, requester classes, audiences, and subject-authority paths;
-- fixed source scheme, host, method, fixed path or tagged selector/prior-fact-
-  bound path template, fixed non-secret headers, fields, credentials, TLS trust-profile
-  name, limits, and redirect policy;
-- fixed source-authentication scheme and, for OAuth, token endpoint, grant,
-  credential placement, scope, bounds, and cache lifetime;
+- for HTTP, fixed scheme, host, method, fixed path or tagged selector/prior-fact-
+  bound path template, fixed non-secret headers, fields, credentials, logical
+  TLS trust-profile name, limits, and redirect policy;
+- for SQLite, one reviewed statement, exact result columns and parameter
+  origins, logical extract profile, publication-age policy, and row, cell,
+  statement-step, elapsed-time, response-size, and concurrency bounds;
+- fixed HTTP source-authentication scheme and, for OAuth, token endpoint,
+  grant, credential placement, scope, bounds, and cache lifetime; extract
+  sources carry no credential or authentication configuration;
 - a closed runtime file with no governed-field override, complete bundle and
   logical trust-profile bindings, and no ambient proxy behavior;
 - fact and concept schemas;
@@ -279,8 +287,9 @@ SD-JWT VC, discovery, audit, and strict verification policy.
 
 ## Source and credential boundary
 
-Version one implements one generic HTTP JSON source executor. Product-specific
-source crates, clients, and domain types are out of scope. A source definition
+Version one implements two coequal generic source executors: fixed HTTP JSON
+and one reviewed SQL statement over a read-only SQLite extract. Product-specific
+source crates, clients, and domain types are out of scope. An HTTP source
 declares a fixed request and selects one generic authentication profile:
 
 - no credential only under `assuranceProfile: local`, at a canonical numeric-
@@ -334,16 +343,33 @@ requirement derivation may compare minimized facts from one unique
 authoritative record with its separately authorized selectors using a
 deterministic, versioned rule.
 
-A source that cannot expose this bounded lookup is not directly compatible with
-Version 1. It requires an external governed integration service. Do not add a
-bulk read, local index, local matching database, probabilistic matcher, or
-candidate-ranking script to Evidence as a workaround.
+A SQLite source instead names one logical extract profile and one bundle-fixed
+statement. The runtime binds the profile to a regular, read-only, checkpointed
+file, opens one connection per concurrency permit with `mode=ro` and
+`immutable=1`, validates publication metadata, and prepares the statement under
+the deny-by-default authorizer before serving. Rust binds selectors, optional
+prepared scalars, and the reserved evaluation instant. This phase is complete
+only when SQL text, extract paths, and source values never enter diagnostics,
+logs, or audit.
+
+This phase is complete only when the statement executor carries one absolute
+elapsed-time deadline across concurrency admission, worker dispatch, and
+statement execution. Engine limits must be derived from the configured cell and
+response bounds so SQLite cannot materialize a value far larger than the adopter
+declared, and concurrent worst-case allocations must stay inside the process
+resource envelope.
+
+A source that cannot expose this bounded lookup directly, or through a
+publisher-produced extract, is not compatible with Version 1. It requires an
+external governed integration service. Do not add a bulk read, local matching
+database, probabilistic matcher, or candidate-ranking script to Evidence as a
+workaround.
 
 ## Source-shape contract suite
 
-The suite is four minimal local mock profiles. They exercise different wire
-contracts while using the same source executor, evaluator, output gate, signer,
-and audit path.
+The suite is five minimal local profiles. Four use deterministic HTTP mocks and
+one builds a sanitized SQLite extract and executes the reviewed statement. They
+use the same evaluator, output gate, signer, and audit path after acquisition.
 
 | Profile | Boundary shape | What it proves |
 |---|---|---|
@@ -351,6 +377,7 @@ and audit path.
 | `dhis2-tracker` | `GET` query, selected fields, pager, collection, nested attribute array, Basic auth | REST query encoding, compound selectors, cardinality, pagination refusal, and code-based extraction |
 | `opencrvs-event-search` | OAuth client token, bounded JSON `POST`, nested event index, and country-configured declaration | Credential bootstrap, exact tracking-ID lookup, nested extraction, and selector-aware relational derivation |
 | `search-chain` | Fixed JSON `POST` search, then a path-bound dereference member and a body-filtered search member in declared order | Ordered multi-stage acquisition, per-member fact-input projection through both the path and the body channel, a provider count read as a value rather than a cardinality guard, and a silently widened query reaching ambiguity |
+| `sqlite-extract` | Reviewed statement over a sanitized published extract | Authorizer refusal, exact parameter and column agreement, publication metadata and age, strict result typing, row/cell/step/time/response bounds, one runtime clock, and final-fact minimization |
 
 These are compatibility-shaped mocks, not whole-product emulators or claims of
 certified DHIS2 or OpenCRVS support. Fixtures are small, invented, and
@@ -358,15 +385,17 @@ hand-authored from public documentation. No captured live response is checked
 in. A source-specific behavior is added to the mock only when Evidence relies
 on it.
 
-The mock profile names do not become runtime identifiers. Production code sees
-only generic HTTP methods, URLs, query and JSON-body templates, authentication
-profiles, bounds, and parsed JSON. Basic, Bearer, and OAuth client-credentials
-support must each have a generic contract and tests independent of either
-named product.
+The profile names do not become runtime identifiers. Production code sees only
+generic HTTP request material or a generic reviewed statement and bound extract,
+plus transport-neutral bounded JSON. Basic, Bearer, and OAuth
+client-credentials support must each have a generic contract and tests
+independent of either named product.
 
 The suite must prove at least:
 
-- exact request method, path, query, body, fields, headers, and authentication;
+- exact HTTP method, path, query, body, fields, headers, and authentication;
+- exact SQLite statement, parameter origins and values, declared result
+  columns, publication metadata, and resource bounds;
 - identifier-only, no-identifier compound, additional-disambiguator, and
   multi-role selector profiles with deployment-defined field names;
 - missing, extra, unknown, mistyped, oversized, or unauthorized selector input
@@ -382,8 +411,11 @@ The suite must prove at least:
   absent from logs, audit, errors, snapshots, and assertion messages;
 - `401`, `403`, `429`, `5xx`, timeout, redirect, invalid JSON, wrong media type,
   oversized response, missing fact, zero matches, and multiple matches;
-- switching among all three profiles requires bundle and Rhai changes only,
-  with no domain branch in Rust.
+- every supported stage order, including HTTP to SQLite and SQLite to HTTP,
+  has an executable offline fixture that runs each reviewed statement rather
+  than replaying a recorded statement result;
+- switching among source profiles and transports requires bundle, runtime
+  binding, fixture, and Rhai changes only, with no domain branch in Rust.
 
 The OpenCRVS shape may support an adult-status fixture because a birth record
 can supply a date of birth. The DHIS2 shape should exercise a controlled code
@@ -508,7 +540,7 @@ Rhai only.
 Each case has a complete test-only bundle with YAML, Rhai extraction, Rhai
 derivation, codelists where needed, positive, negative, boundary,
 missing-record, missing-fact, source-failure, and anti-reconstruction fixtures.
-Each must pass offline evaluation and the production HTTP pipeline, including
+Each must pass offline evaluation and the production service pipeline, including
 authentication, authorization, source execution, access audit, output gating,
 evidence construction, signing, release audit, and verification.
 
@@ -534,8 +566,9 @@ phase must preserve all acceptance definitions introduced in Phase 0.
   authority context, authorization inputs, audit event schemas, problem codes,
   signing profile, content negotiation, response-format authorization, and
   verifier rules.
-- Create the four acceptance-definition bundles and the three source-shape
-  mock contracts before production architecture is written.
+- Create the four acceptance-definition bundles, the HTTP source-shape mocks,
+  and the sanitized SQLite extract contract before production architecture is
+  written.
 - Create identifier-only, no-identifier compound, additional-disambiguator,
   and multi-role selector fixtures before production architecture is written.
 - Create conformance fixtures for every Supported Value form and every
@@ -578,6 +611,15 @@ fixtures, and production Rust contains no case-specific branch or type.
   prior-fact-bound path
   templates, private-CA trust profiles, and exact client-side response
   projection.
+- Implement the reviewed-statement executor over a read-only mounted SQLite
+  extract, including exact statement/column/parameter agreement, a
+  deny-by-default prepare-time authorizer, publication metadata and maximum
+  age, strict value typing, a runtime-bound evaluation instant, and row, cell,
+  statement-step, elapsed-time, response-size, and concurrency bounds.
+- Use one absolute SQLite deadline across concurrency admission, worker
+  dispatch, and execution. Derive SQLite engine allocation limits from the
+  configured result bounds and prove the configured maximum concurrency cannot
+  turn bounded requests into an unbounded aggregate allocation.
 - Implement the closed `single` and `search-then-fetch` acquisitions. The
   latter fixes two source identifiers, validates the search FactSet before the
   fetch, audits each call, and exposes no third-call or response-led routing
@@ -590,7 +632,11 @@ fixtures, and production Rust contains no case-specific branch or type.
 - Implement strict provider-text `parse_integer` without enabling implicit
   query-value conversion or a provider-resolution DSL.
 - Run flat REST, paged nested REST, and Event Search-shaped local mocks through
-  the same executor.
+  the HTTP executor, and a sanitized published extract through the statement
+  executor.
+- Exercise every supported two-stage transport order in deterministic tests:
+  HTTP to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite. Every
+  SQLite stage executes its reviewed statement in the fixture harness.
 - Cover all four acceptance definitions across the source-shape matrix and run
   at least one definition against two different shapes using only YAML and
   Rhai changes.
@@ -602,7 +648,8 @@ fixtures, and production Rust contains no case-specific branch or type.
   and generated public contracts.
 - Prove ambient proxy variables cannot redirect either evidence-data or OAuth
   requests, and prove unbound, malformed, mutable, or insecure private-CA files
-  prevent readiness.
+  prevent readiness. Prove missing, unbound, writable, uncheckpointed, or
+  metadata-invalid extracts prevent serving before any request reaches them.
 
 Exit gate: all source contract tests pass, no product-specific source code
 exists, and no source value, raw selector value, credential, token, or response
@@ -668,7 +715,8 @@ operational endpoints expose no protected data.
   output is explicit, governed, self-identifying, and never a fallback from
   signed failure.
 - Attempt the ignored, read-only DHIS2 and OpenCRVS public-demo smoke tests only
-  after deterministic mocks pass, following `SOURCE-TESTING.md`.
+  after deterministic HTTP mocks and local extract tests pass, following
+  `SOURCE-TESTING.md`.
 - Freeze Version 1 schemas only after all four initial assertion cases and all
   negative security tests pass unchanged through the complete pipeline.
 
@@ -735,7 +783,7 @@ follow-up issue.
 | Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
 | Values and validation | Every Version 1 Supported Value form declared in `CONCEPT.md` passes positive, negative, boundary, size, cardinality, Evidence construction, JWS serialization, and verification tests. The four initial assertion cases exercise boolean, controlled-code, time-bucket, multiple-concept, and multi-subject behavior through the full service. |
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
-| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Authorization header, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
+| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, one durable pre-access audit, bounded transport input and output, and no retry. HTTP fixes its origin, path, headers, reviewed query/body rendering, response projection, credential, TLS, and redirect policy. SQLite fixes its reviewed statement, parameter origins, result columns, extract profile, publication-age policy, and row, cell, statement-step, elapsed-time, response-size, and concurrency bounds. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. All three postures pass through both transports without overclaiming: `source-derived` means the statement or HTTP source returned the final declared concept fact. Credential-free HTTP is a separate local-only exception pinned to an exact numeric-loopback origin; SQLite has no credential by construction. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
 | Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
 | Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
@@ -743,7 +791,7 @@ follow-up issue.
 | Multiple definitions | All four definitions run concurrently in one process and one trust domain without script state, limits, identifiers, subjects, source responses, audit context, or results crossing definition boundaries. Unsafe combined disclosure and mutually distrustful issuer configurations are rejected. |
 | Verification evidence | Focused invariant tests, all package tests, contract drift checks, dependency policy, formatting, package and workspace check, Clippy with warnings denied, and workspace tests pass. Security-sensitive behavior has a named threat, enforcement point, and negative test. |
 | Local compatibility smoke | After deterministic mocks pass, the read-only DHIS2 and OpenCRVS smoke tests are attempted when local credentials and approved demo selectors are available. Unavailability may be recorded as inconclusive; authenticated schema drift or excess disclosure is investigated and cannot be ignored. No credential or live-data artifact enters the repository or test output. |
-| Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, and complete DHIS2/OpenCRVS-shaped projects without editing Rust. An operator can independently bind the immutable governed bundle to listener, secret, audit, private-CA, and Transit proxy paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, planned and emergency signing rotation, audit epochs, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
+| Operability | An adopter can author, test, deploy, and maintain a source integration from the configuration, adapter API, fixture contract, complete DHIS2/OpenCRVS-shaped projects, and the complete SQLite extract project without editing Rust. The documented extract handoff covers publication metadata, canonical time representation where lexical comparison is used, checkpointing, least-data conversion, immutable mounting, new-path replacement, restart, and fixture/startup verification. An operator can independently bind the immutable governed bundle to listener, secret, audit, private-CA, extract, and Transit proxy paths for each environment without overriding evidence semantics, configure authentication, authority mappings, source bindings, planned and emergency signing rotation, audit epochs, rate limits, and verifier trust using documented supported paths, and let an authenticated consumer discover the exact revision-bound request shapes it may invoke. Static onboarding still owns token acquisition, human and legal descriptions, endpoint trust, and verifier policy. |
 | Production build | An editable project remains local until its author supplies exact governance metadata, stable concept identifiers, and one synthetic fixture per question. `evidencectl build` consumes one explicit closed production target, follows no symlink or outside-project reference, creates no secret or runtime residue, delegates bundle validation and every fixture to the real `evidence` binary, atomically publishes only a complete candidate, and reproduces identical bundle bytes and revision from identical inputs. It creates no keys, callers, approvals, deployments, or network side effects. |
 | Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor`, `evidencectl fixtures run`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit events pass `evidence verify-audit`. |
 | Optional Mint pairing | External HTTPS OIDC builds without Mint. When Mint is selected, `mint check`, the paired read-only doctor check, registered-client token acquisition, and Evidence acceptance pass. Issuer, JWKS URI, audience, algorithm, token type, and all configured claim-name mismatches fail generically without keys, tokens, credentials, selectors, or source values in output. Mint remains a single process with a memory-only replay cache. |
@@ -762,8 +810,10 @@ At minimum, pin these acceptance and negative cases:
 3. Caller-supplied identifier or compound selector value never creates
    authority.
 4. Access-audit failure prevents the source request.
-5. Source request method, URL, fields, credentials, size, timeout, and redirect
-   behavior remain fixed by trusted configuration.
+5. Each source operation remains fixed by trusted configuration: HTTP method,
+   URL, fields, credentials, size, timeout, and redirect behavior; or SQLite
+   statement, parameter origins, result columns, extract profile, and resource
+   bounds.
 6. Rhai cannot access network, filesystem, environment, credentials, clock,
    logging, audit, or signing material.
 7. Extra, missing, mistyped, or oversized derived values are rejected.
@@ -780,10 +830,12 @@ At minimum, pin these acceptance and negative cases:
 15. Unsafe combinations, including threshold ladders and overlapping
     categories, are rejected at bundle review or validation.
 16. Flat REST, DHIS2 Tracker-style REST, and OpenCRVS Version 2 Event
-    Search-style JSON mocks all use the same Rust source executor.
+    Search-style JSON mocks all use the generic HTTP executor, while the
+    sanitized extract uses the generic statement executor and joins the same
+    transport-neutral evaluation path afterward.
 17. Zero, one, and multiple results map consistently to `no_match`, `match`,
-    and `ambiguous` across the three source shapes; facts exist only on
-    `match`.
+    and `ambiguous` across all HTTP shapes and the SQLite extract; facts exist
+    only on `match`.
 18. Event-index envelope errors and incomplete declaration data fail closed.
 19. OAuth token requests and responses are absent from all diagnostics, and
     no placement can put client credentials in the token URL.
@@ -804,8 +856,8 @@ At minimum, pin these acceptance and negative cases:
     signed only after unique child resolution and a complete valid parent set.
 25. All four definitions run together and under concurrency without state,
     subject, source, audit, limit, or result leakage.
-26. At least one acceptance definition runs against two different mock source
-    shapes with only bundle and Rhai changes.
+26. At least one acceptance definition runs against both source transports
+    with only bundle, runtime binding, fixture, and Rhai changes.
 27. A repository boundary check rejects DHIS2 or OpenCRVS names and behavior in
     production Rust, Cargo dependencies and features, public configuration
     schemas, routes, and CLI options.
@@ -854,9 +906,10 @@ At minimum, pin these acceptance and negative cases:
 43. Failed selector attempts are bounded per principal and authority profile
     without using raw selector values as metric or rate-limit labels.
 44. All four initial assertion cases pass their assigned selector shapes and
-    lookup outcomes through offline fixtures, local HTTP mocks, the real router,
-    both audit gates, signed JWS, explicitly authorized unsigned output, and
-    strict verification on one revision.
+    lookup outcomes through offline fixtures, local HTTP mocks or a local
+    sanitized extract, the real router, both audit gates, signed JWS,
+    explicitly authorized unsigned output, and strict verification on one
+    revision.
 45. Governed bundle and runtime configuration have separate closed schemas,
     independent startup digests, read-only lifetime enforcement, and negative
     tests proving runtime fields cannot override sources, authorization,
@@ -958,6 +1011,35 @@ At minimum, pin these acceptance and negative cases:
     `evidencectl doctor`. The declared acquisition ceiling bounds the source
     exchanges and the transitions between stages as a dependency failure under
     its own safe category, without ever cancelling a durable audit append.
+67. A statement artifact containing multiple statements, a write, DDL,
+    `ATTACH`, `DETACH`, a pragma, extension loading, transaction control, an
+    ambient-time function, or an unknown authorizer action is refused before
+    serving. The same check runs against the real extract schema at startup.
+68. Missing, unbound, writable, symlinked, uncheckpointed, or metadata-invalid
+    extract files fail before serving. Staleness is checked before every row,
+    and the safe diagnostic names only the governed extract profile, never a
+    publisher-controlled metadata value or filesystem path.
+69. SQLite parameter names and origins, declared result columns and types, and
+    prepared values agree exactly. Statement text, bound values, result values,
+    extract paths, SQLite message text, and extract metadata values are absent
+    from errors, logs, audit, snapshots, and failed-test output.
+70. One absolute deadline covers SQLite concurrency admission, worker dispatch,
+    and execution. Queueing never grants a fresh timeout, and timeout and step
+    exhaustion map to their documented safe categories.
+71. Row, cell, engine-value, statement-step, response-size, and concurrency
+    limits fail closed. Engine allocation limits are derived from the declared
+    result bounds, and a concurrency stress test proves worst-case statements
+    cannot multiply individually bounded values into an unbounded process
+    allocation.
+72. A statement comparing RFC 3339 text lexically against `evidence_now` either
+    requires the exact whole-second UTC storage form `YYYY-MM-DDTHH:MM:SSZ` or
+    normalizes both operands before comparison. Nonzero fractional-second
+    start and end boundary fixtures prove chronological behavior.
+73. Every supported two-stage transport order has an executable fixture: HTTP
+    to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite. Every SQLite
+    stage executes its reviewed statement, and production or evidence-grade
+    build and serving reject a requirement whose complete acquisition cannot
+    be exercised offline.
 
 ## Verification gates
 

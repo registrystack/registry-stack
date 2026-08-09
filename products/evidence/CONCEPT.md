@@ -1,7 +1,7 @@
 # Evidence: Minimum-Disclosure Assertion Service
 
 Status: Approved Version 1 product contract
-Date: 2026-08-06
+Date: 2026-08-09
 Audience: Product, architecture, privacy, interoperability, and implementation stakeholders
 
 Companion implementation note: [IMPLEMENTATION.md](IMPLEMENTATION.md)
@@ -769,6 +769,11 @@ whatever a later defect exposes. A join behaves the same way: the narrow answer
 computed inside the extract is smaller than the two wide inputs that would
 otherwise have to cross.
 
+Aggregation and acquisition posture are separate judgements. A statement that
+returns the final declared concept fact is `source-derived`. A statement that
+returns a count which Rhai later reduces to a boolean is `field-projected`: it
+is strongly minimized, but the final fact was still derived in the evaluator.
+
 #### The authorizer is a safety boundary, not a disclosure declaration
 
 Rust installs an authorizer that denies unconditionally: every write action,
@@ -796,6 +801,14 @@ in the morning and fail at midnight with nothing having changed. This is the
 rule that already keeps ambient time out of Rhai, applied to the transport that
 would otherwise reintroduce it.
 
+The reserved value is canonical whole-second UTC text. Direct lexical
+comparison is correct only when the stored column is contractually restricted
+to that exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC 3339 text permits
+fractional seconds, and a fractional value in the same second does not sort
+chronologically against the shorter whole-second form. A publisher that keeps
+fractional precision must normalize both operands in the reviewed statement,
+and boundary fixtures must include nonzero fractional start and end instants.
+
 #### An extract is a published snapshot
 
 An extract is a snapshot its publisher released, not a live authoritative read.
@@ -807,8 +820,12 @@ Every extract carries a reserved metadata table declaring `publishedAt`,
 table is required rather than inferred, because a filesystem modification time
 is an artifact of the filesystem: a copy, a restore, a container image build,
 or a backup agent rewrites it, and none of those events is a statement by the
-publisher about when the data was true. `extractId` names the snapshot in audit
-and operator diagnostics without describing its contents.
+publisher about when the data was true. All three values are source data. The
+Version 1 conformance rule is that they may reach the bounded extraction input
+when selected, but must never reach audit, logs, errors, or operator
+diagnostics. Those channels identify the bundle-governed `extractProfile`,
+which is sufficient to locate the deployment binding without copying a
+publisher-controlled value across the diagnostic boundary.
 
 A bundle declares `maximumExtractAgeSeconds` for each extract source. The
 runtime compares it against `publishedAt` and refuses before any row is read,

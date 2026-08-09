@@ -23,7 +23,8 @@ evidence_data_request:
     single: Exactly one per evaluation.
     search-then-fetch: One search, followed only after a unique schema-valid match by one fetch; the ceiling is exactly two.
     search-then-fetch-set: One search, followed only after a unique schema-valid match by each declared fetch member in declared order; the ceiling is one plus the declared member count, at most five. The count is fixed by the bundle before any statement is executed, and no result can raise it, lower it, or reorder it.
-    transport_mixing: An acquisition kind places no constraint on which transport a stage uses, so a requirement may mix a statement source and an HTTP source across its stages. A statement source carries no path and therefore no path binding, so a statement fetch stage receives its prior facts only through its preparation script, under the same projection its acquisition kind applies to every other transport. The offline reference fixture harness proves less than the runtime serves. It executes the statement of the stage its acquisition reaches first and replays every later stage from the case, so a requirement whose later stage is a statement source has no reference fixture form and is refused. The refusal belongs to the harness alone. It never reaches configuration validation, bundle loading, or the runtime, so such a deployment loads and is served.
+    transport_mixing: An acquisition kind places no constraint on which transport a stage uses, so a requirement may mix a statement source and an HTTP source across its stages. A statement source carries no path and therefore no path binding, so a statement fetch stage receives its prior facts only through its preparation script, under the same projection its acquisition kind applies to every other transport.
+    fixture_status: The current offline evaluator executes a SQLite statement only when it is the initial source and refuses a later SQLite stage. It therefore cannot prove every transport order, and such a project cannot pass the supported production/evidence-grade build journey even though the serving runtime accepts the configuration. Version 1 completion requires executable HTTP to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite fixtures, plus a serving/build gate that prevents an unexercised acquisition from being presented as deployable assurance. Replaying a recorded statement result is never evidence for reviewed SQL.
     common_order: Successful authorization and request rate limiting occur once. Each actual source call requires its own durable access audit, and complete parameter materialization and extract-age validation, before any row is read.
   retry: There is no transport to retry. One execution prepares the statement once, binds once, and steps once to exhaustion, and never creates an evidence-data request the declared acquisition did not already fix.
   acquisition_budget: A multi-call acquisition kind may declare one whole-acquisition ceiling in milliseconds, in the same [1, 30000] range one request carries. It bounds the source exchanges and the transitions between stages and never crosses a durable audit append. Exhaustion is a dependency failure naming the last stage actually executed, distinct from a per-source timeout.
@@ -57,7 +58,8 @@ evidence_data_request:
   reserved_parameter:
     name: evidence_now
     rule: The runtime has one clock. The whole SQLite clock function family is denied by the authorizer, so a statement cannot read a clock of its own, and the runtime binds its evaluation instant to the reserved name instead.
-    value: The same evaluation instant the acquisition carries, as fixed-width RFC 3339 UTC text in whole seconds with a Z offset, so a statement comparing it against stored text orders lexically the way it orders in time. It is the rendering the assertion reports, character for character, so a statement compared against text stored to the second is not defeated by a longer form that sorts after every value of that second.
+    value: The same evaluation instant the acquisition carries, as fixed-width RFC 3339 UTC text in whole seconds with a Z offset. It is the rendering the assertion reports, character for character.
+    text_comparison_rule: A direct lexical comparison is valid only when the extract schema and publication process restrict the stored operand to the exact whole-second UTC form YYYY-MM-DDTHH:MM:SSZ. General RFC 3339 permits fractional seconds, and a fractional value in the same second does not sort chronologically against the shorter whole-second form. A publisher retaining fractional precision requires the reviewed statement to normalize both operands and fixtures to pin nonzero fractional start and end boundaries.
     bundle_authority: A bundle that declares the reserved name as a parameter binding is refused. The name is available to the statement and to no one else.
   adapter_parameters:
     count: {range: [0, 64]}
@@ -80,11 +82,14 @@ evidence_data_request:
     required: true
     range: [1, 1000000]
     applied: Inside the engine, by the progress handler, between virtual machine instructions.
-  timeout_milliseconds: {required: true, range: [1, 30000], applies_to: [source-concurrency-admission, statement-execution]}
+  timeout_milliseconds: {required: true, range: [1, 30000], current_runtime: Applied independently to source-concurrency admission and statement execution. Statement execution receives a fresh window and blocking-worker queue time is not part of either window, so this is not yet one end-to-end source deadline., version_1_exit_gate: Carry one absolute deadline through admission, worker dispatch, and execution without restarting it.}
   maximum_response_bytes:
     required: true
     upper_bound: 1048576
     applied: To the assembled result tree, before projection.
+  engine_allocation_limit:
+    capacity_note: maximumCellBytes, maximumResponseBytes, and concurrencyLimit are one process-capacity decision, not independent validation knobs.
+    version_1_exit_gate: Derive value-length and page/cache backstops from maximumCellBytes and maximumResponseBytes, and use a connection-pool concurrency stress test to account for aggregate worst-case allocation.
   concurrency_limit: {required: true, range: [1, 256]}
   connection_pool: One SQLite connection per concurrency permit, all opened at startup. A permit carries a connection, so no admitted request waits on a connection it was not admitted for, and a connection that cannot be opened is a startup failure rather than a request-time one.
   cancellation:
@@ -122,7 +127,7 @@ extract:
     applied: Against the evaluation instant this evaluation carries, before a single row is read.
     inclusive: An extract published exactly the bound before the evaluation instant is still current.
     future_dated: An extract published after the evaluation instant is not old, so it passes. Whether a publisher may date an extract forward is a question for the publisher.
-    failure: A stale extract is a dependency failure naming the publisher's own extract identifier, so an adopter is told which extract to republish.
+    failure: A stale extract is a dependency failure naming only the governed extractProfile. The publisher-controlled extract identifier is source data and reaches no error, log, audit record, or operator diagnostic.
 statement_authorizer:
   owner: Core runtime.
   stage: While SQLite prepares the statement, so every action the compiled statement would take is decided before a row moves. This is a safety boundary that refuses whole categories of SQL, not a per-table or per-column declaration of what may be read; review of the statement is the disclosure control.
@@ -142,7 +147,11 @@ projection:
   bounds: {paths: [1, 64], path_length_characters: [2, 256], unique: true, overlapping: refused}
   grammar_and_semantics: source-contract.yaml, unchanged. The extended JSON Pointer grammar, its prohibitions, and its startup conflict rules are transport neutral.
   select_list_rule: The statement's select list is the real projection. Rust maps the bounded result set into a tree of the declared column names, and nothing the statement did not select exists to be removed. The declared projection therefore restates the shape rather than narrowing a wire response, and it stays required so that one rule reads the same for every transport.
-  posture_rule: The declared acquisition posture describes what the statement returned. A statement returning one aggregate is source-derived on the same terms as an API returning it, because the narrow answer is what crossed the process boundary.
+  posture_rule: >-
+    The declared acquisition posture describes what the statement returned. A
+    statement is source-derived only when it returns the final declared concept
+    fact. A count that Rhai later reduces to a boolean is field-projected: it is
+    strongly minimized, but the final fact was derived in the evaluator.
 response_shape:
   owner: Core runtime.
   rules: source-contract.yaml, unchanged. The same required responseSchema per source, in the same closed JSON Schema subset, validated at the same point, under the same required-member, role-relaxation, nullable-form, and division-of-labour rules.
@@ -155,8 +164,8 @@ acquisition_postures:
   rules: source-contract.yaml, unchanged. Same three postures, same claims, and the same chained rule that a multi-stage requirement carries the weakest posture it may call.
 failure_classes:
   statement: [multiple-statements, invalid-sql, unknown-table, unknown-column, column-mismatch, undeclared-parameter, unused-binding, missing-parameter, selector-parameter-overridden, authorizer-refused]
-  budget: [step-budget-exceeded, time-budget-exceeded, too-many-rows, cell-too-large]
-  result: [value-type-mismatch, execution-failed, oversized-response]
+  budget: [step-budget-exceeded, time-budget-exceeded]
+  result: [too-many-rows, cell-too-large, value-type-mismatch, execution-failed, oversized-response]
   extract: [extract-unavailable, no-metadata-table, malformed-metadata, extract-too-old]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
   response_shape: [missing-required-member, unexpected-member, wrong-member-type, out-of-bounds-value, oversized-array, duplicate-array-member]
@@ -164,7 +173,7 @@ failure_classes:
   timing_rule: Every statement and extract class above is settled at startup except the budget and result classes, the extract age, and a statement fault that only a bound value can produce. A deployment whose statement disagrees with its extract does not serve.
 diagnostics:
   audience: Adopter-facing bundle and extract faults only. Public request output stays inside problem-contract.yaml and never gains a statement-specific shape.
-  form: One closed cause drawn from a fixed vocabulary, beside the artifact it came from. A statement fault names the bundle-relative statement artifact; an extract fault names the extract file name before its metadata has been read, and the publisher's own extract identifier afterwards.
+  conformance_requirement: One closed cause drawn from a fixed vocabulary, beside the artifact it came from. A statement fault names the bundle-relative statement artifact. An extract fault must name only the governed extractProfile, never the filesystem path or publisher-controlled metadata.
   location: A line and a column, only for a genuine syntax fault, and only where SQLite reported a character position. An unresolved name is a fact about the extract rather than about a character, and a refused statement or an exceeded bound has no character behind it at all, so none of them carries a position. A column counts characters rather than bytes.
   discarded: SQLite's own message text is classified and then thrown away, because it quotes schema identifiers and stored values. Its fixed message prefix is the only thing read from it, to tell an unknown table, an unknown column, and a refused function apart from a syntax error.
   never_disclosed: Statement text, a bound parameter value, a result value, the extract path, and any SQLite message text appear in no diagnostic, no log, no snapshot, and no audit record. Debug output for a materialized statement request redacts the statement and reports only how many parameters it carries.
@@ -177,7 +186,9 @@ neutrality:
   production_contract: Generic SQL over a generic SQLite file, generic publication metadata, extended JSON Pointer projection, and Rhai preparation and extraction only. No table name, column name, or schema shape is known to the runtime beyond the reserved evidence_extract metadata table.
   named_compatibility_profiles: Test fixtures and reference documentation only.
 fixtures:
-  transport_conformance: The executable tests named by sec-statement-source-bounded in security-test-traceability.yaml. Version 1 ships no statement source-shape fixture, because a fixture would carry a binary extract file rather than a recorded response, and the tests build their extracts in the process that reads them.
+  transport_conformance: The executable tests named by sec-statement-source-bounded in security-test-traceability.yaml, plus the complete project fixture that builds a sanitized extract from reviewed seed SQL and executes the statement in the process that reads it.
+  current_seed_trust: Seed SQL is trusted executable project input. Run only reviewed seed SQL in an isolated local environment; fixture evaluation is not an untrusted-code boundary.
+  version_1_exit_gate: Before seed-bearing fixtures can be treated as safely importable CI or deployable-assurance inputs, confine seed effects to the new temporary extract and apply explicit CPU, disk, and elapsed-time bounds.
   postures: ../fixtures/conformance/acquisition-postures.yaml states the posture claims and negatives; its recorded cases execute over the HTTP transport, and the posture rules they fix are transport neutral.
   shapes: ../fixtures/source-shapes/ holds compatibility shapes for the HTTP transport only.
   reference: ../reference/request-adapter/deployment-projects/CONFIG.md for the deployment-shaped statement configuration and the extract a publisher builds.

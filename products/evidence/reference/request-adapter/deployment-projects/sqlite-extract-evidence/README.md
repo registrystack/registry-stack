@@ -67,14 +67,23 @@ is a fact about their practice; whether they hold one is the question that was
 asked, so the derivation reduces the aggregate to a boolean before the output
 gate ever sees it.
 
+That makes this source `field-projected`, not `source-derived`. The statement
+returns only the narrow fact needed for derivation, but the final declared
+concept fact is the boolean produced afterward. A `source-derived` version of
+this project would return the boolean directly from SQL.
+
 ## One clock
 
 The statement compares validity windows against `:evidence_now`, which Rust
-binds as the runtime's own evaluation instant in fixed-width RFC 3339 UTC. The
-extract stores its bounds in the same form, so the comparisons order lexically
-the way they order in time. SQLite's own date and time functions are denied by
-name, so a statement cannot read a second clock and a fixture run pinned to an
-instant reproduces exactly, on every host and on every day.
+binds as the runtime's own evaluation instant in fixed-width, whole-second RFC
+3339 UTC. This direct text comparison is valid only because the publisher must
+store every compared bound in the exact `YYYY-MM-DDTHH:MM:SSZ` form. General
+RFC 3339 values with fractional seconds do not sort chronologically against the
+shorter whole-second form. A publisher retaining fractional precision must
+normalize both operands in the reviewed statement and add nonzero fractional
+start and end boundary cases. SQLite's own date and time functions are denied
+by name, so a statement cannot read a second clock and a fixture run pinned to
+an instant reproduces exactly, on every host and on every day.
 
 The window is half-open: current from the instant a licence starts until the
 instant it ends. `bundle/fixtures/professional-licence-cases.yaml` pins a case
@@ -104,6 +113,9 @@ The bound file must be a regular, non-symlink, read-only file. That is a
 correctness requirement rather than hygiene: the runtime opens it with SQLite's
 `immutable=1`, and a file that anything can still write makes that promise
 false. Publish a new extract as a new file, mount it read-only, and restart.
+Follow the complete publication checklist in
+[Building an extract](../CONFIG.md#building-an-extract); `evidencectl` validates
+projects but does not create, convert, approve, or publish extract files.
 
 ## Secrets
 

@@ -1,6 +1,6 @@
 # Evidence Version 1 project fixture contract
 
-Status: Implemented Version 1 executable fixture contract
+Status: Partially implemented Version 1 executable fixture contract
 
 Project fixtures are sanitized inputs to the production bundle loader, script
 runtime, request materializer, source projection, output gate, evidence
@@ -81,6 +81,12 @@ binds that file in place of the operator's path before the project's own
 runtime document loads. It carries the reserved `evidence_extract` metadata row
 that `CONFIG.md` requires of any extract, because the fixture builds a real one
 and startup refuses a file without it.
+
+The seed is trusted executable project input. Run only reviewed seed SQL in an
+isolated local environment; fixture evaluation is not an untrusted-code
+boundary. Before seed-bearing fixtures can count as safely importable CI or
+deployable-assurance inputs, the harness must confine seed effects to the new
+temporary extract and apply explicit CPU, disk, and elapsed-time bounds.
 
 ```yaml
 common:
@@ -194,15 +200,16 @@ reads it, and are refused for a source that answers over a network. The
 remaining forms describe the bundle or the authorized request and read the same
 on either transport.
 
-A fixture executes the statement of the source its acquisition reaches first,
-against the single extract `common.extract` seeds, and replays every later stage
-from the case. So a requirement whose later stage reads from an extract has no
-reference fixture form, and is refused before its cases are read rather than
-passing on a recorded response its reviewed SQL never produced. The runtime
-places no such limit: an acquisition kind constrains no stage's transport, and a
-deployment mixing them is served normally. What the harness cannot yet do is
-prove that offline, because a single case would have to state a recorded
-response and an extract at the same time.
+A fixture currently executes a SQLite statement only when that source is the
+initial acquisition stage. The evaluator refuses a later SQLite stage and
+cannot represent an initial SQLite search together with later recorded HTTP
+responses. The serving transport model permits those orders, but the supported
+production/evidence-grade build journey cannot prove them. Treat such a project
+as local authoring only and do not bypass the fixture gate to present it as
+deployable assurance. Version 1 completion requires the harness to execute every
+SQLite stage across HTTP to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to
+SQLite, with a build/serving gate for any order it cannot execute. Replaying a
+recorded statement result is not evidence for reviewed SQL.
 
 The optional inputs shared by applicable forms are:
 
@@ -230,22 +237,41 @@ fixture rather than passing a case that could never occur:
 
 | Name | Transport | The source did not complete because |
 |---|---|---|
-| `timeout` | both | The bounded wait elapsed before a result was assembled. |
+| `timeout` | both | HTTP exhausted its source timeout, or SQLite exhausted concurrency admission. |
 | `oversized` | both | The assembled result exceeded the declared response size. |
 | `connection-refused` | `http-json` | The origin could not be reached. |
 | `invalid-media-type` | `http-json` | The response carried a media type the source does not accept. |
 | `malformed-json` | `http-json` | The response body was not the JSON the source requires. |
-| `extract-unavailable` | `sqlite-extract` | The bound extract could not be opened at request time. |
+| `extract-unavailable` | `sqlite-extract` | The configured extract could not be opened. Mapping coverage only; serving discovers this at startup. |
 | `extract-too-old` | `sqlite-extract` | The extract's published instant is older than the declared bound. |
-| `statement-refused` | `sqlite-extract` | The authorizer refused an action while the statement was prepared. |
-| `statement-parameter` | `sqlite-extract` | The statement names a parameter nothing bound. |
-| `statement-budget` | `sqlite-extract` | The statement exceeded its declared step budget. |
-| `statement-result` | `sqlite-extract` | The result exceeded `maximumRows` or `maximumCellBytes`. |
-| `statement-unavailable` | `sqlite-extract` | No concurrency permit was available within the timeout. |
+| `statement-refused` | `sqlite-extract` | The authorizer refused the reviewed statement. Mapping coverage only; serving discovers this at startup. |
+| `statement-parameter` | `sqlite-extract` | A declared parameter was not bound. Mapping coverage only when static agreement should have rejected startup. |
+| `statement-budget` | `sqlite-extract` | Statement execution exceeded its virtual-machine step or elapsed-time budget. |
+| `statement-result` | `sqlite-extract` | The result exceeded `maximumRows`, `maximumCellBytes`, or `maximumResponseBytes`, or result typing or execution failed. |
+| `statement-unavailable` | `sqlite-extract` | The statement worker could not run. Mapping coverage only; admission timeout uses `timeout`. |
 
 Every one of them collapses into the same `dependency_unavailable` public
 class, which is the point: what a caller learns from a source that did not
 answer is that it did not answer.
+
+Extract opening, metadata, statement-authorizer, column-agreement, and static
+parameter-agreement failures are startup failures, not request-time
+`sourceFailure` cases. They belong in bundle/statement mutation cases and the
+source contract suite. SQLite concurrency admission currently maps to
+`timeout`, while elapsed time inside statement execution maps to
+`statement-budget`; they use separate windows rather than one end-to-end
+deadline. The harness must not synthesize a request-time cause the serving
+lifecycle cannot produce.
+
+A `sourceFailure` case proves only the closed public-problem mapping for an
+injected transport failure. It is not evidence that the acquisition path
+actually reached that failure. This distinction matters for the four entries
+marked mapping-only: the Version 1 fixture vocabulary still admits them, but
+they cannot satisfy the source-lifecycle or deployable-assurance gate. The
+transport's source contract suite must trigger each applicable failure at its
+real startup or request-time enforcement point, and a complete-project fixture
+must execute every successful acquisition stage rather than substituting a
+`sourceFailure` value for it.
 
 ## Expected vocabulary
 
@@ -269,7 +295,7 @@ those stages apply. Omission is not treated as a wildcard.
 | `bundle` | `accepted` or `rejected` | Startup bundle result. |
 | `outputGate` | `accepted` or `rejected` | Derived-value gate result. |
 | `rejectedBefore` | `credential`, `source`, `derivation`, or `signing` | Latest boundary that must not be crossed. |
-| `sourceRequestCount` | integer | Exact number of evidence-data requests. Version 1 permits `0`, `1`, or `2` according to the requirement's acquisition. |
+| `sourceRequestCount` | integer | Exact number of evidence-data operations the production path would attempt. Version 1 permits `0` through the acquisition's fixed ceiling, at most `5`. For an injected `sourceFailure`, this count is modeled; it does not prove the fixture harness executed the source. |
 | `expectedTransport` | object | Exact expanded path, encoded query string, and normalized body bytes for a transport-focused case, or the exact statement artifact and bound parameters where the source reads an extract. |
 
 `expectedTransport` is accepted only for the `selectorOverrides` form.
