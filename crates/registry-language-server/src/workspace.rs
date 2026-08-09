@@ -13,7 +13,7 @@ use crate::{
     evidence,
     refs::{
         document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
-        ProjectIndex, DOCUMENT_CEILING_RULE,
+        ProjectIndex, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
     relay,
     safety::{secure_regular_file, SecureFileRead},
@@ -22,13 +22,30 @@ use crate::{
 
 /// How many roots one session indexes.
 ///
-/// This bounds the number of roots and nothing else. One root holds what its project holds: the
-/// roles the authoring form bounds in number stop where the form stops, every other directory the
-/// family reads is read whole, and each document in it may reach its role's byte ceiling, so a root
-/// costs roughly the bytes of the directories it reads. A client that reaches across many unrelated
-/// projects stops adding roots here, which keeps that cost multiplied by 32 rather than by whatever
-/// a session is pointed at.
+/// This bounds the number of roots in addition to the shared aggregate document-and-byte ceiling
+/// and each family's per-document budgets. A client that reaches across many unrelated projects
+/// stops adding roots here, which keeps those per-root costs multiplied by 32 rather than by
+/// whatever a session is pointed at.
 pub(crate) const MAX_INDEXED_ROOTS: usize = 32;
+
+/// The operational budget for YAML documents one root parses into its live index.
+pub(crate) const MAX_INDEXED_PROJECT_DOCUMENTS: usize = 1024;
+pub(crate) const MAX_INDEXED_PROJECT_BYTES: usize = 16 * 1024 * 1024;
+
+pub(crate) const PROJECT_CEILING_MESSAGE: &str =
+    "This project exceeds the editor's aggregate limit of 1024 documents or 16 MiB; no project documents are indexed until it is reduced";
+
+/// The first path, in project order, that crosses the editor's aggregate document or byte budget.
+pub(crate) fn project_ceiling_path(documents: &BTreeMap<PathBuf, String>) -> Option<PathBuf> {
+    let mut bytes = 0usize;
+    for (index, (path, source)) in documents.iter().enumerate() {
+        bytes = bytes.saturating_add(source.len());
+        if index >= MAX_INDEXED_PROJECT_DOCUMENTS || bytes > MAX_INDEXED_PROJECT_BYTES {
+            return Some(path.clone());
+        }
+    }
+    None
+}
 
 const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
@@ -38,6 +55,7 @@ const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 pub(crate) struct LoadedProjectDocuments {
     pub(crate) documents: BTreeMap<PathBuf, String>,
     pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+    pub(crate) indexing_ceiling_path: Option<PathBuf>,
 }
 
 /// How large a document may be for the family that owns it to index it, and the sentence an author
@@ -141,6 +159,11 @@ impl ProjectFamily {
         }
     }
 
+    /// The first document that puts this family past its aggregate editor budget.
+    fn project_ceiling_path(self, documents: &BTreeMap<PathBuf, String>) -> Option<PathBuf> {
+        project_ceiling_path(documents)
+    }
+
     /// The directory holding this path, when this family bounds how many documents it indexes from
     /// it, and `None` for every other path.
     ///
@@ -237,7 +260,12 @@ pub(crate) struct RootState {
     /// because the client still owns those documents. When the file under one comes back, this
     /// revision is what the root answers from, and not what the returning file says.
     absent_buffers: BTreeMap<PathBuf, String>,
+    /// Per-document ceiling reports for open buffers whose text is deliberately not retained.
+    /// Keeping these separate from disk diagnostics lets a project-level ceiling suppress them
+    /// temporarily without losing the explanation when the project later recovers.
+    open_ceiling_diagnostics: BTreeMap<PathBuf, IndexedDiagnostic>,
     disk_diagnostics: Vec<IndexedDiagnostic>,
+    indexing_ceiling_path: Option<PathBuf>,
     index: ProjectIndex,
 }
 
@@ -245,19 +273,25 @@ impl RootState {
     fn load(root: &Path, family: ProjectFamily) -> Result<Self> {
         let root = root.canonicalize()?;
         let loaded = family.load_documents(&root)?;
-        let index = ProjectIndex::from_documents_with_diagnostics(
-            family,
-            &root,
-            &loaded.documents,
-            loaded.diagnostics.clone(),
-        );
+        let index = if loaded.indexing_ceiling_path.is_some() {
+            ProjectIndex::diagnostics_only(&root, loaded.diagnostics.clone())
+        } else {
+            ProjectIndex::from_documents_with_diagnostics(
+                family,
+                &root,
+                &loaded.documents,
+                loaded.diagnostics.clone(),
+            )
+        };
         Ok(Self {
             root,
             family,
             documents: loaded.documents,
             open_versions: BTreeMap::new(),
             absent_buffers: BTreeMap::new(),
+            open_ceiling_diagnostics: BTreeMap::new(),
             disk_diagnostics: loaded.diagnostics,
+            indexing_ceiling_path: loaded.indexing_ceiling_path,
             index,
         })
     }
@@ -290,6 +324,7 @@ impl RootState {
         if !self.family.owns_document(&self.root, &path) {
             return;
         }
+        let was_blocked = self.indexing_ceiling_path.is_some();
         self.open_versions.insert(path.clone(), version);
         // The revision that arrived is the whole of what the client holds, so it replaces whatever
         // this root was keeping for the path on either side of the project.
@@ -297,18 +332,26 @@ impl RootState {
         self.disk_diagnostics
             .retain(|diagnostic| diagnostic.path != path);
         let ceiling = self.family.document_ceiling(&self.root, &path);
-        if ceiling.admits(text.len()) {
-            self.documents.insert(path, text);
+        let admitted = ceiling.admits(text.len());
+        if admitted {
+            self.open_ceiling_diagnostics.remove(&path);
+            self.documents.insert(path.clone(), text);
         } else {
             // A buffer that has grown past the ceiling stops being indexed and says so. Leaving the
             // last text that fitted would answer every later request from a revision the author can
             // no longer see, and silently: nothing else in the session would report the change.
             self.documents.remove(&path);
-            self.disk_diagnostics.push(document_rule_diagnostic(
-                &path,
-                self.family.diagnostic_code(DOCUMENT_CEILING_RULE),
-                &ceiling.message,
-            ));
+            self.open_ceiling_diagnostics.insert(
+                path.clone(),
+                document_rule_diagnostic(
+                    &path,
+                    self.family.diagnostic_code(DOCUMENT_CEILING_RULE),
+                    &ceiling.message,
+                ),
+            );
+        }
+        if was_blocked && self.reload_project_from_disk().is_ok() {
+            return;
         }
         self.rebuild();
     }
@@ -336,6 +379,7 @@ impl RootState {
         }
         self.open_versions.remove(path);
         self.absent_buffers.remove(path);
+        self.open_ceiling_diagnostics.remove(path);
         self.reload_from_disk(path);
     }
 
@@ -416,6 +460,10 @@ impl RootState {
     /// after a batch is applied, a bounded directory holds what a first scan of the same tree would
     /// hold.
     fn reload_watched_batch(&mut self, paths: &[PathBuf]) -> Result<()> {
+        if self.indexing_ceiling_path.is_some() {
+            self.reload_project_from_disk()?;
+            return Ok(());
+        }
         let mut bounded: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
         for path in paths {
             match self.family.bounded_directory_of(&self.root, path) {
@@ -431,7 +479,11 @@ impl RootState {
                 failure.get_or_insert(error);
             }
         }
-        self.rebuild();
+        if self.indexing_ceiling_path.is_some() {
+            self.reload_project_from_disk()?;
+        } else {
+            self.rebuild();
+        }
         failure.map_or(Ok(()), Err)
     }
 
@@ -465,8 +517,49 @@ impl RootState {
     }
 
     fn reload_from_disk(&mut self, path: &Path) {
+        if self.indexing_ceiling_path.is_some() {
+            let _ = self.reload_project_from_disk();
+            return;
+        }
         self.apply_from_disk(path);
         self.rebuild();
+    }
+
+    /// Retries a project that crossed its aggregate indexing budget.
+    ///
+    /// Disk state is loaded through the same bounded first-scan path. Text still owned by the
+    /// client is then overlaid where it remains available, and the aggregate ceiling is weighed
+    /// again before anything is parsed.
+    fn reload_project_from_disk(&mut self) -> Result<()> {
+        let open_text = self
+            .open_versions
+            .keys()
+            .filter_map(|path| {
+                self.documents
+                    .get(path)
+                    .or_else(|| self.absent_buffers.get(path))
+                    .map(|text| (path.clone(), text.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let loaded = self.family.load_documents(&self.root)?;
+        self.documents = loaded.documents;
+        self.disk_diagnostics = loaded.diagnostics;
+        self.indexing_ceiling_path = loaded.indexing_ceiling_path;
+        for path in self.open_versions.keys() {
+            self.documents.remove(path);
+            self.disk_diagnostics
+                .retain(|diagnostic| diagnostic.path != *path);
+        }
+        for (path, text) in open_text {
+            if self.project_holds(&path) {
+                self.absent_buffers.remove(&path);
+                self.documents.insert(path, text);
+            } else {
+                self.absent_buffers.insert(path, text);
+            }
+        }
+        self.rebuild();
+        Ok(())
     }
 
     /// Takes one document from disk, without rebuilding the index around it.
@@ -475,7 +568,10 @@ impl RootState {
     /// whether it is there at all: the content of an open document is the client's until it closes
     /// it, so this root does not read one back from disk.
     fn apply_from_disk(&mut self, path: &Path) {
-        if !self.family.owns_document(&self.root, path) || self.answers_from_a_buffer(path) {
+        if self.indexing_ceiling_path.is_some()
+            || !self.family.owns_document(&self.root, path)
+            || self.answers_from_a_buffer(path)
+        {
             return;
         }
         self.disk_diagnostics
@@ -497,6 +593,7 @@ impl RootState {
             Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(text) => {
                     self.documents.insert(path.to_path_buf(), text);
+                    self.enforce_project_ceiling();
                 }
                 Err(_) => {
                     self.documents.remove(path);
@@ -523,12 +620,47 @@ impl RootState {
     /// the project had before whatever prompted the rebuild.
     fn rebuild(&mut self) {
         self.settle_open_buffers();
-        self.index = ProjectIndex::from_documents_with_diagnostics(
-            self.family,
-            &self.root,
-            &self.documents,
-            self.disk_diagnostics.clone(),
-        );
+        self.enforce_project_ceiling();
+        let diagnostics = if let Some(path) = &self.indexing_ceiling_path {
+            vec![document_rule_diagnostic(
+                path,
+                self.family.diagnostic_code(PROJECT_CEILING_RULE),
+                PROJECT_CEILING_MESSAGE,
+            )]
+        } else {
+            let mut diagnostics = self.disk_diagnostics.clone();
+            diagnostics.extend(
+                self.open_ceiling_diagnostics
+                    .iter()
+                    .filter(|(path, _)| self.project_holds(path))
+                    .map(|(_, diagnostic)| diagnostic.clone()),
+            );
+            diagnostics
+        };
+        self.index = if self.indexing_ceiling_path.is_some() {
+            ProjectIndex::diagnostics_only(&self.root, diagnostics)
+        } else {
+            ProjectIndex::from_documents_with_diagnostics(
+                self.family,
+                &self.root,
+                &self.documents,
+                diagnostics,
+            )
+        };
+    }
+
+    /// Stops holding disk documents as soon as the root crosses the aggregate editor budget.
+    /// Open buffers remain client-owned, but none are parsed while the project is blocked.
+    fn enforce_project_ceiling(&mut self) {
+        if self.indexing_ceiling_path.is_some() {
+            return;
+        }
+        let Some(path) = self.family.project_ceiling_path(&self.documents) else {
+            return;
+        };
+        self.indexing_ceiling_path = Some(path);
+        self.documents
+            .retain(|path, _| self.open_versions.contains_key(path));
     }
 }
 
@@ -720,7 +852,7 @@ mod tests {
     use registry_evidence_authoring::{
         layout::{
             ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, MAX_QUESTIONS, MAX_QUESTION_BYTES,
-            OPENAPI_FILE, QUESTIONS_DIRECTORY,
+            MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE, QUESTIONS_DIRECTORY,
         },
         marker::{default_project_marker_document, PROJECT_MARKER_FILE},
     };
@@ -1404,6 +1536,133 @@ mod tests {
     }
 
     #[test]
+    fn an_aggregate_overflow_reports_once_without_dependent_diagnostics_and_recovers() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, question) = evidence_root_with_a_question(temp.path());
+        fs::write(
+            temp.path().join(OPENAPI_FILE),
+            r#"openapi: 3.1.0
+info: {title: Test, version: 1.0.0}
+paths:
+  /check:
+    get:
+      operationId: published-operation
+      responses:
+        '200': {description: ok}
+"#,
+        )
+        .unwrap();
+        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
+            state.documents.insert(
+                state
+                    .root
+                    .join("selectors")
+                    .join(format!("profile-{index:04}.yaml")),
+                "kind: exact\n".to_owned(),
+            );
+        }
+
+        state.rebuild();
+
+        assert!(state.documents.is_empty());
+        assert_eq!(state.index.diagnostics().len(), 1);
+        assert_eq!(
+            state.index.diagnostics()[0].code.as_deref(),
+            Some("evidence/project-ceiling")
+        );
+        assert!(state.index.workspace_symbols("adult-status").is_empty());
+        assert!(state.index.workspace_symbols("profile-").is_empty());
+        assert!(state
+            .index
+            .workspace_symbols("published-operation")
+            .is_empty());
+
+        state
+            .reload_watched_batch(std::slice::from_ref(&question))
+            .unwrap();
+
+        assert!(state.indexing_ceiling_path.is_none());
+        assert_eq!(state.index.workspace_symbols("adult-status").len(), 1);
+        assert!(state
+            .index
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
+    }
+
+    #[test]
+    fn reducing_the_open_buffer_that_crossed_the_aggregate_budget_recovers_immediately() {
+        let temp = TempDir::new().unwrap();
+        let (mut state, question) = evidence_root_with_a_question(temp.path());
+        let mut remaining = MAX_INDEXED_PROJECT_BYTES - MAX_QUESTION_BYTES as usize / 2;
+        let mut index = 0usize;
+        while remaining > 0 {
+            let bytes = remaining.min(MAX_SOURCE_ARTIFACT_BYTES as usize);
+            state.documents.insert(
+                state
+                    .root
+                    .join("selectors")
+                    .join(format!("profile-{index:02}.yaml")),
+                "x".repeat(bytes),
+            );
+            remaining -= bytes;
+            index += 1;
+        }
+
+        state.update(question.clone(), "x".repeat(MAX_QUESTION_BYTES as usize), 2);
+        assert!(state.indexing_ceiling_path.is_some());
+
+        state.update(question, QUESTION.to_owned(), 3);
+
+        assert!(state.indexing_ceiling_path.is_none());
+        assert_eq!(state.index.workspace_symbols("adult-status").len(), 1);
+    }
+
+    #[test]
+    fn project_recovery_preserves_another_open_buffer_s_ceiling_report() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+        let selectors = temp.path().join("selectors");
+        fs::create_dir_all(&selectors).unwrap();
+        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
+            fs::write(
+                selectors.join(format!("profile-{index:04}.yaml")),
+                "kind: exact\n",
+            )
+            .unwrap();
+        }
+        let question = temp
+            .path()
+            .join(QUESTIONS_DIRECTORY)
+            .join("adult-status.yaml")
+            .canonicalize()
+            .unwrap();
+        let second_buffer = selectors.join("profile-1023.yaml").canonicalize().unwrap();
+        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
+        assert!(state.indexing_ceiling_path.is_some());
+
+        state.update(question.clone(), oversized_question(), 1);
+        state.update(second_buffer.clone(), "kind: exact\n".to_owned(), 1);
+        assert!(state.indexing_ceiling_path.is_some());
+
+        fs::remove_file(selectors.join("profile-0000.yaml")).unwrap();
+        fs::remove_file(selectors.join("profile-0001.yaml")).unwrap();
+        state.update(second_buffer, "kind: exact\n".to_owned(), 2);
+
+        assert!(state.indexing_ceiling_path.is_none());
+        assert!(!state.documents.contains_key(&question));
+        assert_eq!(
+            reported_at(&state, &question),
+            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+        );
+        assert!(state
+            .index
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
+    }
+
+    #[test]
     fn the_ceiling_the_first_scan_reported_survives_opening_and_closing_the_file() {
         let temp = TempDir::new().unwrap();
         evidence_project_in(temp.path());
@@ -1649,6 +1908,41 @@ governance:
             .workspace_symbols("profile-999")
             .iter()
             .any(|symbol| symbol.name == "profile-999"));
+    }
+
+    #[test]
+    fn an_add_before_delete_rename_at_the_project_ceiling_recovers_in_the_same_batch() {
+        let temp = TempDir::new().unwrap();
+        evidence_project_in(temp.path());
+        let selectors = temp.path().join("selectors");
+        fs::create_dir_all(&selectors).unwrap();
+        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS - 2 {
+            fs::write(
+                selectors.join(format!("profile-{index:04}.yaml")),
+                "kind: exact\n",
+            )
+            .unwrap();
+        }
+        let selectors = selectors.canonicalize().unwrap();
+        let mut state = RootState::load(temp.path(), ProjectFamily::Evidence).unwrap();
+        assert_eq!(state.documents.len(), MAX_INDEXED_PROJECT_DOCUMENTS);
+
+        let departed = selectors.join("profile-0000.yaml");
+        let arrived = selectors.join("profile-9999.yaml");
+        fs::rename(&departed, &arrived).unwrap();
+        state
+            .reload_watched_batch(&[arrived.clone(), departed.clone()])
+            .unwrap();
+
+        assert!(state.indexing_ceiling_path.is_none());
+        assert_eq!(state.documents.len(), MAX_INDEXED_PROJECT_DOCUMENTS);
+        assert!(state.documents.contains_key(&arrived));
+        assert!(!state.documents.contains_key(&departed));
+        assert!(state
+            .index
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
     }
 
     /// Both ceilings the editor applies name the rule they report under.

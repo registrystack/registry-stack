@@ -456,6 +456,9 @@ impl ProjectIndex {
             .canonicalize()
             .with_context(|| format!("failed to resolve project root {}", root.display()))?;
         let loaded = relay::load_project_documents(&root)?;
+        if loaded.indexing_ceiling_path.is_some() {
+            return Ok(Self::diagnostics_only(&root, loaded.diagnostics));
+        }
         Ok(Self::from_documents_with_diagnostics(
             ProjectFamily::Relay,
             &root,
@@ -470,6 +473,9 @@ impl ProjectIndex {
             .canonicalize()
             .with_context(|| format!("failed to resolve project root {}", root.display()))?;
         let loaded = crate::evidence::load_project_documents(&root)?;
+        if loaded.indexing_ceiling_path.is_some() {
+            return Ok(Self::diagnostics_only(&root, loaded.diagnostics));
+        }
         Ok(Self::from_documents_with_diagnostics(
             ProjectFamily::Evidence,
             &root,
@@ -551,6 +557,21 @@ impl ProjectIndex {
         diagnostics.dedup();
         index.diagnostics = diagnostics;
         index
+    }
+
+    /// An intentionally empty project index carrying only a root-level operational diagnostic.
+    ///
+    /// This bypasses every family walker. Evidence therefore does not read the OpenAPI description
+    /// or manufacture path-derived symbols from the diagnostic's location while a project is over
+    /// its aggregate indexing budget.
+    pub(crate) fn diagnostics_only(root: &Path, mut diagnostics: Vec<IndexedDiagnostic>) -> Self {
+        diagnostics.sort_by(diagnostic_cmp);
+        diagnostics.dedup();
+        Self {
+            root: root.to_path_buf(),
+            diagnostics,
+            ..Self::default()
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -901,6 +922,9 @@ pub(crate) const DOCUMENT_CEILING_RULE: &str = "document-ceiling";
 
 /// The rule a directory holding more documents than the editor indexes is reported under.
 pub(crate) const DIRECTORY_CEILING_RULE: &str = "directory-ceiling";
+
+/// The rule a project exceeding the editor's aggregate indexing budget is reported under.
+pub(crate) const PROJECT_CEILING_RULE: &str = "project-ceiling";
 
 /// A problem with a whole document rather than a place in it, reported at its start.
 pub(crate) fn document_diagnostic(path: &Path, message: &str) -> IndexedDiagnostic {

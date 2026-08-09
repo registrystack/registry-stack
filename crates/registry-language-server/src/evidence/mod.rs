@@ -27,10 +27,13 @@ use registry_evidence_authoring::{
 use crate::{
     refs::{
         document_diagnostic, document_rule_diagnostic, DIRECTORY_CEILING_RULE,
-        DOCUMENT_CEILING_RULE,
+        DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
     safety::{plain_directory, plain_file, secure_directory, secure_regular_file, SecureFileRead},
-    workspace::{DocumentCeiling, LoadedProjectDocuments, ProjectFamily},
+    workspace::{
+        DocumentCeiling, LoadedProjectDocuments, ProjectFamily, MAX_INDEXED_PROJECT_BYTES,
+        MAX_INDEXED_PROJECT_DOCUMENTS, PROJECT_CEILING_MESSAGE,
+    },
 };
 
 pub(crate) use index::build_index;
@@ -142,7 +145,11 @@ fn role_ceiling(role: DocumentRole) -> DocumentCeiling {
 /// documents there are.
 pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocuments> {
     let mut diagnostics = Vec::new();
-    let mut candidates = vec![(root.join(PROJECT_FILE), DocumentRole::Marker)];
+    let marker = root.join(PROJECT_FILE);
+    let mut candidates = Vec::new();
+    if plain_file(&marker) {
+        candidates.push((marker, DocumentRole::Marker));
+    }
     for (directory, role) in layout::YAML_DIRECTORIES {
         if !role.is_indexed() {
             continue;
@@ -165,7 +172,11 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
 
     candidates.sort_by(|left, right| left.0.cmp(&right.0));
     candidates.dedup_by(|left, right| left.0 == right.0);
+    if let Some((path, _)) = candidates.get(MAX_INDEXED_PROJECT_DOCUMENTS) {
+        return Ok(blocked_project(path));
+    }
     let mut documents = BTreeMap::new();
+    let mut indexed_bytes = 0usize;
     for (path, role) in candidates {
         let file = match secure_regular_file(root, &path) {
             Ok(Some(file)) => file,
@@ -187,6 +198,13 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
             )),
             Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(source) => {
+                    if documents.len() >= MAX_INDEXED_PROJECT_DOCUMENTS {
+                        return Ok(blocked_project(&path));
+                    }
+                    indexed_bytes = indexed_bytes.saturating_add(source.len());
+                    if indexed_bytes > MAX_INDEXED_PROJECT_BYTES {
+                        return Ok(blocked_project(&path));
+                    }
                     documents.insert(path, source);
                 }
                 Err(_) => diagnostics.push(document_diagnostic(
@@ -204,7 +222,20 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
     Ok(LoadedProjectDocuments {
         documents,
         diagnostics,
+        indexing_ceiling_path: None,
     })
+}
+
+fn blocked_project(path: &Path) -> LoadedProjectDocuments {
+    LoadedProjectDocuments {
+        documents: BTreeMap::new(),
+        diagnostics: vec![document_rule_diagnostic(
+            path,
+            ProjectFamily::Evidence.diagnostic_code(PROJECT_CEILING_RULE),
+            PROJECT_CEILING_MESSAGE,
+        )],
+        indexing_ceiling_path: Some(path.to_path_buf()),
+    }
 }
 
 /// The files one project directory holds in a role a document points at by path, spelled the way a
@@ -278,7 +309,10 @@ fn add_documents(
             root.display()
         )
     })?;
-    let ceiling = role.max_documents();
+    let role_ceiling = role.max_documents();
+    let collection_ceiling = role_ceiling
+        .map(|ceiling| ceiling.min(MAX_INDEXED_PROJECT_DOCUMENTS))
+        .or(Some(MAX_INDEXED_PROJECT_DOCUMENTS));
     let mut named = BTreeSet::new();
     for entry in entries {
         let entry = entry.with_context(|| {
@@ -291,11 +325,11 @@ fn add_documents(
         if document_role(root, &path) != Some(role) {
             continue;
         }
-        keep_bounded(&mut named, path, ceiling);
+        keep_bounded(&mut named, path, collection_ceiling);
     }
 
     let mut paths = named.into_iter().collect::<Vec<_>>();
-    if let Some(ceiling) = ceiling {
+    if let Some(ceiling) = role_ceiling {
         if let Some(first_unread) = paths.get(ceiling) {
             diagnostics.push(document_rule_diagnostic(
                 first_unread,
@@ -577,17 +611,19 @@ mod tests {
             "the one name kept past the ceiling is the first file the reader stops at"
         );
 
-        // The other half of the rule: a directory the authoring form does not bound is gathered
-        // whole, because the compiler reads all of it.
+        // A directory the authoring form does not bound is still gathered under the editor's
+        // aggregate project budget. This is an operational memory bound, not a claim that the
+        // compiler refuses the same directory.
         let mut every = BTreeSet::new();
-        for index in 0..1_000 {
+        for index in 0..10_000 {
             keep_bounded(
                 &mut every,
                 PathBuf::from(format!("selectors/profile-{index:05}.yaml")),
-                None,
+                Some(MAX_INDEXED_PROJECT_DOCUMENTS),
             );
+            assert!(every.len() <= MAX_INDEXED_PROJECT_DOCUMENTS + 1);
         }
-        assert_eq!(every.len(), 1_000);
+        assert_eq!(every.len(), MAX_INDEXED_PROJECT_DOCUMENTS + 1);
     }
 
     /// `evidencectl` reads every selector and source a project holds, so the editor does too. A
@@ -614,6 +650,49 @@ mod tests {
 
         assert_eq!(loaded.documents.len(), beyond_a_bounded_directory + 1);
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    }
+
+    #[test]
+    fn an_aggregate_document_overflow_blocks_the_whole_project_index() {
+        let temp = TempDir::new().unwrap();
+        write(temp.path(), PROJECT_FILE, default_project_marker_document());
+        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
+            write(
+                temp.path(),
+                &format!("selectors/profile-{index:04}.yaml"),
+                "kind: exact\n",
+            );
+        }
+        let root = temp.path().canonicalize().unwrap();
+
+        let loaded = load_project_documents(&root).unwrap();
+
+        assert!(loaded.documents.is_empty());
+        assert_eq!(
+            loaded.indexing_ceiling_path,
+            Some(root.join("selectors/profile-1023.yaml"))
+        );
+        assert_eq!(loaded.diagnostics.len(), 1);
+        assert_eq!(
+            loaded.diagnostics[0].code.as_deref(),
+            Some("evidence/project-ceiling")
+        );
+        assert_eq!(loaded.diagnostics[0].message, PROJECT_CEILING_MESSAGE);
+    }
+
+    #[test]
+    fn the_aggregate_byte_budget_names_the_first_document_past_it() {
+        let first = PathBuf::from("selectors/first.yaml");
+        let second = PathBuf::from("selectors/second.yaml");
+        let mut documents = BTreeMap::from([(first, "x".repeat(MAX_INDEXED_PROJECT_BYTES))]);
+        assert_eq!(crate::workspace::project_ceiling_path(&documents), None);
+
+        documents.insert(second.clone(), "x".to_owned());
+
+        assert_eq!(
+            crate::workspace::project_ceiling_path(&documents),
+            Some(second)
+        );
     }
 
     /// A schema and a fixture are defined by the document that points at one, from the path it

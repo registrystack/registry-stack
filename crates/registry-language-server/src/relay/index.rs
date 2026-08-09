@@ -12,11 +12,15 @@ use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
 use crate::{
     refs::{
-        bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
-        IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
+        bounded_value, document_diagnostic, document_rule_diagnostic, IndexedDiagnostic,
+        IndexedLocation, IndexedReference, IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
+        PROJECT_CEILING_RULE,
     },
     safety::{plain_file, secure_directory, secure_regular_file, SecureFileRead},
-    workspace::LoadedProjectDocuments,
+    workspace::{
+        LoadedProjectDocuments, ProjectFamily, MAX_INDEXED_PROJECT_BYTES,
+        MAX_INDEXED_PROJECT_DOCUMENTS, PROJECT_CEILING_MESSAGE,
+    },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
 
@@ -62,9 +66,13 @@ pub(crate) fn is_project_document(root: &Path, path: &Path) -> bool {
 }
 
 pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocuments> {
-    let mut candidates = vec![root.join(PROJECT_FILE)];
-    add_yaml_files(root, &root.join("entities"), &mut candidates)?;
-    add_yaml_files(root, &root.join("environments"), &mut candidates)?;
+    let mut candidates = BTreeSet::from([root.join(PROJECT_FILE)]);
+    if let Some(path) = add_yaml_files(root, &root.join("entities"), &mut candidates)? {
+        return Ok(blocked_project(&path));
+    }
+    if let Some(path) = add_yaml_files(root, &root.join("environments"), &mut candidates)? {
+        return Ok(blocked_project(&path));
+    }
 
     let integrations = root.join("integrations");
     if secure_directory(root, &integrations)? {
@@ -76,16 +84,24 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
             })?;
             let directory = entry.path();
             if secure_directory(root, &directory)? {
-                candidates.push(directory.join("integration.yaml"));
-                add_yaml_files(root, &directory.join("fixtures"), &mut candidates)?;
+                let manifest = directory.join("integration.yaml");
+                if plain_file(&manifest) {
+                    if let Some(path) = add_candidate(&mut candidates, manifest) {
+                        return Ok(blocked_project(&path));
+                    }
+                }
+                if let Some(path) =
+                    add_yaml_files(root, &directory.join("fixtures"), &mut candidates)?
+                {
+                    return Ok(blocked_project(&path));
+                }
             }
         }
     }
 
-    candidates.sort();
-    candidates.dedup();
     let mut documents = BTreeMap::new();
     let mut diagnostics = Vec::new();
+    let mut indexed_bytes = 0usize;
     for path in candidates {
         let file = match secure_regular_file(root, &path) {
             Ok(Some(file)) => file,
@@ -108,6 +124,13 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
             )),
             Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(source) => {
+                    if documents.len() >= MAX_INDEXED_PROJECT_DOCUMENTS {
+                        return Ok(blocked_project(&path));
+                    }
+                    indexed_bytes = indexed_bytes.saturating_add(source.len());
+                    if indexed_bytes > MAX_INDEXED_PROJECT_BYTES {
+                        return Ok(blocked_project(&path));
+                    }
                     documents.insert(path, source);
                 }
                 Err(_) => diagnostics.push(document_diagnostic(
@@ -130,12 +153,29 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
     Ok(LoadedProjectDocuments {
         documents,
         diagnostics,
+        indexing_ceiling_path: None,
     })
 }
 
-fn add_yaml_files(root: &Path, directory: &Path, candidates: &mut Vec<PathBuf>) -> Result<()> {
+fn blocked_project(path: &Path) -> LoadedProjectDocuments {
+    LoadedProjectDocuments {
+        documents: BTreeMap::new(),
+        diagnostics: vec![document_rule_diagnostic(
+            path,
+            ProjectFamily::Relay.diagnostic_code(PROJECT_CEILING_RULE),
+            PROJECT_CEILING_MESSAGE,
+        )],
+        indexing_ceiling_path: Some(path.to_path_buf()),
+    }
+}
+
+fn add_yaml_files(
+    root: &Path,
+    directory: &Path,
+    candidates: &mut BTreeSet<PathBuf>,
+) -> Result<Option<PathBuf>> {
     if !secure_directory(root, directory)? {
-        return Ok(());
+        return Ok(None);
     }
     let entries = fs::read_dir(directory).with_context(|| {
         format!(
@@ -151,10 +191,19 @@ fn add_yaml_files(root: &Path, directory: &Path, candidates: &mut Vec<PathBuf>) 
             )
         })?;
         if entry.path().extension().is_some_and(|ext| ext == "yaml") {
-            candidates.push(entry.path());
+            if let Some(path) = add_candidate(candidates, entry.path()) {
+                return Ok(Some(path));
+            }
         }
     }
-    Ok(())
+    Ok(None)
+}
+
+fn add_candidate(candidates: &mut BTreeSet<PathBuf>, path: PathBuf) -> Option<PathBuf> {
+    if candidates.insert(path.clone()) && candidates.len() > MAX_INDEXED_PROJECT_DOCUMENTS {
+        return Some(path);
+    }
+    None
 }
 
 /// Walks the parsed Relay documents of one project root into symbols, references, and the
@@ -582,6 +631,36 @@ services:
             "name: active-person\n",
         );
         temp
+    }
+
+    #[test]
+    fn an_aggregate_document_overflow_blocks_the_whole_relay_index() {
+        let temp = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            "version: 1\nregistry: { id: demo }\n",
+        );
+        for index in 0..MAX_INDEXED_PROJECT_DOCUMENTS {
+            write(
+                temp.path(),
+                &format!("entities/entity-{index:04}.yaml"),
+                "version: 1\nid: entity\n",
+            );
+        }
+        let root = temp.path().canonicalize().unwrap();
+
+        let loaded = load_project_documents(&root).unwrap();
+
+        assert!(loaded.documents.is_empty());
+        assert!(loaded.indexing_ceiling_path.is_some());
+        assert_eq!(loaded.diagnostics.len(), 1);
+        assert_eq!(loaded.diagnostics[0].code, None);
+        assert_eq!(loaded.diagnostics[0].message, PROJECT_CEILING_MESSAGE);
+
+        let index = ProjectIndex::load(&root).unwrap();
+        assert!(index.symbols().is_empty());
+        assert_eq!(index.diagnostics().len(), 1);
     }
 
     #[test]

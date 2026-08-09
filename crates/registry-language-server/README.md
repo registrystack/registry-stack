@@ -89,9 +89,9 @@ question the reader cannot parse at all is reported once, carrying the reader's 
 
 ## Diagnostics
 
-Every diagnostic this server publishes has severity `Error`. The channel carries what the compiler
-refuses and nothing else, so an author who fixes everything the editor underlines has a project that
-builds, and an author who ignores an underline is ignoring a build failure rather than an opinion.
+Every diagnostic this server publishes has severity `Error`. Semantic diagnostics carry what the
+compiler refuses. The separately named indexing-ceiling diagnostics explain when the editor cannot
+safely build an index and do not claim that the compiler applies the same operational budget.
 
 Evidence diagnostics carry a code naming the rule, such as `evidence/unknown-source`,
 `evidence/question-file-name`, `evidence/question-shape`, and the authoring library's own finding
@@ -111,16 +111,16 @@ Only regular files in the documented project layouts are indexed. Symbolic links
 project root, unrelated YAML files, and documents past the per-role byte ceiling are ignored, and
 those ceilings are the authoring form's own rather than the editor's, so a document `evidencectl`
 refuses for its size is one the editor refuses for the same size. How many documents a directory
-contributes is bounded only where the authoring form bounds it: an Evidence root stops at the 128
-documents the form allows in `questions/` and in `access/policies/`, while `sources/` and
-`selectors/`, the other two directories it reads documents from, are read whole at up to 1 MiB a
-document, and a Relay root bounds no directory at all and holds every document to 1 MiB. One root
-therefore holds roughly the bytes of the directories it reads, and a session holds that for up to 32
-roots, so a project with a very large `selectors/` directory can exhaust the server's memory as its
-root is indexed. That is the price of the rule behind it: a ceiling only the editor applies would
-draw an unresolved reference over a project that builds. Open files are not part of the growth. Each
-document is read and closed as the scan reaches it, so a session keeps the same handful of
-descriptors open whatever the size of the project.
+contributes follows two layers. An Evidence root first applies the authoring form's 128-document
+limits to `questions/` and `access/policies/`; both families retain their existing per-document byte
+limits. Every root then applies an editor-only aggregate budget of 1,024 indexed documents or 16
+MiB across the YAML documents it parses. A project past either aggregate limit gets one
+project-ceiling diagnostic and no partial index, so the editor does not invent unresolved-reference
+errors for documents it deliberately left out. Evidence names that rule
+`evidence/project-ceiling`; Relay follows its existing unnumbered diagnostic convention. Reduce the
+project and save or close a document to retry the complete index. Each document is read and closed
+as the scan reaches it, so a session keeps the same handful of descriptors open whatever the size
+of the project.
 
 ## Parsing
 
