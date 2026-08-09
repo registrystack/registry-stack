@@ -66,6 +66,45 @@ states the reason: a schema written by hand for one of the other parts would be
 the drift the generated pair exists to prevent. The key-path inventory at the
 end of this page is therefore the marker and the question, and nothing else.
 
+### Parsing, form validation, and compilation
+
+The generated schemas describe the JSON-compatible shape that can be parsed
+into the marker and question models. They do not describe every condition for
+an accepted authoring project. After parsing, the shared authoring library
+checks field bounds and relationships within one question. `evidencectl` then
+checks filenames, referenced files, cross-question relationships, local
+artifacts, and the compiled deployment grammar. The real `evidence` binary
+performs the final bundle check before a local generation or production
+candidate is published.
+
+For example, the question schema describes `subjects` as an array but does not
+state its item-count bound. A document with nine structurally valid subjects
+can pass JSON Schema validation, then the shared form validator rejects it
+because one question accepts only 1 through 8 subjects. Treat schema success as
+editor and parse-shape feedback, not as a successful compile.
+
+### Local secrets and signing identity
+
+`evidencectl new` creates `secrets/`, adds it to `.gitignore`, and generates
+disposable local key material. A local compile requires that directory to be a
+plain, non-symlink directory owned by the current user with exact mode `0700`.
+The generated signing private JWK and the two independent HMAC masters remain
+inside that directory. They are not bundle artifacts.
+
+The compiler reads `secrets/signing-p256-public.jwk.json` as a bounded regular
+file. The shared JWK parser limits the JSON document to 64 KiB, rejects private
+members, and requires an `ES256` key with `kty: EC` and `crv: P-256`. Its `kid`
+must equal the 43-character RFC 7638 thumbprint of that exact public key. The
+compiler copies only this public half to
+`bundle/public-keys/<kid>.jwk.json` and uses that path as
+`signing.activePublicJwkFile`.
+
+The generated local `runtime.yaml` records the canonical secret-directory path
+and synthesizes `signer.privateKeyRef` as
+`secret:file/signing-p256-private-jwk`. The generated runtime contains the
+reference, not the private JWK, HMAC masters, or another secret value. The
+runtime validates the referenced owner-only files before serving.
+
 ## The project marker
 
 `evidence-project.yaml` confirms that a directory holding authoring parts is
@@ -459,6 +498,40 @@ what the grammar refuses. Without `governance` there is nothing to collide:
 `disclosure-family:{id}`, and
 `concept:{question_id}:{concept}` from the question's own id.
 
+### Local access policies
+
+An optional document under `access/policies/<id>.yaml` groups authored
+questions for one local requester policy. Access policy documents affect the
+local development authority profiles that `evidencectl` compiles. They are not
+part of the production authoring form or copied into a production target.
+
+The document is closed and has exactly these keys:
+
+```yaml
+version: 1
+id: age-checks
+questions: [adult-status, age-bracket]
+```
+
+`version` must be `1`. `id` follows the lowercase local-identifier grammar and
+must equal the filename stem. `questions` contains 1 through 128 existing
+question ids in strictly increasing lexical order, which also makes the list
+unique. The project may contain 1 through 128 policy files, and every entry in
+`access/policies/` must be an `<id>.yaml` regular file no larger than 64 KiB.
+
+Use the command when adding a policy so it validates question ids and writes
+the sorted closed document without replacing an existing file:
+
+```sh
+evidencectl access policy add age-checks \
+  --question adult-status \
+  --question age-bracket
+```
+
+When at least one explicit policy exists, local compilation replaces the
+single implicit all-question caller profile with one authority profile per
+policy. A project that has `access/clients/` but no access policy is rejected.
+
 ## Bounds at a glance
 
 Every ceiling the authoring form applies, with the file that states it.
@@ -484,6 +557,10 @@ Every ceiling the authoring form applies, with the file that states it.
 | Local identifier | 64 bytes | `validate.rs` |
 | SD-JWT VC claim name | 64 bytes | `validate.rs` |
 | Operation identifier | 256 bytes | `validate.rs` |
+| Local public signing JWK | 64 KiB | `registry-platform-crypto` |
+| Access policies per project | 1 to 128 | `authoring.rs` |
+| Questions per access policy | 1 to 128 | `authoring.rs` |
+| Access policy document size | 64 KiB | `layout.rs` |
 
 ## Complete key-path inventory
 

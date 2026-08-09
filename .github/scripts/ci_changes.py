@@ -83,6 +83,37 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
     }
 )
 
+# This guide explains the authoring form across three intentionally separate
+# enforcement layers: the shared form model, the evidencectl compiler, and the
+# frozen bundle validator. Keep the routing list at module ownership rather
+# than duplicating its fields and rules in another semantic manifest. The
+# sample gives the focused CI test one existing path for each route.
+EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
+    (
+        "crates/registry-evidence-authoring/src/**",
+        "crates/registry-evidence-authoring/src/model.rs",
+    ),
+    (
+        "crates/registry-evidencectl/src/**",
+        "crates/registry-evidencectl/src/authoring.rs",
+    ),
+    (
+        "crates/registry-evidence/src/bundle.rs",
+        "crates/registry-evidence/src/bundle.rs",
+    ),
+    (
+        "crates/registry-evidence/src/config.rs",
+        "crates/registry-evidence/src/config.rs",
+    ),
+    (
+        "crates/registry-platform-crypto/src/lib.rs",
+        "crates/registry-platform-crypto/src/lib.rs",
+    ),
+)
+EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
+    pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
+)
+
 # Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
 # their own source is covered by check-source-neutrality.sh, and that is what
 # makes `evidence_contracts` run the neutrality check against them. Every
@@ -453,6 +484,9 @@ def classify(
             # schema, and the docs tests read those references to prove the
             # published key paths and the documented ones agree.
             "products/evidence/reference/*/CONFIG.md",
+            # The published authoring guide states behavior enforced in these
+            # modules, not only the generated question and marker schemas.
+            *EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS,
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path

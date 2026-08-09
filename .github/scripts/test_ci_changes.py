@@ -15,6 +15,7 @@ from typing import Any
 from ci_changes import (
     AUTHORING_REFERENCE_CONTRACT_SOURCES,
     AUTHORING_REFERENCE_INPUTS,
+    EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
@@ -735,6 +736,22 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
 
+    def test_evidence_authoring_guide_implementation_changes_run_docs(self) -> None:
+        """Implementation behind the published guide cannot change unnoticed."""
+        for pattern, sample in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(Path(sample).is_file())
+                self.assertTrue(fnmatch.fnmatchcase(sample, pattern))
+                self.assertTrue(classify(self.workspace, (sample,))["docs"])
+
+    def test_unrelated_evidence_client_source_does_not_run_docs(self) -> None:
+        """The guide routes owning modules, not every Evidence implementation."""
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client/src/lib.rs",),
+        )
+        self.assertFalse(outputs["docs"])
+
     def test_every_published_evidence_schema_and_reference_runs_docs(self) -> None:
         """Whatever the generator publishes, a change to it rebuilds the docs."""
         generator = EVIDENCE_CONFIGURATION_GENERATOR.read_text(encoding="utf-8")
@@ -978,7 +995,7 @@ on:
             ),
             (
                 "crates/registry-platform-crypto/src/lib.rs",
-                {"docs": False, "registryctl_tutorial": True},
+                {"docs": True, "registryctl_tutorial": True},
             ),
             (
                 "crates/registryctl/src/project_authoring/project.rs",

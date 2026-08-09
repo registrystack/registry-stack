@@ -14,10 +14,9 @@ wide: true
 
 import EvidenceConfigurationReference from '../../../components/EvidenceConfigurationReference.astro';
 
-This generated reference lists every key path an Evidence Gateway deployment may write, in the two
-frozen Version 1 configuration grammars: the deployment bundle and the runtime configuration. It
-also lists the authoring form an adopter writes before a deployment project exists: one question
-document and one project marker.
+This generated reference lists the schema-visible key paths in the two frozen Version 1
+configuration grammars and in the authoring form an adopter writes before a deployment project
+exists.
 
 Each entry reports only what the schema itself proves: the value type, whether the key is
 required, the fixed values it accepts, the bounds it enforces, and the schema's own description
@@ -52,6 +51,20 @@ still has to compile, and compiling is where the frozen contract applies.
 
 The coverage gate holds every schema's key paths in exact parity with the product reference that
 explains it, so a key cannot reach one artifact and quietly skip the others.
+
+## Schema shape and accepted projects
+
+The authoring schemas describe the JSON-compatible shape that an editor and parser can read.
+They do not contain every field bound, cross-field rule, filename check, referenced-file check, or
+compiled-bundle invariant. The shared form validator, `evidencectl` compiler, and real `evidence`
+bundle check apply those additional gates in order.
+
+For example, the question schema describes `subjects` as an array without an item-count bound.
+Nine structurally valid subjects can pass JSON Schema validation, but the shared form validator
+rejects the question because the accepted form allows only 1 through 8 subjects. The
+[Evidence authoring form reference](../../products/registry-evidence/authoring-form/) documents
+the complete project rules, including local secret posture, signing-key handling, and access
+policies.
 
 ## Notation
 
@@ -96,10 +109,10 @@ loopback pattern printed below them.
 
 Each description here states what one key decides, in the sentence the schema itself carries. It
 cannot show you how the keys fit together, walk you through authoring a bundle, or explain why a
-deployment is shaped the way it is. For that, read the guide each section names: the deployment
-grammar is explained in `products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`
-and the authoring form in `products/evidence/reference/authoring-projects/CONFIG.md`, both of which
-document the same key paths in the context of a whole project.
+deployment is shaped the way it is. The deployment grammar is explained in
+`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`. The published
+[Evidence authoring form reference](../../products/registry-evidence/authoring-form/) documents
+the authoring keys in the context of a whole project.
 
 A key path that this page lists is not a deployment that runs. Schema validity is one gate.
 Runtime, bundle, secret, and audit posture is a separate gate that `evidencectl doctor` reports,
@@ -108,6 +121,7 @@ and fixture results are a third that `evidencectl fixtures run` reports.
 ## Next
 
 - [Configuration reference](../project-configuration/)
+- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
 - [Evidencectl command reference](../evidencectl/)
 - [Evidence Gateway errors and problems reference](../evidence-problems/)
 - [Evidence Gateway API](../apis/registry-evidence/)

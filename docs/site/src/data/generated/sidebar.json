@@ -107,28 +107,47 @@
         "slug": "products/registry-evidence"
       },
       {
-        "label": "Product concept",
-        "slug": "products/registry-evidence/concept"
+        "label": "How-to",
+        "items": [
+          {
+            "label": "First server curl",
+            "slug": "products/registry-evidence/first-curl-test"
+          },
+          {
+            "label": "Source testing",
+            "slug": "products/registry-evidence/source-testing"
+          },
+          {
+            "label": "SD-JWT VC demo",
+            "slug": "products/registry-evidence/sd-jwt-vc-demo"
+          }
+        ]
       },
       {
-        "label": "First server curl",
-        "slug": "products/registry-evidence/first-curl-test"
+        "label": "Reference",
+        "items": [
+          {
+            "label": "Authoring form reference",
+            "slug": "products/registry-evidence/authoring-form"
+          },
+          {
+            "label": "Operator contract",
+            "slug": "products/registry-evidence/operator-contract"
+          }
+        ]
       },
       {
-        "label": "Source testing",
-        "slug": "products/registry-evidence/source-testing"
-      },
-      {
-        "label": "SD-JWT VC demo",
-        "slug": "products/registry-evidence/sd-jwt-vc-demo"
-      },
-      {
-        "label": "Operator contract",
-        "slug": "products/registry-evidence/operator-contract"
-      },
-      {
-        "label": "Performance",
-        "slug": "products/registry-evidence/performance"
+        "label": "Explanation",
+        "items": [
+          {
+            "label": "Product concept",
+            "slug": "products/registry-evidence/concept"
+          },
+          {
+            "label": "Performance",
+            "slug": "products/registry-evidence/performance"
+          }
+        ]
       }
     ]
   }
