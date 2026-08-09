@@ -880,10 +880,9 @@ store:
     }
 
     #[test]
-    fn a_nonce_outliving_the_token_it_is_bound_to_is_refused() {
-        // The nonce is an HMAC over the access token tag and its own expiry.
-        // One that outlives its token verifies against a token that can no
-        // longer be claimed, which is state that can only mislead.
+    fn a_nonce_outliving_the_access_window_is_refused() {
+        // A nonce that remains valid after the access token window can only
+        // advertise a retry window the credential endpoint will not honor.
         let text = VALID.replace("nonceLifetimeSeconds: 120", "nonceLifetimeSeconds: 600");
         assert_eq!(
             load_from(&text),

@@ -440,15 +440,14 @@ async fn token(
 /// The endpoint requires no authorization, which is what OpenID4VCI 1.0 says
 /// and is also the only shape that cannot be used as an oracle: nothing here
 /// looks anything up, so nothing here can report whether a credential exists.
-/// The nonce is a keyed tag over the presented credential and an expiry, so a
-/// nonce minted without one, or under a different one, simply fails when the
-/// credential request presents it.
-async fn nonce(State(service): State<Arc<DeliveryService>>, headers: HeaderMap) -> Response {
-    let credential = bearer_credential(&headers).unwrap_or_default();
-    let tag = service.store.access_token_tag(credential);
+/// Nothing about the caller is read either, so the nonce is a freshness
+/// challenge rather than a second authorization: it is a keyed tag over its own
+/// expiry, and a proof echoing it is bounded by the single-use access token the
+/// credential request must also present.
+async fn nonce(State(service): State<Arc<DeliveryService>>) -> Response {
     value_response(
         StatusCode::OK,
-        &json!({"c_nonce": service.nonces.mint(&tag, now())}),
+        &json!({"c_nonce": service.nonces.mint(now())}),
     )
 }
 
@@ -509,10 +508,9 @@ async fn credential(
         );
     }
 
-    let tag = service.store.access_token_tag(&access_token);
     let mut holder_keys = Vec::with_capacity(request.proofs.jwt.len());
     for proof in &request.proofs.jwt {
-        match holder_key_from_proof(&service, proof, &tag) {
+        match holder_key_from_proof(&service, proof) {
             Ok(key) => holder_keys.push(key),
             Err(refusal) => {
                 return problem(StatusCode::BAD_REQUEST, refusal.error, refusal.description)
@@ -574,7 +572,6 @@ impl ProofRefusal {
 fn holder_key_from_proof(
     service: &DeliveryService,
     proof: &str,
-    access_token_tag: &str,
 ) -> Result<HolderPublicKey, ProofRefusal> {
     if proof.len() > MAXIMUM_PROOF_BYTES {
         return Err(ProofRefusal::new(
@@ -588,7 +585,7 @@ fn holder_key_from_proof(
             "the proof does not carry a nonce",
         ));
     };
-    match service.nonces.verify(&nonce, access_token_tag, now()) {
+    match service.nonces.verify(&nonce, now()) {
         Ok(()) => {}
         Err(NonceError::Expired) => {
             return Err(ProofRefusal::new("invalid_nonce", "the nonce has expired"))
@@ -596,7 +593,7 @@ fn holder_key_from_proof(
         Err(NonceError::Refused) => {
             return Err(ProofRefusal::new(
                 "invalid_nonce",
-                "the nonce is not one this service issued for this token",
+                "the nonce is not one this service issued",
             ))
         }
     }
@@ -1012,11 +1009,11 @@ mod tests {
             .to_owned()
     }
 
-    async fn minted_nonce(server: &TestServer, access_token: &str) -> String {
-        let response = server
-            .post(NONCE_PATH)
-            .add_header("authorization", format!("Bearer {access_token}"))
-            .await;
+    /// Ask for a nonce the way the specification says a wallet does, with no
+    /// authorization at all. Every flow below therefore walks the path a
+    /// conforming wallet walks.
+    async fn minted_nonce(server: &TestServer) -> String {
+        let response = server.post(NONCE_PATH).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         response.json::<Value>()["c_nonce"]
             .as_str()
@@ -1430,6 +1427,43 @@ mod tests {
         assert!(response.json::<Value>()["c_nonce"].is_string());
     }
 
+    /// A wallet that follows the specification can collect its credential.
+    ///
+    /// OpenID4VCI 1.0 Final section 7 gives the nonce endpoint no
+    /// authorization, so a conforming wallet holds a nonce that was minted for
+    /// a request carrying no access token. Issuance reachable only with a nonce
+    /// minted under the token would be issuance no conforming wallet could
+    /// reach, so the whole flow is walked here with the one header the
+    /// specification says is not sent.
+    #[tokio::test]
+    async fn a_wallet_that_never_authorizes_its_nonce_request_can_collect_its_credential() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, issuer) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        let access_token = access_token(&server).await;
+        let minted = server.post(NONCE_PATH).await;
+        assert_eq!(minted.status_code(), StatusCode::OK);
+        let nonce = minted.json::<Value>()["c_nonce"]
+            .as_str()
+            .expect("the nonce response carries a nonce")
+            .to_owned();
+
+        let key = private_jwk("holder");
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "credential_configuration_id": CONFIGURATION_ID,
+                "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+            }))
+            .await;
+        let status = response.status_code();
+        let body: Value = response.json();
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        assert_eq!(issuer.requests().len(), 1);
+    }
+
     #[tokio::test]
     async fn one_credential_request_with_several_proofs_becomes_one_evidence_request() {
         let directory = tempfile::tempdir().expect("temp dir");
@@ -1437,7 +1471,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let keys: Vec<String> = (0..3)
             .map(|index| private_jwk(&format!("k{index}")))
             .collect();
@@ -1469,7 +1503,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("only");
         let response = server
             .post(CREDENTIAL_PATH)
@@ -1520,7 +1554,7 @@ mod tests {
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let response = server
             .post(CREDENTIAL_PATH)
@@ -1547,6 +1581,24 @@ mod tests {
         })
     }
 
+    /// The self-contained key-reference form used by wallets that identify a
+    /// proof key with `did:jwk` instead of placing the JWK directly in the
+    /// header. The encoded JWK includes the ordinary public `use: sig`
+    /// metadata and no Registry-specific member.
+    fn did_jwk_proof_header(private_key: &str) -> Value {
+        let mut jwk = public_jwk(private_key);
+        let members = jwk.as_object_mut().expect("public JWK object");
+        members.remove("alg");
+        members.remove("kid");
+        members.insert("use".to_owned(), json!("sig"));
+        let encoded = URL_SAFE_NO_PAD.encode(jwk.to_string());
+        json!({
+            "alg": "ES256",
+            "typ": "openid4vci-proof+jwt",
+            "kid": format!("did:jwk:{encoded}#0"),
+        })
+    }
+
     /// The payload a proof this service accepts carries.
     fn proof_payload(nonce: &str) -> Value {
         json!({"aud": "https://wallet.example.org", "iat": now(), "nonce": nonce})
@@ -1554,7 +1606,7 @@ mod tests {
 
     /// Present one proof at the credential endpoint, over the whole flow a
     /// wallet walks: an authorized offer, a redeemed pre-authorized code, and a
-    /// nonce minted for the access token that presents it.
+    /// fresh nonce collected without authorization.
     ///
     /// Everything except the proof is therefore correct, which is what makes a
     /// refusal attributable to the proof. The proof is built from a freshly
@@ -1570,7 +1622,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let response = server
             .post(CREDENTIAL_PATH)
@@ -1644,6 +1696,22 @@ mod tests {
         assert_eq!(from_text.2, 1, "one request reaches Evidence");
     }
 
+    /// A self-contained `did:jwk` proof is the same key-possession statement
+    /// as an inline JWK proof. Its optional `exp` is enforced in addition to,
+    /// and never instead of, the short `iat` freshness window.
+    #[tokio::test]
+    async fn a_local_did_jwk_proof_with_an_expiry_is_accepted() {
+        let accepted = credential_request_with_proof(|key, nonce| {
+            let mut payload = proof_payload(nonce);
+            payload["exp"] = json!(now() + 18_000);
+            proof_jwt_with_header(key, did_jwk_proof_header(key), payload)
+        })
+        .await;
+
+        assert_eq!(accepted.0, StatusCode::OK, "body: {}", accepted.1);
+        assert_eq!(accepted.2, 1, "one request reaches Evidence");
+    }
+
     /// The registered media type carries an `application/` prefix and the
     /// header value does not, so the prefixed spelling is a different `typ` and
     /// not a lenient one.
@@ -1659,23 +1727,22 @@ mod tests {
         assert_proof_refused_before_any_evidence_call("a prefixed typ", refusal);
     }
 
-    /// A `kid` nominates a key this service would have to resolve from
-    /// somewhere else. There is nowhere else: the only key it forwards is the
-    /// one the proof carried and authenticated, so a nomination it cannot check
-    /// is refused rather than resolved.
+    /// A `kid` outside the self-contained `did:jwk` method nominates a key this
+    /// service would have to resolve from somewhere else. There is nowhere
+    /// else, so a remote nomination is refused rather than resolved.
     #[tokio::test]
-    async fn a_proof_nominating_its_key_by_kid_is_refused() {
+    async fn a_proof_nominating_a_remote_key_by_kid_is_refused() {
         let refusal = credential_request_with_proof(|key, nonce| {
             let header = json!({
                 "alg": "ES256",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "holder",
+                "kid": "did:web:wallet.example#holder",
             });
             proof_jwt_with_header(key, header, proof_payload(nonce))
         })
         .await;
 
-        assert_proof_refused_before_any_evidence_call("a kid nomination", refusal);
+        assert_proof_refused_before_any_evidence_call("a remote kid nomination", refusal);
     }
 
     /// An `x5c` nominates a key behind a certificate chain, which is the same
@@ -1738,6 +1805,18 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_proof_past_its_optional_expiry_is_refused() {
+        let refusal = credential_request_with_proof(|key, nonce| {
+            let mut payload = proof_payload(nonce);
+            payload["exp"] = json!(now());
+            proof_jwt_with_header(key, did_jwk_proof_header(key), payload)
+        })
+        .await;
+
+        assert_proof_refused_before_any_evidence_call("an expired proof", refusal);
+    }
+
     /// A payload naming one claim twice is refused rather than resolved.
     ///
     /// The nonce is the member duplicated, and the second copy is the one this
@@ -1769,7 +1848,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         // A correctly signed proof whose header presents the private key
         // itself, so the refusal is attributable to the key and not to a broken
@@ -1822,29 +1901,41 @@ mod tests {
         assert!(issuer.requests().is_empty());
     }
 
+    /// A nonce whose expiry has been rewritten is refused.
+    ///
+    /// The nonce states its own expiry, so a wallet that wants a longer window
+    /// has an obvious thing to edit. The tag covers the expiry, so the edit is
+    /// a nonce this process did not mint rather than a longer-lived one.
     #[tokio::test]
-    async fn a_nonce_minted_for_another_token_is_refused() {
+    async fn a_nonce_whose_expiry_was_rewritten_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let (service, _) = wired_service(directory.path());
+        let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
-        let first = access_token(&server).await;
-        let second = access_token(&server).await;
-        let nonce = minted_nonce(&server, &first).await;
+        let access_token = access_token(&server).await;
+        let nonce = minted_nonce(&server).await;
+        let (expiry, tag) = nonce
+            .split_once('.')
+            .expect("the nonce carries its own expiry");
+        let extended = format!(
+            "{}.{tag}",
+            expiry.parse::<i64>().expect("the expiry is a number") + 86_400
+        );
         let key = private_jwk("holder");
 
         let response = server
             .post(CREDENTIAL_PATH)
-            .add_header("authorization", format!("Bearer {second}"))
+            .add_header("authorization", format!("Bearer {access_token}"))
             .json(&json!({
                 "credential_configuration_id": CONFIGURATION_ID,
                 "proofs": {
-                    "jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())],
+                    "jwt": [proof_jwt(&key, "https://wallet.example.org", &extended, now())],
                 },
             }))
             .await;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         assert_eq!(response.json::<Value>()["error"], json!("invalid_nonce"));
+        assert!(issuer.requests().is_empty());
     }
 
     /// A wallet addresses its proof to the identifier this service publishes,
@@ -1874,7 +1965,7 @@ mod tests {
             .to_owned();
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let response = server
             .post(CREDENTIAL_PATH)
@@ -1932,7 +2023,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let request = json!({
             "credential_configuration_id": CONFIGURATION_ID,
@@ -1956,6 +2047,117 @@ mod tests {
         assert_eq!(replayed.status_code(), StatusCode::UNAUTHORIZED);
     }
 
+    /// A request refused after the token was claimed does not give the token
+    /// back.
+    ///
+    /// The token is claimed before the body is parsed and before any proof is
+    /// looked at, which is what makes one authorization mean one attempt rather
+    /// than one success. Without that, the credential endpoint would be a place
+    /// to try proofs against a live token until one was accepted. The refusal
+    /// here comes from the deepest validation step, so every step between the
+    /// claim and it is covered: a service that restored the token on any of
+    /// them would let the retry below succeed.
+    #[tokio::test]
+    async fn a_credential_request_refused_after_the_token_is_claimed_leaves_it_spent() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, issuer) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        let access_token = access_token(&server).await;
+        let key = private_jwk("holder");
+        let refused = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "credential_configuration_id": CONFIGURATION_ID,
+                "proofs": {
+                    "jwt": [proof_jwt(&key, "https://wallet.example.org", "invented", now())],
+                },
+            }))
+            .await;
+        assert_eq!(refused.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(refused.json::<Value>()["error"], json!("invalid_nonce"));
+
+        // Everything wrong with the first request is corrected, and the same
+        // token is presented again. It is gone.
+        let nonce = minted_nonce(&server).await;
+        let retried = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "credential_configuration_id": CONFIGURATION_ID,
+                "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+            }))
+            .await;
+        assert_eq!(retried.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(
+            issuer.requests().is_empty(),
+            "a spent token may reach no credential"
+        );
+    }
+
+    /// The batch ceiling a wallet reads is the batch ceiling it may use.
+    ///
+    /// The published number is taken from the served metadata and used as the
+    /// proof count, so a metadata entry that overstated what the endpoint
+    /// accepts would fail on the accepted case and one that understated it
+    /// would fail on the refused case.
+    #[tokio::test]
+    async fn the_published_batch_size_is_what_the_credential_endpoint_accepts() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, issuer) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        let published = server.get(ISSUER_METADATA_PATH).await.json::<Value>()
+            ["batch_credential_issuance"]["batch_size"]
+            .as_u64()
+            .expect("the metadata publishes a batch size") as usize;
+
+        let keys: Vec<String> = (0..published + 1)
+            .map(|index| private_jwk(&format!("k{index}")))
+            .collect();
+
+        let nonce = minted_nonce(&server).await;
+        let at_the_ceiling: Vec<String> = keys[..published]
+            .iter()
+            .map(|key| proof_jwt(key, "https://wallet.example.org", &nonce, now()))
+            .collect();
+        let accepted = server
+            .post(CREDENTIAL_PATH)
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token(&server).await),
+            )
+            .json(&json!({
+                "credential_configuration_id": CONFIGURATION_ID,
+                "proofs": {"jwt": at_the_ceiling},
+            }))
+            .await;
+        let status = accepted.status_code();
+        let body: Value = accepted.json();
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        assert_eq!(issuer.requests()[0].holder_keys.len(), published);
+
+        let nonce = minted_nonce(&server).await;
+        let over_the_ceiling: Vec<String> = keys
+            .iter()
+            .map(|key| proof_jwt(key, "https://wallet.example.org", &nonce, now()))
+            .collect();
+        let refused = server
+            .post(CREDENTIAL_PATH)
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token(&server).await),
+            )
+            .json(&json!({
+                "credential_configuration_id": CONFIGURATION_ID,
+                "proofs": {"jwt": over_the_ceiling},
+            }))
+            .await;
+        assert_eq!(refused.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(issuer.requests().len(), 1, "one request reached Evidence");
+    }
+
     #[tokio::test]
     async fn a_credential_request_for_another_configuration_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
@@ -1963,7 +2165,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let response = server
             .post(CREDENTIAL_PATH)
@@ -2000,7 +2202,7 @@ mod tests {
         let server = TestServer::new(build_app(service));
 
         let access_token = access_token(&server).await;
-        let nonce = minted_nonce(&server, &access_token).await;
+        let nonce = minted_nonce(&server).await;
         let key = private_jwk("holder");
         let proof = proof_jwt(&key, "https://wallet.example.org", &nonce, now());
         let proofs = vec![proof.as_str(); MAXIMUM_HOLDER_KEYS + 1];

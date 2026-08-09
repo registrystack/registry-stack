@@ -418,15 +418,16 @@ entries:
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_proof_the_refusal_cases_vary_is_otherwise_accepted}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_typed_with_the_registered_media_type_prefix_is_refused}
-      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_nominating_its_key_by_kid_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_nominating_a_remote_key_by_kid_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_nominating_its_key_by_x5c_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_past_its_optional_expiry_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_carrying_no_signature_under_alg_none_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_claiming_an_issuer_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_for_another_audience_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_issued_outside_the_accepted_window_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_payload_naming_a_claim_twice_is_refused_rather_than_resolved}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_this_service_did_not_mint_is_refused}
-      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_minted_for_another_token_is_refused}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_whose_expiry_was_rewritten_is_refused}
   - id: sec-oid4vci-no-audience-scoped-laundering
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_audience_scoped_requirement_cannot_be_offered_to_a_wallet}

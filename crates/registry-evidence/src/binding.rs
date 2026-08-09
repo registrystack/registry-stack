@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_crypto::hmac_sha256_base64url_no_pad;
 use thiserror::Error;
 
@@ -15,6 +16,7 @@ const ENTITY_DOMAIN: &[u8] = b"registry-evidence/entity-reference/v1";
 /// A SHA-256 digest in base64url with no padding, which is what RFC 7638
 /// specifies for a JSON Web Key thumbprint.
 const THUMBPRINT_CHARS: usize = 43;
+const THUMBPRINT_DECODED_BYTES: usize = 32;
 const MIN_KEY_BYTES: usize = 32;
 const MAX_COMPONENT_BYTES: usize = 8 * 1024;
 const MAX_SELECTOR_FIELDS: usize = 16;
@@ -226,11 +228,25 @@ fn push_u32(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
 }
 
+/// Accept only the canonical 43-character unpadded base64url encoding of
+/// exactly 32 bytes. Length, alphabet, padding, and a noncanonical final
+/// symbol (one that leaves nonzero bits past the encoded 256 bits) all fail.
+/// Re-encoding the decoded bytes makes that canonical spelling requirement
+/// explicit rather than depending only on the decoder's trailing-bit policy.
 fn is_canonical_thumbprint(value: &str) -> bool {
-    value.len() == THUMBPRINT_CHARS
-        && value
+    if value.len() != THUMBPRINT_CHARS
+        || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return false;
+    }
+    match URL_SAFE_NO_PAD.decode(value) {
+        Ok(decoded) => {
+            decoded.len() == THUMBPRINT_DECODED_BYTES && URL_SAFE_NO_PAD.encode(decoded) == value
+        }
+        Err(_) => false,
+    }
 }
 
 fn is_canonical_date(value: &str) -> bool {
@@ -252,10 +268,15 @@ mod tests {
 
     const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
 
-    /// A syntactically valid RFC 7638 thumbprint: 43 base64url characters with
-    /// no padding, which is what a SHA-256 digest encodes to.
-    const THUMBPRINT: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
-    const OTHER_THUMBPRINT: &str = "HIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmn";
+    /// A canonical RFC 7638 thumbprint: the unpadded base64url encoding of an
+    /// actual 32-byte digest, with no bits left over past that 256th bit.
+    const THUMBPRINT: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    const OTHER_THUMBPRINT: &str = "AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw";
+    /// Same length and alphabet as `THUMBPRINT`, but its final symbol leaves
+    /// the two bits past the encoded 256th bit set, so it is not the canonical
+    /// spelling of the 32-byte digest it resembles.
+    const NON_CANONICAL_TRAILING_BITS_THUMBPRINT: &str =
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHhG";
 
     fn input<'a>(fields: &'a [SelectorField<'a>]) -> SubjectBindingInput<'a> {
         SubjectBindingInput {
@@ -360,6 +381,23 @@ mod tests {
                 "{candidate:?} is not a canonical thumbprint"
             );
         }
+    }
+
+    #[test]
+    fn a_holder_key_thumbprint_with_nonzero_trailing_bits_is_refused() {
+        let fields = [SelectorField {
+            name: "coordinate",
+            value: SelectorScalar::String("same-bytes"),
+        }];
+        let mut candidate_input = holder_input(&fields);
+        candidate_input.scope =
+            SubjectBindingScope::HolderKeyThumbprint(NON_CANONICAL_TRAILING_BITS_THUMBPRINT);
+        assert_eq!(
+            subject_binding(KEY, 1, candidate_input),
+            Err(BindingError::HolderKey),
+            "a 43-character, alphabet-valid string with nonzero trailing bits is not a \
+             canonical thumbprint"
+        );
     }
 
     #[test]

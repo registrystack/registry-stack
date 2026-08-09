@@ -56,12 +56,16 @@ endpoints:
     authorization: none
     rule: >-
       Publishes credential_issuer, credential_endpoint, nonce_endpoint,
-      authorization_servers and credential_configurations_supported. The token
-      endpoint is not published here; it is published by the authorization
-      server metadata below, which is what authorization_servers points a wallet
-      at. Every credential_configurations_supported entry is derived from the
-      Evidence bundle rather than hand-written, so published metadata cannot
-      drift from what Evidence will actually issue.
+      authorization_servers, batch_credential_issuance and
+      credential_configurations_supported. The token endpoint is not published
+      here; it is published by the authorization server metadata below, which is
+      what authorization_servers points a wallet at. Every
+      credential_configurations_supported entry is derived from the Evidence
+      bundle rather than hand-written, so published metadata cannot drift from
+      what Evidence will actually issue. The batch_credential_issuance
+      batch_size is the holder-key ceiling the Evidence client enforces, read
+      from that constant rather than restated, so the number a wallet is told it
+      may send is the number the credential endpoint accepts.
   - path: GET /.well-known/oauth-authorization-server
     authorization: none
     rule: >-
@@ -69,7 +73,10 @@ endpoints:
       the pre-authorized code grant alone. It publishes issuer, token_endpoint,
       the one supported grant type, an empty response_types_supported, and
       token_endpoint_auth_methods_supported of none, because a pre-authorized
-      flow authenticates the code rather than the client.
+      flow authenticates the code rather than the client. It also publishes
+      pre-authorized_grant_anonymous_access_supported as true, spelled with the
+      hyphen inside pre-authorized that OpenID4VCI gives it, which is what tells
+      a wallet holding no client registration that it may redeem a code anyway.
   - path: POST /offers
     authorization: Mint-issued bearer token, verified as a resource server through the shared OIDC primitive
     rule: >-
@@ -92,13 +99,16 @@ endpoints:
   - path: POST /nonce
     authorization: none, as the specification requires
     rule: >-
-      Empty request, a c_nonce response, and Cache-Control no-store. A bearer
-      token is read if one is presented, solely to bind the nonce to that
-      token's tag; presenting none is not an error and simply mints a nonce no
-      credential request can use. The nonce is a keyed tag over the token tag
-      and an expiry, verified by recomputation, so an unauthenticated endpoint
-      cannot be turned into a memory-exhaustion target by asking for nonces, and
-      nothing here looks anything up, so nothing here can be used as an oracle.
+      Empty request, a c_nonce response, and Cache-Control no-store. Nothing
+      about the caller is read: no header is inspected, so a nonce is minted for
+      a caller this service cannot name and is bound to no access token. The
+      nonce is a freshness challenge, a keyed tag over its own expiry, verified
+      by recomputation, so an unauthenticated endpoint cannot be turned into a
+      memory-exhaustion target by asking for nonces, and nothing here looks
+      anything up, so nothing here can be used as an oracle. Binding it to a
+      token would make it unreachable rather than stronger: the endpoint the
+      specification defines carries no token to bind to, so a conforming wallet
+      would hold a nonce the credential endpoint could never accept.
   - path: POST /credential
     authorization: bearer access token
     rule: >-
@@ -118,10 +128,10 @@ endpoints:
       endpoint list is the complete set of routes the service answers.
 proof_rules:
   - The header type is the bare openid4vci-proof+jwt. The registered media type carries an application prefix; the header value does not, and a value carrying the prefix is rejected.
-  - Exactly one of kid, jwk or x5c may be present. Only jwk is accepted; kid and x5c are rejected with a stated reason, because a pre-authorized flow has no prior key registration for either to resolve against.
+  - Exactly one of kid, jwk or x5c may be present. An inline public JWK is accepted directly. A kid is accepted only as a self-contained did:jwk URL with the #0 verification-method fragment, decoded locally to a public P-256 key; any other kid and every x5c are rejected rather than resolved through ambient network or trust state.
   - iss must be absent. Final requires its omission when the token came from the pre-authorized code flow, so its presence is a rejection rather than something ignored.
-  - aud is the credential issuer identifier, and iat and nonce are required.
-  - The signature is verified before the payload is parsed, the header allowlist is closed, the payload is closed, and a duplicate JSON member is rejected rather than last-wins.
+  - aud is the credential issuer identifier, and iat and nonce are required. exp is the only optional claim; when present it must be a future integer NumericDate and never widens the short iat freshness window.
+  - The signature is verified before the payload is parsed, the header allowlist is closed, the payload is closed to the required claims plus optional exp, and a duplicate JSON member is rejected rather than last-wins.
   - Every rejection happens before any Evidence call, so a malformed proof never reaches an authorization decision or a source.
   - Each accepted proof yields one public JWK, and the set becomes the Evidence request's holder keys, so the holder-bound profile's duplicate-thumbprint rejection applies unchanged and a wallet cannot inflate a batch with one key wearing several kid values.
 state_model:
@@ -135,10 +145,11 @@ state_model:
     - The prepared request carried forward, keyed by the access token's tag, for minutes, so one credential request may be made per token.
     - A ledger of the transaction code failure count and whether the offer was redeemed or locked out, keyed by the pre-authorized code's tag, for the offer's whole life whether or not the offer itself is still redeemable. A lockout drops the offer, so a counter that lived inside the offer would be forgotten by the very event it exists to record, and a counter a restart clears is a restart-to-reset lockout.
   stateless_by_design: >-
-    The c_nonce is not stored. It is a keyed tag over the token tag and an
-    expiry, verified by recomputation. Nonce replay is harmless once the access
-    token is single use, because the proof binds the wallet's own key, so a
-    replay returns the same holder the same credential.
+    The c_nonce is not stored. It is a keyed tag over its own expiry, verified
+    by recomputation, and it names no access token. Nonce replay is harmless
+    because the access token is single use and the proof binds the wallet's own
+    key, so a replay returns the same holder the same credential, and a stolen
+    nonce is worth nothing without the token that must accompany it.
   honest_limits:
     - A restart invalidates every offer outstanding in a minutes-wide window. The resulting failure is a clean, value-free error rather than a panic.
     - Single use is enforced per process. A second replica breaks it, which is why there is exactly one. Adding a replica means a shared store, and that decision is not taken here.
@@ -153,6 +164,7 @@ prohibitions:
     - generating, holding, escrowing, or recovering a holder key
     - delivering a credential for a requirement that is not holder-bound, which would launder an audience-scoped credential into a wallet
     - wallet attestation, trust-list membership, and any judgement about which wallet is asking
+    - remote DID resolution or any key lookup selected by a proof
     - draft-13 compatibility in either direction
 # Each identifier is a named security negative resolved through
 # security-test-traceability.yaml to executable tests, and each is the negative

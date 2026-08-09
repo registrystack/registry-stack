@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use registry_evidence_client::{
     AssuranceProfile, DefinitionSubject, EvidenceDefinition, EvidenceDefinitionsDocument,
-    ExpectedOutputDocument, SubjectBindingMode, MAXIMUM_EXPECTED_OUTPUTS,
+    ExpectedOutputDocument, SubjectBindingMode, MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_HOLDER_KEYS,
 };
 use serde_json::{json, Map, Value};
 
@@ -29,8 +29,11 @@ use crate::{config::DeliveryConfig, CREDENTIAL_FORMAT};
 /// signs a holder-bound credential with. Both are fixed by the frozen profile.
 const ES256: &str = "ES256";
 
-/// The binding method a holder presents: a public JWK inside the proof header.
+/// The two binding methods a holder may present. Both are self-contained in
+/// the proof header; the `did:jwk` form is decoded locally and never resolved
+/// over the network.
 const JWK_BINDING: &str = "jwk";
+const DID_JWK_BINDING: &str = "did:jwk";
 
 /// The widest collection a requested concept may answer with.
 ///
@@ -125,7 +128,7 @@ impl CredentialCatalog {
                 json!({
                     "format": CREDENTIAL_FORMAT,
                     "vct": configuration.vct,
-                    "cryptographic_binding_methods_supported": [JWK_BINDING],
+                    "cryptographic_binding_methods_supported": [JWK_BINDING, DID_JWK_BINDING],
                     "credential_signing_alg_values_supported": [ES256],
                     // An object keyed by proof type, not a list of type names.
                     "proof_types_supported": {
@@ -139,6 +142,11 @@ impl CredentialCatalog {
             "credential_endpoint": format!("{issuer}{}", crate::service::CREDENTIAL_PATH),
             "nonce_endpoint": format!("{issuer}{}", crate::service::NONCE_PATH),
             "authorization_servers": [issuer],
+            // The ceiling the credential endpoint enforces, published rather
+            // than restated: a wallet that reads this and sends that many
+            // proofs is sending a request this service accepts, and a published
+            // number of its own could drift away from the one enforced.
+            "batch_credential_issuance": {"batch_size": MAXIMUM_HOLDER_KEYS},
             "credential_configurations_supported": Value::Object(supported),
         })
     }
@@ -158,6 +166,11 @@ pub fn authorization_server_metadata(config: &DeliveryConfig) -> Value {
         "grant_types_supported": [crate::PRE_AUTHORIZED_CODE_GRANT_TYPE],
         "response_types_supported": [],
         "token_endpoint_auth_methods_supported": ["none"],
+        // A pre-authorized code is redeemed by whoever holds it, with no client
+        // registration and no client authentication. Stating so is what tells a
+        // wallet it may redeem one without an identity of its own, and it
+        // matches the auth method published above.
+        "pre-authorized_grant_anonymous_access_supported": true,
     })
 }
 
@@ -325,7 +338,7 @@ pub(crate) mod tests {
         assert_eq!(entry["format"], json!("dc+sd-jwt"));
         assert_eq!(
             entry["cryptographic_binding_methods_supported"],
-            json!(["jwk"])
+            json!(["jwk", "did:jwk"])
         );
         assert_eq!(
             entry["credential_signing_alg_values_supported"],
@@ -336,6 +349,22 @@ pub(crate) mod tests {
         assert_eq!(
             entry["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
             json!(["ES256"])
+        );
+    }
+
+    /// The published batch ceiling is the one the credential endpoint enforces.
+    ///
+    /// Asserted against the constant rather than against a number written here,
+    /// because a literal would let the two drift apart in exactly the way a
+    /// published ceiling must not.
+    #[test]
+    fn the_published_batch_size_is_the_ceiling_the_service_enforces() {
+        let config = crate::config::tests::valid_config();
+        let metadata = catalog().issuer_metadata(&config);
+
+        assert_eq!(
+            metadata["batch_credential_issuance"]["batch_size"],
+            json!(MAXIMUM_HOLDER_KEYS)
         );
     }
 
@@ -351,6 +380,26 @@ pub(crate) mod tests {
         assert_eq!(
             metadata["grant_types_supported"],
             json!(["urn:ietf:params:oauth:grant-type:pre-authorized_code"])
+        );
+    }
+
+    /// A wallet with no client registration must be told it may redeem a
+    /// pre-authorized code anyway. The key is spelled the way OpenID4VCI spells
+    /// it, with a hyphen inside `pre-authorized` and underscores elsewhere, so
+    /// it is asserted verbatim rather than through a helper that could
+    /// normalize it.
+    #[test]
+    fn the_authorization_server_metadata_states_anonymous_pre_authorized_access() {
+        let config: DeliveryConfig = crate::config::tests::valid_config();
+        let metadata = authorization_server_metadata(&config);
+
+        assert_eq!(
+            metadata["pre-authorized_grant_anonymous_access_supported"],
+            json!(true)
+        );
+        assert_eq!(
+            metadata["token_endpoint_auth_methods_supported"],
+            json!(["none"])
         );
     }
 }
