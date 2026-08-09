@@ -1,0 +1,131 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: registered-businesses
+  version: 2026-08-01
+  title: Synthetic registered businesses
+registry:
+  registryIdentifier: urn:example:registry:registered-businesses
+  name: Synthetic registered business Registry
+  authority:
+    identifier: urn:example:institution:company-registrar
+    name: Example Company Registrar
+  operator:
+    identifier: urn:example:institution:digital-service-operator
+    name: Example Digital Service Operator
+  authoritativeScope: Synthetic legal business registrations for Relay acceptance testing
+  baseUri: https://business.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+    - name: govstack-api-design-guide
+      version: 0.1.0-draft
+      status: directional
+governance:
+  controller: urn:example:institution:company-registrar
+  publisher: urn:example:institution:company-registrar
+  auditOwner: urn:example:institution:company-registrar-audit
+semantics:
+  localVocabulary: https://business.example.invalid/vocabulary/
+  alignments:
+    - id: semic-business-alignment
+      profileRef: semantics/semic-business-alignment.yaml
+      digest: sha256:69c6efc233798949fb69457583733b837ce7fa36d238828e9357533383f197c3
+      version: "1"
+      relationRequired: true
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: https://business.example.invalid/classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/legal-basis.yaml
+sources:
+  companies:
+    kind: sqlite
+    profile: snapshot
+    expectedSchemaFingerprint: sha256:c978e36d7f0de71e8aa8245cdc8501ffdd760d87d9e6e0df97fd1228712361f1
+resources:
+  - id: registered-business
+    title: Registered business
+    description: Current synthetic public business registration.
+    semanticClass: local:RegisteredBusiness
+    source:
+      source: companies
+      view: relay_registered_businesses
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: registration_number}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    properties:
+      registrationNumber:
+        sourceColumn: registration_number
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrationNumber
+        label: Registration number
+        description: Stable synthetic business registration number.
+      legalName:
+        sourceColumn: legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:legalName
+        label: Legal name
+        description: Registered legal name of the synthetic organisation.
+        classification: {privacy: potentially-personal, institutional: public-by-law}
+      registrationStatus:
+        sourceColumn: registration_status
+        type: controlled-code
+        codelist: codelists/business-status.yaml
+        sourceRequired: true
+        semanticTerm: local:registrationStatus
+        label: Registration status
+        description: Current registration lifecycle status.
+      legalForm:
+        sourceColumn: legal_form
+        type: controlled-code
+        codelist: codelists/legal-forms.yaml
+        sourceRequired: true
+        semanticTerm: local:legalForm
+        label: Legal form
+        description: Declared legal form of the synthetic organisation.
+      registeredJurisdiction:
+        sourceColumn: jurisdiction_code
+        type: controlled-code
+        codelist: codelists/jurisdictions.yaml
+        sourceRequired: true
+        semanticTerm: local:registeredJurisdiction
+        label: Registered jurisdiction
+        description: Jurisdiction maintaining the synthetic registration.
+    disclosureProfiles:
+      public-register:
+        properties: [registrationNumber, legalName, registrationStatus, legalForm, registeredJurisdiction]
+    operations:
+      list:
+        access: public
+        disclosureProfile: public-register
+        filters:
+          - {name: status, property: registrationStatus, type: controlled-code}
+          - {name: jurisdiction, property: registeredJurisdiction, type: controlled-code}
+        allowUnfiltered: true
+        orderBy: [registrationNumber]
+        pagination: {defaultPageSize: 2, maximumPageSize: 4}
+      read:
+        access: public
+        disclosureProfile: public-register
+    processingDescriptions:
+      - id: statutory-publication
+        operationRefs: [list, read]
+        purpose: statutory-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [reviewed-public-view, property-minimization, deterministic-pagination, change-impact-review]
+metadataVisibility:
+  service: public
+  resources: public
+  semantics: public
+  classifications: public
+  processing: public

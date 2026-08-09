@@ -1,0 +1,8 @@
+schemaVersion: relay.registrystack.org/semantic-alignment/v1alpha1
+profile: https://semiceu.github.io/Core-Business-Vocabulary/
+profileVersion: reviewed-2026-08-09
+profileDigest: sha256:4d8a80f57267b670b307bda30365a33f9bac291687011290195b2496ca39cc01
+status: illustrative-pinned-input
+mappings:
+  - {local: local:RegisteredBusiness, external: https://data.europa.eu/m8g/LegalEntity, relation: close}
+  - {local: local:legalName, external: https://data.europa.eu/m8g/legalName, relation: close}

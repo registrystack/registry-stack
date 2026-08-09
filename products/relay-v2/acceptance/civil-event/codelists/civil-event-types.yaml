@@ -1,0 +1,4 @@
+id: civil-event-types
+version: 1
+status: reviewed
+values: [BIRTH, DEATH, MARRIAGE]

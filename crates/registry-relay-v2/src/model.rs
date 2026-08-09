@@ -1,0 +1,354 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Immutable compiled model and rendering-neutral reports.
+
+use serde::{Deserialize, Serialize};
+
+use crate::contract::{
+    AlignmentTarget, DataType, Handling, ProcessingDescription, SemanticAlignment, SourceProfile,
+    Visibility,
+};
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostic {
+    pub severity: DiagnosticSeverity,
+    pub code: String,
+    pub location: String,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompileReport {
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl CompileReport {
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|item| item.severity == DiagnosticSeverity::Error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompileProfile {
+    Authoring,
+    Production,
+}
+
+/// Product-neutral result of inspecting every reviewed source view. The
+/// SQLite platform crate owns extraction and fingerprint calculation.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedSourceSchema {
+    pub source: String,
+    pub fingerprint: String,
+    pub views: Vec<ObservedView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedView {
+    pub name: String,
+    pub columns: Vec<ObservedColumn>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedColumn {
+    pub name: String,
+    pub declared_type: String,
+    pub nullable: bool,
+    pub primary_key: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledRegistry {
+    pub contract_revision: String,
+    pub contract_id: String,
+    pub contract_version: String,
+    pub registry_identifier: String,
+    pub registry_name: String,
+    pub authority_identifier: String,
+    pub operator_identifier: Option<String>,
+    pub authoritative_scope: String,
+    pub base_uri: String,
+    pub identifier_lifecycle_policy_ref: String,
+    pub alignment_targets: Vec<AlignmentTarget>,
+    pub controller_identifier: String,
+    pub publisher_identifier: String,
+    pub audit_owner_identifier: String,
+    pub local_vocabulary: String,
+    pub semantic_alignments: Vec<SemanticAlignment>,
+    pub governed_files: Vec<CompiledGovernedFile>,
+    pub codelists: Vec<CompiledCodelist>,
+    pub sources: Vec<CompiledSource>,
+    pub resources: Vec<CompiledResource>,
+    pub metadata_visibility: CompiledMetadataVisibility,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledGovernedFile {
+    pub path: String,
+    pub sha256: String,
+    pub roles: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledCodelist {
+    pub path: String,
+    pub id: String,
+    pub version: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSource {
+    pub id: String,
+    pub profile: SourceProfile,
+    pub expected_schema_fingerprint: String,
+    pub observed_schema: Option<ObservedSourceSchema>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledResource {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub semantic_class: String,
+    pub source: String,
+    pub view: String,
+    pub record_context: CompiledRecordContext,
+    pub properties: Vec<CompiledProperty>,
+    pub disclosure_profiles: Vec<CompiledDisclosureProfile>,
+    pub operations: Vec<CompiledOperation>,
+    pub column_accounting: Vec<ColumnAccount>,
+    pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledRecordContext {
+    pub record_identifier_column: String,
+    pub revision_identifier_column: String,
+    pub lifecycle_state_column: String,
+    pub lifecycle_state_codelist: String,
+    pub recorded_at_column: String,
+    pub schema_reference: String,
+    pub semantic_model_reference: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledProperty {
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: DataType,
+    pub codelist: Option<String>,
+    pub source_required: bool,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveClassification {
+    pub privacy: String,
+    pub privacy_scheme: String,
+    pub privacy_version: String,
+    pub institutional: String,
+    pub institutional_scheme: String,
+    pub institutional_version: String,
+    pub handling: Handling,
+    pub handling_scheme: String,
+    pub handling_version: String,
+    pub status: crate::contract::ReviewStatus,
+    pub provenance_ref: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledDisclosureProfile {
+    pub id: String,
+    /// Maximum and default set in authored order.
+    pub properties: Vec<String>,
+    pub maximum_handling: Handling,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledOperation {
+    pub identifier: String,
+    pub family: CapabilityFamily,
+    pub pattern: ConsultationPattern,
+    pub kind: OperationKind,
+    pub access: CompiledAccess,
+    pub disclosure_profile: String,
+    pub selectable_properties: Vec<String>,
+    pub query: QueryPlan,
+    pub maximum_handling: Handling,
+    pub schema_reference: String,
+    pub semantic_model_reference: String,
+    pub context_reference: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityFamily {
+    Consultation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsultationPattern {
+    List,
+    Retrieve,
+    Search,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationKind {
+    List,
+    Read,
+    Lookup { name: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CompiledAccess {
+    Public,
+    Protected {
+        scope: String,
+        purpose: Option<CompiledPurpose>,
+        row_binding: Option<CompiledRowBinding>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPurpose {
+    pub claim: String,
+    pub allowed: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledRowBinding {
+    pub source: RowAuthoritySource,
+    pub source_column: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "claim", rename_all = "kebab-case")]
+pub enum RowAuthoritySource {
+    Principal,
+    Claim(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPlan {
+    pub source: String,
+    pub view: String,
+    pub projected_columns: Vec<String>,
+    pub filters: Vec<CompiledFilter>,
+    pub selectors: Vec<CompiledSelector>,
+    pub order_by: Vec<String>,
+    pub allow_unfiltered: bool,
+    pub pagination: Option<CompiledPagination>,
+    pub maximum_request_body_bytes: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledFilter {
+    pub parameter: String,
+    pub property: String,
+    pub source_column: String,
+    pub data_type: DataType,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSelector {
+    pub name: String,
+    pub source_column: String,
+    pub data_type: DataType,
+    pub minimum_bytes: Option<u32>,
+    pub maximum_bytes: Option<u32>,
+    pub codelist: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPagination {
+    pub default_page_size: u32,
+    pub maximum_page_size: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnAccount {
+    pub column: String,
+    pub uses: Vec<ColumnUse>,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColumnUse {
+    RecordIdentifier,
+    RevisionIdentifier,
+    LifecycleState,
+    RecordedAt,
+    Property(String),
+    Filter(String),
+    Order,
+    Selector(String),
+    RowBinding(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledMetadataVisibility {
+    pub service: Visibility,
+    pub resources: Visibility,
+    pub semantics: Visibility,
+    pub classifications: Visibility,
+    pub processing: Visibility,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarterContract {
+    pub source: String,
+    pub view: String,
+    pub expected_schema_fingerprint: String,
+    pub columns: Vec<StarterColumn>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarterColumn {
+    pub source_column: String,
+    pub suggested_property: String,
+    pub suggested_type: DataType,
+    pub classification_status: crate::contract::ReviewStatus,
+}

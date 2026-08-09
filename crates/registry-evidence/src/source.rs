@@ -274,15 +274,6 @@ pub enum StatementExtract<'a> {
     Fixture(&'a Path),
 }
 
-impl<'a> StatementExtract<'a> {
-    fn path(self) -> &'a Path {
-        match self {
-            Self::Bound(extract) => extract.path(),
-            Self::Fixture(path) => path,
-        }
-    }
-}
-
 /// Bind one source to what a statement transport needs from outside its own
 /// configuration, so every caller assembles it the same way.
 ///
@@ -1067,8 +1058,17 @@ impl StatementTransport {
         // settled here instead of going unchecked.
         let extract = match inputs.extract {
             Some(bound) => {
-                let opened = SqliteExtractSource::open(source, inputs.statement_sql, bound.path())
-                    .map_err(map_statement_error)?;
+                let opened = match bound {
+                    StatementExtract::Bound(extract) => SqliteExtractSource::open_captured(
+                        source,
+                        inputs.statement_sql,
+                        extract.captured_snapshot(),
+                    ),
+                    StatementExtract::Fixture(path) => {
+                        SqliteExtractSource::open(source, inputs.statement_sql, path)
+                    }
+                }
+                .map_err(map_statement_error)?;
                 // Digesting the file and opening it are not the same moment:
                 // the bundle, the kernel, and the audit log are read in
                 // between. A publisher refreshing the bound path inside that

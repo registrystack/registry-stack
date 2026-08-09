@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""Run the complete Relay V2 adopter workflow and verify reviewed outputs."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+PRODUCT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PRODUCT_ROOT.parents[1]
+PROJECTS = ("social-assistance", "business-registry", "civil-event")
+BASELINE_PATH = PRODUCT_ROOT / "contracts/generated-baselines.yaml"
+CONFIGURATION_REFERENCE = PRODUCT_ROOT / "CONFIGURATION-EXAMPLES.md"
+CONFIGURATION_MARKERS = {
+    "registry": "relay-v2-registry-key-paths",
+    "runtime": "relay-v2-runtime-key-paths",
+}
+SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class GateFailure(Exception):
+    pass
+
+
+def run(relayctl: Path, arguments: list[str], *, expected: int = 0) -> tuple[dict[str, Any], bytes]:
+    completed = subprocess.run(
+        [str(relayctl), "--json", *arguments],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != expected:
+        raise GateFailure(
+            f"relayctl {' '.join(arguments[:1])} returned {completed.returncode}, expected {expected}"
+        )
+    if completed.stderr:
+        raise GateFailure(f"relayctl {' '.join(arguments[:1])} wrote to stderr")
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise GateFailure(f"relayctl {' '.join(arguments[:1])} did not emit JSON") from error
+    return report, completed.stdout
+
+
+def materialize(project: Path) -> None:
+    database = project / "fixture.sqlite"
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript((project / "fixture.sql").read_text(encoding="utf-8"))
+    finally:
+        connection.close()
+    database.chmod(0o444)
+
+
+def protected_canaries(project: Path) -> set[bytes]:
+    sql = (project / "fixture.sql").read_text(encoding="utf-8")
+    values = {match.replace("''", "'") for match in re.findall(r"'((?:''|[^'])*)'", sql)}
+    journey = yaml.safe_load((project / "expected-http.yaml").read_text(encoding="utf-8"))
+    for authorization in journey.get("authorizations", {}).values():
+        values.add(str(authorization.get("principal", "")))
+        values.update(str(value) for value in authorization.get("claims", {}).values())
+    for step in journey.get("steps", []):
+        values.update(str(value) for value in step.get("request", {}).get("body", {}).values())
+    return {value.encode() for value in values if len(value) >= 4}
+
+
+def assert_value_free(outputs: list[bytes], canaries: set[bytes], project: str) -> None:
+    for output in outputs:
+        for canary in canaries:
+            if canary in output:
+                raise GateFailure(f"{project}: adopter output exposed a protected fixture value")
+
+
+def file_sha256(path: Path) -> str:
+    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def tree_hashes(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): file_sha256(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def openapi_operations(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+    if document.get("openapi") != "3.1.0" or not isinstance(document.get("paths"), dict):
+        raise GateFailure("generated OpenAPI is not a valid 3.1 path document")
+    for path, path_item in document["paths"].items():
+        if not isinstance(path, str) or not path.startswith("/") or not isinstance(path_item, dict):
+            raise GateFailure("generated OpenAPI path inventory is malformed")
+        for method, operation in path_item.items():
+            if method not in {"get", "post"} or not isinstance(operation, dict):
+                raise GateFailure("generated OpenAPI contains an unsupported path item")
+            operation_id = operation.get("operationId")
+            if not isinstance(operation_id, str) or not operation_id:
+                raise GateFailure("generated OpenAPI operation has no operationId")
+            result[(path, method)] = operation
+    operation_ids = [operation["operationId"] for operation in result.values()]
+    if len(operation_ids) != len(set(operation_ids)):
+        raise GateFailure("generated OpenAPI operation identifiers are not unique")
+    return result
+
+
+def validate_openapi(package: Path) -> None:
+    full = yaml.safe_load((package / "generated/openapi.full.yaml").read_text(encoding="utf-8"))
+    public = json.loads((package / "generated/openapi.public.json").read_text(encoding="utf-8"))
+    full_operations = openapi_operations(full)
+    public_operations = openapi_operations(public)
+    for key, operation in public_operations.items():
+        if full_operations.get(key) != operation:
+            raise GateFailure("public OpenAPI is not an exact path subset of full OpenAPI")
+        if operation.get("security") == [{"bearerAuth": []}]:
+            raise GateFailure("public OpenAPI exposes a protected-only operation")
+
+    capabilities = json.loads(
+        (package / "generated/artifacts/capabilities.full.json").read_text(encoding="utf-8")
+    )
+    capability_ids = {
+        capability["operationIdentifier"] for capability in capabilities["capabilities"]
+    }
+    fixed_ids = {
+        "relay.health",
+        "relay.ready",
+        "relay.openapi.public",
+        "relay.registry.metadata",
+        "relay.resources.list",
+        "relay.resources.retrieve",
+        "relay.artifacts.retrieve",
+    }
+    full_ids = {operation["operationId"] for operation in full_operations.values()}
+    if full_ids != fixed_ids | capability_ids:
+        raise GateFailure("full OpenAPI does not exactly cover compiled capabilities and router metadata")
+
+    public_capabilities = json.loads(
+        (package / "generated/artifacts/capabilities.json").read_text(encoding="utf-8")
+    )
+    public_capability_ids = {
+        capability["operationIdentifier"]
+        for capability in public_capabilities["capabilities"]
+    }
+    public_ids = {operation["operationId"] for operation in public_operations.values()}
+    required_public_ids = {
+        "relay.health",
+        "relay.ready",
+        "relay.openapi.public",
+        "relay.registry.metadata",
+        "relay.artifacts.retrieve",
+    }
+    if not required_public_ids.issubset(public_ids):
+        raise GateFailure("public OpenAPI omits a required public router operation")
+    if public_ids - fixed_ids != public_capability_ids:
+        raise GateFailure("public OpenAPI capability paths do not match public discovery")
+
+
+def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, Any]:
+    manifest = json.loads((package / "relay-package.json").read_text(encoding="utf-8"))
+    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha1":
+        raise GateFailure("sealed package has an unsupported manifest")
+    artifacts = manifest.get("artifacts")
+    files = manifest.get("files")
+    if not isinstance(artifacts, list) or not isinstance(files, list):
+        raise GateFailure("sealed package inventory is incomplete")
+    file_inventory = {entry["path"]: entry for entry in files}
+    if len(file_inventory) != len(files):
+        raise GateFailure("sealed package contains duplicate file inventory paths")
+    for entry in files:
+        path = package / entry["path"]
+        if not path.is_file() or file_sha256(path) != entry.get("sha256"):
+            raise GateFailure("sealed package file bytes do not match their inventory")
+        if not entry.get("generated") and entry.get("visibility") != "operator-only":
+            raise GateFailure("an authored governed file is not operator-only")
+    artifact_ids: set[str] = set()
+    for artifact in artifacts:
+        identifier = artifact.get("id")
+        path = artifact.get("path")
+        if identifier in artifact_ids or path not in file_inventory:
+            raise GateFailure("generated artifact inventory is not one-to-one")
+        artifact_ids.add(identifier)
+        file_entry = file_inventory[path]
+        for key in ("mediaType", "visibility", "sha256"):
+            if artifact.get(key) != file_entry.get(key):
+                raise GateFailure("artifact exposure inventory disagrees with file inventory")
+        visibility = artifact.get("visibility")
+        operation = artifact.get("operationIdentifier")
+        if visibility == "operation-bound" and not operation:
+            raise GateFailure("operation-bound artifact has no compiled operation gate")
+        if visibility != "operation-bound" and operation is not None:
+            raise GateFailure("non-operation-bound artifact carries an operation gate")
+        generated_path = generated / path.removeprefix("generated/")
+        if not generated_path.is_file() or generated_path.read_bytes() != (package / path).read_bytes():
+            raise GateFailure("generated and packaged artifact bytes differ")
+    by_id = {artifact["id"]: artifact for artifact in artifacts}
+    if by_id.get("openapi-full", {}).get("visibility") != "operator-only":
+        raise GateFailure("full OpenAPI is not package-only")
+    if by_id.get("openapi-public", {}).get("visibility") != "public":
+        raise GateFailure("public OpenAPI is not explicitly public")
+    validate_openapi(package)
+    return manifest
+
+
+def baseline(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "packageRevision": manifest["packageRevision"],
+        "contractRevision": manifest["contractRevision"],
+        "sourceSchemaFingerprints": manifest["sourceSchemaFingerprints"],
+        "artifacts": manifest["artifacts"],
+        "governedFiles": [entry for entry in manifest["files"] if not entry["generated"]],
+    }
+
+
+def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[dict[str, Any]], list[bytes], dict[str, Any]]:
+    source = PRODUCT_ROOT / "acceptance" / project_name
+    project = root / "project"
+    previous = root / "previous"
+
+    reports: list[dict[str, Any]] = []
+    outputs: list[bytes] = []
+
+    def accepted(arguments: list[str]) -> dict[str, Any]:
+        report, output = run(relayctl, arguments)
+        if report.get("status") != "success" or report.get("diagnostics") != []:
+            raise GateFailure(f"{project_name}: relayctl {arguments[0]} refused a reviewed project")
+        reports.append(report)
+        outputs.append(output)
+        return report
+
+    accepted(["init", str(project)])
+    for starter in project.iterdir():
+        if starter.is_dir():
+            shutil.rmtree(starter)
+        else:
+            starter.unlink()
+    shutil.copytree(source, project, dirs_exist_ok=True)
+    materialize(project)
+    shutil.copytree(project, previous)
+    accepted(["inspect", str(project / "fixture.sqlite"), "--starters", str(root / "inspection")])
+    check = accepted(["check", str(project), "--production"])
+    accepted(["generate", str(project), "--output", str(root / "generated")])
+    accepted(["test", str(project)])
+    accepted(["diff", str(previous), str(project)])
+    package_report = accepted(["package", str(project), "--output", str(root / "package")])
+
+    manifest = validate_exposure_and_identity(root / "package", root / "generated")
+    if package_report["details"]["manifest"] != manifest:
+        raise GateFailure(f"{project_name}: package report bytes and sealed manifest differ")
+
+    drift = root / "schema-drift"
+    shutil.copytree(project, drift)
+    database = drift / "fixture.sqlite"
+    database.chmod(0o644)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("CREATE TABLE drift_probe (identifier TEXT NOT NULL)")
+        connection.commit()
+    finally:
+        connection.close()
+    database.chmod(0o444)
+    refusal, refusal_output = run(
+        relayctl, ["check", str(drift), "--production"], expected=1
+    )
+    if refusal.get("status") != "refused" or not refusal.get("diagnostics"):
+        raise GateFailure(f"{project_name}: schema change did not fail closed")
+    outputs.append(refusal_output)
+
+    key_paths = check["details"].get("configuration_key_paths")
+    if not isinstance(key_paths, dict):
+        raise GateFailure(f"{project_name}: shared check report omitted configuration key paths")
+    return reports + [refusal], outputs, {"manifest": manifest, "keyPaths": key_paths}
+
+
+def documented_key_paths(text: str, marker: str) -> set[str]:
+    start = f"<!-- {marker}:start -->"
+    end = f"<!-- {marker}:end -->"
+    _, separator, tail = text.partition(start)
+    if not separator:
+        raise GateFailure(f"configuration reference is missing {start}")
+    block, separator, _ = tail.partition(end)
+    if not separator:
+        raise GateFailure(f"configuration reference is missing {end}")
+    paths = [
+        line.strip()
+        for line in block.splitlines()
+        if line.strip() and not line.strip().startswith("```")
+    ]
+    if paths != sorted(set(paths)):
+        raise GateFailure(f"{marker} key paths are not unique and sorted")
+    return set(paths)
+
+
+def rewrite_key_paths(text: str, marker: str, paths: set[str]) -> str:
+    start = f"<!-- {marker}:start -->"
+    end = f"<!-- {marker}:end -->"
+    head, separator, tail = text.partition(start)
+    if not separator:
+        raise GateFailure(f"configuration reference is missing {start}")
+    _, separator, rest = tail.partition(end)
+    if not separator:
+        raise GateFailure(f"configuration reference is missing {end}")
+    body = "\n".join(sorted(paths))
+    return f"{head}{start}\n```text\n{body}\n```\n{end}{rest}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--relayctl", type=Path, required=True)
+    parser.add_argument("--write", action="store_true")
+    args = parser.parse_args()
+    relayctl = args.relayctl.resolve()
+    if not relayctl.is_file():
+        print("relay-v2 adopter workflow: relayctl binary is missing", file=sys.stderr)
+        return 1
+
+    try:
+        snapshots: dict[str, Any] = {}
+        key_paths = {"registry": set(), "runtime": set()}
+        for project_name in PROJECTS:
+            with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-first-") as first_raw:
+                with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-second-") as second_raw:
+                    first = Path(first_raw)
+                    second = Path(second_raw)
+                    first_reports, first_outputs, first_result = run_workflow(
+                        relayctl, project_name, first
+                    )
+                    second_reports, second_outputs, second_result = run_workflow(
+                        relayctl, project_name, second
+                    )
+                    if first_reports != second_reports:
+                        raise GateFailure(f"{project_name}: adopter reports are not deterministic")
+                    if tree_hashes(first / "generated") != tree_hashes(second / "generated"):
+                        raise GateFailure(f"{project_name}: generated artifacts are not deterministic")
+                    if tree_hashes(first / "package") != tree_hashes(second / "package"):
+                        raise GateFailure(f"{project_name}: sealed package is not deterministic")
+                    canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
+                    assert_value_free(first_outputs + second_outputs, canaries, project_name)
+                    snapshots[project_name] = baseline(first_result["manifest"])
+                    if first_result != second_result:
+                        raise GateFailure(f"{project_name}: shared inventories are not deterministic")
+                    for kind in key_paths:
+                        key_paths[kind].update(first_result["keyPaths"][kind])
+
+        baseline_document = {
+            "schemaVersion": "relay.registrystack.org/generated-baselines/v1alpha1",
+            "product": "relay-v2",
+            "projects": snapshots,
+        }
+        reference = CONFIGURATION_REFERENCE.read_text(encoding="utf-8")
+        if args.write:
+            BASELINE_PATH.write_text(
+                yaml.safe_dump(baseline_document, sort_keys=False, width=1000),
+                encoding="utf-8",
+            )
+            for kind, paths in key_paths.items():
+                reference = rewrite_key_paths(
+                    reference, CONFIGURATION_MARKERS[kind], paths
+                )
+            CONFIGURATION_REFERENCE.write_text(reference, encoding="utf-8")
+            print("relay-v2 reviewed baselines and configuration key paths updated")
+            return 0
+
+        committed = yaml.safe_load(BASELINE_PATH.read_text(encoding="utf-8"))
+        if committed != baseline_document:
+            raise GateFailure("generated semantic hashes or exposure inventory drifted")
+        for kind, paths in key_paths.items():
+            documented = documented_key_paths(reference, CONFIGURATION_MARKERS[kind])
+            if documented != paths:
+                raise GateFailure(f"{kind} configuration key-path reference drifted")
+    except (GateFailure, OSError, KeyError, TypeError, yaml.YAMLError) as error:
+        print(f"relay-v2 adopter workflow: {error}", file=sys.stderr)
+        return 1
+
+    print("relay-v2 complete adopter workflow, exposure inventory, and baselines passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

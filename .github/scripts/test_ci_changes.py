@@ -183,6 +183,7 @@ class PlatformRetirementTest(unittest.TestCase):
                 self.assertFalse(Path("crates", crate).exists())
 
         self.assertIn("registry-platform-pdp", SHARDS["platform"])
+        self.assertIn("registry-platform-sqlite", SHARDS["platform"])
         self.assertIn("registry-platform-testing", SHARDS["platform"])
         self.assertFalse(
             Path(
@@ -212,6 +213,28 @@ class CiChangesTest(unittest.TestCase):
         assigned = [package for packages in SHARDS.values() for package in packages]
         self.assertCountEqual(assigned, self.workspace.package_names)
         self.assertEqual(len(assigned), len(set(assigned)))
+
+    def test_relay_v2_paths_select_only_the_v2_product_contract(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-relay-v2/src/compiler.rs",),
+        )
+        self.assertIn("registry-relay-v2", outputs["rust_packages"])
+        self.assertIn("registry-relayctl", outputs["rust_packages"])
+        self.assertTrue(outputs["relay_v2_contracts"])
+        self.assertFalse(outputs["relay_contracts"])
+        self.assertNotIn("registryctl", outputs["rust_packages"])
+
+    def test_relay_v2_product_material_selects_runtime_and_tooling(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("products/relay-v2/contracts/security-invariants.yaml",),
+        )
+        self.assertEqual(
+            set(outputs["rust_packages"]),
+            {"registry-relay-v2", "registry-relayctl"},
+        )
+        self.assertTrue(outputs["relay_v2_contracts"])
 
     def test_example_pr_runs_only_affected_rust_shards(self) -> None:
         outputs = classify(

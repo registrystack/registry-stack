@@ -1,0 +1,4 @@
+schemaVersion: relay.registrystack.org/legal-basis-reference/v1alpha1
+status: synthetic-test-only
+identifier: urn:example:legal-basis:business-register-publication
+statement: Fictional publication authority used only for acceptance testing.

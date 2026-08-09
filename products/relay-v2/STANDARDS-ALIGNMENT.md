@@ -1,0 +1,53 @@
+# Relay V2 standards alignment
+
+Status: Maintained directional alignment note
+Last reviewed: 2026-08-10
+
+Relay V2 was reviewed against the written GovStack Digital Registries draft
+`3.0.0-alpha.2`, its CFR target `govstack-cfr-2.1.0`, and the GovStack API
+Design Guide draft `0.1.0-draft`. These are directional design inputs. This
+note makes no conformance, compatibility, certification, or completeness
+claim. The obsolete Digital Registries OpenAPI is not an input.
+
+## Adopted direction
+
+| Input concept | Relay V2 treatment |
+|---|---|
+| One Registry with named authority and authoritative scope | Authored once in `RegistryContract`, compiled into service metadata and package provenance. |
+| Consultation Retrieve | Identifier read is compiled only when the resource declares `read`. |
+| Consultation List | Deterministic list is compiled only when the resource declares `list`; pagination and filters are closed. |
+| Consultation Search | A named exact lookup is the only accepted search-shaped operation. It returns one governed Record or the unresolved outcome. |
+| Registry semantics | Every resource and property has a stable local semantic identity; JSON-LD, JSON Schema, and SHACL artifacts are compiler outputs. |
+| Capability discovery | The public and protected inventories are derived from compiled operations and their visibility. |
+| API description | One full OpenAPI 3.1 document is package-only and one deterministic public subset is exposed at `/openapi.json`. |
+| API error discipline | Relay uses RFC 9457 problems, stable Registry Stack codes, W3C Trace Context correlation, and value-free details. |
+
+## Intentional gaps
+
+- Exact lookup is not Record Match. Relay emits no candidates, confidence, or
+  explanation.
+- Version 1 does not negotiate response language. Authored semantic labels
+  retain their language metadata.
+- Registry Manifest, machine-readable GovStack alignment, DPV projection, and
+  a GovStack linter remain future adopter-tooling projections.
+- A current SQLite source and its lifecycle policy do not prove that an
+  institution has never reassigned an identifier.
+- Relay responses are unsigned. Portable signed minimum disclosure belongs to
+  Registry Evidence.
+
+## Rejected expansion
+
+Relay V2 does not infer or advertise Provisioning, Write, Notification,
+Aggregate Data, Access Transparency, Identity Federation, Evidence, credential
+lifecycle, registry administration, or a generic compatibility mode. Offline
+`relayctl` authoring is not a Provisioning API, audit is not an Access
+Transparency API, and OAuth resource-server behavior is not Identity
+Federation.
+
+## Review trigger
+
+Review this note when either pinned draft changes, when a compiled capability
+pattern changes, or when the public OpenAPI projection changes. The three
+acceptance contracts carry the same pinned target versions; product validation
+keeps those projects coequal and generated-baseline review makes output changes
+visible.

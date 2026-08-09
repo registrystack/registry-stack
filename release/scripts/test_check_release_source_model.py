@@ -262,6 +262,8 @@ class MonorepoFixture:
             "crates/registry-manifest-core",
             "crates/registry-notary-server",
             "crates/registry-relay",
+            "crates/registry-relay-v2",
+            "crates/registry-relayctl",
             "crates/registry-evidence",
             "crates/registry-evidencectl",
             "crates/registry-mint",

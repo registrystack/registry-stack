@@ -5601,6 +5601,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-oidc",
  "registry-platform-sdjwt",
+ "registry-platform-sqlite",
  "reqwest 0.12.28",
  "rhai",
  "rusqlite",
@@ -6078,6 +6079,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-sqlite"
+version = "0.18.0"
+dependencies = [
+ "rusqlite",
+ "rustix",
+ "serde",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "registry-platform-testing"
 version = "0.18.0"
 dependencies = [
@@ -6180,6 +6194,60 @@ dependencies = [
  "wkt",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "registry-relay-v2"
+version = "0.18.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures",
+ "hex",
+ "hmac 0.13.0",
+ "http",
+ "jsonwebtoken",
+ "registry-platform-audit",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-sqlite",
+ "registry-platform-testing",
+ "reqwest 0.12.28",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "utoipa",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-relayctl"
+version = "0.18.0"
+dependencies = [
+ "clap",
+ "registry-platform-buildinfo",
+ "registry-relay-v2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

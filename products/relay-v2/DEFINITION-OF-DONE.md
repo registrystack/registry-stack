@@ -1,0 +1,172 @@
+# Relay V2 Definition of Done
+
+Status: Approved acceptance contract
+Date: 2026-08-09
+Product direction: [Relay V2 Product Concept](CONCEPT.md)
+Configuration design probes: [Relay V2 Configuration Examples](CONFIGURATION-EXAMPLES.md)
+
+GovStack Digital Registries and API Design Guide drafts are directional inputs.
+The legacy Digital Registries OpenAPI is not an acceptance artifact. This DoD
+requires a concise alignment note and intentional-difference records, not a
+GovStack conformance or certification claim.
+
+## Completion rule
+
+Relay V2 is done only when every required row below passes on the same revision. A working SQLite endpoint, one successful registry, generated OpenAPI, or a green subset of tests is not completion.
+
+The social, business, and civil-event registries are coequal acceptance definitions. None is the architectural seed, a privileged demo, or a later generality check. Production code, public schemas, routes, and CLI behavior remain registry-domain neutral.
+
+No required behavior may remain as a stub, TODO, undocumented manual step, disabled test, or follow-up issue. Additional storage engines, SpatiaLite, GeoJSON, general policy evaluation, response signing, dynamic masking, and other future profiles are outside this Definition of Done.
+
+## Coequal acceptance definitions
+
+| Registry | Required shape | What it must prove |
+|---|---|---|
+| Social assistance enrolment | Live SQLite, exact lookup only, protected properties, trusted purpose, authority-to-row binding, external authorization server | A sensitive person-related registry can answer a bounded consultation without enumeration, identifier read, selector disclosure, or domain-specific runtime behavior. |
+| Business registration | Snapshot SQLite, anonymous public list and identifier read, predefined exact filters, pagination, public semantics | A genuinely public register can be discoverable and cacheable while remaining contract-bound rather than becoming a generic database API. |
+| Civil event registration | Live SQLite, protected identifier read plus named exact lookup, different operation scopes and disclosure profiles, optional Mint issuer | A CRVS-shaped event register can support registrar and verification uses without exposing a collection, coupling Relay to Mint, or moving signed assertions into Relay. |
+
+Each definition must pass offline fixture evaluation and the real HTTP runtime
+as its own one-Registry deployment. All three must use the same compiler,
+access-decision types, SQLite executor, disclosure planner, serializers, audit
+vocabulary, and problem model. Focused parameterized compiler and runtime tests
+prove in-process resource isolation without adding a fourth deployment project.
+
+## Definition of Done
+
+| Area | Done when |
+|---|---|
+| Product boundary | One `relay` runtime and one separate `relayctl` implement the initial product. Relay is a read-only governed registry publisher, not a SQL proxy, write API, policy engine, credential issuer, or signed-assertion service. The existing `registryctl` is unchanged and unused by Relay V2. |
+| Governed contract | A concise, closed, versioned authoring contract defines resources, source views, identifiers, properties, operations, disclosure profiles, semantics, classifications, access rules, bounds, and metadata visibility, with optional governance sidecars. Unknown fields are rejected. A deployment file may bind paths, listeners, one issuer, secrets, and audit storage but cannot override governed behavior. |
+| Registry identity | One contract and process describes exactly one Registry with a globally stable `registryIdentifier`, name, Registry Authority, optional operator, authoritative scope, base URI, and pinned alignment targets. Resources are Record types within that Registry. Authority, controller, publisher, and operator remain distinct roles even when one institution fills several. |
+| Registry Core | Every returned Record contains non-selectable `registryIdentifier`, `recordIdentifier`, `revisionIdentifier`, `lifecycleState`, `schemaReference`, `semanticModelReference`, `authorityIdentifier`, `recordedAt`, and selected `domainData`. Record identifier, revision, lifecycle, and recorded time are source-bound; recorded time is never Relay observation time. The Registry and Record identifier pair is stable, and the contract names the institution's identifier-lifecycle policy without claiming Relay can prove non-reassignment from one current database. |
+| Family capabilities | Each compiled operation carries a derived family and pattern: read is `consultation.retrieve`, list is `consultation.list`, and named exact lookup is constrained `consultation.search`. Capability discovery is generated from operations rather than separately authored. Relay makes no claim for Record Match or the Provisioning, Evidence, Write, Notification, Aggregate Data, Access Transparency, or Identity Federation families. |
+| Compilation and activation | Relay compiles and validates the complete contract before listening, produces one deterministic contract revision, and activates it atomically. Incomplete semantics, unclassified published properties, invalid source bindings, schema drift, conflicting operations, or unsafe access rules prevent readiness. There is no partial activation, runtime merge, silent fallback, or hot reload. |
+| Domain neutrality | Production Rust, public configuration schemas, routes, CLI options, and generated generic contracts contain no social-registry, business-registry, CRVS, birth, death, household, benefit, company, or acceptance-fixture-specific type, branch, feature, or operation. Such terms appear only in examples, fixtures, and explanatory documentation. |
+| SQLite source boundary | Snapshot and live read-only profiles use one hardened SQLite boundary with OS and engine read-only enforcement, defensive authorizer rules, bound values, consistent per-request transactions, schema fingerprints, and step, time, row, cell, response, queue, and concurrency limits. Writes, schema changes, control statements, attachment, extension loading, and unreviewed SQL are impossible through the public contract. |
+| Snapshot profile | A deployment-bound snapshot is captured outside the contract package, bound to its exact file identity and digest, refuses unsafe sidecars or path replacement, opens immutably, and reports a truthful source revision. Identical governed package and snapshot inputs produce identical revisions and generated artifacts. Snapshot mode is supported but not required for a deployment. |
+| Live profile | A live database is opened read-only while a separately trusted publisher may update it. Each response uses one consistent read transaction and verifies the expected schema fingerprint. Version one live sources compile read and exact lookup only, always return `sourceRevision: {profile: live, status: unversioned, value: null}`, use `no-store`, and emit no ETag. Publisher-owned revisions, live pagination, and live caching are deferred. |
+| Closed operation model | Resources compile only declared list, identifier-read, and named exact-lookup operations. A list's access rule determines whether enumeration is public or protected; absence of list means no enumeration. Collection filters are direct publisher-defined camelCase query parameters, typed, non-personal, and exact-equality only. Any non-empty subset of declared filters is valid, and the contract separately permits or forbids unfiltered access. `pageSize`, `cursor`, and `fields` are reserved. Lookups have complete bounded body inputs and exactly zero or one disclosed result. Callers cannot add SQL, source columns, joins, expressions, operators, paths, projection expressions, sort orders, or page traversal. |
+| Disclosure and requester minimization | Every operation selects one reviewed disclosure profile whose `properties` list is both maximum and default. A caller may request a non-empty, duplicate-free comma-separated subset of selectable `domainData` property keys and nothing else. Registry Core fields remain present. Unknown, internal, source-column, or malformed selections fail before source access. Field selection cannot change predicates, bindings, derivations, validation, authorization, effective handling, audit, quota, metadata, or cache posture. Caller-dependent maximum entitlement variants are explicitly deferred. |
+| HTTP and pagination | Business routes are under `/v2`; `/health`, `/ready`, and `/openapi.json` are unversioned. `GET /v2` publishes safe first-class Registry service metadata and visible derived capabilities. Lists accept bounded `pageSize` and opaque `cursor` and return `{items, pageInfo: {nextCursor}, meta}` with nullable `nextCursor`. Cursor integrity binds revisions, operation, filters, fixed order, field set, authorization context, and expiry; each page is reauthorized. Single reads and resolved lookups return `{data, meta}`. No caller sorting exists. |
+| Query and serialization minimization | Relay may read the complete fixed reviewed projection so it can validate the authoritative Record before disclosure. Unrequested and hidden columns are never serialized. Ordinary JSON and JSON-LD disclose the same Registry Core and selected domain data with deterministic property order. JSON-LD adds the generated context and a derived `@id` without replacing `recordIdentifier`. Cacheable public snapshot responses use a strong exact-byte ETag, `Vary: Accept, Authorization`, `If-None-Match`, and `304`; non-public and live responses are `no-store` and have no ETag. |
+| Semantic contract | Every resource and property has a stable local semantic identity, datatype, cardinality, label, and description. `relayctl` can generate reviewed starter semantics, JSON-LD context, permitted-representation JSON Schema and SHACL, full-record validation schema and SHACL, and codelist scaffolding without requiring prior semantic-web expertise. The representation artifacts require Registry Core and validate selectable domain properties only when present; full-record artifacts retain source requiredness. `semanticModelReference` resolves to the generated vocabulary/model and the context is linked separately. Generated suggestions are visibly non-authoritative until accepted. |
+| External semantic alignment | Optional mappings to SEMIC, PublicSchema, schema.org, or another profile are curated, relation-qualified, versioned, and digest-pinned. Relay fetches no vocabulary and performs no inference at request time. Mapping changes appear in change-impact reports and cannot silently widen disclosure. |
+| Classification and processing | Every published property and every reviewed source-view column has an effective reviewed privacy, institutional, and technical-handling classification with provenance and version. Resource defaults reduce repetition; compilation expands defaults and explicit overrides before validation. Simple property columns inherit unless the source is stricter; hidden Registry Core, selector, row-binding, revision, filter, and order columns are accounted for explicitly. Handling is one of ordered `public`, `internal`, `confidential`, or `restricted`; non-public data requires authentication, operation scope, `no-store`, and durable value-free audit, and restricted data cannot be listed. Purpose and row binding remain explicit access constraints. More restrictive or uncertain classification fails closed. Processing descriptions and DPV projections are optional governance sidecars and never runtime policy. |
+| Authentication and issuers | Relay acts as an OAuth 2.0 JWT resource server for protected operations and Version one configures exactly one issuer per Registry deployment. Relay strictly verifies issuer, audience, token type, algorithm, key, time, client or subject, token identifier, and scope claims. Missing or invalid credentials return safe `401` responses; insufficient scope returns `403`. Anonymous access exists only on operations explicitly compiled as public. |
+| Operation authorization | List, read, and named lookup use distinct registered scopes that are unique across the Registry contract. Trusted purpose and authority-to-row binding are optional compiled constraints and can come only from the resolved principal or a direct verified scalar claim. Caller filters or headers never create authority. A lookup-only client cannot enumerate or perform identifier reads, even when another client can use those operations on the same deployment. |
+| Optional Mint pairing | Relay accepts a conforming token from an external authorization server without Mint. A Mint deployment may be paired when it emits the same Relay audience, operation scopes, and optional authority claims from server-side grants. Relay has no Mint runtime dependency or Mint-specific authentication branch. Mint changes and a Mint integration journey do not block the core Relay V1 acceptance path. |
+| Lookup containment | Sensitive selectors use a bounded request body, are bound rather than rendered, and never appear in URLs, errors, logs, metrics, traces, audit, or responses. No match, ambiguity, policy-hidden record, unknown or protected identifier, and unsafe source record share one `404` outcome with the same Registry Stack problem type, code, detail, schema, and headers. Only independently generated trace correlation may differ. Invalid syntax is a value-free bounded request error. Rate and concurrency limits make consultation abuse observable and bounded. |
+| Validation and failure | Every selected row is schema-validated before release. Relay never skips, coerces, truncates, or partially releases an invalid row to preserve success. Errors use the fixed Registry Stack status/code catalog and derived type URIs plus `traceId`, exactly the 32-lowercase-hex trace ID of the effective valid or server-generated W3C Trace Context. Caller-supplied `tracestate` is never propagated. Problems contain no field-error array, SQL, paths, schema internals, selector values, source values, token material, or subject identifiers. Draft GovStack error namespaces are not used. Required audit or other release-gate failure prevents disclosure. |
+| Unsigned response boundary | Relay responses are not signed. TLS and access-token verification protect the live exchange, while revisions, ETags, provenance, and tamper-evident audit support accountability without being described as signatures. Evidence can consume a fixed Relay lookup when a portable signed minimum-disclosure assertion is required. |
+| Audit and provenance | Every public or protected data request processed by Relay durably records either a refusal before returning or a pre-source attempt followed by one terminal release or unresolved outcome. Durable audit gates source access and response release. Events carry stable identifiers for Registry, resource, operation, access-rule revision, optional purpose, row-boundary kind, disclosure profile, selected-property set or digest, handling level, contract revision, and truthful source revision. Anonymous calls record an anonymous principal kind. Audit contains no tokens, selector values, source values, response values, SQL, or raw subject identifiers. The safeguards report names public shared-cache hits as outside Relay observation. |
+| Metadata visibility | Registry service identity is public. Other resource, capability, OpenAPI, semantic, classification, processing, and operational metadata is `public`, `operation-bound` behind the same static gate as the operation whose Record links it, or `operator-only` in package/CLI with no HTTP route. Protected resource existence and selector shape are indistinguishable from unknown, and discovery performs no source query. The package contains full OpenAPI; `/openapi.json` is a deterministic safe public projection. Compilation fails if any successful Record audience cannot resolve a safe operation-bound projection of its exact `schemaReference` and `semanticModelReference`. |
+| Freshness and caching | Snapshot and live responses expose truthful, profile-specific revision and cache behavior. Every public snapshot response uses `Cache-Control: public, no-cache`, a strong exact-byte ETag, and revalidation. Every non-public or live response is `no-store`. `Vary: Authorization` prevents an anonymous cached `200` from serving a request with an invalid bearer. No response implies a stable cross-request snapshot, and field subsets cannot collide. |
+| Generated contracts | OpenAPI 3.1, JSON Schema, SHACL, JSON-LD contexts, codelists, and capability discovery are generated reproducibly from the compiled contract. Full and public OpenAPI projections have drift checks. No artifact is generated from the obsolete Digital Registries OpenAPI. |
+| Standards alignment | A concise maintained note pins the reviewed Digital Registries and API Design Guide drafts, maps adopted concepts and Consultation patterns, and records intentional gaps and rejected rules. It uses alignment language only, never conformance or certification. Machine-readable alignment reports, GovStack linting, Registry Manifest projection, and DPV generation are later optional tooling. |
+| `relayctl` adopter journey | An adopter can initialize a project, inspect a SQLite schema without values by default, generate starter semantics and classifications, validate, generate artifacts, run fixtures, inspect a semantic and disclosure diff, and package a deployment without editing Rust. `relayctl` uses the same Relay compiler and fixture library as `relay` and implements no second product semantics. |
+| Change impact and safeguards | A contract diff identifies new properties, wider operations or filters, relaxed classification, changed disclosure profiles, removed row bindings, expanded scopes or purposes, changed metadata visibility, source-view changes, and semantic mapping changes. Each applicable DPI safeguard is linked to a concrete mechanism, enforcement point, negative test, evidence artifact, and named institutional responsibility. No certification claim is generated. |
+| Operability | Unauthenticated `/health` reports only liveness and `/ready` reports only ability to serve the compiled Registry, each as minimal `application/json` on `200`, `no-store`, and safe Registry Stack Problem `503` on failure. Neither exposes Registry or source details. Startup, shutdown, bounded concurrency, audit durability, issuer-key refresh, source unavailability, schema drift, and live publisher replacement have documented and tested behavior. Relay emits structured value-free lifecycle logs and bounded request outcomes using only a fixed method class, route template, status, latency, and trace identifier. Version one has no `/metrics` route or in-process metrics registry; operators derive aggregate metrics outside Relay from these logs and durable audit without protected values or high-cardinality subject labels. |
+| Verification evidence | Focused positive, negative, boundary, and non-disclosure tests pass for every security-sensitive behavior. Formatting, package check, Clippy with warnings denied, package tests, workspace tests, dependency policy, contract drift, exposure inventory, source neutrality, config-key-path, and reproducible-generation gates pass on one revision. CI path selection is itself tested for every new owning path. |
+| Stop boundary | Version 1 contains no generic storage trait before a second adapter, SpatiaLite or GeoJSON path, general search language, fuzzy or Record Match behavior, dynamic masking, caller-dependent maximum entitlement profile, PDP, consent workflow, response signing, credential lifecycle, multi-source analytics, runtime vocabulary fetch, RDF store, SPARQL, hot reload, write API, registry administration, formal GovStack compatibility mode, or compatibility work in `registryctl`. |
+
+## Required acceptance coverage
+
+A compact scenario table binds the three journeys below to executable tests. A
+separate security-invariant matrix names threats, enforcement points, and
+negative tests. Non-security prose does not require one machine-readable row
+per sentence.
+
+### Cross-registry path
+
+The three coequal Registry journeys prove adopter-facing behavior. Shared
+product-neutral kernel and multi-resource tests prove security invariants that
+do not need to be repeated with domain-specific fixtures.
+
+For each of the three coequal registries:
+
+1. the example compiles through the same closed configuration types;
+2. Registry identity, authority, scope, alignment targets, and derived Consultation capabilities are correct;
+3. offline fixtures and the real HTTP service return the same semantic result;
+4. every returned Record has valid Registry Core context, and `recordedAt` and `revisionIdentifier` come from the source view;
+5. ordinary JSON and JSON-LD are data-equivalent and validate against generated contracts;
+6. default disclosure and at least two valid `domainData` subsets succeed while Registry Core remains complete;
+7. an unknown property, source-column name, duplicate property, and malformed selection fail without source or value leakage;
+8. invalid selected source rows fail the whole response closed; every Registry proves at least one such refusal, and the coequal suite covers wrong type, missing required value, extra unexpected value, and excessive size;
+9. restarting with identical inputs reproduces the same compiled contract and generated artifacts;
+10. a schema or governed-contract change is detected and cannot silently widen the active API;
+11. full packaged OpenAPI, safe public OpenAPI, semantic, schema, SHACL, codelist, and capability artifacts reproduce byte for byte.
+
+Shared security acceptance additionally proves that:
+
+1. a response and its emitted value-free audit correlate through trace and request-operation identifiers and agree on Registry, resource, compiled operation, contract, disclosure profile, selected properties, row-boundary kind, and truthful source revision;
+2. audit never records response bytes, response digests, Record identifiers, raw subject identifiers, or fixture canaries;
+3. Problems do not contain fixture canaries, trace headers carry only Relay-validated fixed identifiers, and operational log dimensions cannot contain request paths, identifiers, query values, headers, bodies, selectors, or principals;
+4. adopter reports and generated or packaged artifacts pass fixture-canary scans.
+
+Raw source databases are governed inputs rather than diagnostic output. Relay
+does not claim that a test framework's own failure renderer is a protected
+product surface. Metrics, when deployed, are derived externally from the fixed
+value-free operational log dimensions.
+
+### Social registry cases
+
+- exact match, no match, ambiguity, policy-hidden row, and invalid selected row;
+- correct purpose and service-area row binding, missing purpose, wrong purpose, missing binding, and wrong binding;
+- lookup scope succeeds while list and identifier read are absent regardless of token scope;
+- selectors and internal person, household, and service-area binding columns remain absent from every response and diagnostic surface;
+- live update within the compatible schema appears under a truthful later Record revision without mixing rows inside one response;
+- the deployment advertises constrained `consultation.search` only and makes no Base Registry or Record Match claim.
+
+### Business registry cases
+
+- anonymous paginated list and identifier read over a captured snapshot;
+- `pageSize`, first page, cursor page, and nullable `pageInfo.nextCursor` behavior;
+- no filter when allowed, each declared direct camelCase exact filter, a subset of declared filters, unknown filter, unsupported operator, and attempted arbitrary sort;
+- deterministic ordering and pagination with no duplicate or missing record across the unchanged snapshot;
+- public field subset, JSON-LD context, SEMIC mapping artifact, SHACL, and codelist validation;
+- snapshot digest, path replacement, unsafe sidecar, write attempt, and schema mismatch failures.
+- `consultation.list` and `consultation.retrieve` discovery with no unsupported family claim.
+
+### Civil-event registry cases
+
+- protected identifier read and named exact verification lookup, with collection listing absent;
+- registrar read scope cannot be inferred from verification lookup scope, and vice versa;
+- the registrar and verification operations receive their different compiled disclosure profiles, each safely narrowable by the requester;
+- the external-issuer path is complete; a later optional Mint pairing must traverse the same verifier and access-decision path;
+- no match, ambiguity, jurisdiction-hidden row, invalid event record, wrong purpose, and wrong jurisdiction binding collapse according to the lookup contract;
+- the fixed Relay lookup remains an ordinary protected HTTP source contract
+  suitable for a future Evidence integration, without adding signing behavior
+  to Relay; a real Evidence pairing is a separate non-blocking journey.
+- the same Registry Core fields remain present under both operation-specific disclosure profiles.
+
+### Cross-product and neutrality cases
+
+- three independently instantiated one-Registry services exercise real loopback
+  HTTP without sharing authority, contract, source, or audit state, and one
+  packaged deployment passes a real-process start, request, stop, and restart
+  smoke test;
+- parameterized multi-resource compiler and runtime tests prove that contract, query, disclosure, audit, limit, and response state do not cross resource boundaries;
+- a repository boundary check rejects acceptance-domain terms and branches from production code and generic public schemas;
+- the same hardened SQLite executor serves snapshot and live profiles without domain-specific SQL paths;
+- a token minted for Evidence, another Relay audience, or an undeclared operation is rejected;
+- a public operation in a focused multi-resource test does not weaken a protected resource in that same process;
+- full packaged OpenAPI contains all operations while public OpenAPI omits every protected selector and operator-only artifact;
+- unknown, protected, ambiguous, and unsafe lookup outcomes are identical except for trace correlation;
+- the alignment note records the deferred same-operation entitlement variant and every unimplemented family without a conformance claim;
+- every security invariant has a named threat, enforcement point, stable negative case, and traceable test.
+
+## Completion evidence
+
+Before the product can be called complete, the repository must contain and CI must invoke:
+
+- a compact scenario table for the three acceptance definitions;
+- a security-invariant matrix paired with executable negative-test traceability;
+- reproducible generators and drift checks for public and semantic artifacts;
+- generated Consultation capabilities plus a maintained Digital Registries and API Design Guide alignment note;
+- source-product-neutrality and protected-value canary scans;
+- focused runtime, `relayctl`, shared-SQLite, issuer, audit, and serialization tests;
+- the applicable package and workspace formatting, check, Clippy, test, and dependency-policy gates;
+- one local end-to-end journey for each coequal registry using synthetic SQLite data and no external credentials.
+
+Optional live demos may supplement this evidence but never replace deterministic local fixtures and tests.

@@ -5,6 +5,7 @@
 //! and value-free diagnostics that still name the artifact to open.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -184,6 +185,11 @@ fn extract(directory: &TempDir, published_at: &str) -> PathBuf {
         .execute_batch(&statements)
         .expect("the extract fixture is valid SQL");
     drop(connection);
+    let mut permissions = fs::metadata(&path)
+        .expect("the extract fixture has metadata")
+        .permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).expect("the extract fixture is immutable");
     path
 }
 

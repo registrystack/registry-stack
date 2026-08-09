@@ -44,6 +44,7 @@ jobs:
       platform: ${{ steps.filter.outputs.platform }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       relay_contracts: ${{ steps.filter.outputs.relay_contracts }}
+      relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       project_authoring: ${{ steps.filter.outputs.project_authoring }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
@@ -274,6 +275,7 @@ jobs:
           - authcommon_parsers
           - sdjwt_holder_proof
           - sdjwt_issuance
+          - sqlite_statement
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -533,6 +535,32 @@ jobs:
           cargo test --locked -p registry-relay --test api_docs
           openapi_json_can_be_moved_to_public_router_for_local_testing -- --exact
 
+  relay-v2-contracts:
+    name: Relay V2 product contracts
+    needs: changes
+    if: needs.changes.outputs.relay_v2_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Relay V2 contract consistency
+        run: products/relay-v2/scripts/check-contracts.sh
+
+      - name: Relay V2 coequal HTTP journeys
+        run: products/relay-v2/scripts/test-http.sh
+
   rust-result:
     name: Rust workspace
     if: always()
@@ -543,6 +571,7 @@ jobs:
       - rust-tests
       - evidence-contracts
       - relay-contracts
+      - relay-v2-contracts
     runs-on: ubuntu-24.04
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -675,6 +704,9 @@ jobs:
 
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
+
+      - name: Test maintained Debian 13 image checks
+        run: python3 -m unittest release/scripts/test_check_debian13_images.py
 
       - name: Test release workflow guard
         run: python3 -m unittest release/scripts/test_release_workflow_guard.py

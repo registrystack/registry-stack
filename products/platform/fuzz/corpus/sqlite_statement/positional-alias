@@ -1,0 +1,1 @@
+SELECT :value AS result, ?1

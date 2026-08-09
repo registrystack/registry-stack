@@ -1,0 +1,37 @@
+schemaVersion: relay.registrystack.org/package-layout/v1alpha1
+product: relay-v2
+requiredDocuments:
+  - CONCEPT.md
+  - DEFINITION-OF-DONE.md
+  - CONFIGURATION-EXAMPLES.md
+  - IMPLEMENTATION.md
+  - STANDARDS-ALIGNMENT.md
+requiredContracts:
+  - contracts/security-invariant-matrix.yaml
+  - contracts/artifact-inventory.yaml
+  - contracts/package-layout.yaml
+  - contracts/acceptance-scenario-matrix.yaml
+  - contracts/generated-baselines.yaml
+acceptanceProjects:
+  - id: social-assistance
+    path: acceptance/social-assistance
+    registryCount: 1
+  - id: business-registry
+    path: acceptance/business-registry
+    registryCount: 1
+  - id: civil-event
+    path: acceptance/civil-event
+    registryCount: 1
+projectFiles:
+  - registry.yaml
+  - runtime.yaml
+  - fixture.sql
+  - expected-http.yaml
+generatedFilesCommitted: false
+semanticHashSnapshotsCommitted: true
+generatedFilePolicy: Generated SQLite databases and runtime artifacts are built in temporary directories and are not tracked; reviewed semantic hashes and exposure metadata are committed.
+excludedInputs:
+  - legacy GovStack Digital Registries OpenAPI
+  - production credentials or tokens
+  - real personal, organisation, or civil-event data
+  - Registry Relay V1 configuration

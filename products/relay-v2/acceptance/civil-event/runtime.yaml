@@ -1,0 +1,24 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RelayRuntime
+server:
+  bind: 127.0.0.1:18083
+packagePath: package
+sources:
+  events:
+    path: fixture.sqlite
+authentication:
+  issuer:
+    id: registry-mint
+    discoveryUrl: https://mint.example.invalid/.well-known/openid-configuration
+    audience: relay-civil-events
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+audit:
+  sink: var/audit.jsonl
+  integrityKeyRef: secret:env/RELAY_TEST_AUDIT_KEY
+limits:
+  requestTimeoutMilliseconds: 1500
+  concurrentQueries: 16
+quotas:
+  requestsPerMinute: 1
+  burst: 6

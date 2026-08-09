@@ -1,0 +1,176 @@
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry:social-assistance-enrolments
+authorizations:
+  social-lookup-area-a:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:lookup]
+    claims: {purpose: benefit-delivery, service_area: AREA-A}
+  social-lookup-wrong-purpose:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:lookup]
+    claims: {purpose: unpermitted-purpose, service_area: AREA-A}
+  social-lookup-missing-purpose:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:lookup]
+    claims: {service_area: AREA-A}
+  social-lookup-missing-binding:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:lookup]
+    claims: {purpose: benefit-delivery}
+  social-lookup-wrong-binding:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:lookup]
+    claims: {purpose: benefit-delivery, service_area: AREA-B}
+steps:
+  - id: readiness
+    request: {method: GET, path: /ready}
+    expect: {status: 200}
+  - id: lookup-success
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: "enrolmentStatus,validThrough"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [enrolmentStatus, validThrough]
+      absentEverywhere: [caseReference, personReference, service_area_code]
+  - id: lookup-default
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [enrolmentReference, programmeCode, enrolmentStatus, validThrough]
+  - id: lookup-second-subset
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: programmeCode}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 200, registryCoreRequired: true, domainDataKeys: [programmeCode]}
+  - id: lookup-jsonld
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      headers: {accept: application/ld+json}
+      query: {fields: "enrolmentStatus,validThrough"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [enrolmentStatus, validThrough]
+      recordsEquivalentTo: lookup-success
+  - id: route-confinement
+    authorizationFixture: social-lookup-area-a
+    request: {method: GET, path: /v2/resources/assistance-enrolment/records}
+    expect: {status: 404, routeAbsent: true}
+  - id: wrong-purpose
+    authorizationFixture: social-lookup-wrong-purpose
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 403, code: consultation.denied}
+  - id: missing-purpose
+    authorizationFixture: social-lookup-missing-purpose
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 403, code: consultation.denied}
+  - id: missing-binding
+    authorizationFixture: social-lookup-missing-binding
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 403, code: consultation.denied}
+  - id: wrong-binding
+    authorizationFixture: social-lookup-wrong-binding
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: unknown-field
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: notGoverned}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: duplicate-field
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: "programmeCode,programmeCode"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: source-column-field
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: programme_code}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: malformed-field
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {fields: ",programmeCode"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: no-match
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-NONE, personReference: PERSON-SYNTH-NONE}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: ambiguous
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-AMBIG, personReference: PERSON-SYNTH-AMBIG}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: row-hidden
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0002, personReference: PERSON-SYNTH-0002}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: invalid-row
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-BAD1, personReference: PERSON-SYNTH-BAD1}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: excessive-row
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-BAD2, personReference: PERSON-SYNTH-BAD2}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: quota-exhausted
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 429, code: consultation.rate_limited}

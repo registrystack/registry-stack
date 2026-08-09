@@ -643,7 +643,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_relay_all_features_shard_is_reported(self) -> None:
         classifier = self.classifier.replace(
-            '"all_features": shard_name == "relay"',
+            '"all_features": shard_name in {"relay", "relay-v2"}',
             '"all_features": False',
         )
         self.assertIn(

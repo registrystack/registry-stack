@@ -39,6 +39,7 @@ registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sdjwt.workspace = true
+registry-platform-sqlite = { workspace = true, features = ["fixture"] }
 reqwest.workspace = true
 rand_core.workspace = true
 rhai.workspace = true

@@ -1,0 +1,7 @@
+schemaVersion: relay.registrystack.org/identifier-lifecycle/v1alpha1
+registry: urn:example:registry:civil-events
+policyStatus: reviewed-synthetic
+rules:
+  stableAcrossRevisions: true
+  retiredIdentifiersReassigned: false
+evidenceFixtures: [fixture.sql]

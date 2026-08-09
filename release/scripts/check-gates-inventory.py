@@ -91,7 +91,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Relay all-features shard",
-        '"all_features": shard_name == "relay"',
+        '"all_features": shard_name in {"relay", "relay-v2"}',
     ),
     ("Disk-bounded Rust cache", "cache-targets: false"),
     ("Rust disk telemetry", "du -sh target 2>/dev/null || true"),

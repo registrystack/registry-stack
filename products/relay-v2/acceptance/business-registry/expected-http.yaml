@@ -1,0 +1,128 @@
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry:registered-businesses
+authorizations: {}
+steps:
+  - id: registry-discovery
+    request: {method: GET, path: /v2}
+    expect:
+      status: 200
+      capabilityPatterns: [consultation.list, consultation.retrieve]
+      absentCapabilityPatterns: [consultation.search, evidence, write, notification]
+  - id: first-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {pageSize: 2}
+    expect:
+      status: 200
+      itemCount: 2
+      nextCursor: non-null
+      registryCoreRequired: true
+  - id: second-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {cursor: "$nextCursor:first-page"}
+    expect: {status: 200, itemCount: 2, registryCoreRequired: true}
+  - id: terminal-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A, pageSize: 4}
+    expect: {status: 200, itemCount: 2, nextCursor: "null", registryCoreRequired: true}
+  - id: status-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {status: SUSPENDED}
+    expect: {status: 200, itemCount: 1, registryCoreRequired: true}
+  - id: jurisdiction-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A}
+    expect: {status: 200, itemCount: 2, registryCoreRequired: true}
+  - id: filtered-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {status: ACTIVE, jurisdiction: EX-A, fields: "registrationNumber,legalName"}
+    expect:
+      status: 200
+      domainDataKeys: [registrationNumber, legalName]
+      registryCoreRequired: true
+  - id: second-field-subset
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: registrationStatus, pageSize: 2}
+    expect: {status: 200, itemCount: 2, registryCoreRequired: true, domainDataKeys: [registrationStatus]}
+  - id: identifier-read
+    request: {method: GET, path: /v2/resources/registered-business/records/BIZ-SYNTH-0001}
+    expect:
+      status: 200
+      recordIdentifier: BIZ-SYNTH-0001
+      cache: public-snapshot-revalidation
+  - id: identifier-read-jsonld
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      headers: {accept: application/ld+json}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      recordsEquivalentTo: identifier-read
+  - id: identifier-read-revalidated
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      headers: {if-none-match: "$etag:identifier-read"}
+    expect:
+      status: 304
+      bodyEmpty: true
+      etagSameAs: identifier-read
+  - id: unknown-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: notGoverned}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: duplicate-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: "legalName,legalName"}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: source-column-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: legal_name}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: malformed-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: ",legalName"}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: unknown-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {legalName: Example}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: arbitrary-sort
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {sort: legalName}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: unsupported-filter-operator
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {"status[eq]": ACTIVE}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: invalid-source-row
+    request: {method: GET, path: /v2/resources/registered-business/records/BIZ-SYNTH-BAD1}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}

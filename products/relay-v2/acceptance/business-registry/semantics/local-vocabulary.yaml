@@ -1,0 +1,12 @@
+schemaVersion: relay.registrystack.org/local-vocabulary/v1alpha1
+baseIri: https://business.example.invalid/vocabulary/
+origin: curated-local
+reviewStatus: reviewed
+classes:
+  - {id: RegisteredBusiness, label: Registered business, description: Synthetic current business registration.}
+properties:
+  - {id: registrationNumber, label: Registration number, datatype: string, cardinality: one}
+  - {id: legalName, label: Legal name, datatype: string, cardinality: one}
+  - {id: registrationStatus, label: Registration status, datatype: controlled-code, cardinality: one}
+  - {id: legalForm, label: Legal form, datatype: controlled-code, cardinality: one}
+  - {id: registeredJurisdiction, label: Registered jurisdiction, datatype: controlled-code, cardinality: one}

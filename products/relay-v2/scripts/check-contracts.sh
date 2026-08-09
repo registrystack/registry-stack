@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+python3 "$SCRIPT_DIR/validate_product.py"
+bash "$SCRIPT_DIR/check-source-neutrality.sh"
+python3 -m unittest "$SCRIPT_DIR/test_validate_product.py"
+bash "$SCRIPT_DIR/check-configs.sh"
+
+echo "relay-v2 product contracts passed"

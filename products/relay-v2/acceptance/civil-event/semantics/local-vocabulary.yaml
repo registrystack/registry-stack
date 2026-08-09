@@ -1,0 +1,13 @@
+schemaVersion: relay.registrystack.org/local-vocabulary/v1alpha1
+baseIri: https://civil-registry.example.invalid/vocabulary/
+origin: curated-local
+reviewStatus: reviewed
+classes:
+  - {id: CivilEventRegistration, label: Civil-event registration, description: Synthetic current civil-event registration.}
+properties:
+  - {id: eventReference, label: Event reference, datatype: string, cardinality: one}
+  - {id: eventType, label: Event type, datatype: controlled-code, cardinality: one}
+  - {id: registrationStatus, label: Registration status, datatype: controlled-code, cardinality: one}
+  - {id: registrationDate, label: Registration date, datatype: date, cardinality: one}
+  - {id: registrationArea, label: Registration area, datatype: controlled-code, cardinality: one}
+  - {id: certificateAvailable, label: Certificate available, datatype: boolean, cardinality: one}

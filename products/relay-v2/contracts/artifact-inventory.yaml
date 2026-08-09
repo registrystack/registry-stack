@@ -1,0 +1,62 @@
+schemaVersion: relay.registrystack.org/artifact-inventory/v1alpha1
+product: relay-v2
+artifacts:
+  - id: openapi-full
+    mediaType: application/yaml
+    visibility: operator-only
+    source: compiled-registry
+    generated: true
+  - id: openapi-public
+    mediaType: application/json
+    visibility: public
+    source: compiled-registry
+    generated: true
+  - id: representation-schema
+    mediaType: application/schema+json
+    visibility: operation-compatible
+    source: compiled-resource
+    generated: true
+    invariant: Validates mandatory Registry Core and every allowed domainData subset.
+  - id: full-record-schema
+    mediaType: application/schema+json
+    visibility: operator-only
+    source: compiled-resource
+    generated: true
+    invariant: Validates the complete reviewed source representation before field minimization.
+  - id: full-record-shacl
+    mediaType: text/turtle
+    visibility: operator-only
+    source: compiled-resource
+    generated: true
+    invariant: Retains full source requiredness for pre-disclosure validation.
+  - id: semantic-model
+    mediaType: application/ld+json
+    visibility: operation-compatible
+    source: compiled-resource
+    generated: true
+    invariant: Defines the local vocabulary; it is not only a JSON-LD context.
+  - id: jsonld-context
+    mediaType: application/ld+json
+    visibility: operation-compatible
+    source: compiled-resource
+    generated: true
+  - id: shacl-shape
+    mediaType: text/turtle
+    visibility: operation-compatible
+    source: compiled-resource
+    generated: true
+  - id: codelists
+    mediaType: application/yaml
+    visibility: operation-compatible
+    source: governed-contract-closure
+    generated: false
+  - id: capability-inventory
+    mediaType: application/json
+    visibility: discovery-policy
+    source: compiled-operations
+    generated: true
+  - id: audit-event-schema
+    mediaType: application/schema+json
+    visibility: operator-only
+    source: relay-audit-vocabulary
+    generated: true

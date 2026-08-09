@@ -36,6 +36,7 @@ DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
     Path("release/docker/Dockerfile.registry-relay"),
+    Path("release/docker/Dockerfile.relay"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -65,6 +66,7 @@ RELAY_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile.demo"),
     Path("release/docker/Dockerfile.registry-relay"),
 )
+RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
 STAGE_NAME_RE = re.compile(r"^FROM\s+\S+\s+AS\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -281,6 +283,29 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
 
+    for relative in RELAY_V2_DOCKERFILES:
+        text = texts[relative]
+        require(
+            text,
+            "/usr/local/bin/relay",
+            relative,
+            "Relay V2 binary",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'ENTRYPOINT ["/usr/local/bin/relay"]',
+            relative,
+            "absolute Relay V2 entrypoint",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]',
+            relative,
+            "absolute Relay V2 runtime configuration binding",
+            failures,
+        )
     candidate_workflow = texts[Path(".github/workflows/release-candidate.yml")]
     release_workflow = texts[Path(".github/workflows/release.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]

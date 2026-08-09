@@ -1,9 +1,9 @@
 //! Bounded execution of one reviewed SQL statement against a read-only extract.
 //!
 //! The transport holds one reviewed statement and one extract file. Review of
-//! the statement is the disclosure control: the authorizer below is a safety
-//! boundary that refuses whole categories of SQL, not a per-table or
-//! per-column declaration of what may be read.
+//! the statement is the disclosure control. `registry-platform-sqlite` supplies
+//! the safety boundary that refuses whole categories of SQL; it is not a
+//! per-table or per-column declaration of what may be read.
 //!
 //! Every failure this module reports names the bundle artifact it came from
 //! and a cause drawn from [`cause`], so an adopter is told which file to open
@@ -12,24 +12,22 @@
 //! this crate carries data.
 
 use std::collections::BTreeMap;
-use std::ffi::c_int;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
-use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
-use rusqlite::limits::Limit;
-use rusqlite::types::ValueRef;
-use rusqlite::{Connection, ErrorCode, OpenFlags, Row, Statement};
+use registry_platform_sqlite::{
+    CapturedSnapshot, ColumnContract, ColumnType, DatabaseProfile, ErrorKind as PlatformErrorKind,
+    ParameterContract, ReadOnlyStatement, StatementContract, StatementLimits,
+    Value as PlatformValue,
+};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use thiserror::Error;
-use tokio::sync::Semaphore;
 
 use crate::bundle::ArtifactFault;
 use crate::config::{
-    SchemaFault, SourceConfig, SqliteColumn, SqliteColumnType, SqliteRequest, TextLocation,
+    SchemaFault, SourceConfig, SqliteColumnType, SqliteRequest, TextLocation,
     RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
@@ -37,18 +35,13 @@ use crate::model::SelectorValue;
 /// The reserved metadata table every extract carries.
 pub const EXTRACT_METADATA_TABLE: &str = "evidence_extract";
 
-/// Virtual machine steps between progress callbacks.
-///
-/// The callback is the only cancellation this transport has, so the interval
-/// sets the resolution of both bounds. SQLite runs on the order of a hundred
-/// million steps a second here, so a thousand steps is about ten microseconds:
-/// fine enough that the smallest legal `timeoutMilliseconds` of 1 is honoured
-/// to roughly a percent, and coarse enough that the callback itself is a
-/// rounding error against the statement it guards.
-const PROGRESS_STEP_INTERVAL: u64 = 1_000;
-
 /// The largest metadata field an extract may declare.
 const MAXIMUM_METADATA_FIELD_BYTES: usize = 1_024;
+/// Worst-case JSON accounting for three maximum-size metadata strings plus
+/// their fixed keys and row/collection framing. A one-byte control character
+/// can require six JSON bytes, while the frozen metadata contract bounds the
+/// original UTF-8 field bytes rather than their serialized representation.
+const MAXIMUM_METADATA_RESPONSE_BYTES: usize = 20 * 1_024;
 
 /// The engine's own ceiling on one value and one assembled record.
 ///
@@ -68,39 +61,8 @@ const MAXIMUM_METADATA_FIELD_BYTES: usize = 1_024;
 /// `maximumCellBytes`, which may legally be as low as 1, would refuse ordinary
 /// statements. The value admits the largest result the configuration bounds
 /// allow, 64 columns of 65,536 bytes, with room to spare.
+#[cfg(test)]
 const MAXIMUM_ENGINE_VALUE_BYTES: i32 = 8 * 1_024 * 1_024;
-
-/// SQL functions the authorizer refuses by name.
-///
-/// The authorizer sees a function's name but never its arguments, so the whole
-/// clock family is refused rather than only its `'now'` forms. Evidence binds
-/// the runtime's evaluation instant to [`RESERVED_SQL_PARAMETER`] instead, so a
-/// statement that needs the current time has a deterministic way to ask for it.
-///
-/// This is a denylist, not an allowlist: an allowlist would refuse ordinary
-/// deterministic SQL such as `substr`, `printf` and `coalesce` and would grow a
-/// support burden for every adopter. The set below is closed against the
-/// vendored SQLite amalgamation, which is pinned by `Cargo.lock` and changes
-/// only when the dependency is deliberately raised.
-const DENIED_FUNCTIONS: &[&str] = &[
-    "changes",
-    "current_date",
-    "current_time",
-    "current_timestamp",
-    "date",
-    "datetime",
-    "julianday",
-    "last_insert_rowid",
-    "load_extension",
-    "random",
-    "randomblob",
-    "sqlite_offset",
-    "strftime",
-    "time",
-    "timediff",
-    "total_changes",
-    "unixepoch",
-];
 
 /// The closed cause vocabulary a statement source reports.
 pub mod cause {
@@ -171,30 +133,6 @@ fn statement_fault(artifact: &str, cause: &'static str) -> SqliteSourceError {
 
 fn extract_fault(subject: &str, cause: &'static str) -> SqliteSourceError {
     SqliteSourceError::Extract(ArtifactFault::new(subject, SchemaFault::because(cause)))
-}
-
-/// Where a byte offset into some text falls, as a one-based line and column.
-///
-/// A column counts characters rather than bytes, which is what the
-/// configuration decoder's own locations count, so one convention holds across
-/// every deployment diagnostic and a position is the one an adopter's editor
-/// shows them. An offset at or past the end of the text is the position just
-/// after the last character.
-fn text_location(text: &str, offset: usize) -> TextLocation {
-    let mut line = 1;
-    let mut column = 1;
-    for (index, character) in text.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if character == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    TextLocation { line, column }
 }
 
 /// The publisher's own statement about one extract file.
@@ -301,23 +239,9 @@ pub fn check_statement_offline(
 ) -> Result<(), SqliteSourceError> {
     let (request, _, _) = statement_source(source)?;
     let artifact = request.statement.as_str();
-    let connection = Connection::open_in_memory()
-        .map_err(|_| statement_fault(artifact, cause::EXECUTION_FAILED))?;
-    install_authorizer(&connection)
-        .map_err(|_| statement_fault(artifact, cause::EXECUTION_FAILED))?;
-    // The prepared statement is dropped in `map` so that it cannot outlive the
-    // connection it borrows.
-    match connection.prepare(statement_sql).map(|_| ()) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let fault = classify_prepare(&error);
-            match fault.cause {
-                // Only the extract can settle these, and the extract is not here.
-                cause::UNKNOWN_TABLE | cause::UNKNOWN_COLUMN => Ok(()),
-                _ => Err(fault.statement_fault(artifact, statement_sql)),
-            }
-        }
-    }
+    let contract = platform_contract(request, statement_sql)?;
+    registry_platform_sqlite::check_statement_offline(&contract)
+        .map_err(|error| map_platform_error(error, artifact, "extract"))
 }
 
 fn statement_source(
@@ -334,38 +258,11 @@ fn statement_source(
     }
 }
 
-/// One statement parameter, at the index SQLite assigned it.
-#[derive(Debug, Clone)]
-struct BoundParameter {
-    index: usize,
-    name: String,
-}
-
-/// A value on its way into a statement. Booleans travel as SQLite integers,
-/// which is how SQLite itself stores them.
-#[derive(Debug, Clone)]
-enum BoundValue {
-    Text(String),
-    Integer(i64),
-}
-
 /// The reviewed statement and the bounds its result is read under.
 #[derive(Debug)]
 struct StatementPlan {
     artifact: String,
-    sql: String,
-    columns: Vec<SqliteColumn>,
-    parameters: Vec<BoundParameter>,
-    maximum_rows: u64,
-    maximum_cell_bytes: usize,
-    /// The same bound the caller measures the serialized response against, held
-    /// here so collection can refuse before the whole result exists. The bounds
-    /// above it are per row and per cell, and nothing bounds their product, so
-    /// at the schema maxima a result can reach a gibibyte before the caller ever
-    /// sees it.
-    maximum_response_bytes: usize,
-    maximum_statement_steps: u64,
-    timeout: Duration,
+    parameters: Vec<String>,
     maximum_extract_age_seconds: u64,
     extract_profile: String,
 }
@@ -387,57 +284,57 @@ pub struct SqliteExtractSource {
     plan: Arc<StatementPlan>,
     metadata: ExtractMetadata,
     extract: JsonValue,
-    /// The pool and its permits are shared with the blocking task that borrows
-    /// from them, because a caller that stops awaiting must not be able to carry
-    /// either away. See [`SqliteExtractSource::execute`].
-    connections: Arc<Mutex<Vec<Connection>>>,
-    concurrency: Arc<Semaphore>,
+    /// The platform boundary owns the connection pool, admission permits, and
+    /// cancellation recovery.
+    statement: ReadOnlyStatement,
 }
 
 impl SqliteExtractSource {
     /// Open an extract and run the strong check against it.
     ///
-    /// `extract_path` must name a file the process cannot write and no other
-    /// process will change while this source lives. The caller owns that
-    /// precondition, and it is what makes `immutable=1` below sound.
+    /// `extract_path` must name a regular, unwritable, sidecar-free file. The
+    /// platform capture enforces that precondition before using `immutable=1`.
     pub fn open(
         source: &SourceConfig,
         statement_sql: &str,
         extract_path: &Path,
     ) -> Result<Self, SqliteSourceError> {
+        let (_, _, extract_profile) = statement_source(source)?;
+        let captured = CapturedSnapshot::capture(extract_path)
+            .map_err(|_| extract_fault(extract_profile, cause::EXTRACT_UNAVAILABLE))?;
+        Self::open_captured(source, statement_sql, captured)
+    }
+
+    /// Open the exact snapshot already validated and digest-bound by the
+    /// runtime document. Re-capturing by path here could accept a replacement
+    /// under the old runtime revision.
+    pub(crate) fn open_captured(
+        source: &SourceConfig,
+        statement_sql: &str,
+        captured: CapturedSnapshot,
+    ) -> Result<Self, SqliteSourceError> {
         let (request, maximum_extract_age_seconds, extract_profile) = statement_source(source)?;
         let artifact = request.statement.as_str();
-        let uri = extract_uri(extract_path)
-            .ok_or_else(|| extract_fault(extract_profile, cause::EXTRACT_UNAVAILABLE))?;
-
-        let permits = usize::from(request.concurrency_limit);
-        let mut connections = Vec::with_capacity(permits);
-        for _ in 0..permits {
-            connections.push(open_extract(&uri, extract_profile)?);
-        }
-        let first = connections.first().ok_or(SqliteSourceError::InvalidPlan)?;
-
         let timeout = Duration::from_millis(request.timeout_milliseconds);
+        let profile = DatabaseProfile::Snapshot(captured);
         let metadata = read_extract_metadata(
-            first,
+            &profile,
             extract_profile,
             request.maximum_statement_steps,
             timeout,
         )?;
-        let parameters = verify_statement(first, request, statement_sql)?;
+        let statement =
+            ReadOnlyStatement::open(profile, platform_contract(request, statement_sql)?)
+                .map_err(|error| map_platform_error(error, artifact, extract_profile))?;
+        let parameters = request
+            .parameter_bindings
+            .keys()
+            .map(str::to_owned)
+            .collect();
 
         let plan = StatementPlan {
             artifact: artifact.to_owned(),
-            sql: statement_sql.to_owned(),
-            columns: request.columns.clone(),
             parameters,
-            maximum_rows: request.maximum_rows,
-            maximum_cell_bytes: usize::try_from(request.maximum_cell_bytes)
-                .map_err(|_| SqliteSourceError::InvalidPlan)?,
-            maximum_response_bytes: usize::try_from(request.maximum_response_bytes)
-                .map_err(|_| SqliteSourceError::InvalidPlan)?,
-            maximum_statement_steps: request.maximum_statement_steps,
-            timeout,
             maximum_extract_age_seconds,
             extract_profile: extract_profile.to_owned(),
         };
@@ -445,8 +342,7 @@ impl SqliteExtractSource {
             plan: Arc::new(plan),
             extract: metadata.as_json(),
             metadata,
-            connections: Arc::new(Mutex::new(connections)),
-            concurrency: Arc::new(Semaphore::new(permits)),
+            statement,
         })
     }
 
@@ -479,10 +375,10 @@ impl SqliteExtractSource {
     ///
     /// The result is `{"rows": [...], "extract": {...}}`. Applying the
     /// acquisition projection belongs to the caller, which does it for every
-    /// transport, and so does the authoritative response size check, which
-    /// measures the serialized bytes. Collection here reads the same bound
-    /// against the text payload alone, which is only ever shorter, so it can
-    /// refuse sooner but never refuse a result the caller would accept.
+    /// transport, and so does the authoritative response size check. Collection
+    /// here conservatively charges the serialized collection, row, column-name,
+    /// and scalar-value structure against the same bound so the intermediate
+    /// result is bounded before the caller projects it.
     ///
     /// A caller may stop awaiting this at any point: the acquisition deadline
     /// above it expires, or a client disconnects and the handler future is
@@ -498,50 +394,17 @@ impl SqliteExtractSource {
         evaluation_instant: DateTime<Utc>,
     ) -> Result<JsonValue, SqliteSourceError> {
         let bindings = self.bind_values(parameters, evaluation_instant)?;
-        // One absolute deadline covers every wait this source owns. In
-        // particular, admission cannot consume this window and then hand a
-        // fresh one to SQLite, and a task waiting for a blocking worker cannot
-        // outlive it either.
-        let deadline = Instant::now() + self.plan.timeout;
-        let asynchronous_deadline = tokio::time::Instant::from_std(deadline);
-        // An owned permit so the blocking task can hold it; a borrowed one would
-        // be tied to this future, which is the lifetime being escaped.
-        let permit = tokio::time::timeout_at(
-            asynchronous_deadline,
-            Arc::clone(&self.concurrency).acquire_owned(),
-        )
-        .await
-        .map_err(|_| SqliteSourceError::Timeout)?
-        .map_err(|_| SqliteSourceError::Concurrency)?;
-        let connection = self.take_connection()?;
-        let plan = Arc::clone(&self.plan);
-        let connections = Arc::clone(&self.connections);
-
-        let execution = tokio::task::spawn_blocking(move || {
-            let outcome = run_statement(&connection, &plan, &bindings, deadline);
-            return_connection(&connections, connection);
-            drop(permit);
-            outcome
-        });
-        // Timing out this await detaches rather than cancels the blocking task.
-        // The task still owns the connection and permit and returns both from
-        // inside its closure, preserving the pool after a queue or execution
-        // timeout just as it does after caller cancellation.
-        let outcome = tokio::time::timeout_at(asynchronous_deadline, execution)
+        let rows = self
+            .statement
+            .execute(&bindings)
             .await
-            .map_err(|_| SqliteSourceError::Timeout)?
-            .map_err(|_| SqliteSourceError::Unavailable)?;
-
-        let rows = match outcome {
-            Ok(rows) => rows,
-            // Admission, worker scheduling and execution share one time limit
-            // and therefore one operator category. Normalizing the progress
-            // handler's execution-time signal avoids a race where the same
-            // deadline could be reported differently depending on whether the
-            // blocking task or Tokio's timer was polled first.
-            Err(cause::TIME_BUDGET_EXCEEDED) => return Err(SqliteSourceError::Timeout),
-            Err(cause) => return Err(self.plan.fault(cause)),
-        };
+            .map_err(|error| {
+                map_platform_error(error, &self.plan.artifact, &self.plan.extract_profile)
+            })?
+            .rows
+            .into_iter()
+            .map(platform_row_json)
+            .collect();
         let mut result = JsonMap::new();
         result.insert("rows".to_owned(), JsonValue::Array(rows));
         result.insert("extract".to_owned(), self.extract.clone());
@@ -552,7 +415,7 @@ impl SqliteExtractSource {
         &self,
         parameters: &BTreeMap<String, SelectorValue>,
         evaluation_instant: DateTime<Utc>,
-    ) -> Result<Vec<(usize, BoundValue)>, SqliteSourceError> {
+    ) -> Result<BTreeMap<String, PlatformValue>, SqliteSourceError> {
         // Fixed-width RFC 3339 UTC, so a statement that compares the instant
         // against stored text orders lexically the way it orders in time. Whole
         // seconds, because this is the same rendering the assertion carries: a
@@ -561,49 +424,124 @@ impl SqliteExtractSource {
         // it. The runtime truncates the instant where it reads the clock, so in
         // production this only chooses how an already-whole second is written.
         let instant = evaluation_instant.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mut bound = Vec::with_capacity(self.plan.parameters.len());
+        let mut bound = BTreeMap::new();
         for parameter in &self.plan.parameters {
-            let value = if parameter.name == RESERVED_SQL_PARAMETER {
-                BoundValue::Text(instant.clone())
-            } else {
-                match parameters.get(&parameter.name) {
-                    Some(SelectorValue::String(text)) => BoundValue::Text(text.clone()),
-                    Some(SelectorValue::Integer(number)) => BoundValue::Integer(*number),
-                    Some(SelectorValue::Boolean(flag)) => BoundValue::Integer(i64::from(*flag)),
-                    None => return Err(self.plan.fault(cause::MISSING_PARAMETER)),
-                }
+            let value = match parameters.get(parameter) {
+                Some(SelectorValue::String(text)) => PlatformValue::String(text.clone()),
+                Some(SelectorValue::Integer(number)) => PlatformValue::Integer(*number),
+                Some(SelectorValue::Boolean(flag)) => PlatformValue::Boolean(*flag),
+                None => return Err(self.plan.fault(cause::MISSING_PARAMETER)),
             };
-            bound.push((parameter.index, value));
+            bound.insert(parameter.clone(), value);
         }
+        bound.insert(
+            RESERVED_SQL_PARAMETER.to_owned(),
+            PlatformValue::String(instant),
+        );
         Ok(bound)
-    }
-
-    /// Take the connection this request's permit stands for.
-    ///
-    /// A poisoned lock is recovered rather than refused, which is the same
-    /// choice [`return_connection`] makes: the only operations this pool has are
-    /// a push and a pop, so a panic elsewhere cannot have left it half-written,
-    /// and refusing to touch it would strand every connection in it.
-    fn take_connection(&self) -> Result<Connection, SqliteSourceError> {
-        self.connections
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pop()
-            .ok_or(SqliteSourceError::Unavailable)
     }
 }
 
-/// Put a connection back where the next admitted request will find it.
-///
-/// This is a free function rather than a method because it runs inside the
-/// blocking task, which holds no reference to the source. A poisoned lock is
-/// recovered here rather than propagated, because dropping the connection is
-/// exactly the pool drain this path exists to prevent.
-fn return_connection(connections: &Mutex<Vec<Connection>>, connection: Connection) {
-    connections
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(connection);
+fn platform_contract(
+    request: &SqliteRequest,
+    statement_sql: &str,
+) -> Result<StatementContract, SqliteSourceError> {
+    let columns = request
+        .columns
+        .iter()
+        .map(|column| ColumnContract {
+            name: column.name.clone(),
+            value_type: match column.value_type {
+                SqliteColumnType::String => ColumnType::String,
+                SqliteColumnType::Integer => ColumnType::Integer,
+                SqliteColumnType::Number => ColumnType::Number,
+                SqliteColumnType::Boolean => ColumnType::Boolean,
+            },
+        })
+        .collect();
+    let mut parameters: Vec<_> = request
+        .parameter_bindings
+        .keys()
+        .map(|name| ParameterContract {
+            name: name.to_owned(),
+            required: true,
+        })
+        .collect();
+    parameters.push(ParameterContract {
+        name: RESERVED_SQL_PARAMETER.to_owned(),
+        required: false,
+    });
+    Ok(StatementContract {
+        sql: statement_sql.to_owned(),
+        columns,
+        parameters,
+        limits: StatementLimits {
+            maximum_rows: request.maximum_rows,
+            maximum_cell_bytes: usize::try_from(request.maximum_cell_bytes)
+                .map_err(|_| SqliteSourceError::InvalidPlan)?,
+            maximum_response_bytes: usize::try_from(request.maximum_response_bytes)
+                .map_err(|_| SqliteSourceError::InvalidPlan)?,
+            maximum_statement_steps: request.maximum_statement_steps,
+            timeout: Duration::from_millis(request.timeout_milliseconds),
+            concurrency: usize::from(request.concurrency_limit),
+        },
+        schema: None,
+    })
+}
+
+fn map_platform_error(
+    error: registry_platform_sqlite::SqliteError,
+    artifact: &str,
+    extract_profile: &str,
+) -> SqliteSourceError {
+    let cause = match error.kind() {
+        PlatformErrorKind::InvalidPlan => return SqliteSourceError::InvalidPlan,
+        PlatformErrorKind::Concurrency => return SqliteSourceError::Concurrency,
+        PlatformErrorKind::Timeout | PlatformErrorKind::TimeBudgetExceeded => {
+            return SqliteSourceError::Timeout;
+        }
+        PlatformErrorKind::WorkerUnavailable => return SqliteSourceError::Unavailable,
+        PlatformErrorKind::DatabaseUnavailable
+        | PlatformErrorKind::DatabaseReplaced
+        | PlatformErrorKind::DatabaseWritable
+        | PlatformErrorKind::DatabaseSymlink
+        | PlatformErrorKind::DatabaseNotFile
+        | PlatformErrorKind::DatabaseChanged
+        | PlatformErrorKind::UncheckpointedSidecar => {
+            return extract_fault(extract_profile, cause::EXTRACT_UNAVAILABLE);
+        }
+        _ => error.cause(),
+    };
+    match error.location() {
+        Some(location) => SqliteSourceError::Statement(ArtifactFault::at(
+            artifact,
+            SchemaFault::because(cause),
+            TextLocation {
+                line: location.line,
+                column: location.column,
+            },
+        )),
+        None => statement_fault(artifact, cause),
+    }
+}
+
+fn platform_row_json(row: BTreeMap<String, PlatformValue>) -> JsonValue {
+    JsonValue::Object(
+        row.into_iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    PlatformValue::Null => JsonValue::Null,
+                    PlatformValue::String(value) => JsonValue::String(value),
+                    PlatformValue::Integer(value) => JsonValue::from(value),
+                    PlatformValue::Number(value) => {
+                        JsonNumber::from_f64(value).map_or(JsonValue::Null, JsonValue::Number)
+                    }
+                    PlatformValue::Boolean(value) => JsonValue::Bool(value),
+                };
+                (name, value)
+            })
+            .collect(),
+    )
 }
 
 /// Build an extract file from a reviewed text seed.
@@ -613,28 +551,24 @@ fn return_connection(connections: &Mutex<Vec<Connection>>, connection: Connectio
 /// every other bundle artifact, and it keeps table and column names legible to
 /// the checks that read this tree, none of which an opaque binary would be.
 ///
-/// The connection opened here has no authorizer, and the contrast with
-/// [`open_extract`] is the point. A seed is DDL and `INSERT`, which [`authorize`]
-/// denies by design, so the world cannot be built through the posture that
-/// reads it. This connection is closed before the extract is opened again,
-/// read-only and immutable, for the reviewed statement to run against, so
-/// building a fixture world and reading one are two connections apart and
-/// neither can be mistaken for the other.
+/// The fixture connection can execute DDL and `INSERT`; the production reader
+/// cannot. This connection is closed before the extract is opened again,
+/// read-only and immutable, through `registry-platform-sqlite`, so building a
+/// fixture world and reading one are two connections apart and neither can be
+/// mistaken for the other.
 ///
 /// The finished file is made unwritable, because `immutable=1` on the reading
 /// connection is sound only against a file nothing will change.
 pub fn materialize_seed_extract(target: &Path, seed_sql: &str) -> Result<(), SqliteSourceError> {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let subject = extract_subject(target);
-    let unavailable = || extract_fault(&subject, cause::EXTRACT_UNAVAILABLE);
-    let connection = Connection::open(target).map_err(|_| unavailable())?;
-    connection
-        .execute_batch(seed_sql)
-        .map_err(|_| extract_fault(&subject, cause::INVALID_SQL))?;
-    connection.close().map_err(|_| unavailable())?;
-    std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o444))
-        .map_err(|_| unavailable())
+    registry_platform_sqlite::materialize_fixture(target, seed_sql).map_err(|error| {
+        let cause = if error.kind() == PlatformErrorKind::InvalidSql {
+            cause::INVALID_SQL
+        } else {
+            cause::EXTRACT_UNAVAILABLE
+        };
+        extract_fault(&subject, cause)
+    })
 }
 
 /// A fixture-only extract name used internally while its seed is materialized.
@@ -647,119 +581,6 @@ fn extract_subject(extract_path: &Path) -> String {
     )
 }
 
-/// The extract as a SQLite URI.
-///
-/// `mode=ro` refuses the write path outright. `immutable=1` tells SQLite the
-/// file will not change while it is open, which lets it skip locking and
-/// journal replay. That flag is sound only because the caller has already
-/// proven the extract is read-only and stable for the life of this source; it
-/// is a correctness precondition, not a tuning knob, and removing the proof
-/// would make the flag unsafe rather than merely slower.
-fn extract_uri(extract_path: &Path) -> Option<String> {
-    let text = extract_path.to_str()?;
-    let mut uri = String::from("file:");
-    for byte in text.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                uri.push(char::from(byte));
-            }
-            other => uri.push_str(&format!("%{other:02X}")),
-        }
-    }
-    uri.push_str("?mode=ro&immutable=1");
-    Some(uri)
-}
-
-fn open_extract(uri: &str, subject: &str) -> Result<Connection, SqliteSourceError> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
-        | OpenFlags::SQLITE_OPEN_URI
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let connection = Connection::open_with_flags(uri, flags)
-        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
-    connection
-        .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAXIMUM_ENGINE_VALUE_BYTES)
-        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
-    install_authorizer(&connection)
-        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
-    Ok(connection)
-}
-
-/// Refuse everything a reviewed read-only statement has no business doing.
-///
-/// This is a safety boundary, not a disclosure declaration. It says nothing
-/// about which tables or columns a statement may read, because review of the
-/// statement is what decides that. It says only that the statement may not
-/// write, may not reach another database, may not touch a pragma, may not load
-/// an extension, and may not read a clock or a random source.
-///
-/// WARNING: `AuthAction` is `#[non_exhaustive]`, so this match cannot be
-/// written without a wildcard arm, and the compiler will not report a variant
-/// added by a future `rusqlite`. The wildcard therefore DENIES. A `rusqlite`
-/// upgrade that introduces an action will refuse statements that use it rather
-/// than allow them, which is the right way round: the failure is visible and
-/// recoverable, and the alternative would be a silent widening of this
-/// boundary. Whoever raises the `rusqlite` version should revisit this match.
-/// The stable toolchain has no lint that would catch the omission
-/// (`non_exhaustive_omitted_patterns` remains unstable, rust-lang/rust#89554).
-fn authorize(action: &AuthAction<'_>) -> Authorization {
-    match action {
-        // Reading is what a statement source is for. Which rows and columns it
-        // may read is settled by review, not here.
-        AuthAction::Read { .. } | AuthAction::Select | AuthAction::Recursive => {
-            Authorization::Allow
-        }
-        AuthAction::Function { function_name, .. } => {
-            if DENIED_FUNCTIONS
-                .iter()
-                .any(|denied| function_name.eq_ignore_ascii_case(denied))
-            {
-                Authorization::Deny
-            } else {
-                Authorization::Allow
-            }
-        }
-        // Every mutating action.
-        AuthAction::Insert { .. }
-        | AuthAction::Update { .. }
-        | AuthAction::Delete { .. }
-        | AuthAction::CreateIndex { .. }
-        | AuthAction::CreateTable { .. }
-        | AuthAction::CreateTempIndex { .. }
-        | AuthAction::CreateTempTable { .. }
-        | AuthAction::CreateTempTrigger { .. }
-        | AuthAction::CreateTempView { .. }
-        | AuthAction::CreateTrigger { .. }
-        | AuthAction::CreateView { .. }
-        | AuthAction::CreateVtable { .. }
-        | AuthAction::DropIndex { .. }
-        | AuthAction::DropTable { .. }
-        | AuthAction::DropTempIndex { .. }
-        | AuthAction::DropTempTable { .. }
-        | AuthAction::DropTempTrigger { .. }
-        | AuthAction::DropTempView { .. }
-        | AuthAction::DropTrigger { .. }
-        | AuthAction::DropView { .. }
-        | AuthAction::DropVtable { .. }
-        | AuthAction::AlterTable { .. }
-        | AuthAction::Reindex { .. }
-        | AuthAction::Analyze { .. }
-        // Another database file, and the pragma surface that can reach one.
-        | AuthAction::Attach { .. }
-        | AuthAction::Detach { .. }
-        | AuthAction::Pragma { .. }
-        // Transaction control has no place inside one reviewed read.
-        | AuthAction::Transaction { .. }
-        | AuthAction::Savepoint { .. }
-        // An action code this rusqlite does not recognise.
-        | AuthAction::Unknown { .. } => Authorization::Deny,
-        _ => Authorization::Deny,
-    }
-}
-
-fn install_authorizer(connection: &Connection) -> rusqlite::Result<()> {
-    connection.authorizer(Some(|context: AuthContext<'_>| authorize(&context.action)))
-}
-
 /// The extract's reserved metadata table, read before any row of data is.
 ///
 /// Nothing requires the reserved object to be an ordinary table: a view reads
@@ -768,44 +589,51 @@ fn install_authorizer(connection: &Connection) -> rusqlite::Result<()> {
 /// So this read carries the same declared step and time bounds the statement
 /// itself runs under, and reports its own cause when it exceeds them.
 fn read_extract_metadata(
-    connection: &Connection,
+    profile: &DatabaseProfile,
     subject: &str,
     maximum_statement_steps: u64,
     timeout: Duration,
 ) -> Result<ExtractMetadata, SqliteSourceError> {
-    let budget = install_progress_handler(
-        connection,
-        maximum_statement_steps,
-        Instant::now() + timeout,
-    )
-    // A connection that will not take a progress handler cannot be stepped
-    // under a bound, so it is not a connection this source can read from.
-    .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
     let sql = format!("SELECT published_at, publisher, extract_id FROM {EXTRACT_METADATA_TABLE}");
-    let mut statement = connection.prepare(&sql).map_err(|error| {
-        // A missing table and a missing column are different problems for an
-        // extract publisher, so they are reported differently.
-        match classify_prepare(&error).cause {
-            cause::UNKNOWN_TABLE => extract_fault(subject, cause::NO_METADATA_TABLE),
-            _ => extract_fault(subject, cause::MALFORMED_METADATA),
-        }
-    })?;
+    let statement = ReadOnlyStatement::open(
+        profile.clone(),
+        StatementContract {
+            sql,
+            columns: vec![
+                ColumnContract {
+                    name: "published_at".to_owned(),
+                    value_type: ColumnType::String,
+                },
+                ColumnContract {
+                    name: "publisher".to_owned(),
+                    value_type: ColumnType::String,
+                },
+                ColumnContract {
+                    name: "extract_id".to_owned(),
+                    value_type: ColumnType::String,
+                },
+            ],
+            parameters: Vec::new(),
+            limits: StatementLimits {
+                maximum_rows: 1,
+                maximum_cell_bytes: MAXIMUM_METADATA_FIELD_BYTES,
+                maximum_response_bytes: MAXIMUM_METADATA_RESPONSE_BYTES,
+                maximum_statement_steps,
+                timeout,
+                concurrency: 1,
+            },
+            schema: None,
+        },
+    )
+    .map_err(|error| map_metadata_error(error, subject))?;
+    let result = statement
+        .execute_at_open(&BTreeMap::new())
+        .map_err(|error| map_metadata_error(error, subject))?;
     let malformed = || extract_fault(subject, cause::MALFORMED_METADATA);
-    // A step that failed because a bound stopped it says nothing about whether
-    // the metadata is well formed, so the two are told apart.
-    let stepped = || match budget.load(Ordering::Relaxed) {
-        BUDGET_WITHIN => malformed(),
-        _ => extract_fault(subject, cause::METADATA_BUDGET_EXCEEDED),
-    };
-
-    let mut rows = statement.raw_query();
-    let row = rows.next().map_err(|_| stepped())?.ok_or_else(malformed)?;
-    let published_at = metadata_field(row, 0, subject)?;
-    let publisher = metadata_field(row, 1, subject)?;
-    let extract_id = metadata_field(row, 2, subject)?;
-    if rows.next().map_err(|_| stepped())?.is_some() {
-        return Err(malformed());
-    }
+    let row = result.rows.into_iter().next().ok_or_else(malformed)?;
+    let published_at = metadata_value(&row, "published_at", subject)?;
+    let publisher = metadata_value(&row, "publisher", subject)?;
+    let extract_id = metadata_value(&row, "extract_id", subject)?;
 
     // The instant is truncated where it is parsed, so the instant the age bound
     // is measured against is the one the response carries. A relying party
@@ -819,425 +647,40 @@ fn read_extract_metadata(
     Ok(ExtractMetadata::new(published_at, publisher, extract_id))
 }
 
-fn metadata_field(row: &Row<'_>, index: usize, subject: &str) -> Result<String, SqliteSourceError> {
+fn metadata_value(
+    row: &BTreeMap<String, PlatformValue>,
+    name: &str,
+    subject: &str,
+) -> Result<String, SqliteSourceError> {
     let malformed = || extract_fault(subject, cause::MALFORMED_METADATA);
-    let ValueRef::Text(bytes) = row.get_ref(index).map_err(|_| malformed())? else {
+    let Some(PlatformValue::String(value)) = row.get(name) else {
         return Err(malformed());
     };
-    if bytes.is_empty() || bytes.len() > MAXIMUM_METADATA_FIELD_BYTES {
+    if value.is_empty() || value.len() > MAXIMUM_METADATA_FIELD_BYTES {
         return Err(malformed());
     }
-    std::str::from_utf8(bytes)
-        .map(str::to_owned)
-        .map_err(|_| malformed())
+    Ok(value.clone())
 }
 
-/// The strong check: prepare the statement against the real extract, and prove
-/// its result columns and its parameters are the ones the bundle declared.
-fn verify_statement(
-    connection: &Connection,
-    request: &SqliteRequest,
-    statement_sql: &str,
-) -> Result<Vec<BoundParameter>, SqliteSourceError> {
-    let artifact = request.statement.as_str();
-    if contains_positional_parameter(statement_sql) {
-        return Err(statement_fault(artifact, cause::UNDECLARED_PARAMETER));
-    }
-    let statement = connection
-        .prepare(statement_sql)
-        .map_err(|error| classify_prepare(&error).statement_fault(artifact, statement_sql))?;
-    verify_columns(&statement, request, artifact)?;
-    verify_parameters(&statement, request, artifact)
-}
-
-/// Whether executable SQL contains a `?` or `?NNN` parameter token.
-///
-/// SQLite can alias `?1` to a slot first introduced as `:name`, after which
-/// its parameter API reports only the named spelling. Scan the reviewed text
-/// as well, ignoring quoted values, quoted identifiers, and comments, so that
-/// alias cannot bypass the named-only statement contract.
-fn contains_positional_parameter(sql: &str) -> bool {
-    #[derive(Clone, Copy)]
-    enum State {
-        Sql,
-        Quote(u8),
-        Bracket,
-        LineComment,
-        BlockComment,
-    }
-
-    let bytes = sql.as_bytes();
-    let mut state = State::Sql;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        let next = bytes.get(index + 1).copied();
-        match state {
-            State::Sql => match (byte, next) {
-                (b'?', _) => return true,
-                (b'\'', _) | (b'"', _) | (b'`', _) => state = State::Quote(byte),
-                (b'[', _) => state = State::Bracket,
-                (b'-', Some(b'-')) => {
-                    state = State::LineComment;
-                    index += 1;
-                }
-                (b'/', Some(b'*')) => {
-                    state = State::BlockComment;
-                    index += 1;
-                }
-                _ => {}
-            },
-            State::Quote(quote) if byte == quote => {
-                if next == Some(quote) {
-                    index += 1;
-                } else {
-                    state = State::Sql;
-                }
-            }
-            State::Quote(_) => {}
-            State::Bracket if byte == b']' => state = State::Sql,
-            State::Bracket => {}
-            State::LineComment if matches!(byte, b'\n' | b'\r') => state = State::Sql,
-            State::LineComment => {}
-            State::BlockComment if byte == b'*' && next == Some(b'/') => {
-                state = State::Sql;
-                index += 1;
-            }
-            State::BlockComment => {}
-        }
-        index += 1;
-    }
-    false
-}
-
-/// The declared `columns` are what `responseSchema`, the extraction script and
-/// the fact schema are written against, so a statement whose real result
-/// disagrees with them is refused rather than silently reshaped.
-fn verify_columns(
-    statement: &Statement<'_>,
-    request: &SqliteRequest,
-    artifact: &str,
-) -> Result<(), SqliteSourceError> {
-    let mismatch = || statement_fault(artifact, cause::COLUMN_MISMATCH);
-    if statement.column_count() != request.columns.len() {
-        return Err(mismatch());
-    }
-    for (index, declared) in request.columns.iter().enumerate() {
-        let real = statement.column_name(index).map_err(|_| mismatch())?;
-        if real != declared.name {
-            return Err(mismatch());
-        }
-    }
-    Ok(())
-}
-
-/// The statement's real parameters and the declared `parameterBindings` must
-/// name each other exactly, allowing for the reserved evaluation instant.
-fn verify_parameters(
-    statement: &Statement<'_>,
-    request: &SqliteRequest,
-    artifact: &str,
-) -> Result<Vec<BoundParameter>, SqliteSourceError> {
-    let mut parameters = Vec::new();
-    for index in 1..=statement.parameter_count() {
-        // A positional parameter has no name to match a binding against.
-        let name = statement
-            .parameter_name(index)
-            .and_then(bare_parameter_name)
-            .ok_or_else(|| statement_fault(artifact, cause::UNDECLARED_PARAMETER))?;
-        if name != RESERVED_SQL_PARAMETER && !request.parameter_bindings.contains_key(name) {
-            return Err(statement_fault(artifact, cause::UNDECLARED_PARAMETER));
-        }
-        parameters.push(BoundParameter {
-            index,
-            name: name.to_owned(),
-        });
-    }
-    for declared in request.parameter_bindings.keys() {
-        if !parameters.iter().any(|bound| bound.name == declared) {
-            return Err(statement_fault(artifact, cause::UNUSED_BINDING));
-        }
-    }
-    Ok(parameters)
-}
-
-/// `:name`, `@name` and `$name` without the sigil. A numbered `?NNN` keeps its
-/// digits, which no declared binding key can match, so it reads as undeclared.
-fn bare_parameter_name(name: &str) -> Option<&str> {
-    let mut characters = name.chars();
-    match characters.next()? {
-        ':' | '@' | '$' => Some(characters.as_str()),
-        _ => None,
-    }
-}
-
-const BUDGET_WITHIN: u8 = 0;
-const BUDGET_STEPS: u8 = 1;
-const BUDGET_TIME: u8 = 2;
-
-/// Install the only cancellation this transport has.
-///
-/// `tokio::time::timeout` cannot cancel a `spawn_blocking` task, and SQLite has
-/// no way to be interrupted from outside a step. The progress callback runs on
-/// the same thread as the statement, between virtual machine instructions, and
-/// returning `true` aborts the step. Both bounds are checked there.
-///
-/// The handler is not cleared afterwards. Nothing steps this connection between
-/// executions, and every step this transport takes installs its own handler
-/// first, so a handler left behind can never fire.
-///
-/// The bounds arrive as values rather than as a [`StatementPlan`], because the
-/// extract's metadata is read at startup before the plan's parameters are known
-/// and that read is stepped under the same declared bounds.
-fn install_progress_handler(
-    connection: &Connection,
-    maximum_statement_steps: u64,
-    deadline: Instant,
-) -> Result<Arc<AtomicU8>, &'static str> {
-    let outcome = Arc::new(AtomicU8::new(BUDGET_WITHIN));
-    let observed = Arc::clone(&outcome);
-    // A budget smaller than the interval would never be checked, so a small
-    // budget shortens the interval to itself.
-    let interval = maximum_statement_steps.clamp(1, PROGRESS_STEP_INTERVAL);
-    let budget = maximum_statement_steps;
-    let mut consumed: u64 = 0;
-    connection
-        .progress_handler(
-            c_int::try_from(interval).unwrap_or(c_int::MAX),
-            Some(move || {
-                consumed = consumed.saturating_add(interval);
-                if consumed >= budget {
-                    observed.store(BUDGET_STEPS, Ordering::Relaxed);
-                    return true;
-                }
-                if Instant::now() >= deadline {
-                    observed.store(BUDGET_TIME, Ordering::Relaxed);
-                    return true;
-                }
-                false
-            }),
-        )
-        .map_err(|_| cause::EXECUTION_FAILED)?;
-    Ok(outcome)
-}
-
-fn run_statement(
-    connection: &Connection,
-    plan: &StatementPlan,
-    bindings: &[(usize, BoundValue)],
-    deadline: Instant,
-) -> Result<Vec<JsonValue>, &'static str> {
-    // A task may have spent the whole source window waiting for a blocking
-    // worker. Refuse it before preparing or stepping anything when it finally
-    // starts, while the async caller independently returns at the same deadline.
-    if Instant::now() >= deadline {
-        return Err(cause::TIME_BUDGET_EXCEEDED);
-    }
-    let budget = install_progress_handler(connection, plan.maximum_statement_steps, deadline)?;
-    let mut statement = connection
-        .prepare(&plan.sql)
-        .map_err(|error| classify_prepare(&error).cause)?;
-    for (index, value) in bindings {
-        match value {
-            BoundValue::Text(text) => statement.raw_bind_parameter(*index, text),
-            BoundValue::Integer(number) => statement.raw_bind_parameter(*index, number),
-        }
-        .map_err(|_| cause::EXECUTION_FAILED)?;
-    }
-
-    let mut rows = statement.raw_query();
-    let mut collected: Vec<JsonValue> = Vec::new();
-    // Text is the only value whose size a row bound and a cell bound do not
-    // already settle, so it is the only thing worth running a total on.
-    let mut text_bytes: usize = 0;
-    loop {
-        let row = match rows.next() {
-            Ok(Some(row)) => row,
-            Ok(None) => break,
-            Err(error) => return Err(classify_step(&error, &budget)),
-        };
-        // The statement is never rewritten, so the row bound is enforced by
-        // stepping one row past it and refusing that row.
-        if collected.len() as u64 >= plan.maximum_rows {
-            return Err(cause::TOO_MANY_ROWS);
-        }
-        collected.push(read_row(row, plan, &mut text_bytes)?);
-    }
-    Ok(collected)
-}
-
-/// Read one row, and carry the running text total the response bound is read
-/// against.
-///
-/// `text_bytes` counts the text payload alone. Serializing the result adds key
-/// names, quotes, any escaping, and the extract block, so the total counted here
-/// is never more than the length the caller measures. Refusing on it can
-/// therefore only refuse sooner than the caller would, never differently, and a
-/// result the caller accepts is collected unchanged.
-fn read_row(
-    row: &Row<'_>,
-    plan: &StatementPlan,
-    text_bytes: &mut usize,
-) -> Result<JsonValue, &'static str> {
-    let mut object = JsonMap::with_capacity(plan.columns.len());
-    for (index, column) in plan.columns.iter().enumerate() {
-        let raw = row.get_ref(index).map_err(|_| cause::EXECUTION_FAILED)?;
-        let value = read_value(raw, column.value_type, plan.maximum_cell_bytes)?;
-        if let JsonValue::String(text) = &value {
-            *text_bytes = text_bytes.saturating_add(text.len());
-            if *text_bytes > plan.maximum_response_bytes {
-                return Err(cause::RESPONSE_TOO_LARGE);
-            }
-        }
-        object.insert(column.name.clone(), value);
-    }
-    Ok(JsonValue::Object(object))
-}
-
-/// Read one value as the type the bundle declared for its column.
-///
-/// A value whose real SQLite type cannot be represented as the declared type is
-/// a failure, not a coercion: the declared type is what the response schema and
-/// the extraction script are written against. The cell bound is checked against
-/// the borrowed bytes before an owned value is built, so an oversized value is
-/// never copied into the process.
-fn read_value(
-    value: ValueRef<'_>,
-    declared: SqliteColumnType,
-    maximum_cell_bytes: usize,
-) -> Result<JsonValue, &'static str> {
-    match (value, declared) {
-        (ValueRef::Null, _) => Ok(JsonValue::Null),
-        (ValueRef::Text(bytes), SqliteColumnType::String) => {
-            if bytes.len() > maximum_cell_bytes {
-                return Err(cause::CELL_TOO_LARGE);
-            }
-            std::str::from_utf8(bytes)
-                .map(|text| JsonValue::String(text.to_owned()))
-                .map_err(|_| cause::VALUE_TYPE_MISMATCH)
-        }
-        (ValueRef::Integer(number), SqliteColumnType::Integer) => Ok(JsonValue::from(number)),
-        (ValueRef::Integer(number), SqliteColumnType::Number) => Ok(JsonValue::from(number)),
-        (ValueRef::Integer(number), SqliteColumnType::Boolean) => match number {
-            0 => Ok(JsonValue::Bool(false)),
-            1 => Ok(JsonValue::Bool(true)),
-            _ => Err(cause::VALUE_TYPE_MISMATCH),
-        },
-        (ValueRef::Real(number), SqliteColumnType::Number) => JsonNumber::from_f64(number)
-            .map(JsonValue::Number)
-            .ok_or(cause::VALUE_TYPE_MISMATCH),
-        _ => Err(cause::VALUE_TYPE_MISMATCH),
-    }
-}
-
-/// A classified preparation failure: one closed cause, and the byte offset
-/// SQLite reported when a single character is what went wrong.
-struct PrepareFault {
-    cause: &'static str,
-    offset: Option<usize>,
-}
-
-impl PrepareFault {
-    fn because(cause: &'static str) -> Self {
-        Self {
-            cause,
-            offset: None,
-        }
-    }
-
-    /// The failure as it is reported, placed inside the statement where SQLite
-    /// pointed at a character.
-    ///
-    /// `statement_sql` supplies the line breaks the offset is counted against
-    /// and nothing else: what travels out of here is a line and a column.
-    fn statement_fault(&self, artifact: &str, statement_sql: &str) -> SqliteSourceError {
-        match self.offset {
-            Some(offset) => SqliteSourceError::Statement(ArtifactFault::at(
-                artifact,
-                SchemaFault::because(self.cause),
-                text_location(statement_sql, offset),
-            )),
-            None => statement_fault(artifact, self.cause),
-        }
-    }
-}
-
-/// Classify a preparation failure and discard the message SQLite wrote.
-///
-/// SQLite reports an unknown table, an unknown column and a syntax error under
-/// one result code, so its fixed message prefix is the only thing that separates
-/// them. The prefix is matched and the remainder, which quotes the identifier
-/// that was not found, is thrown away.
-///
-/// The offset is kept only for a syntax error. SQLite also offers one for an
-/// unresolved name, but an unknown table is a fact about the extract rather
-/// than about a character of the statement, and a refused statement and an
-/// exceeded bound have no character behind them at all.
-fn classify_prepare(error: &rusqlite::Error) -> PrepareFault {
-    match error {
-        rusqlite::Error::MultipleStatement => PrepareFault::because(cause::MULTIPLE_STATEMENTS),
-        rusqlite::Error::SqliteFailure(failure, message) => {
-            PrepareFault::because(classify_failure(failure.code, message.as_deref()))
-        }
-        rusqlite::Error::SqlInputError {
-            error, msg, offset, ..
-        } => {
-            let cause = classify_failure(error.code, Some(msg));
-            // SQLite writes a negative offset where it has no position to give.
-            let offset = (cause == cause::INVALID_SQL)
-                .then(|| usize::try_from(*offset).ok())
-                .flatten();
-            PrepareFault { cause, offset }
-        }
-        _ => PrepareFault::because(cause::INVALID_SQL),
-    }
-}
-
-fn classify_failure(code: ErrorCode, message: Option<&str>) -> &'static str {
-    match code {
-        ErrorCode::AuthorizationForStatementDenied => cause::AUTHORIZER_REFUSED,
-        // SQLITE_ERROR, the code every statement-level complaint arrives under.
-        ErrorCode::Unknown => match message {
-            Some(text) if text.starts_with("no such table") => cause::UNKNOWN_TABLE,
-            Some(text) if text.starts_with("no such column") => cause::UNKNOWN_COLUMN,
-            // A refused function is reported while names are resolved, under
-            // SQLITE_ERROR rather than SQLITE_AUTH, so only the prefix says the
-            // authorizer is what stopped it.
-            Some(text) if text.starts_with("not authorized") => cause::AUTHORIZER_REFUSED,
-            _ => cause::INVALID_SQL,
-        },
-        _ => cause::INVALID_SQL,
-    }
-}
-
-/// Which bound stopped the statement, if a bound did.
-///
-/// The progress callback records why it aborted before SQLite turns the abort
-/// into `SQLITE_INTERRUPT`, so the two budgets stay distinguishable without
-/// reading any message text.
-fn classify_step(error: &rusqlite::Error, budget: &AtomicU8) -> &'static str {
-    match budget.load(Ordering::Relaxed) {
-        BUDGET_STEPS => cause::STEP_BUDGET_EXCEEDED,
-        BUDGET_TIME => cause::TIME_BUDGET_EXCEEDED,
-        _ => match error {
-            // `SQLITE_TOOBIG` while stepping is [`MAXIMUM_ENGINE_VALUE_BYTES`]
-            // refusing to materialize a value, so the row that carries it is
-            // over the cell bound whatever the declared bound happens to be.
-            // Only stepping may read the code this way: the same code at
-            // preparation time means the statement text was too long, which
-            // this cause would misname, so it is classified here rather than
-            // in the shared [`classify_failure`].
-            rusqlite::Error::SqliteFailure(failure, _) if failure.code == ErrorCode::TooBig => {
-                cause::CELL_TOO_LARGE
-            }
-            // Preparation has already settled statement syntax, names and
-            // authorization. Any other engine failure while rows are being
-            // stepped is an execution failure, not newly invalid SQL. Discard
-            // SQLite's message because it may quote extract content.
-            rusqlite::Error::SqliteFailure(_, _) => cause::EXECUTION_FAILED,
-            _ => cause::EXECUTION_FAILED,
-        },
-    }
+fn map_metadata_error(
+    error: registry_platform_sqlite::SqliteError,
+    subject: &str,
+) -> SqliteSourceError {
+    let cause = match error.kind() {
+        PlatformErrorKind::UnknownTable => cause::NO_METADATA_TABLE,
+        PlatformErrorKind::StepBudgetExceeded
+        | PlatformErrorKind::TimeBudgetExceeded
+        | PlatformErrorKind::Timeout => cause::METADATA_BUDGET_EXCEEDED,
+        PlatformErrorKind::DatabaseUnavailable
+        | PlatformErrorKind::DatabaseReplaced
+        | PlatformErrorKind::DatabaseWritable
+        | PlatformErrorKind::DatabaseSymlink
+        | PlatformErrorKind::DatabaseNotFile
+        | PlatformErrorKind::DatabaseChanged
+        | PlatformErrorKind::UncheckpointedSidecar => cause::EXTRACT_UNAVAILABLE,
+        _ => cause::MALFORMED_METADATA,
+    };
+    extract_fault(subject, cause)
 }
 
 #[cfg(test)]
@@ -1416,6 +859,11 @@ factSchema: schemas/facts.schema.yaml
             .execute_batch(statements)
             .expect("the extract fixture is valid SQL");
         drop(connection);
+        let mut permissions = std::fs::metadata(&path)
+            .expect("the extract fixture has metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).expect("the extract fixture is immutable");
         path
     }
 
@@ -1733,8 +1181,9 @@ factSchema: schemas/facts.schema.yaml
             // execution queued behind the occupied blocking worker. A reset
             // after admission would let this call run until the test's much
             // larger safety ceiling instead of enforcing its own 25 ms limit.
-            let held = Arc::clone(&source.concurrency)
-                .acquire_many_owned(2)
+            let held = source
+                .statement
+                .hold_all_permits_for_test()
                 .await
                 .expect("the test holds every source permit");
             let release_admission = async move {
@@ -1822,18 +1271,6 @@ factSchema: schemas/facts.schema.yaml
         assert_eq!(answered["rows"], json!([{"total": 1}]));
     }
 
-    #[test]
-    fn an_engine_failure_while_stepping_is_not_reported_as_invalid_sql() {
-        let error = rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
-            Some("database disk image is malformed around protected-value".to_owned()),
-        );
-        let budget = AtomicU8::new(BUDGET_WITHIN);
-
-        assert_eq!(classify_step(&error, &budget), cause::EXECUTION_FAILED);
-        assert!(!cause::EXECUTION_FAILED.contains("protected-value"));
-    }
-
     #[tokio::test]
     async fn one_row_beyond_the_row_bound_is_refused() {
         let directory = TempDir::new().expect("a temporary directory");
@@ -1860,13 +1297,13 @@ factSchema: schemas/facts.schema.yaml
     async fn a_result_beyond_the_response_bound_is_refused_as_it_is_collected() {
         let directory = TempDir::new().expect("a temporary directory");
         let path = extract(&directory);
-        let plan = Plan::default().response_bytes(8);
+        let plan = Plan::default().response_bytes(39);
         let source = open(&plan, "SELECT id FROM person ORDER BY id", &path);
         assert_eq!(run_error(&source).await, cause::RESPONSE_TOO_LARGE);
 
-        // The three identifiers are nine bytes of text between them, and the
-        // count is of text alone, so a bound of nine admits exactly them.
-        let exact = Plan::default().response_bytes(9);
+        // The exact compact JSON collection is 40 bytes: three one-property
+        // objects containing the three identifiers, plus delimiters and keys.
+        let exact = Plan::default().response_bytes(40);
         let source = open(&exact, "SELECT id FROM person ORDER BY id", &path);
         let result = run(&source, "the response bound admits its own size").await;
         assert_eq!(
@@ -1977,15 +1414,6 @@ factSchema: schemas/facts.schema.yaml
             open_error(&declared, "SELECT id FROM person", &path),
             cause::UNUSED_BINDING
         );
-    }
-
-    #[test]
-    fn positional_parameter_scan_ignores_literals_identifiers_and_comments() {
-        assert!(!contains_positional_parameter(
-            "SELECT '?' AS \"?\", `?`, [?] -- ?1\n/* ?2 */"
-        ));
-        assert!(contains_positional_parameter("SELECT :record, ?1"));
-        assert!(contains_positional_parameter("SELECT ?"));
     }
 
     #[tokio::test]
@@ -2127,6 +1555,44 @@ factSchema: schemas/facts.schema.yaml
                 cause::MALFORMED_METADATA
             );
         }
+    }
+
+    #[test]
+    fn maximum_metadata_fields_survive_structural_response_accounting() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = directory.path().join("extract.sqlite");
+        let connection = Connection::open(&path).expect("the extract opens for writing");
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE {EXTRACT_METADATA_TABLE} \
+                 (published_at TEXT, publisher TEXT, extract_id TEXT); \
+                 {EXTRACT_SCHEMA}"
+            ))
+            .expect("the extract schema is valid");
+        let escaped = "\u{0001}".repeat(MAXIMUM_METADATA_FIELD_BYTES);
+        connection
+            .execute(
+                &format!("INSERT INTO {EXTRACT_METADATA_TABLE} VALUES (?1, ?2, ?3)"),
+                rusqlite::params!["2026-08-07T02:00:00Z", &escaped, &escaped],
+            )
+            .expect("maximum-size metadata inserts");
+        drop(connection);
+        let mut permissions = std::fs::metadata(&path)
+            .expect("the extract fixture has metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).expect("the extract becomes immutable");
+
+        let source = open(&Plan::default(), "SELECT id FROM person", &path);
+
+        assert_eq!(
+            source.extract_metadata().publisher().len(),
+            MAXIMUM_METADATA_FIELD_BYTES
+        );
+        assert_eq!(
+            source.extract_metadata().extract_id().len(),
+            MAXIMUM_METADATA_FIELD_BYTES
+        );
     }
 
     #[test]
@@ -2475,28 +1941,6 @@ factSchema: schemas/facts.schema.yaml
                 line: 1,
                 column: 44
             }),
-        );
-    }
-
-    /// An offset at or past the end of the text is the position just after the
-    /// last character, not a panic.
-    #[test]
-    fn an_offset_at_or_past_the_end_of_the_text_still_has_a_position() {
-        let text = "SELECT id\nFROM person";
-        for offset in [text.len(), text.len() + 1, usize::MAX] {
-            assert_eq!(
-                text_location(text, offset),
-                TextLocation {
-                    line: 2,
-                    column: 12
-                },
-                "offset {offset} did not land after the last character"
-            );
-        }
-        assert_eq!(text_location("", 0), TextLocation { line: 1, column: 1 });
-        assert_eq!(
-            text_location("SELECT id\n", 10),
-            TextLocation { line: 2, column: 1 },
         );
     }
 

@@ -1,0 +1,4 @@
+id: civil-event-record-lifecycle
+version: 1
+status: reviewed
+values: [ACTIVE, RETIRED, SEALED]

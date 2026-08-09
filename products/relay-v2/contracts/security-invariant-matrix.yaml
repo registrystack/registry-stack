@@ -1,0 +1,169 @@
+schemaVersion: relay.registrystack.org/security-invariants/v1alpha1
+product: relay-v2
+status: enforced
+invariants:
+  - id: sec-contract-runtime-separation
+    threat: Deployment configuration weakens governed disclosure or authorization.
+    enforcementPoint: RegistryContract and RelayRuntime closed-schema compilation before readiness.
+    negativeCase: runtime_governed_override_is_rejected
+    expected: Runtime configuration cannot add or alter resources, operations, disclosure, semantics, classification, access, or metadata visibility.
+    evidence: config-validation
+    tests:
+      - {path: crates/registry-relay-v2/src/contract.rs, name: runtime_rejects_governed_override}
+  - id: sec-one-registry-boundary
+    threat: Source, operation, disclosure, quota, or audit state crosses resource boundaries within one compiled Registry.
+    enforcementPoint: Resource-qualified compiled operations and operation-keyed runtime state.
+    negativeCase: multi_resource_state_crosses_a_resource_boundary
+    expected: Multi-resource compilation and routing keep every resource's query, disclosure, authorization, quota, response, and audit state local.
+    evidence: compiler-and-multi-resource-acceptance
+    tests:
+      - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: compiler_keeps_every_multi_resource_operation_boundary_local}
+      - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
+  - id: sec-sqlite-read-only
+    threat: A request mutates, attaches, extends, or escapes the reviewed SQLite source.
+    enforcementPoint: OS read-only access, SQLite authorizer, fixed generated statements, bound values, and resource budgets.
+    negativeCase: sqlite_write_attach_extension_and_unreviewed_sql_are_rejected
+    expected: No public request can execute a write, schema change, attachment, extension, control statement, or caller-authored SQL.
+    evidence: platform-sqlite-negative-tests
+    tests:
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: every_mutating_or_connection_widening_action_is_refused}
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: row_cell_and_response_bounds_are_enforced}
+  - id: sec-token-profile-closed
+    threat: A malformed, wrong-audience, not-yet-valid, expired, or malformed-principal token authorizes access.
+    enforcementPoint: JWT access-token verification and strict principal extraction before access decisions.
+    negativeCase: malformed_audience_time_and_principal_tokens_fail_closed
+    expected: Malformed JWTs, non-scalar audiences, wrong audiences, future issuance, expiry, and malformed subjects are refused as invalid credentials.
+    evidence: real-router-authentication-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: real_jwt_path_rejects_malformed_audience_time_and_expired_tokens}
+      - {path: crates/registry-relay-v2/src/auth.rs, name: malformed_subject_cannot_fall_back_to_client_identifier}
+  - id: sec-operation-confinement
+    threat: A token or request enables an operation the Registry did not compile.
+    enforcementPoint: Hardcoded route construction from compiled operation kinds and exact operation scopes.
+    negativeCase: lookup_scope_cannot_enable_list_or_read
+    expected: Missing routes remain absent and scopes never synthesize capabilities.
+    evidence: route-inventory-and-scope-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
+      - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
+  - id: sec-operation-quota
+    threat: One named lookup exhausts another resource or operation's request budget.
+    enforcementPoint: Runtime quota configuration compiled into an operation-keyed limiter before readiness.
+    negativeCase: lookup_quota_exhaustion_is_operation_scoped
+    expected: Every named lookup has a bounded quota and exhaustion remains isolated to its compiled operation.
+    evidence: real-router-quota-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/server.rs, name: quota_is_scoped_to_the_compiled_operation}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
+  - id: sec-trusted-context
+    threat: Caller input fabricates purpose or row authority.
+    enforcementPoint: Purpose and principal row binding come only from verified claims and compiler-injected predicates.
+    negativeCase: headers_and_filters_cannot_satisfy_purpose_or_row_binding
+    expected: Caller headers, selectors, and filters never create trusted authority.
+    evidence: authorization-negative-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: row_authority_is_a_compiler_injected_lane_not_a_filter}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: trusted_purpose_and_row_binding_refusals_use_only_verified_claims}
+  - id: sec-disclosure-monotonic
+    threat: Field selection expands disclosure, changes predicates, or exposes source columns.
+    enforcementPoint: One compiled maximum disclosure per operation followed by subset-only projection.
+    negativeCase: unknown_duplicate_hidden_and_source_fields_are_rejected_before_io
+    expected: fields can only remove selectable domainData properties; Registry Core remains present.
+    evidence: disclosure-and-query-plan-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
+  - id: sec-lookup-non-enumeration
+    threat: Exact lookup reveals selector values, protected existence, ambiguity, policy outcomes, or invalid source data.
+    enforcementPoint: Bounded body parsing, bound selectors, at-most-two-row execution, and one unresolved problem contract.
+    negativeCase: unresolved_lookup_outcomes_are_indistinguishable
+    expected: No match, ambiguity, hidden Record, unknown or protected identifier, and unsafe selected row share the same value-free outcome except independent trace correlation.
+    evidence: real-router-collapse-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/problem.rs, name: unresolved_lookup_causes_have_one_public_body}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
+  - id: sec-reference-visibility
+    threat: A Record leaks protected metadata or points its caller to an unresolvable schema or semantic model.
+    enforcementPoint: Compile-time visibility closure across operation, resource, schema, semantic, capability, and OpenAPI artifacts.
+    negativeCase: record_cannot_reference_a_less_visible_required_artifact
+    expected: Every successful caller can resolve safe projections of the exact schema and semantic model referenced by the Record.
+    evidence: metadata-exposure-inventory
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: public_record_cannot_reference_operator_only_semantics}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
+  - id: sec-audit-release-gate
+    threat: Source access or response bytes escape without durable accountability.
+    enforcementPoint: Durable attempt before source I/O and durable refusal or release before returning exact held bytes.
+    negativeCase: audit_failure_blocks_source_access_or_release
+    expected: Every data operation, including public release, fails closed at the relevant audit gate.
+    evidence: audit-ordering-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_attempt_failure_prevents_source_access}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_terminal_failure_discards_held_record_bytes}
+  - id: sec-audit-correlation-and-minimization
+    threat: An emitted audit event cannot be correlated to the released operation or records protected request, response, source-row, or principal values.
+    enforcementPoint: Relay-owned closed audit vocabulary populated from compiled and verified operation context.
+    negativeCase: emitted_audit_disagrees_with_response_or_contains_fixture_canaries
+    expected: Emitted attempt and terminal events correlate by trace and request-operation identifiers, agree with the released Registry, resource, operation, contract, disclosure, selected-property, row-boundary, and source-revision context, and contain no response bytes, Record identifiers, raw principals, or fixture canaries.
+    evidence: real-router-recording-audit-proof
+    tests:
+      - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
+  - id: sec-cursor-integrity
+    threat: A caller tampers with pagination state or reuses it across revisions, operations, fields, filters, or authority contexts.
+    enforcementPoint: Authenticated opaque cursor verification and per-page reauthorization.
+    negativeCase: cursor_context_or_revision_change_is_rejected
+    expected: A cursor is usable only under its exact compiled and authorized context before expiry.
+    evidence: cursor-negative-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_is_opaque_and_refuses_tampering}
+      - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_cannot_cross_authorization_or_filter_contexts}
+  - id: sec-source-truthfulness
+    threat: Relay serves incompatible schema, mixed live state, or false revision and cache claims.
+    enforcementPoint: Schema fingerprint, one transaction per request, source-profile revisions, and path identity checks.
+    negativeCase: schema_drift_path_replacement_and_stale_cursor_fail_closed
+    expected: Relay reports only revisions it can establish and never claims snapshot consistency for unversioned live data.
+    evidence: source-profile-tests
+    tests:
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: a_snapshot_is_digest_bound_and_read_immutably}
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: live_reads_allow_content_updates_but_refuse_path_replacement}
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: row_cell_and_response_bounds_are_enforced}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: readiness_fails_value_free_for_missing_replaced_and_drifted_sources}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: social_live_update_is_consistent_and_truthfully_unversioned}
+  - id: sec-value-free-diagnostics
+    threat: SQL, source paths, or fixture row values appear in SQLite or adopter-tooling errors.
+    enforcementPoint: Typed SQLite errors and closed adopter-tooling diagnostics.
+    negativeCase: sqlite_and_tooling_errors_render_no_sql_paths_or_row_values
+    expected: SQLite errors render no SQL, paths, or bound values, and fixture-tooling failures render no source row values.
+    evidence: focused-error-redaction-tests
+    tests:
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: errors_never_render_sql_paths_or_values}
+      - {path: crates/registry-relay-v2/src/tooling.rs, name: errors_never_render_paths}
+      - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_execution_is_isolated_and_reports_no_row_values}
+  - id: sec-value-free-operational-logs
+    threat: Request paths, identifiers, query values, or dependency traces enter operational logs.
+    enforcementPoint: Closed Relay-owned log filter plus fixed method, route-template, status, latency, and trace dimensions.
+    negativeCase: hostile_log_configuration_or_request_values_cannot_widen_operational_logs
+    expected: Operational logging cannot enable dependency targets and never records a dynamic path segment, query string, header, body, selector, Record identifier, or principal identifier.
+    evidence: focused-operational-log-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/main.rs, name: operational_log_filter_cannot_enable_dependency_targets}
+      - {path: crates/registry-relay-v2/src/server.rs, name: operational_dimensions_never_include_request_values}
+      - {path: crates/registry-relay-v2/src/server.rs, name: operational_trace_identifier_is_closed_and_bounded}
+  - id: sec-value-free-trace-context
+    threat: Invalid or caller-controlled trace state is normalized or reflected through ordinary and Problem response headers.
+    enforcementPoint: Strict lowercase version-zero traceparent parser and Relay-owned response Trace Context projection.
+    negativeCase: invalid_traceparent_or_caller_tracestate_is_reflected
+    expected: Invalid traceparent is replaced with server context, and Relay never emits caller-supplied tracestate even when it is syntactically valid.
+    evidence: focused-trace-context-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/problem.rs, name: version_zero_traceparent_rejects_non_lowercase_hex}
+      - {path: crates/registry-relay-v2/src/problem.rs, name: invalid_traceparent_is_replaced_with_server_context}
+      - {path: crates/registry-relay-v2/src/problem.rs, name: caller_tracestate_is_never_echoed_in_ordinary_or_problem_headers}
+  - id: sec-unsigned-family-boundary
+    threat: Relay output is mistaken for portable signed Evidence or API authentication is mistaken for Identity Federation.
+    enforcementPoint: Product routes, dependencies, discovery, and family-alignment inventory.
+    negativeCase: relay_never_advertises_or_emits_unimplemented_family_artifacts
+    expected: Relay advertises only compiled Consultation patterns, signs no response, and exposes no credential, federation, write, notification, aggregate, or access-history surface.
+    evidence: family-alignment-and-route-inventory
+    tests:
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: generated_inventory_covers_required_v1_artifact_classes_only}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}

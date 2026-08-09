@@ -11,6 +11,7 @@ use jsonschema::{Draft, JSONSchema};
 use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
+use registry_platform_sqlite::{CapturedSnapshot, ErrorKind as SqliteErrorKind};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -46,6 +47,7 @@ const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
 /// this size and never held whole.
+#[cfg(test)]
 const EXTRACT_DIGEST_CHUNK_BYTES: usize = 64 * 1024;
 const ALLOWED_DIRECTORIES: [&str; 7] = [
     "adapters",
@@ -311,9 +313,7 @@ pub struct RuntimeDocument {
 /// identity both were taken over.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SourceExtract {
-    path: PathBuf,
-    digest: String,
-    identity: FileIdentity,
+    captured: CapturedSnapshot,
 }
 
 /// The identity a capture was taken over, kept so a later opener can prove it
@@ -323,25 +323,32 @@ pub struct SourceExtract {
 /// compares, so the two cannot drift apart: whatever identity a read brackets
 /// itself with is the identity a reopen is held to.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 struct FileIdentity(Metadata);
 
+#[cfg(test)]
 impl PartialEq for FileIdentity {
     fn eq(&self, other: &Self) -> bool {
         same_file(&self.0, &other.0)
     }
 }
 
+#[cfg(test)]
 impl Eq for FileIdentity {}
 
 impl SourceExtract {
+    pub(crate) fn captured_snapshot(&self) -> CapturedSnapshot {
+        self.captured.clone()
+    }
+
     /// The validated file the statement executor opens.
     pub fn path(&self) -> &Path {
-        &self.path
+        self.captured.path()
     }
 
     /// `sha256:` and lowercase hex over the extract's bytes, as they were read.
     pub fn digest(&self) -> &str {
-        &self.digest
+        self.captured.digest()
     }
 
     /// Prove the bound path still names the file this validated and digested.
@@ -359,18 +366,16 @@ impl SourceExtract {
     /// window still passes, and anyone who can write the containing directory
     /// can do worse than this. The case it settles is the one that happens.
     pub fn confirm_still_bound(&self) -> Result<(), BundleError> {
-        let current = fs::symlink_metadata(&self.path).map_err(|_| {
-            invalid_artifact("the source extract the runtime file names is unavailable")
-        })?;
-        if current.file_type().is_symlink()
-            || !current.is_file()
-            || FileIdentity(current) != self.identity
-        {
-            return Err(not_immutable(
-                "the source extract was replaced between digesting it and opening it",
-            ));
-        }
-        Ok(())
+        self.captured
+            .confirm_still_bound()
+            .map_err(|error| match error.kind() {
+                SqliteErrorKind::DatabaseUnavailable => {
+                    invalid_artifact("the source extract the runtime file names is unavailable")
+                }
+                _ => not_immutable(
+                    "the source extract was replaced between digesting it and opening it",
+                ),
+            })
     }
 }
 
@@ -809,37 +814,35 @@ fn source_extract_artifact(profile: &str) -> String {
 /// know whether the file is absent, indirect, of the wrong kind, or writable,
 /// and those are four different pieces of work.
 fn capture_source_extract(path: &Path) -> Result<SourceExtract, BundleError> {
-    let unavailable = invalid_artifact("the source extract the runtime file names is unavailable");
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable.clone())?;
-    if metadata.file_type().is_symlink() {
-        return Err(invalid_artifact(
-            "the source extract the runtime file names is a symbolic link",
-        ));
+    let captured = CapturedSnapshot::capture(path).map_err(map_extract_capture_error)?;
+    Ok(SourceExtract { captured })
+}
+
+fn map_extract_capture_error(error: registry_platform_sqlite::SqliteError) -> BundleError {
+    match error.kind() {
+        SqliteErrorKind::DatabaseUnavailable => {
+            invalid_artifact("the source extract the runtime file names is unavailable")
+        }
+        SqliteErrorKind::DatabaseSymlink => {
+            invalid_artifact("the source extract the runtime file names is a symbolic link")
+        }
+        SqliteErrorKind::DatabaseNotFile => {
+            invalid_artifact("the source extract the runtime file names is not a regular file")
+        }
+        SqliteErrorKind::DatabaseWritable => {
+            invalid_artifact("the source extract the runtime file names is writable")
+        }
+        SqliteErrorKind::UncheckpointedSidecar => invalid_artifact(
+            "the source extract the runtime file names has an uncheckpointed sidecar",
+        ),
+        SqliteErrorKind::DatabaseReplaced => {
+            not_immutable("the source extract was replaced between naming it and opening it")
+        }
+        SqliteErrorKind::DatabaseChanged => {
+            not_immutable("the source extract changed while it was being read")
+        }
+        _ => invalid_artifact("the source extract the runtime file names is unavailable"),
     }
-    if !metadata.is_file() {
-        return Err(invalid_artifact(
-            "the source extract the runtime file names is not a regular file",
-        ));
-    }
-    let filesystem_read_only = filesystem_is_read_only(path).map_err(|_| unavailable)?;
-    // Not hygiene. The statement executor opens this file `mode=ro` with
-    // `immutable=1`, which promises SQLite that no other connection can change
-    // it. A file that is still writable makes that promise false, and an
-    // immutable connection over a file that changes is undefined behaviour
-    // rather than a stale read. Dropping this check would move that undefined
-    // behaviour into every assertion the deployment answers.
-    validate_read_only(
-        &metadata,
-        filesystem_read_only,
-        "the source extract the runtime file names is writable",
-    )?;
-    refuse_uncheckpointed_sidecars(path)?;
-    let (digest, identity) = digest_stable_file(path, &metadata, filesystem_read_only)?;
-    Ok(SourceExtract {
-        path: path.to_path_buf(),
-        digest,
-        identity,
-    })
 }
 
 /// The files SQLite writes beside a database and reads back to complete it.
@@ -847,37 +850,8 @@ fn capture_source_extract(path: &Path) -> Result<SourceExtract, BundleError> {
 /// A `-shm` is deliberately absent. It is shared memory rather than content,
 /// and one can survive a clean checkpoint and close, so its presence says
 /// nothing about whether the snapshot is whole.
+#[cfg(test)]
 const EXTRACT_SIDECAR_SUFFIXES: [&str; 2] = ["-wal", "-journal"];
-
-/// Refuse an extract published with the sidecar that completes it.
-///
-/// `immutable=1` tells SQLite to skip change detection, and skipping change
-/// detection also skips these files. A `-wal` holding committed frames is read
-/// straight past, so the deployment answers from the last checkpoint while
-/// every other reader of the same file sees newer rows. A `-journal` left by a
-/// writer that died mid-transaction is worse: an ordinary read-only opener
-/// refuses such a file because it cannot perform the rollback, while an
-/// immutable opener reads the rows that transaction never committed as though
-/// they were authoritative.
-///
-/// An extract is a published snapshot, so a sidecar is a publishing mistake
-/// rather than a state to interpret, and this makes it a startup refusal
-/// instead of a silent one. It detects that mistake rather than preventing it:
-/// a sidecar appearing after this check belongs to the deployment's own
-/// guarantee that nothing else changes the mounted file, and a publisher who
-/// copies only the main file out of a live database leaves no sidecar to find.
-fn refuse_uncheckpointed_sidecars(path: &Path) -> Result<(), BundleError> {
-    for suffix in EXTRACT_SIDECAR_SUFFIXES {
-        let mut sidecar = path.to_path_buf().into_os_string();
-        sidecar.push(suffix);
-        if fs::symlink_metadata(PathBuf::from(sidecar)).is_ok() {
-            return Err(invalid_artifact(
-                "the source extract the runtime file names has an uncheckpointed sidecar",
-            ));
-        }
-    }
-    Ok(())
-}
 
 /// Digest one file without holding it in memory.
 ///
@@ -886,6 +860,7 @@ fn refuse_uncheckpointed_sidecars(path: &Path) -> Result<(), BundleError> {
 /// same before-and-after identity checks bracket the read, so the file
 /// identity that was validated is the file identity that was hashed. There is
 /// no byte cap, because an extract is a register rather than an artifact.
+#[cfg(test)]
 fn digest_stable_file(
     path: &Path,
     scanned: &Metadata,

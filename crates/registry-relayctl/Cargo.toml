@@ -1,0 +1,24 @@
+[package]
+name = "registry-relayctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Relay V2 adopter tooling and authoring workflows."
+repository.workspace = true
+publish = false
+readme = "INTEGRATION.md"
+
+[[bin]]
+name = "relayctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-relay-v2 = { workspace = true, features = ["tooling"] }
+serde.workspace = true
+serde_json.workspace = true
