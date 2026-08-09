@@ -3299,6 +3299,162 @@ async fn a_holder_bound_binding_does_not_move_with_the_requesting_relying_party(
     );
 }
 
+/// A refusal pseudonym stays audience-scoped whatever mode the requirement the
+/// caller was reaching for declares.
+///
+/// A refusal can be written before any requirement has been matched, so the
+/// declared mode is not in scope when one is recorded. Deriving it without the
+/// requester's audience would hand every relying party the same durable name
+/// for one denied principal, which is a cross-audience identifier the mode
+/// exists to prevent. The same principal asks the same holder-bound
+/// requirement for a purpose no grant permits, under two audiences.
+#[tokio::test]
+async fn a_holder_bound_refusal_pseudonym_does_not_follow_the_principal_across_audiences() {
+    const PRINCIPAL: &str = "holder-bound-refusal-principal-canary";
+    const ACTOR: &str = "holder-bound-refusal-actor-canary";
+    const REFUSED_PURPOSE: &str = "refused-holder-bound-purpose";
+    const SECOND_AUDIENCE: &str = "https://second-relying.invalid/procedure";
+
+    let prepared = holder_bound_acceptance().await;
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(
+            &prepared.runtime_path,
+            authenticator_with_actor_claim("evidence_actor"),
+        )
+        .await
+        .expect("runtime initializes with an actor claim"),
+    );
+    // No source is mounted: a refused request may reach no acquisition.
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut refused = adult_request();
+    refused.purpose = REFUSED_PURPOSE.to_owned();
+    let mut body = serde_json::to_value(refused).expect("request serializes");
+    body["holderKeys"] = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    }]);
+
+    for audience in [EVIDENCE_AUDIENCE, SECOND_AUDIENCE, EVIDENCE_AUDIENCE] {
+        body["requestNonce"] = json!(fresh_request_nonce());
+        let token = access_token_for(
+            PRINCIPAL,
+            Some(json!({
+                "evidence_actor": ACTOR,
+                "evidence_audience": audience,
+            })),
+        );
+        let response = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
+    }
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    let requesters = pseudonyms_for_phase(&audit, "denial", "requesterPseudonym");
+    let actors = pseudonyms_for_phase(&audit, "denial", "actorPseudonym");
+    assert_eq!(
+        requesters.len(),
+        3,
+        "every request must be refused in audit"
+    );
+    assert_eq!(actors.len(), 3, "every refusal must carry its actor");
+    for (class, pseudonyms) in [("requester", requesters), ("actor", actors)] {
+        assert_ne!(
+            pseudonyms[0], pseudonyms[1],
+            "one denied {class} carries the same refusal pseudonym to two relying parties"
+        );
+        assert_eq!(
+            pseudonyms[0], pseudonyms[2],
+            "one denied {class} does not keep a stable pseudonym within one relying party"
+        );
+    }
+    for protected in [
+        PRINCIPAL,
+        ACTOR,
+        REFUSED_PURPOSE,
+        EVIDENCE_AUDIENCE,
+        SECOND_AUDIENCE,
+    ] {
+        assert!(
+            !audit.contains(protected),
+            "a refusal retained protected request material"
+        );
+    }
+}
+
+/// A released holder-bound record is scoped to no relying party, so the
+/// requester pseudonym on it must not vary with the audience that asked.
+///
+/// This is the deliberate property the audience-scoped refusal pseudonym sits
+/// beside: making every derivation name the audience would be a quiet revert
+/// of the mode's audit contract.
+#[tokio::test]
+async fn a_holder_bound_release_pseudonym_does_not_vary_with_the_relying_party() {
+    const PRINCIPAL: &str = "holder-bound-release-principal-canary";
+    const SECOND_AUDIENCE: &str = "https://second-relying.invalid/procedure";
+
+    let prepared = holder_bound_acceptance().await;
+    let runtime = runtime_for(&prepared).await;
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+    let mut body = serde_json::to_value(adult_request()).expect("request serializes");
+    body["holderKeys"] = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+        "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+    }]);
+
+    for audience in [EVIDENCE_AUDIENCE, SECOND_AUDIENCE] {
+        body["requestNonce"] = json!(fresh_request_nonce());
+        let token = access_token_for(PRINCIPAL, Some(json!({"evidence_audience": audience})));
+        let released = http
+            .post("/v1/evidence")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE)
+            .json(&body)
+            .await;
+        released.assert_status_ok();
+    }
+
+    let audit = wait_for_audit_counts(&prepared.audit_path, 2, 2).await;
+    let released = requester_pseudonyms_for_phase(&audit, "disclosure-release");
+    assert_eq!(released.len(), 2);
+    assert_eq!(
+        released[0], released[1],
+        "a holder-bound release record was scoped to the relying party that asked"
+    );
+}
+
+fn requester_pseudonyms_for_phase(audit: &str, phase: &str) -> Vec<String> {
+    pseudonyms_for_phase(audit, phase, "requesterPseudonym")
+}
+
+fn pseudonyms_for_phase(audit: &str, phase: &str, field: &str) -> Vec<String> {
+    audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit line is JSON"))
+        .filter(|event| event["record"]["phase"] == json!(phase))
+        .map(|event| {
+            event["record"][field]
+                .as_str()
+                .expect("audit pseudonym is text")
+                .to_owned()
+        })
+        .collect()
+}
+
 /// A requirement that does not declare the mode serves the audience-scoped
 /// path whatever the caller supplies.
 ///

@@ -916,27 +916,27 @@ impl EvidenceRuntime {
             .map_or(SubjectBindingMode::AudienceScoped, |requirement| {
                 requirement.subject_binding_mode()
             });
-        // A holder-bound operation is scoped to no relying party, so its audit
-        // pseudonyms cannot be derived under one. Its scope names the trust
-        // domain and the purpose only, and never the holder key.
-        let scope = match binding_mode {
-            SubjectBindingMode::AudienceScoped => audit_scope(
-                &self.bundle().config.service.trust_domain,
-                &request.purpose,
-                context.evidence_audience(),
-            ),
-            SubjectBindingMode::HolderBound => audit_scope_holder_bound(
-                &self.bundle().config.service.trust_domain,
-                &request.purpose,
-            ),
-        };
-        let requester_pseudonym = self
+        // A refusal is scoped to the relying party that asked, in both binding
+        // modes. It can be written before any requirement has been matched, so
+        // no declared mode is in scope when one is recorded, and an
+        // audience-free refusal pseudonym would be a durable cross-audience
+        // name for one denied principal: every relying party that refused it
+        // would hold the same identifier.
+        let refusal_scope = authorization_refusal_audit_scope(
+            &self.bundle().config.service.trust_domain,
+            &request.purpose,
+            context.evidence_audience(),
+        );
+        let refusal_requester_pseudonym = self
             .audit
-            .pseudonym("requester", &scope, context.principal().as_bytes())
+            .pseudonym("requester", &refusal_scope, context.principal().as_bytes())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
-        let actor_pseudonym = context
+        let refusal_actor_pseudonym = context
             .actor()
-            .map(|actor| self.audit.pseudonym("actor", &scope, actor.as_bytes()))
+            .map(|actor| {
+                self.audit
+                    .pseudonym("actor", &refusal_scope, actor.as_bytes())
+            })
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
@@ -945,8 +945,8 @@ impl EvidenceRuntime {
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    requester_pseudonym,
-                    actor_pseudonym,
+                    refusal_requester_pseudonym,
+                    refusal_actor_pseudonym,
                     started,
                 )
                 .await?;
@@ -966,8 +966,8 @@ impl EvidenceRuntime {
         {
             self.append_authorization_refusal(
                 operation,
-                requester_pseudonym,
-                actor_pseudonym,
+                refusal_requester_pseudonym,
+                refusal_actor_pseudonym,
                 started,
             )
             .await?;
@@ -1018,8 +1018,8 @@ impl EvidenceRuntime {
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    requester_pseudonym,
-                    actor_pseudonym,
+                    refusal_requester_pseudonym,
+                    refusal_actor_pseudonym,
                     started,
                 )
                 .await?;
@@ -1036,8 +1036,37 @@ impl EvidenceRuntime {
             }
         };
 
+        // A holder-bound operation is scoped to no relying party, so the audit
+        // pseudonyms of what it releases cannot be derived under one. Its scope
+        // names the trust domain and the purpose only, and never the holder
+        // key. Under the audience-scoped mode this derivation repeats the
+        // refusal one exactly, because a pseudonym is a keyed function of its
+        // label, its scope, and its input.
+        let issuance_scope = match binding_mode {
+            SubjectBindingMode::AudienceScoped => audit_scope(
+                &self.bundle().config.service.trust_domain,
+                &request.purpose,
+                context.evidence_audience(),
+            ),
+            SubjectBindingMode::HolderBound => audit_scope_holder_bound(
+                &self.bundle().config.service.trust_domain,
+                &request.purpose,
+            ),
+        };
+        let requester_pseudonym = self
+            .audit
+            .pseudonym("requester", &issuance_scope, context.principal().as_bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let actor_pseudonym = context
+            .actor()
+            .map(|actor| {
+                self.audit
+                    .pseudonym("actor", &issuance_scope, actor.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
         let material = self.audit_material(
-            &scope,
+            &issuance_scope,
             requester_pseudonym,
             actor_pseudonym,
             &resolved,
@@ -2470,6 +2499,12 @@ fn audit_scope(trust_domain: &str, purpose: &str, audience: &str) -> String {
         purpose.len(),
         audience.len()
     )
+}
+
+/// Authorization refusals always remain scoped to the authenticated relying
+/// party, before any later event is allowed to select a binding-mode scope.
+fn authorization_refusal_audit_scope(trust_domain: &str, purpose: &str, audience: &str) -> String {
+    audit_scope(trust_domain, purpose, audience)
 }
 
 /// Audit scope for a holder-bound operation, which has no audience to bind.

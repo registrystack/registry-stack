@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     bundle::DeploymentInputs,
-    config::{AssuranceProfile, ConceptForm, ResponseFormat},
+    config::{AssuranceProfile, ConceptForm, ResponseFormat, SubjectBindingMode},
     model::{JwksDocument, RequestedSubject},
     runtime::{validate_verification_material, ValidatedVerificationMaterial},
     secrets::{SecretProvider, SecretResolver},
@@ -184,6 +184,13 @@ fn validate_local_requirement(
     {
         return Err(LocalProcedureError);
     }
+    // The local relying procedure derives an audience-scoped binding only: a
+    // holder-bound requirement needs a per-request wallet key this
+    // preparation seam does not have, so it is refused here rather than
+    // handed a binding that can never match at the server.
+    if requirement.subject_binding_mode() != SubjectBindingMode::AudienceScoped {
+        return Err(LocalProcedureError);
+    }
     Ok(())
 }
 
@@ -245,8 +252,9 @@ fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn bounded_integer_has_an_exact_local_verification_form() {
@@ -282,6 +290,23 @@ mod tests {
             assert!(
                 serde_json::from_value::<LocalRelyingProcedureInput>(changed).is_err(),
                 "{member} is outside the closed draft"
+            );
+        }
+    }
+
+    #[test]
+    fn local_requirement_validation_refuses_holder_bound_requirements() {
+        let config = crate::config::EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
+        ))
+        .expect("the holder-bound acceptance bundle validates");
+
+        for requirement in &config.requirements {
+            assert_eq!(
+                validate_local_requirement(requirement),
+                Err(LocalProcedureError),
+                "{} must not receive an audience-scoped local procedure",
+                requirement.id
             );
         }
     }

@@ -1464,12 +1464,17 @@ its scope inputs is stored in the refusal event. Its scope binds the operator
 trust domain, requested purpose, and authenticated audience so refusals do not
 create a cross-purpose or cross-audience identifier.
 
-That scope is the same under both subject binding modes. A refusal is written
-before a requirement is matched, so no declared binding mode is in scope when it
-is written, and the requester pseudonym in a refusal event stays audience-scoped
+That scope is the same under both subject binding modes. A refusal can be
+written before any requirement has been matched, so no declared binding mode is
+reliably in scope when one is recorded, and an audience-free refusal pseudonym
+would name a denied principal identically to every relying party that refused
+it. The requester pseudonym in a refusal event therefore stays audience-scoped
 whether or not the requirement the caller was reaching for declares the
-holder-bound mode. The refusal event names no holder key, because the request
-never reached the point where one would be read.
+holder-bound mode. That holds for every refusal, including the ones written
+after a requirement has been matched: the rule is a property of the event, not
+of how far the request travelled before it was denied. The refusal event names
+no holder key, because its content is fixed and minimal and no holder key is
+among the fields it carries.
 
 Audit pseudonyms use keyed, domain-separated hashing with separate requester,
 actor, authority, and subject domains. A subject pseudonym covers the canonical

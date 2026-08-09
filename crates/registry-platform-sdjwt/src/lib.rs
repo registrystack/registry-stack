@@ -38,16 +38,23 @@ const SELF_NOMINATING_HEADER_PARAMETERS: [&str; 5] = ["crit", "jku", "jwk", "x5u
 /// self-nominating parameter appears here.
 const KEY_BINDING_HEADER_PARAMETERS: [&str; 3] = ["alg", "typ", "kid"];
 
-/// Header parameters an OpenID4VCI proof JWT may carry. `jwk` is the one
-/// self-nominating parameter this crate honours, and only because the proof's
-/// whole purpose is to present a key the issuer has not seen before.
-const OID4VCI_PROOF_HEADER_PARAMETERS: [&str; 3] = ["alg", "typ", "jwk"];
+/// Header parameters an OpenID4VCI proof JWT may carry. `jwk` presents the key
+/// directly, while `kid` is accepted only when it is a locally decoded
+/// `did:jwk` URL. Neither path performs network resolution.
+const OID4VCI_PROOF_HEADER_PARAMETERS: [&str; 4] = ["alg", "typ", "jwk", "kid"];
 
 /// The complete claim set RFC 9901 section 4.3 permits in a key-binding JWT.
 const KEY_BINDING_PAYLOAD_CLAIMS: [&str; 4] = ["nonce", "aud", "iat", "sd_hash"];
 
-/// The complete claim set this crate permits in an OpenID4VCI proof JWT.
-const OID4VCI_PROOF_PAYLOAD_CLAIMS: [&str; 3] = ["aud", "iat", "nonce"];
+/// Claims every OpenID4VCI proof JWT must carry, plus the one bounded lifetime
+/// extension this profile accepts for wallet interoperability.
+const OID4VCI_PROOF_REQUIRED_PAYLOAD_CLAIMS: [&str; 3] = ["aud", "iat", "nonce"];
+const OID4VCI_PROOF_OPTIONAL_PAYLOAD_CLAIMS: [&str; 1] = ["exp"];
+
+/// A P-256 public JWK is a few hundred bytes. This bound leaves room for
+/// reviewed public metadata without allowing a `kid` to become an unbounded
+/// encoded document.
+const MAXIMUM_OID4VCI_DID_JWK_BYTES: usize = 2_048;
 
 #[derive(Clone)]
 pub struct SdJwtIssuer {
@@ -489,6 +496,7 @@ pub struct Oid4vciProofClaims {
     pub holder_jwk: PublicJwk,
     pub aud: String,
     pub iat: i64,
+    pub exp: Option<i64>,
     pub nonce: String,
 }
 
@@ -498,6 +506,7 @@ impl fmt::Debug for Oid4vciProofClaims {
             .field("holder_jwk", &self.holder_jwk)
             .field("aud", &self.aud)
             .field("iat", &self.iat)
+            .field("exp", &self.exp)
             .finish_non_exhaustive()
     }
 }
@@ -587,11 +596,12 @@ pub fn validate_key_binding_jwt(
 ///
 /// - `typ` is the bare subtype `openid4vci-proof+jwt`. The registered media
 ///   type carries an `application/` prefix; the header value does not;
-/// - the header may nominate exactly one of `kid`, `jwk`, or `x5c`, and this
-///   validator honours `jwk` only, so the key is verified from the token and
-///   returned to the caller;
+/// - the header may nominate exactly one of `kid`, `jwk`, or `x5c`; `jwk` is
+///   honoured directly and `kid` only as a locally decoded `did:jwk` URL, so
+///   no key lookup or remote DID resolution is introduced;
 /// - `aud` is the credential issuer identifier, and `iat` and `nonce` are both
-///   required;
+///   required. An optional `exp` is enforced without widening the `iat`
+///   freshness window;
 /// - `iss` must be absent. A present `iss` is a rejection, not a claim to
 ///   ignore.
 pub fn validate_oid4vci_proof_jwt(
@@ -619,8 +629,12 @@ pub fn validate_oid4vci_proof_jwt(
     if members.contains_key("iss") {
         return Err(SdJwtError::Oid4vciProofIssuerPresent);
     }
-    let members = closed_payload(&payload, &OID4VCI_PROOF_PAYLOAD_CLAIMS)
-        .ok_or(SdJwtError::Oid4vciProofInvalid)?;
+    let members = closed_payload_with_optional(
+        &payload,
+        &OID4VCI_PROOF_REQUIRED_PAYLOAD_CLAIMS,
+        &OID4VCI_PROOF_OPTIONAL_PAYLOAD_CLAIMS,
+    )
+    .ok_or(SdJwtError::Oid4vciProofInvalid)?;
 
     let nonce = required_member_str(members, "nonce").ok_or(SdJwtError::Oid4vciProofInvalid)?;
     if !constant_time_eq(nonce.as_bytes(), policy.nonce.as_bytes()) {
@@ -635,11 +649,22 @@ pub fn validate_oid4vci_proof_jwt(
     if !iat_within_window(iat, now, policy.max_age, policy.max_future_skew)? {
         return Err(SdJwtError::Oid4vciProofInvalid);
     }
+    let exp = match members.get("exp") {
+        Some(value) => {
+            let exp = value.as_i64().ok_or(SdJwtError::Oid4vciProofInvalid)?;
+            if exp <= now {
+                return Err(SdJwtError::Oid4vciProofInvalid);
+            }
+            Some(exp)
+        }
+        None => None,
+    };
 
     Ok(Oid4vciProofClaims {
         holder_jwk,
         aud,
         iat,
+        exp,
         nonce: nonce.to_string(),
     })
 }
@@ -668,9 +693,8 @@ pub enum SdJwtError {
     #[error("OpenID4VCI proof JWT is invalid")]
     Oid4vciProofInvalid,
     #[error(
-        "OpenID4VCI proof JWT must nominate its key with `jwk`: `kid` needs a key registered \
-         before the request, which a pre-authorized code flow does not have, and `x5c` needs a \
-         certificate trust anchor this crate does not hold"
+        "OpenID4VCI proof JWT key reference is unsupported: `kid` must be a local `did:jwk` \
+         URL and `x5c` needs a certificate trust anchor this crate does not hold"
     )]
     Oid4vciProofKeyReferenceUnsupported,
     #[error("OpenID4VCI proof JWT carries `iss` but no authenticated client identity backs it")]
@@ -768,21 +792,69 @@ fn require_oid4vci_proof_header(header: &Value) -> Result<PublicJwk, SdJwtError>
 
 /// Select the one key an OpenID4VCI proof may nominate.
 ///
-/// OpenID4VCI 1.0 permits exactly one of `kid`, `jwk`, or `x5c`. Only `jwk` is
-/// honoured, and the other two are refused with their own error so a deployment
-/// reads the reason rather than a generic parse failure.
+/// OpenID4VCI 1.0 permits exactly one of `kid`, `jwk`, or `x5c`. This profile
+/// honours an inline `jwk` and the self-contained `did:jwk` form of `kid`.
+/// Other references are refused rather than resolved through ambient network
+/// or trust state.
 fn oid4vci_proof_key(header: &Value) -> Result<PublicJwk, SdJwtError> {
     let nominated: Vec<&str> = ["kid", "jwk", "x5c"]
         .into_iter()
         .filter(|name| header.get(*name).is_some())
         .collect();
     match nominated.as_slice() {
-        ["jwk"] => {}
-        [] => return Err(SdJwtError::Oid4vciProofInvalid),
-        _ => return Err(SdJwtError::Oid4vciProofKeyReferenceUnsupported),
+        ["jwk"] => {
+            let jwk = header.get("jwk").ok_or(SdJwtError::Oid4vciProofInvalid)?;
+            parse_oid4vci_proof_jwk(jwk)
+        }
+        ["kid"] => {
+            let kid = header
+                .get("kid")
+                .and_then(Value::as_str)
+                .ok_or(SdJwtError::Oid4vciProofInvalid)?;
+            parse_oid4vci_did_jwk(kid)
+        }
+        [] => Err(SdJwtError::Oid4vciProofInvalid),
+        _ => Err(SdJwtError::Oid4vciProofKeyReferenceUnsupported),
     }
-    let jwk = header.get("jwk").ok_or(SdJwtError::Oid4vciProofInvalid)?;
-    parse_oid4vci_proof_jwk(jwk)
+}
+
+/// Decode the one key-reference form this profile can resolve by itself.
+///
+/// The `#0` verification-method fragment is required, the method-specific
+/// identifier is canonical unpadded base64url, and the decoded document is a
+/// bounded public P-256 JWK. The original DID URL is retained as the public
+/// key identifier carried into the credential confirmation.
+fn parse_oid4vci_did_jwk(kid: &str) -> Result<PublicJwk, SdJwtError> {
+    let encoded = kid
+        .strip_prefix("did:jwk:")
+        .and_then(|value| value.strip_suffix("#0"))
+        .filter(|value| !value.is_empty() && !value.contains('#'))
+        .ok_or(SdJwtError::Oid4vciProofKeyReferenceUnsupported)?;
+    if encoded.len() > MAXIMUM_OID4VCI_DID_JWK_BYTES.saturating_mul(2) {
+        return Err(SdJwtError::Oid4vciProofInvalid);
+    }
+    let decoded = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| SdJwtError::Oid4vciProofInvalid)?;
+    if decoded.len() > MAXIMUM_OID4VCI_DID_JWK_BYTES || URL_SAFE_NO_PAD.encode(&decoded) != encoded
+    {
+        return Err(SdJwtError::Oid4vciProofInvalid);
+    }
+    let value = parse_json_strict(&decoded).map_err(|_| SdJwtError::Oid4vciProofInvalid)?;
+    let members = value.as_object().ok_or(SdJwtError::Oid4vciProofInvalid)?;
+    const ALLOWED_MEMBERS: [&str; 7] = ["kty", "crv", "x", "y", "alg", "kid", "use"];
+    if members
+        .keys()
+        .any(|name| !ALLOWED_MEMBERS.contains(&name.as_str()))
+        || members
+            .get("use")
+            .is_some_and(|value| value.as_str() != Some("sig"))
+    {
+        return Err(SdJwtError::Oid4vciProofInvalid);
+    }
+    let mut jwk = parse_oid4vci_proof_jwk(&value)?;
+    jwk.kid = Some(kid.to_owned());
+    Ok(jwk)
 }
 
 /// Parse a nominated proof key through `registry_platform_crypto::PublicJwk`.
@@ -847,6 +919,24 @@ fn header_parameters_are_reviewed(
 fn closed_payload<'a>(payload: &'a Value, claims: &[&str]) -> Option<&'a Map<String, Value>> {
     let members = payload.as_object()?;
     if members.len() != claims.len() || !claims.iter().all(|claim| members.contains_key(*claim)) {
+        return None;
+    }
+    Some(members)
+}
+
+/// Require every member in `required`, permit members in `optional`, and
+/// reject everything else.
+fn closed_payload_with_optional<'a>(
+    payload: &'a Value,
+    required: &[&str],
+    optional: &[&str],
+) -> Option<&'a Map<String, Value>> {
+    let members = payload.as_object()?;
+    if !required.iter().all(|claim| members.contains_key(*claim))
+        || members
+            .keys()
+            .any(|claim| !required.contains(&claim.as_str()) && !optional.contains(&claim.as_str()))
+    {
         return None;
     }
     Some(members)
@@ -2118,6 +2208,27 @@ mod tests {
         assert_eq!(claims.aud, "https://issuer.example/credentials");
         assert_eq!(claims.nonce, "c-nonce-value");
         assert_eq!(claims.iat, now);
+        assert_eq!(claims.exp, None);
+    }
+
+    #[test]
+    fn oid4vci_proof_jwt_accepts_a_local_did_jwk_key_and_optional_expiry() {
+        let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
+        let now = 1_700_000_000;
+        let header = oid4vci_did_jwk_proof_header(&holder);
+        let kid = header["kid"].as_str().expect("kid").to_owned();
+        let mut payload = oid4vci_proof_payload(now);
+        payload["exp"] = json!(now + 18_000);
+        let proof = sign_compact(&holder, header, &payload);
+
+        let claims = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect("self-contained did:jwk proof validates");
+
+        assert_eq!(claims.holder_jwk.x, holder.public().x);
+        assert_eq!(claims.holder_jwk.y, holder.public().y);
+        assert_eq!(claims.holder_jwk.alg.as_deref(), Some("ES256"));
+        assert_eq!(claims.holder_jwk.kid.as_deref(), Some(kid.as_str()));
+        assert_eq!(claims.exp, Some(now + 18_000));
     }
 
     #[test]
@@ -2150,10 +2261,13 @@ mod tests {
         let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
         let now = 1_700_000_000;
 
-        for reference in ["kid", "x5c"] {
+        for (reference, value) in [
+            ("kid", json!("did:web:wallet.example#key-1")),
+            ("x5c", json!(["certificate"])),
+        ] {
             let mut header = oid4vci_proof_header(&holder);
             header.as_object_mut().expect("header object").remove("jwk");
-            header[reference] = json!("did:jwk:holder#p256-key-1");
+            header[reference] = value;
             let proof = sign_compact(&holder, header, &oid4vci_proof_payload(now));
 
             let err = validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
@@ -2185,6 +2299,47 @@ mod tests {
     }
 
     #[test]
+    fn oid4vci_proof_jwt_rejects_malformed_or_non_p256_did_jwk_keys() {
+        let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
+        let now = 1_700_000_000;
+        let invalid = [
+            "did:jwk:not-base64url#0".to_owned(),
+            oid4vci_did_jwk_proof_header(&holder)["kid"]
+                .as_str()
+                .expect("kid")
+                .trim_end_matches("#0")
+                .to_owned(),
+            format!(
+                "did:jwk:{}#0",
+                URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&json!({
+                        "kty": "EC",
+                        "crv": "P-384",
+                        "x": holder.public().x,
+                        "y": holder.public().y,
+                        "use": "sig",
+                    }))
+                    .expect("json")
+                )
+            ),
+        ];
+
+        for kid in invalid {
+            let proof = sign_compact(
+                &holder,
+                json!({
+                    "alg": "ES256",
+                    "typ": "openid4vci-proof+jwt",
+                    "kid": kid,
+                }),
+                &oid4vci_proof_payload(now),
+            );
+            validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+                .expect_err("unusable did:jwk key is rejected");
+        }
+    }
+
+    #[test]
     fn oid4vci_proof_jwt_rejects_a_present_issuer_claim() {
         let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
         let now = 1_700_000_000;
@@ -2199,7 +2354,7 @@ mod tests {
     }
 
     #[test]
-    fn oid4vci_proof_jwt_requires_exactly_the_three_closed_payload_claims() {
+    fn oid4vci_proof_jwt_requires_the_three_claims_and_closes_the_optional_expiry() {
         let holder = PrivateJwk::parse(HOLDER_P256_JWK).expect("holder");
         let now = 1_700_000_000;
 
@@ -2225,6 +2380,18 @@ mod tests {
         let proof = sign_compact(&holder, oid4vci_proof_header(&holder), &extended);
         validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
             .expect_err("an unreviewed extra claim is rejected");
+
+        let mut expired = oid4vci_proof_payload(now);
+        expired["exp"] = json!(now);
+        let proof = sign_compact(&holder, oid4vci_proof_header(&holder), &expired);
+        validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("a proof at or beyond its expiry is rejected");
+
+        let mut wrong_type = oid4vci_proof_payload(now);
+        wrong_type["exp"] = json!("later");
+        let proof = sign_compact(&holder, oid4vci_proof_header(&holder), &wrong_type);
+        validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("expiry must use numeric-date integer form");
     }
 
     #[test]
@@ -2357,6 +2524,16 @@ mod tests {
         validate_oid4vci_proof_jwt(&stale, &oid4vci_proof_policy(), now)
             .expect_err("iat older than max_age rejects");
 
+        let mut stale_with_future_expiry = oid4vci_proof_payload(now - 301);
+        stale_with_future_expiry["exp"] = json!(now + 18_000);
+        let proof = sign_compact(
+            &holder,
+            oid4vci_did_jwk_proof_header(&holder),
+            &stale_with_future_expiry,
+        );
+        validate_oid4vci_proof_jwt(&proof, &oid4vci_proof_policy(), now)
+            .expect_err("exp must not widen the iat freshness window");
+
         let baseline = sign_compact(
             &holder,
             oid4vci_proof_header(&holder),
@@ -2432,6 +2609,25 @@ mod tests {
             "alg": "ES256",
             "typ": "openid4vci-proof+jwt",
             "jwk": holder.public(),
+        })
+    }
+
+    fn oid4vci_did_jwk_proof_header(holder: &PrivateJwk) -> Value {
+        let public = holder.public();
+        let encoded = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "kty": public.kty,
+                "crv": public.crv,
+                "x": public.x,
+                "y": public.y,
+                "use": "sig",
+            }))
+            .expect("did:jwk json"),
+        );
+        json!({
+            "alg": "ES256",
+            "typ": "openid4vci-proof+jwt",
+            "kid": format!("did:jwk:{encoded}#0"),
         })
     }
 

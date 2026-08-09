@@ -20,10 +20,9 @@
 //!    failure count lives as long as the offer does, in its own key-space, so a
 //!    caller cannot reset it by abandoning a request.
 //!
-//! `c_nonce` is deliberately absent. It is minted as an HMAC over the access
-//! token tag and an expiry and verified by recomputation, so a wallet's nonce
-//! costs the process no memory and cannot be exhausted by asking for more. See
-//! [`NonceMinter`].
+//! `c_nonce` is deliberately absent. It is minted as an HMAC over its own
+//! expiry and verified by recomputation, so a wallet's nonce costs the process
+//! no memory and cannot be exhausted by asking for more. See [`NonceMinter`].
 //!
 //! The consequences of holding all of this in one process are real and are
 //! accepted rather than engineered around: a restart invalidates every
@@ -432,12 +431,6 @@ impl OfferStore {
         Ok(entry.prepared)
     }
 
-    /// The tag an access token is known by, for binding a nonce to it.
-    #[must_use]
-    pub fn access_token_tag(&self, access_token: &str) -> Zeroizing<String> {
-        self.tag(ACCESS_TOKEN_DOMAIN, access_token)
-    }
-
     /// Drop everything that has expired.
     ///
     /// Writes prune as they go, so this exists for the quiet deployment: one
@@ -524,14 +517,18 @@ pub enum NonceError {
 
 /// The `c_nonce` a wallet must echo inside its proof of key possession.
 ///
-/// Nothing is stored. A nonce is its own expiry plus an HMAC over that expiry
-/// and the access token tag it is bound to, so verification is a recomputation
-/// and a comparison. That is the whole reason to do it this way: an endpoint
-/// that hands out nonces on request is an endpoint an unauthenticated caller can
-/// use to fill memory, and a nonce nobody remembers cannot be exhausted.
+/// Nothing is stored. A nonce is its own expiry plus an HMAC over that expiry,
+/// so verification is a recomputation and a comparison. That is the whole
+/// reason to do it this way: an endpoint that hands out nonces on request is an
+/// endpoint an unauthenticated caller can use to fill memory, and a nonce
+/// nobody remembers cannot be exhausted.
 ///
-/// Binding to the access token tag is what stops a nonce minted for one flow
-/// from being replayed in another.
+/// It is a freshness challenge and nothing more. OpenID4VCI 1.0 Final gives the
+/// nonce endpoint no authorization, so a nonce is minted for a caller this
+/// process cannot name and can be bound to no credential of one. What bounds
+/// replay is the access token behind the proof: it is claimed once, and each
+/// proof binds the wallet's own key, so a nonce presented a second time returns
+/// the same holder the same credential and reaches nothing else.
 pub struct NonceMinter {
     lifetime_seconds: i64,
     key: Zeroizing<[u8; 32]>,
@@ -562,18 +559,18 @@ impl NonceMinter {
     }
 
     #[must_use]
-    pub fn mint(&self, access_token_tag: &str, now: i64) -> String {
+    pub fn mint(&self, now: i64) -> String {
         let expires_at = now.saturating_add(self.lifetime_seconds);
-        let tag = self.tag(access_token_tag, expires_at);
+        let tag = self.tag(expires_at);
         format!("{expires_at}.{tag}")
     }
 
     /// Verify a nonce by recomputing it. Never reads a stored value, because
     /// there is none.
-    pub fn verify(&self, nonce: &str, access_token_tag: &str, now: i64) -> Result<(), NonceError> {
+    pub fn verify(&self, nonce: &str, now: i64) -> Result<(), NonceError> {
         let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Refused)?;
         let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Refused)?;
-        let expected = self.tag(access_token_tag, expires_at);
+        let expected = self.tag(expires_at);
         // The MAC is checked before the expiry, so a caller cannot learn
         // anything about a nonce it did not receive by reading the refusal.
         let matches: bool = expected.as_bytes().ct_eq(presented.as_bytes()).into();
@@ -586,8 +583,8 @@ impl NonceMinter {
         Ok(())
     }
 
-    fn tag(&self, access_token_tag: &str, expires_at: i64) -> String {
-        let input = format!("{NONCE_DOMAIN}\u{0}{access_token_tag}\u{0}{expires_at}");
+    fn tag(&self, expires_at: i64) -> String {
+        let input = format!("{NONCE_DOMAIN}\u{0}{expires_at}");
         hmac_sha256_base64url_no_pad(self.key.as_ref(), input.as_bytes())
     }
 }
@@ -917,29 +914,26 @@ mod tests {
         assert_ne!(first.held_key_material(), second.held_key_material());
     }
 
+    /// A nonce is a freshness challenge, so what it must survive is the window
+    /// it states and nothing else. It carries no caller, because the endpoint
+    /// that mints it is given none.
     #[test]
-    fn a_nonce_verifies_only_for_the_token_it_was_minted_for() {
+    fn a_minted_nonce_verifies_for_the_window_it_states() {
         let minter = NonceMinter::new(120);
-        let nonce = minter.mint("token-tag-1", NOW);
+        let nonce = minter.mint(NOW);
 
+        minter.verify(&nonce, NOW).expect("a fresh nonce verifies");
         minter
-            .verify(&nonce, "token-tag-1", NOW)
-            .expect("the nonce verifies for its own token");
-        assert_eq!(
-            minter.verify(&nonce, "token-tag-2", NOW),
-            Err(NonceError::Refused)
-        );
+            .verify(&nonce, NOW + 119)
+            .expect("the nonce verifies up to its expiry");
     }
 
     #[test]
     fn an_expired_or_tampered_nonce_is_refused() {
         let minter = NonceMinter::new(120);
-        let nonce = minter.mint("token-tag-1", NOW);
+        let nonce = minter.mint(NOW);
 
-        assert_eq!(
-            minter.verify(&nonce, "token-tag-1", NOW + 121),
-            Err(NonceError::Expired)
-        );
+        assert_eq!(minter.verify(&nonce, NOW + 121), Err(NonceError::Expired));
 
         let (expiry, tag) = nonce.split_once('.').expect("the nonce carries its expiry");
         for tampered in [
@@ -950,7 +944,7 @@ mod tests {
             String::new(),
         ] {
             assert!(
-                minter.verify(&tampered, "token-tag-1", NOW).is_err(),
+                minter.verify(&tampered, NOW).is_err(),
                 "the minter accepted {tampered}"
             );
         }
@@ -960,12 +954,9 @@ mod tests {
     fn a_nonce_from_another_process_is_refused() {
         let first = NonceMinter::new(120);
         let second = NonceMinter::new(120);
-        let nonce = first.mint("token-tag-1", NOW);
+        let nonce = first.mint(NOW);
 
-        assert_eq!(
-            second.verify(&nonce, "token-tag-1", NOW),
-            Err(NonceError::Refused)
-        );
+        assert_eq!(second.verify(&nonce, NOW), Err(NonceError::Refused));
     }
 
     #[test]
