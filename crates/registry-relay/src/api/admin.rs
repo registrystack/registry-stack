@@ -909,6 +909,38 @@ fn posture_filter_failed(error: PostureFilterError) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use axum_test::TestServer;
+    use datafusion::execution::context::SessionContext;
+    use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
+
+    use crate::audit::AuditPipeline;
+    use crate::auth::{Principal, ScopeSet};
+    use crate::format::FormatRegistry;
+
+    struct AlwaysFailWriteSink;
+
+    #[async_trait]
+    impl AuditSink for AlwaysFailWriteSink {
+        async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+            Err(AuditError::Io(std::io::Error::other(
+                "injected admin audit failure",
+            )))
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
 
     /// Minimal valid config used by equivalence classifier tests.
     ///
@@ -934,6 +966,63 @@ audit:
 datasets: []
 "#
         .to_string()
+    }
+
+    fn failing_admin_server(config: Arc<Config>, ingest: Arc<IngestRegistry>) -> TestServer {
+        let principal = Principal {
+            principal_id: "admin-test".to_string(),
+            scopes: [ADMIN_SCOPE].into_iter().collect::<ScopeSet>(),
+            auth_mode: crate::auth::AuthMode::ApiKey,
+        };
+        let audit: Arc<AuditPipeline> = AuditPipeline::from_sink(AlwaysFailWriteSink);
+        let app = router::<()>()
+            .layer(Extension(principal))
+            .layer(Extension(audit))
+            .layer(Extension(Arc::clone(&ingest)))
+            .layer(Extension(config));
+        TestServer::new(app)
+    }
+
+    fn empty_ingest(config: &Config) -> Arc<IngestRegistry> {
+        Arc::new(
+            IngestRegistry::from_config(
+                config,
+                Arc::new(FormatRegistry::new()),
+                Arc::from(std::path::Path::new(".")),
+                Arc::new(SessionContext::new()),
+            )
+            .expect("empty ingest registry builds"),
+        )
+    }
+
+    #[tokio::test]
+    async fn reload_table_fail_closed_audit_failure_prevents_reload() {
+        let config = Arc::new(parse_minimal_config(&minimal_config_yaml()));
+        assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
+        let ingest = empty_ingest(&config);
+        let server = failing_admin_server(Arc::clone(&config), Arc::clone(&ingest));
+
+        let response = server
+            .post("/admin/v1/datasets/test-dataset/tables/test-table/reload")
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.json::<Value>()["code"], "audit.write_failed");
+        assert_eq!(ingest.reload_attempt_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn reload_all_fail_closed_audit_failure_prevents_reload() {
+        let config = Arc::new(parse_minimal_config(&minimal_config_yaml()));
+        assert_eq!(config.audit.write_policy, AuditWritePolicy::FailClosed);
+        let ingest = empty_ingest(&config);
+        let server = failing_admin_server(Arc::clone(&config), Arc::clone(&ingest));
+
+        let response = server.post("/admin/v1/reload").await;
+
+        assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.json::<Value>()["code"], "audit.write_failed");
+        assert_eq!(ingest.reload_attempt_count(), 0);
     }
 
     // --- deployment posture surface tests ---

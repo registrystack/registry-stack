@@ -1056,6 +1056,8 @@ fn snapshot_exact_requires_reconciliation(
 /// Held in `AppState`. Drives startup, refresh, and reload.
 pub struct IngestRegistry {
     plans: BTreeMap<(DatasetId, ResourceId), Arc<IngestPlan>>,
+    #[cfg(test)]
+    reload_attempts: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -1184,7 +1186,11 @@ impl IngestRegistry {
             }
         }
 
-        Ok(Self { plans })
+        Ok(Self {
+            plans,
+            #[cfg(test)]
+            reload_attempts: AtomicU64::new(0),
+        })
     }
 
     pub(crate) fn bind_snapshot_materialization(
@@ -1330,6 +1336,8 @@ impl IngestRegistry {
         dataset: &DatasetId,
         resource: &ResourceId,
     ) -> Result<(), IngestError> {
+        #[cfg(test)]
+        self.reload_attempts.fetch_add(1, Ordering::SeqCst);
         let key = (dataset.clone(), resource.clone());
         let plan = self.plans.get(&key).ok_or(IngestError::SourceNotFound)?;
         plan.refresh().await
@@ -1337,6 +1345,8 @@ impl IngestRegistry {
 
     /// Trigger a reload of every configured resource through the admin endpoint.
     pub async fn reload_all(&self) -> RegistryReloadReport {
+        #[cfg(test)]
+        self.reload_attempts.fetch_add(1, Ordering::SeqCst);
         if self
             .plans
             .values()
@@ -1506,6 +1516,11 @@ impl IngestRegistry {
             failed: 0,
             resources: resources.into_values().collect(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reload_attempt_count(&self) -> u64 {
+        self.reload_attempts.load(Ordering::SeqCst)
     }
 
     /// Aggregate readiness snapshot across all plans.
@@ -2253,6 +2268,7 @@ mod tests {
 
         let registry = IngestRegistry {
             plans: BTreeMap::from([((id("dataset"), id("resource")), Arc::clone(&plan))]),
+            reload_attempts: AtomicU64::new(0),
         };
         let snapshot = registry.snapshot();
         assert!(snapshot.fully_ready(), "last-good data remains ready");
@@ -2392,6 +2408,7 @@ mod tests {
                 ((id("dataset"), id("a_healthy")), Arc::clone(&healthy)),
                 ((id("dataset"), id("b_failing")), Arc::clone(&failing)),
             ]),
+            reload_attempts: AtomicU64::new(0),
         };
 
         failing_source.fail_open.store(true, Ordering::SeqCst);
