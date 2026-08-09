@@ -20,7 +20,7 @@ expected = {
   "integrations/person-record/fixtures/no-match.yaml": "415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "73e73a00632488badd087c1a2c6830f961ba9533763a7127bed13984809a1386"
+  "registry-stack.yaml": "b82a9e8f2154a8639a33e21009a481e76747a364401645de204deed91ff7bba5"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"opencrvs-events-api-overlay-v1.sh", "opencrvs-events-api-overlay-v1.sh.sha256"}
