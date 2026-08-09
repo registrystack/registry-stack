@@ -186,11 +186,19 @@ batch:
   mode_restriction: >-
     The envelope belongs to this mode alone. It is not among the serializations
     an audience-scoped requirement may be issued in, whatever the bundle and the
-    grant permit, so no audience-scoped request can select it and there is no
-    batch form of an audience-scoped assertion. The restriction runs both ways:
+    grant permit, so no audience-scoped request can select it. The restriction runs both ways:
     a holder-bound requirement is served only as the singular SD-JWT VC
     serialization or as this envelope over it, and never as signed JWS or
     unsigned output.
+  request_batch_noninteraction: >-
+    POST /v1/evidence/batch is a different audience-scoped operation and uses
+    application/vnd.registrystack.evidence.request-batch+json. It evaluates one
+    to sixteen ordered subject sets, accepts no holderKeys, and emits only
+    flattened signed JWS or evidence_not_available item outcomes. It never
+    selects, carries, invokes, verifies, or changes this holder-bound issuance
+    envelope. Conversely, POST /v1/evidence with holderKeys never enters the
+    request-batch route or its batch-native audit schema. Enabling either feature
+    grants no permission for the other.
   lifecycle_scope: >-
     Issuance only, in both directions. The envelope exists to carry several
     freshly issued credentials out of one request; nothing reissues, refreshes,

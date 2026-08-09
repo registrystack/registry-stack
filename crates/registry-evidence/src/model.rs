@@ -25,6 +25,10 @@ pub use registry_evidence_verifier::model::{
 pub const REQUEST_NONCE_ENCODED_LENGTH: usize = 43;
 const REQUEST_NONCE_DECODED_LENGTH: usize = 32;
 
+/// Public request batches are deliberately small enough to validate and
+/// authorize in full before the first source call.
+pub const EVIDENCE_REQUEST_BATCH_MAX_ITEMS: usize = 16;
+
 /// Deterministic canonical nonce for offline fixture evaluation and internal
 /// non-released request shapes. Real callers generate a fresh random value
 /// for every request.
@@ -97,6 +101,30 @@ pub struct EvidenceRequest {
     /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holder_keys: Vec<HolderPublicKey>,
+}
+
+/// One audience-scoped multi-subject request batch.
+///
+/// The requirement and purpose are common because a batch is a bounded set of
+/// independent subjects asking the same governed question. The authenticated
+/// token supplies the one audience shared by every signed result.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequestBatch {
+    pub requirement: String,
+    pub purpose: String,
+    /// Ordered requests. Each item gets its own request binding nonce and
+    /// complete role-bound subject set.
+    pub items: Vec<EvidenceRequestBatchItem>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequestBatchItem {
+    pub request_nonce: String,
+    /// Unordered role set encoded as an array. Roles are resolved by name and
+    /// canonicalized to requirement declaration order independently per item.
+    pub subjects: Vec<RequestedSubject>,
 }
 
 /// Issuance container for a holder-bound release carrying one SD-JWT VC
@@ -269,6 +297,8 @@ pub enum LookupResult {
 
 redacted_debug!(
     EvidenceRequest,
+    EvidenceRequestBatch,
+    EvidenceRequestBatchItem,
     EvidenceDefinitions,
     EvidenceDefinition,
     EvidenceDefinitionSubject,

@@ -7,6 +7,7 @@
 //! critical section.
 
 use std::{
+    collections::BTreeSet,
     future::{Future, IntoFuture},
     io,
     net::{IpAddr, SocketAddr},
@@ -38,16 +39,23 @@ use tokio::{net::TcpListener, sync::Semaphore};
 
 use crate::{
     config::{ListenerConfig, ResponseFormat},
-    contracts::{request_contract_accepts, served_openapi_document},
-    model::{request_nonce_is_canonical, EvidenceRequest},
+    contracts::{
+        request_batch_contract_accepts, request_contract_accepts, served_openapi_document,
+    },
+    model::{
+        request_nonce_is_canonical, EvidenceRequest, EvidenceRequestBatch,
+        EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
+    },
     observability::{self, operation_id, Metrics},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
-    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+    EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
 
 const EVIDENCE_ROUTE: &str = "/v1/evidence";
+const EVIDENCE_BATCH_ROUTE: &str = "/v1/evidence/batch";
 const DEFINITIONS_ROUTE: &str = "/v1/evidence-definitions";
 const HEALTH_ROUTE: &str = "/health";
 const OPENAPI_ROUTE: &str = "/openapi.json";
@@ -59,8 +67,9 @@ const JWT_VC_ISSUER_ROUTE: &str = "/.well-known/jwt-vc-issuer";
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 7] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 8] = [
     EVIDENCE_ROUTE,
+    EVIDENCE_BATCH_ROUTE,
     DEFINITIONS_ROUTE,
     HEALTH_ROUTE,
     OPENAPI_ROUTE,
@@ -142,6 +151,7 @@ fn build_app_with_tracker_at(
 
     let routes = Router::new()
         .route(EVIDENCE_ROUTE, post(create_evidence))
+        .route(EVIDENCE_BATCH_ROUTE, post(create_evidence_batch))
         .route(DEFINITIONS_ROUTE, get(discover_evidence))
         .route(HEALTH_ROUTE, get(health))
         .route(OPENAPI_ROUTE, get(openapi))
@@ -512,6 +522,132 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
     }
 }
 
+/// The request-batch route has one exact representation in both directions.
+/// It is separate from the singular response-format negotiation because a
+/// caller must opt into the batch envelope explicitly and no singular format
+/// is an authorization or error fallback for it.
+async fn create_evidence_batch(
+    State(state): State<Arc<ServerState>>,
+    request: Request<Body>,
+) -> Response {
+    let mut response = create_evidence_batch_negotiated(state, request).await;
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static("Accept"));
+    response
+}
+
+async fn create_evidence_batch_negotiated(
+    state: Arc<ServerState>,
+    request: Request<Body>,
+) -> Response {
+    let operation = operation_id(request.extensions());
+    let started = Instant::now();
+
+    let access_token = match bearer_token(request.headers()) {
+        Ok(token) => token.to_owned(),
+        Err(code) => return problem_response(code, "authentication", &operation),
+    };
+    if !has_exact_accept(request.headers(), EVIDENCE_REQUEST_BATCH_MEDIA_TYPE) {
+        return problem_response(
+            ProblemCode::ResponseFormatNotAcceptable,
+            "response-format",
+            &operation,
+        );
+    }
+    if !has_exact_content_type(request.headers(), JSON_MEDIA_TYPE)
+        || content_length_exceeds(request.headers(), state.maximum_request_bytes)
+    {
+        return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation);
+    }
+
+    let admission_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let request_slot = match tokio::time::timeout(
+        admission_budget,
+        Arc::clone(&state.request_slots).acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) | Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "admission", &operation)
+        }
+    };
+
+    let body_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let body = match tokio::time::timeout(
+        body_budget,
+        to_bytes(request.into_body(), state.maximum_request_bytes),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(_)) => {
+            return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation)
+        }
+        Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let batch = match parse_evidence_request_batch(&body) {
+        Ok(batch) => batch,
+        Err(code) => return problem_response(code, "request-shape", &operation),
+    };
+
+    // As on the singular route, the detached evaluation owns its request slot
+    // and its complete fail-closed audit section even if the client leaves.
+    let evaluation_operation = operation.clone();
+    let runtime = Arc::clone(&state.runtime);
+    let evaluations = state.evaluations.clone();
+    #[cfg(test)]
+    let evaluation_time = state.evaluation_time;
+    let evaluation = evaluations.spawn(async move {
+        let _request_slot = request_slot;
+        #[cfg(test)]
+        if let Some(evaluation_time) = evaluation_time {
+            return runtime
+                .evaluate_batch_at_for_test(
+                    &evaluation_operation,
+                    &access_token,
+                    &batch,
+                    evaluation_time,
+                )
+                .await;
+        }
+        runtime
+            .evaluate_request_batch(&evaluation_operation, &access_token, &batch)
+            .await
+    });
+    let result = match evaluation.await {
+        Ok(result) => result,
+        Err(_) => {
+            return problem_response(
+                ProblemCode::ServiceUnavailable,
+                "evaluation-task",
+                &operation,
+            )
+        }
+    };
+
+    match result {
+        Ok(released) => {
+            let media_type = released.media_type();
+            bytes_response(StatusCode::OK, media_type, released.into_bytes())
+        }
+        Err(failure) => runtime_failure_response(failure, &operation),
+    }
+}
+
 /// Resolve the closed Version 1 `Accept` matrix. Missing, `*/*`, and the exact
 /// signed media type select signed JWS; only the exact unsigned vendor media
 /// type selects the unsigned envelope, only the exact SD-JWT VC media type
@@ -538,6 +674,14 @@ fn resolve_response_format(headers: &HeaderMap) -> Result<ResponseFormat, Proble
         }
         _ => Err(ProblemCode::ResponseFormatNotAcceptable),
     }
+}
+
+fn has_exact_accept(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers.get_all(ACCEPT).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    values.next().is_none() && value.as_bytes() == expected.as_bytes()
 }
 
 async fn discover_evidence(
@@ -711,6 +855,28 @@ fn parse_evidence_request(bytes: &[u8]) -> Result<EvidenceRequest, ProblemCode> 
     // The transport schema pins length and alphabet; canonicality of the
     // final base64url symbol is checked here, before authentication.
     if !request_nonce_is_canonical(&request.request_nonce) {
+        return Err(ProblemCode::MalformedRequest);
+    }
+    Ok(request)
+}
+
+fn parse_evidence_request_batch(bytes: &[u8]) -> Result<EvidenceRequestBatch, ProblemCode> {
+    let value = parse_json_strict(bytes).map_err(|_| ProblemCode::MalformedRequest)?;
+    match request_batch_contract_accepts(&value) {
+        Ok(true) => {}
+        Ok(false) => return Err(ProblemCode::MalformedRequest),
+        Err(_) => return Err(ProblemCode::ServiceUnavailable),
+    }
+    let request: EvidenceRequestBatch =
+        serde_json::from_value(value).map_err(|_| ProblemCode::MalformedRequest)?;
+    if !(1..=EVIDENCE_REQUEST_BATCH_MAX_ITEMS).contains(&request.items.len()) {
+        return Err(ProblemCode::MalformedRequest);
+    }
+    let mut nonces = BTreeSet::new();
+    if request.items.iter().any(|item| {
+        !request_nonce_is_canonical(&item.request_nonce)
+            || !nonces.insert(item.request_nonce.as_str())
+    }) {
         return Err(ProblemCode::MalformedRequest);
     }
     Ok(request)

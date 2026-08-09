@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use chrono::{SubsecRound as _, Utc};
 use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_crypto::{
@@ -21,25 +22,29 @@ use crate::{
     audit::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
-        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent, ResponseProtection,
+        EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent,
+        EvidenceRequestBatchAuditDecision, EvidenceRequestBatchAuditEvent,
+        EvidenceRequestBatchAuditItemGroup, EvidenceRequestBatchAuditOutcome,
+        EvidenceRequestBatchAuditOutcomeKind, EvidenceRequestBatchAuditPhase, ResponseProtection,
     },
-    auth::Authenticator,
+    auth::{AuthenticatedContext, AuthenticationError, Authenticator},
     bundle::{Bundle, DeploymentInputs},
     config::{
         subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
         AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
-        RuntimeSignerConfig, SelectorField, SelectorInput, StageRole, SubjectBindingMode,
-        SubjectCardinality, ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+        RuntimeSignerConfig, SelectorField, SelectorInput, SourceBatchPlan, StageRole,
+        SubjectBindingMode, SubjectCardinality, ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
     model::{
         request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
         EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
-        EvidenceRequest, EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult,
-        RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType,
-        SelectorValue, SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
-        UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
+        EvidenceRequest, EvidenceRequestBatch, EvidenceSelectorField, FlattenedJws, JwksDocument,
+        LookupResult, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope,
+        SdJwtVcBatchEnvelopeType, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
+        UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
+        EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
@@ -52,13 +57,19 @@ use crate::{
     },
     signing::EvidenceSigner,
     source::{statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor},
-    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+    EVIDENCE_REQUEST_BATCH_SCHEMA_V1, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
     EVIDENCE_UNSIGNED_MEDIA_TYPE, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES, SD_JWT_VC_BATCH_SCHEMA_V1,
+};
+use registry_evidence_verifier::model::{
+    EvidenceRequestBatchResponse, EvidenceRequestBatchResponseItem,
+    EvidenceRequestBatchResponseType,
 };
 use zeroize::Zeroizing;
 
 const MAX_OPERATION_BYTES: usize = 128;
+const MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Error)]
 pub enum RuntimeInitializationError {
@@ -349,13 +360,43 @@ pub struct EvidenceRuntime {
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
     runtime_revision: String,
-    authenticator: Authenticator,
+    authenticator: Arc<dyn RuntimeAuthenticator>,
     sources: BTreeMap<String, SourceExecutor>,
     audit: Arc<EvidenceAuditLog>,
     signer: EvidenceSigner,
     jwks: JwksDocument,
     subject_binding_secret: ProtectedSecret,
     rate_limiter: Arc<EvidenceRateLimiter>,
+}
+
+#[async_trait]
+pub(crate) trait RuntimeAuthenticator: Send + Sync {
+    async fn authenticate(
+        &self,
+        access_token: &str,
+    ) -> Result<AuthenticatedContext, AuthenticationError>;
+
+    async fn probe_key_source(&self);
+
+    async fn announce_key_source(&self);
+}
+
+#[async_trait]
+impl RuntimeAuthenticator for Authenticator {
+    async fn authenticate(
+        &self,
+        access_token: &str,
+    ) -> Result<AuthenticatedContext, AuthenticationError> {
+        Authenticator::authenticate(self, access_token).await
+    }
+
+    async fn probe_key_source(&self) {
+        Authenticator::probe_key_source(self).await;
+    }
+
+    async fn announce_key_source(&self) {
+        Authenticator::announce_key_source(self).await;
+    }
 }
 
 impl std::fmt::Debug for EvidenceRuntime {
@@ -380,12 +421,20 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Authenticator,
     ) -> Result<Self, RuntimeInitializationError> {
+        Self::initialize_internal(runtime_path, Some(Arc::new(authenticator))).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn initialize_with_runtime_authenticator(
+        runtime_path: &Path,
+        authenticator: Arc<dyn RuntimeAuthenticator>,
+    ) -> Result<Self, RuntimeInitializationError> {
         Self::initialize_internal(runtime_path, Some(authenticator)).await
     }
 
     async fn initialize_internal(
         runtime_path: &Path,
-        authenticator_override: Option<Authenticator>,
+        authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
         let deployment =
             DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
@@ -457,10 +506,10 @@ impl EvidenceRuntime {
             runtime_config,
             runtime_revision,
             authenticator: authenticator_override.unwrap_or_else(|| {
-                Authenticator::from_config(
+                Arc::new(Authenticator::from_config(
                     &bundle.config.authentication,
                     bundle.config.assurance_profile,
-                )
+                ))
             }),
             sources,
             audit: Arc::new(audit),
@@ -768,6 +817,371 @@ impl EvidenceRuntime {
                     maximum_bytes: *maximum_bytes,
                 }
             }
+        })
+    }
+
+    /// Evaluate one ordered multi-subject request batch through one
+    /// authentication, atomic N-item rate admission, complete pre-authorization,
+    /// sequential source fallback, and one exact-byte release gate.
+    pub async fn evaluate_request_batch(
+        &self,
+        operation: &str,
+        access_token: &str,
+        batch: &EvidenceRequestBatch,
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
+        self.evaluate_request_batch_at(operation, access_token, batch, None)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn evaluate_batch_at_for_test(
+        &self,
+        operation: &str,
+        access_token: &str,
+        batch: &EvidenceRequestBatch,
+        evaluation_time: chrono::DateTime<Utc>,
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
+        self.evaluate_request_batch_at(operation, access_token, batch, Some(evaluation_time))
+            .await
+    }
+
+    async fn evaluate_request_batch_at(
+        &self,
+        operation: &str,
+        access_token: &str,
+        batch: &EvidenceRequestBatch,
+        evaluation_time: Option<chrono::DateTime<Utc>>,
+    ) -> Result<ReleasedEvidence, RuntimeFailure> {
+        if operation.len() < 16
+            || operation.len() > MAX_OPERATION_BYTES
+            || operation.bytes().any(|byte| byte.is_ascii_whitespace())
+        {
+            return Err(failure(ProblemCode::ServiceUnavailable, "operation-id"));
+        }
+        if !(1..=EVIDENCE_REQUEST_BATCH_MAX_ITEMS).contains(&batch.items.len()) {
+            return Err(failure(ProblemCode::MalformedRequest, "request-batch-size"));
+        }
+        let mut nonces = BTreeSet::new();
+        if batch.items.iter().any(|item| {
+            !request_nonce_is_canonical(&item.request_nonce)
+                || !nonces.insert(item.request_nonce.as_str())
+        }) {
+            return Err(failure(ProblemCode::MalformedRequest, "request-nonce"));
+        }
+
+        let started = Instant::now();
+        // Every logical item, physical source call, and signed assertion in
+        // this outer request observes this one instant.
+        let observed_at = evaluation_time.unwrap_or_else(Utc::now).trunc_subsecs(0);
+        let context = self
+            .authenticator
+            .authenticate(access_token)
+            .await
+            .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+        let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
+        let request_limit_key = self
+            .audit
+            .pseudonym("request-rate", &rate_scope, context.principal().as_bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let request_cost = u32::try_from(batch.items.len())
+            .map_err(|_| failure(ProblemCode::MalformedRequest, "request-batch-size"))?;
+        self.rate_limiter
+            .check_request_cost(&request_limit_key, request_cost)
+            .await
+            .map_err(map_request_limit)?;
+
+        let refusal_scope = authorization_refusal_audit_scope(
+            &self.bundle().config.service.trust_domain,
+            &batch.purpose,
+            context.evidence_audience(),
+        );
+        let refusal_requester_pseudonym = self
+            .audit
+            .pseudonym("requester", &refusal_scope, context.principal().as_bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let refusal_actor_pseudonym = context
+            .actor()
+            .map(|actor| {
+                self.audit
+                    .pseudonym("actor", &refusal_scope, actor.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+
+        let binding_mode = self
+            .bundle()
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == batch.requirement)
+            .map_or(SubjectBindingMode::AudienceScoped, |requirement| {
+                requirement.subject_binding_mode()
+            });
+        let issuance_scope = audit_scope(
+            &self.bundle().config.service.trust_domain,
+            &batch.purpose,
+            context.evidence_audience(),
+        );
+        let requester_pseudonym = self
+            .audit
+            .pseudonym("requester", &issuance_scope, context.principal().as_bytes())
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let actor_pseudonym = context
+            .actor()
+            .map(|actor| {
+                self.audit
+                    .pseudonym("actor", &issuance_scope, actor.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+
+        // Resolve every authorization and selector set before constructing the
+        // first source future. A refused later item therefore cannot make an
+        // earlier item acquire a credential or touch a source.
+        let mut authorized = Vec::with_capacity(batch.items.len());
+        for item in &batch.items {
+            let request = EvidenceRequest {
+                request_nonce: item.request_nonce.clone(),
+                requirement: batch.requirement.clone(),
+                purpose: batch.purpose.clone(),
+                subjects: item.subjects.clone(),
+                holder_keys: Vec::new(),
+            };
+            let matched = match match_entitlement(self.bundle(), &request, &context) {
+                Ok(matched) => matched,
+                Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                    self.append_authorization_refusal(
+                        operation,
+                        refusal_requester_pseudonym,
+                        refusal_actor_pseudonym,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                }
+                Err(error) => return Err(map_authority(error)),
+            };
+            if !self
+                .bundle()
+                .config
+                .response_formats
+                .contains(&ResponseFormat::SignedJws)
+                || !matched.permits_response_format(ResponseFormat::SignedJws)
+                || !matched.permits_subject_binding(binding_mode)
+                || !subject_binding_permits_response_format(binding_mode, ResponseFormat::SignedJws)
+            {
+                self.append_authorization_refusal(
+                    operation,
+                    refusal_requester_pseudonym,
+                    refusal_actor_pseudonym,
+                    started,
+                )
+                .await?;
+                return Err(failure(ProblemCode::NotAuthorized, "response-format"));
+            }
+
+            let selector_limit_input = canonical_pair(
+                context.principal().as_bytes(),
+                matched.authority_profile().as_bytes(),
+            )
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "selector-rate-key"))?;
+            let selector_limit_key = self
+                .audit
+                .pseudonym("selector-failure-rate", &rate_scope, &selector_limit_input)
+                .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+            self.rate_limiter
+                .check_selector_failure_budget(&selector_limit_key)
+                .await
+                .map_err(map_selector_limit)?;
+            let resolved = match resolve_selectors(self.bundle(), &request, &context, &matched) {
+                Ok(resolved) => resolved,
+                Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                    self.append_authorization_refusal(
+                        operation,
+                        refusal_requester_pseudonym,
+                        refusal_actor_pseudonym,
+                        started,
+                    )
+                    .await?;
+                    return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                }
+                Err(error) => {
+                    if error == AuthorizationError::Selector {
+                        self.rate_limiter
+                            .record_selector_failure(&selector_limit_key)
+                            .await
+                            .map_err(map_selector_limit)?;
+                    }
+                    return Err(map_authority(error));
+                }
+            };
+            let audit = self.request_batch_item_audit_material(&issuance_scope, &resolved)?;
+            authorized.push(AuthorizedRequestBatchItem {
+                request,
+                resolved,
+                audit,
+            });
+        }
+
+        let audit_material = RequestBatchAuditMaterial {
+            assurance_profile: self.bundle().config.assurance_profile,
+            requirement: batch.requirement.clone(),
+            bundle_revision: self.bundle().revision().to_owned(),
+            purpose: batch.purpose.clone(),
+            requester_pseudonym,
+            actor_pseudonym,
+            items: authorized.iter().map(|item| item.audit.clone()).collect(),
+        };
+        let issued_at = observed_at;
+        let mut response_items = Vec::with_capacity(authorized.len());
+        let mut audit_outcomes = Vec::with_capacity(authorized.len());
+        let mut disclosed_concepts = BTreeSet::new();
+        let mut optimized_lookups = match self.bundle().config.source_batch_plan(
+            &self.runtime_config,
+            &batch.requirement,
+            authorized.len(),
+        ) {
+            SourceBatchPlan::Sequential => None,
+            SourceBatchPlan::Optimized { source_id } => {
+                let outcomes = match self
+                    .execute_optimized_request_batch(
+                        &audit_material,
+                        &authorized,
+                        operation,
+                        &source_id,
+                        started,
+                    )
+                    .await
+                {
+                    Ok(outcomes) => outcomes,
+                    Err(error) => {
+                        return self
+                            .abort_request_batch(&audit_material, operation, started, error)
+                            .await;
+                    }
+                };
+                Some(outcomes.into_iter())
+            }
+        };
+
+        // Mandatory fallback execution is sequential in input order. The
+        // optional one-call lane above is selected before any source I/O and
+        // never falls back after preparation or execution begins.
+        for (index, item) in authorized.iter().enumerate() {
+            let item_index = u8::try_from(index)
+                .map_err(|_| failure(ProblemCode::ServiceUnavailable, "request-batch-size"))?;
+            let evaluated = if let Some(lookups) = optimized_lookups.as_mut() {
+                match lookups.next() {
+                    Some(LookupResult::Match(facts)) => {
+                        self.complete_request_batch_item(item, &facts, observed_at, issued_at)
+                            .await
+                    }
+                    Some(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        Ok(RequestBatchItemEvaluation::EvidenceNotAvailable)
+                    }
+                    None => Err(failure(
+                        ProblemCode::DependencyUnavailable,
+                        "source-batch-cardinality",
+                    )),
+                }
+            } else {
+                self.evaluate_request_batch_item(
+                    &audit_material,
+                    item_index,
+                    item,
+                    operation,
+                    started,
+                    observed_at,
+                    issued_at,
+                )
+                .await
+            };
+            match evaluated {
+                Ok(RequestBatchItemEvaluation::Evidence {
+                    evidence,
+                    evidence_id,
+                    concepts,
+                }) => {
+                    disclosed_concepts.extend(concepts);
+                    response_items.push(EvidenceRequestBatchResponseItem::Evidence { evidence });
+                    audit_outcomes.push(EvidenceRequestBatchAuditOutcome {
+                        item_index,
+                        outcome: EvidenceRequestBatchAuditOutcomeKind::Evidence,
+                        evidence_id: Some(evidence_id),
+                    });
+                }
+                Ok(RequestBatchItemEvaluation::EvidenceNotAvailable) => {
+                    response_items.push(EvidenceRequestBatchResponseItem::EvidenceNotAvailable);
+                    audit_outcomes.push(EvidenceRequestBatchAuditOutcome {
+                        item_index,
+                        outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                        evidence_id: None,
+                    });
+                }
+                Err(error) => {
+                    return self
+                        .abort_request_batch(&audit_material, operation, started, error)
+                        .await;
+                }
+            }
+        }
+
+        let response = EvidenceRequestBatchResponse {
+            schema: EVIDENCE_REQUEST_BATCH_SCHEMA_V1.to_owned(),
+            response_type: EvidenceRequestBatchResponseType::EvidenceRequestBatchResponse,
+            items: response_items,
+        };
+        let bytes = match serde_json::to_vec(&response) {
+            Ok(bytes) if bytes.len() <= MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES => bytes,
+            _ => {
+                return self
+                    .abort_request_batch(
+                        &audit_material,
+                        operation,
+                        started,
+                        failure(ProblemCode::ServiceUnavailable, "release-serialization"),
+                    )
+                    .await;
+            }
+        };
+
+        let mut release = audit_material.event(
+            operation,
+            EvidenceRequestBatchAuditPhase::DisclosureRelease,
+            EvidenceRequestBatchAuditDecision::Released,
+            elapsed_millis(started),
+        );
+        release.item_groups = Some(match audit_material.item_groups() {
+            Ok(groups) => groups,
+            Err(error) => {
+                return self
+                    .abort_request_batch(&audit_material, operation, started, error)
+                    .await;
+            }
+        });
+        release.disclosed_concepts = Some(disclosed_concepts.into_iter().collect());
+        if audit_outcomes
+            .iter()
+            .any(|outcome| outcome.outcome == EvidenceRequestBatchAuditOutcomeKind::Evidence)
+        {
+            release.signing_key_id = Some(self.signer.key_id().to_owned());
+        }
+        release.outcomes = Some(audit_outcomes);
+        if self.audit.append_request_batch(release).await.is_err() {
+            return self
+                .abort_request_batch(
+                    &audit_material,
+                    operation,
+                    started,
+                    failure(ProblemCode::ServiceUnavailable, "release-audit"),
+                )
+                .await;
+        }
+
+        Ok(ReleasedEvidence {
+            format: ResponseFormat::SignedJws,
+            media_type: EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+            bytes,
         })
     }
 
@@ -1767,6 +2181,508 @@ impl EvidenceRuntime {
         })
     }
 
+    fn request_batch_item_audit_material(
+        &self,
+        scope: &str,
+        resolved: &ResolvedAuthorization,
+    ) -> Result<RequestBatchItemAuditMaterial, RuntimeFailure> {
+        let grant_pseudonym = resolved
+            .grant_id
+            .as_deref()
+            .map(|grant| self.audit.pseudonym("grant", scope, grant.as_bytes()))
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let subjects = resolved
+            .subjects
+            .iter()
+            .map(|subject| {
+                let protected = subject
+                    .audit_pseudonym_input(&resolved.subject_scope, &resolved.purpose)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "subject-pseudonym"))?;
+                let pseudonym = self
+                    .audit
+                    .pseudonym("subject-selector-bundle", scope, &protected)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+                Ok(AuditSubject {
+                    role: subject.role.clone(),
+                    selector_profile: subject.selector_profile.clone(),
+                    selector_bundle_pseudonym: Some(pseudonym),
+                })
+            })
+            .collect::<Result<Vec<_>, RuntimeFailure>>()?;
+        Ok(RequestBatchItemAuditMaterial {
+            authority: AuditAuthority {
+                kind: map_authority_kind(resolved.authority_kind),
+                grant_pseudonym,
+            },
+            subjects,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn evaluate_request_batch_item(
+        &self,
+        audit_material: &RequestBatchAuditMaterial,
+        item_index: u8,
+        item: &AuthorizedRequestBatchItem,
+        operation: &str,
+        started: Instant,
+        observed_at: chrono::DateTime<Utc>,
+        issued_at: chrono::DateTime<Utc>,
+    ) -> Result<RequestBatchItemEvaluation, RuntimeFailure> {
+        let Some(facts) = self
+            .acquire_request_batch_item(
+                audit_material,
+                item_index,
+                &item.resolved,
+                operation,
+                started,
+                observed_at,
+            )
+            .await?
+        else {
+            return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable);
+        };
+        self.complete_request_batch_item(item, &facts, observed_at, issued_at)
+            .await
+    }
+
+    async fn complete_request_batch_item(
+        &self,
+        item: &AuthorizedRequestBatchItem,
+        facts: &BTreeMap<String, Value>,
+        observed_at: chrono::DateTime<Utc>,
+        issued_at: chrono::DateTime<Utc>,
+    ) -> Result<RequestBatchItemEvaluation, RuntimeFailure> {
+        let requirement = self
+            .kernel
+            .requirement(&item.request.requirement)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        let derivation_selectors =
+            selector_input_value(&item.resolved, &requirement.derivation.selector_inputs)?;
+        let values = match self.kernel.derive_and_validate_with_selectors(
+            &item.request.requirement,
+            facts,
+            &derivation_selectors,
+            observed_at,
+            ValueProjection {
+                scope: evidence_scope(&item.resolved.subject_scope, &item.request.request_nonce),
+                binding_key: self.subject_binding_secret.expose_secret(),
+                binding_key_version: self.bundle().config.subject_binding.key_version,
+            },
+        ) {
+            Ok(values) => values,
+            Err(error) if kernel_failure_problem(&error) == ProblemCode::EvidenceNotAvailable => {
+                return Ok(RequestBatchItemEvaluation::EvidenceNotAvailable);
+            }
+            Err(error) => {
+                return Err(failure(
+                    kernel_failure_problem(&error),
+                    kernel_failure_category(&error),
+                ));
+            }
+        };
+        let subjects = self.subject_bindings(&item.resolved, &item.resolved.subject_scope)?;
+        let evidence_id = format!("urn:ulid:{}", ulid::Ulid::new());
+        let evidence = self
+            .kernel
+            .construct_evidence(
+                &item.request.requirement,
+                values,
+                EvidenceConstruction {
+                    evidence_id: &evidence_id,
+                    purpose: &item.request.purpose,
+                    scope: evidence_scope(
+                        &item.resolved.subject_scope,
+                        &item.request.request_nonce,
+                    ),
+                    issued_at,
+                    observed_at,
+                    subjects,
+                },
+            )
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "evidence-construction"))?;
+        let concepts = evidence
+            .supported_values
+            .iter()
+            .map(|value| value.provides_value_for.clone())
+            .collect();
+        let evidence = self
+            .signer
+            .sign_json(&evidence)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "signing"))?;
+        Ok(RequestBatchItemEvaluation::Evidence {
+            evidence,
+            evidence_id,
+            concepts,
+        })
+    }
+
+    async fn execute_optimized_request_batch(
+        &self,
+        audit_material: &RequestBatchAuditMaterial,
+        items: &[AuthorizedRequestBatchItem],
+        operation: &str,
+        source_id: &str,
+        started: Instant,
+    ) -> Result<Vec<LookupResult>, RuntimeFailure> {
+        let source = self
+            .bundle()
+            .config
+            .sources
+            .get(source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let selector_items = items
+            .iter()
+            .map(|item| source_selector_input_value(&item.resolved, source.selector_inputs()))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Preparation validates every minimized logical selector object and
+        // fixes the complete transport request before credentials or source
+        // I/O. Once this succeeds, no sequential fallback is available.
+        let prepared = self
+            .kernel
+            .prepare_source_batch(source_id, &selector_items)
+            .map_err(|error| {
+                failure(
+                    kernel_failure_problem(&error),
+                    kernel_failure_category(&error),
+                )
+            })?;
+        if prepared.item_count() != items.len() {
+            return Err(failure(
+                ProblemCode::DependencyUnavailable,
+                "source-batch-cardinality",
+            ));
+        }
+        let item_indices = (0..items.len())
+            .map(|index| {
+                u8::try_from(index)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "request-batch-audit"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut access = audit_material.event(
+            operation,
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+            elapsed_millis(started),
+        );
+        access.source_id = Some(prepared.source_id().to_owned());
+        access.adapter_id = Some(prepared.adapter_id().to_owned());
+        access.item_indices = Some(item_indices.clone());
+        access.item_groups = Some(audit_material.item_groups_for_indices(&item_indices)?);
+        self.audit
+            .append_request_batch(access)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
+
+        let executor = self
+            .sources
+            .get(source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let response = executor
+            .execute_batch(prepared.request())
+            .await
+            .map_err(|error| {
+                failure(
+                    source_failure_problem(&error),
+                    source_failure_category(&error),
+                )
+            })?;
+        let lookups = self
+            .kernel
+            .extract_source_batch(&prepared, &response)
+            .map_err(|error| {
+                failure(
+                    kernel_failure_problem(&error),
+                    kernel_failure_category(&error),
+                )
+            })?;
+        if lookups.len() != items.len() {
+            return Err(failure(
+                ProblemCode::DependencyUnavailable,
+                "source-batch-cardinality",
+            ));
+        }
+        Ok(lookups)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn acquire_request_batch_item(
+        &self,
+        audit_material: &RequestBatchAuditMaterial,
+        item_index: u8,
+        resolved: &ResolvedAuthorization,
+        operation: &str,
+        started: Instant,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> Result<Option<BTreeMap<String, Value>>, RuntimeFailure> {
+        let requirement = self
+            .kernel
+            .requirement(&resolved.requirement)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        let empty_facts = BTreeMap::new();
+        match requirement.acquisition.clone() {
+            AcquisitionConfig::Single { source } => {
+                let stage = self
+                    .execute_request_batch_source_stage(
+                        audit_material,
+                        item_index,
+                        operation,
+                        &source,
+                        resolved,
+                        &empty_facts,
+                        None,
+                        started,
+                        observed_at,
+                    )
+                    .await;
+                let stage = match stage {
+                    Ok(stage) => stage,
+                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                };
+                match stage.lookup {
+                    LookupResult::Match(facts) => Ok(Some(facts)),
+                    LookupResult::NoMatch | LookupResult::Ambiguous => Ok(None),
+                }
+            }
+            AcquisitionConfig::SearchThenFetch { search, fetch } => {
+                let search_stage = self
+                    .execute_request_batch_source_stage(
+                        audit_material,
+                        item_index,
+                        operation,
+                        &search,
+                        resolved,
+                        &empty_facts,
+                        None,
+                        started,
+                        observed_at,
+                    )
+                    .await;
+                let search_stage = match search_stage {
+                    Ok(stage) => stage,
+                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let search_facts = match search_stage.lookup {
+                    LookupResult::Match(facts) => facts,
+                    LookupResult::NoMatch | LookupResult::Ambiguous => return Ok(None),
+                };
+                let fetch_stage = self
+                    .execute_request_batch_source_stage(
+                        audit_material,
+                        item_index,
+                        operation,
+                        &fetch,
+                        resolved,
+                        &search_facts,
+                        None,
+                        started,
+                        observed_at,
+                    )
+                    .await;
+                let fetch_stage = match fetch_stage {
+                    Ok(stage) => stage,
+                    Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                };
+                match fetch_stage.lookup {
+                    LookupResult::Match(facts) => Ok(Some(facts)),
+                    LookupResult::NoMatch | LookupResult::Ambiguous => {
+                        Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"))
+                    }
+                }
+            }
+            AcquisitionConfig::SearchThenFetchSet { .. } => {
+                let plan = requirement.acquisition.plan();
+                let deadline = plan
+                    .budget_milliseconds
+                    .map(|budget| Instant::now() + Duration::from_millis(budget));
+                let mut search_facts = BTreeMap::new();
+                let mut merged: BTreeMap<String, Value> = BTreeMap::new();
+                for stage in &plan.stages {
+                    if acquisition_budget_exhausted(deadline, Instant::now()) {
+                        return Err(failure(
+                            ProblemCode::DependencyUnavailable,
+                            "acquisition-budget",
+                        ));
+                    }
+                    let stage_facts = stage.inputs.project(&search_facts);
+                    let outcome = self
+                        .execute_request_batch_source_stage(
+                            audit_material,
+                            item_index,
+                            operation,
+                            &stage.source,
+                            resolved,
+                            &stage_facts,
+                            deadline,
+                            started,
+                            observed_at,
+                        )
+                        .await;
+                    let outcome = match outcome {
+                        Ok(outcome) => outcome,
+                        Err(error) if error.problem() == ProblemCode::EvidenceNotAvailable => {
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match (stage.role, outcome.lookup) {
+                        (StageRole::Search, LookupResult::Match(facts)) => {
+                            search_facts.clone_from(&facts);
+                            merged = facts;
+                        }
+                        (StageRole::Member, LookupResult::Match(facts)) => merged.extend(facts),
+                        (StageRole::Search, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            return Ok(None);
+                        }
+                        (StageRole::Member, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                            return Err(failure(
+                                ProblemCode::DependencyUnavailable,
+                                "fetch-result",
+                            ));
+                        }
+                    }
+                }
+                let merged_bytes = serde_json::to_vec(&merged)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(usize::MAX);
+                if merged_bytes > crate::rhai_runtime::MAXIMUM_RESULT_BYTES {
+                    return Err(failure(
+                        ProblemCode::ServiceUnavailable,
+                        "acquisition-fact-size",
+                    ));
+                }
+                Ok(Some(merged))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_request_batch_source_stage(
+        &self,
+        audit_material: &RequestBatchAuditMaterial,
+        item_index: u8,
+        operation: &str,
+        source_id: &str,
+        resolved: &ResolvedAuthorization,
+        prior_facts: &BTreeMap<String, Value>,
+        deadline: Option<Instant>,
+        started: Instant,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> Result<SourceStageOutcome, RuntimeFailure> {
+        let (source_id, adapter_id) = self.source_identity(source_id)?;
+        let executor = self
+            .sources
+            .get(&source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let source = self
+            .bundle()
+            .config
+            .sources
+            .get(&source_id)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        let preparation_selector_value =
+            source_selector_input_value(resolved, source.selector_inputs())?;
+        let selectors = source_selectors(resolved, source.selector_inputs())?;
+        let request = self
+            .kernel
+            .prepare_source(&source_id, &preparation_selector_value, prior_facts)
+            .map_err(|error| {
+                failure(
+                    kernel_failure_problem(&error),
+                    kernel_failure_category(&error),
+                )
+            })?;
+        // The fixed request is prepared without credentials or I/O. Record
+        // access only once a physical call is ready to begin, while still
+        // gating credential resolution and the source future on durable
+        // acceptance of this event.
+        let mut access = audit_material.event(
+            operation,
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+            elapsed_millis(started),
+        );
+        access.source_id = Some(source_id.clone());
+        access.adapter_id = Some(adapter_id.clone());
+        access.item_indices = Some(vec![item_index]);
+        access.item_groups = Some(vec![audit_material.item_group(item_index)?]);
+        self.audit
+            .append_request_batch(access)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "access-audit"))?;
+
+        let execution =
+            executor.execute_with_prior_facts(&selectors, prior_facts, &request, observed_at);
+        let executed = match deadline {
+            Some(deadline) => {
+                let Some(remaining) = stage_time_budget(deadline, Instant::now()) else {
+                    return Err(failure(
+                        ProblemCode::DependencyUnavailable,
+                        "acquisition-budget",
+                    ));
+                };
+                tokio::time::timeout(remaining, execution)
+                    .await
+                    .map_err(|_| {
+                        failure(ProblemCode::DependencyUnavailable, "acquisition-budget")
+                    })?
+            }
+            None => execution.await,
+        };
+        let source_response = executed.map_err(|error| {
+            failure(
+                source_failure_problem(&error),
+                source_failure_category(&error),
+            )
+        })?;
+        let lookup = self
+            .kernel
+            .extract_source_for_request_batch(&source_id, &source_response, prior_facts)
+            .map_err(|error| {
+                failure(
+                    kernel_failure_problem(&error),
+                    kernel_failure_category(&error),
+                )
+            })?;
+        Ok(SourceStageOutcome {
+            lookup,
+            source_id,
+            adapter_id,
+        })
+    }
+
+    async fn abort_request_batch<T>(
+        &self,
+        audit_material: &RequestBatchAuditMaterial,
+        operation: &str,
+        started: Instant,
+        error: RuntimeFailure,
+    ) -> Result<T, RuntimeFailure> {
+        let mut aborted = audit_material.event(
+            operation,
+            EvidenceRequestBatchAuditPhase::TerminalFailure,
+            EvidenceRequestBatchAuditDecision::Aborted,
+            elapsed_millis(started),
+        );
+        aborted.safe_error_category = Some(error.category().to_owned());
+        self.audit
+            .append_request_batch(aborted)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "failure-audit"))?;
+        Err(error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn execute_source_stage(
         &self,
@@ -2094,6 +3010,112 @@ impl EvidenceRuntime {
             .await
             .map(|_| ())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "failure-audit"))
+    }
+}
+
+struct AuthorizedRequestBatchItem {
+    request: EvidenceRequest,
+    resolved: ResolvedAuthorization,
+    audit: RequestBatchItemAuditMaterial,
+}
+
+enum RequestBatchItemEvaluation {
+    Evidence {
+        evidence: FlattenedJws,
+        evidence_id: String,
+        concepts: Vec<String>,
+    },
+    EvidenceNotAvailable,
+}
+
+#[derive(Clone)]
+struct RequestBatchItemAuditMaterial {
+    authority: AuditAuthority,
+    subjects: Vec<AuditSubject>,
+}
+
+struct RequestBatchAuditMaterial {
+    assurance_profile: AssuranceProfile,
+    requirement: String,
+    bundle_revision: String,
+    purpose: String,
+    requester_pseudonym: String,
+    actor_pseudonym: Option<String>,
+    items: Vec<RequestBatchItemAuditMaterial>,
+}
+
+impl RequestBatchAuditMaterial {
+    fn event(
+        &self,
+        operation: &str,
+        phase: EvidenceRequestBatchAuditPhase,
+        decision: EvidenceRequestBatchAuditDecision,
+        duration_milliseconds: u64,
+    ) -> EvidenceRequestBatchAuditEvent {
+        let mut event = EvidenceRequestBatchAuditEvent::new(
+            self.assurance_profile,
+            operation.to_owned(),
+            phase,
+            self.requirement.clone(),
+            self.bundle_revision.clone(),
+            self.purpose.clone(),
+            self.requester_pseudonym.clone(),
+            decision,
+            duration_milliseconds,
+        );
+        event.actor_pseudonym = self.actor_pseudonym.clone();
+        event
+    }
+
+    fn item_group(
+        &self,
+        item_index: u8,
+    ) -> Result<EvidenceRequestBatchAuditItemGroup, RuntimeFailure> {
+        let item = self
+            .items
+            .get(usize::from(item_index))
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "request-batch-audit"))?;
+        Ok(EvidenceRequestBatchAuditItemGroup {
+            item_indices: vec![item_index],
+            authority: item.authority.clone(),
+            subjects: item.subjects.clone(),
+        })
+    }
+
+    fn item_groups(&self) -> Result<Vec<EvidenceRequestBatchAuditItemGroup>, RuntimeFailure> {
+        let indices = (0..self.items.len())
+            .map(|index| {
+                u8::try_from(index)
+                    .map_err(|_| failure(ProblemCode::ServiceUnavailable, "request-batch-audit"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.item_groups_for_indices(&indices)
+    }
+
+    fn item_groups_for_indices(
+        &self,
+        indices: &[u8],
+    ) -> Result<Vec<EvidenceRequestBatchAuditItemGroup>, RuntimeFailure> {
+        let mut groups: Vec<EvidenceRequestBatchAuditItemGroup> = Vec::new();
+        for item_index in indices {
+            let item = self
+                .items
+                .get(usize::from(*item_index))
+                .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "request-batch-audit"))?;
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|group| group.authority == item.authority && group.subjects == item.subjects)
+            {
+                group.item_indices.push(*item_index);
+            } else {
+                groups.push(EvidenceRequestBatchAuditItemGroup {
+                    item_indices: vec![*item_index],
+                    authority: item.authority.clone(),
+                    subjects: item.subjects.clone(),
+                });
+            }
+        }
+        Ok(groups)
     }
 }
 

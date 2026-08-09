@@ -12,7 +12,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::{body::Body, http::Request as HttpRequest};
+use axum::{
+    body::Body,
+    http::{Request as HttpRequest, StatusCode},
+};
 use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
@@ -26,6 +29,7 @@ use registry_platform_crypto::{
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -40,7 +44,7 @@ use crate::{
         AuthorityKind as AuditAuthorityKind, EvidenceAuditEvent, EvidenceAuditLog,
         ResponseProtection,
     },
-    auth::{AuthenticationClaimsConfig, Authenticator},
+    auth::{AuthenticatedContext, AuthenticationClaimsConfig, AuthenticationError, Authenticator},
     bundle::DeploymentInputs,
     config::{AssuranceProfile, ResponseFormat, MAXIMUM_HOLDER_BOUND_BATCH_SIZE},
     contracts::evidence_contract_accepts,
@@ -49,21 +53,29 @@ use crate::{
         LocalResponseFormat, LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1,
     },
     model::{
-        Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceSelectorField, FlattenedJws,
-        PublicValue, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope, SelectorValue,
+        Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch,
+        EvidenceRequestBatchItem, EvidenceSelectorField, FlattenedJws, PublicValue,
+        RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope, SelectorValue,
         UnsignedEvidenceEnvelope,
     },
     observability::{metrics_app, CORRELATION_HEADER, REQUEST_LOG_TARGET},
     problem::ProblemCode,
-    runtime::{acquisition_budget_exhausted, EvidenceRuntime, RuntimeInitializationError},
+    runtime::{
+        acquisition_budget_exhausted, EvidenceRuntime, RuntimeAuthenticator,
+        RuntimeInitializationError,
+    },
     server::{build_app, build_app_at_for_test, build_app_with_metrics, serve_listener_for_test},
     signing::EvidenceSigner,
     verifier::{
         verify_flattened_jws, verify_sd_jwt_vc, EvidenceVerificationPolicy,
         EvidenceVerificationPolicyDocument, ExpectedValueForm,
     },
+    EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
     EVIDENCE_UNSIGNED_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
+};
+use registry_evidence_verifier::model::{
+    EvidenceRequestBatchResponse, EvidenceRequestBatchResponseItem,
 };
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"acceptance-auth-key"}"#;
@@ -114,6 +126,16 @@ struct FailOnceAfterSelfTestSigner {
 
 struct UnavailableReadinessSigner {
     delegate: LocalJwkSigner,
+}
+
+struct OversizedAfterSelfTestSigner {
+    delegate: LocalJwkSigner,
+    calls: AtomicUsize,
+}
+
+struct CountingAuthenticator {
+    delegate: Authenticator,
+    authenticate_calls: Arc<AtomicUsize>,
 }
 
 /// Start the real Evidence HTTP router over TCP for one operator-driven curl,
@@ -351,6 +373,25 @@ impl SigningProvider for UnavailableReadinessSigner {
 }
 
 #[async_trait]
+impl RuntimeAuthenticator for CountingAuthenticator {
+    async fn authenticate(
+        &self,
+        access_token: &str,
+    ) -> Result<AuthenticatedContext, AuthenticationError> {
+        self.authenticate_calls.fetch_add(1, Ordering::AcqRel);
+        self.delegate.authenticate(access_token).await
+    }
+
+    async fn probe_key_source(&self) {
+        self.delegate.probe_key_source().await;
+    }
+
+    async fn announce_key_source(&self) {
+        self.delegate.announce_key_source().await;
+    }
+}
+
+#[async_trait]
 impl SigningProvider for FailOnceAfterSelfTestSigner {
     fn algorithm(&self) -> SigningAlgorithm {
         self.delegate.algorithm()
@@ -377,6 +418,33 @@ impl SigningProvider for FailOnceAfterSelfTestSigner {
             0 => self.delegate.sign(payload).await,
             1 => Err(SigningError::external("synthetic unavailable signer")),
             _ => self.delegate.sign(payload).await,
+        }
+    }
+}
+
+#[async_trait]
+impl SigningProvider for OversizedAfterSelfTestSigner {
+    fn algorithm(&self) -> SigningAlgorithm {
+        self.delegate.algorithm()
+    }
+
+    fn key_id(&self) -> &str {
+        self.delegate.key_id()
+    }
+
+    fn public_jwk(&self) -> PublicJwk {
+        self.delegate.public_jwk()
+    }
+
+    fn readiness(&self) -> KeyReadiness {
+        KeyReadiness::Ready
+    }
+
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+        if self.calls.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.delegate.sign(payload).await
+        } else {
+            Ok(vec![0x5a; 80 * 1024])
         }
     }
 }
@@ -1800,6 +1868,62 @@ async fn graceful_shutdown_waits_for_admitted_evaluation_and_terminal_audit() {
 }
 
 #[tokio::test]
+async fn graceful_shutdown_waits_for_admitted_request_batch_and_terminal_audit() {
+    let fixture = acceptance_runtime().await;
+    mount_adult_source_expecting(&fixture.server, Some(Duration::from_millis(500)), 2).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let address = listener
+        .local_addr()
+        .expect("listener address is available");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let runtime = Arc::clone(&fixture.runtime);
+    let serving = tokio::spawn(async move {
+        crate::server::serve_listener_for_test(runtime, listener, async move {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    tokio::task::yield_now().await;
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("test client builds");
+    let token = access_token(None);
+    let response = tokio::spawn(async move {
+        client
+            .post(format!("http://{address}/v1/evidence/batch"))
+            .bearer_auth(token)
+            .header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+            .json(&adult_request_batch(2))
+            .send()
+            .await
+            .expect("request batch completes")
+    });
+    wait_for_source_request_count(&fixture.server, 1).await;
+    shutdown_tx
+        .send(())
+        .expect("server still observes shutdown signal");
+    assert!(
+        !serving.is_finished(),
+        "shutdown cannot finish while a protected request batch is active"
+    );
+
+    let response = response.await.expect("request task completes");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    tokio::time::timeout(Duration::from_secs(4), serving)
+        .await
+        .expect("server drains before timeout")
+        .expect("server task does not panic")
+        .expect("server exits cleanly");
+    let audit = wait_for_audit_counts(&fixture.audit_path, 2, 1).await;
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 2);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
+}
+
+#[tokio::test]
 async fn weak_subject_binding_key_fails_initialization_before_source_access() {
     let prepared = prepare_acceptance("0123456789012345678901234567890").await;
     let result =
@@ -2484,6 +2608,867 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
             assert!(!value.contains(&nonce));
         }
     }
+}
+
+#[tokio::test]
+async fn request_batch_bounds_unique_nonces_and_every_item_before_source_access() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let token = access_token(None);
+
+    let mut duplicate = adult_request_batch(2);
+    duplicate.items[1].request_nonce = duplicate.items[0].request_nonce.clone();
+    let mut invalid_later_item = adult_request_batch(2);
+    invalid_later_item.items[1].subjects[0]
+        .selector
+        .values
+        .as_mut()
+        .expect("request selector values exist")
+        .insert(
+            "caller_extra".to_owned(),
+            SelectorValue::String("must-not-reach-source".to_owned()),
+        );
+
+    for (request, expected_code) in [
+        (adult_request_batch(0), "malformed_request"),
+        (adult_request_batch(17), "malformed_request"),
+        (duplicate, "malformed_request"),
+        (invalid_later_item, "invalid_selector"),
+    ] {
+        let response = http
+            .post("/v1/evidence/batch")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["code"], expected_code);
+    }
+    let mut unauthorized = adult_request_batch(2);
+    unauthorized.purpose = "fixture-routing".to_owned();
+    let refused = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&unauthorized)
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn request_batch_later_authorization_refusal_precedes_missing_source_credential_resolution() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes before its source credential is removed"),
+    );
+    let source_credential = prepared.temporary.path().join("secrets/source-a-token");
+    fs::remove_file(&source_credential).expect("source credential canary is removed");
+    assert!(!source_credential.exists());
+
+    let mut batch = adult_request_batch(2);
+    batch.items[1].subjects[0] = requested_subject(
+        "subject",
+        "residence-record-v1",
+        Some([("record_reference", "synthetic-residence-record-001")]),
+    );
+    let http = TestServer::new(build_app(runtime));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert!(server
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .is_empty());
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.lines().count(), 1);
+    let refusal: Value = serde_json::from_str(
+        audit
+            .lines()
+            .next()
+            .expect("authorization refusal is durable"),
+    )
+    .expect("authorization refusal parses");
+    assert_eq!(
+        refusal["record"]["schema"],
+        json!("registry.evidence.audit.authorization-refusal/v1")
+    );
+    assert_eq!(refusal["record"]["decision"], json!("not-authorized"));
+    assert!(!audit.contains("access-attempt"));
+    assert!(!audit.contains("terminal-failure"));
+    assert!(!audit.contains("disclosure-release"));
+}
+
+#[tokio::test]
+async fn request_batch_accept_negotiation_is_exact_and_precedes_source_access() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let token = access_token(None);
+
+    let missing = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&adult_request_batch(1))
+        .await;
+    assert_eq!(missing.status_code(), StatusCode::NOT_ACCEPTABLE);
+    assert_eq!(
+        missing.json::<Value>()["code"],
+        "response_format_not_acceptable"
+    );
+    assert_eq!(missing.header("vary"), "Accept");
+
+    for invalid in [
+        "*/*",
+        EVIDENCE_JWS_MEDIA_TYPE,
+        EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
+        "application/vnd.registrystack.evidence.request-batch+json; charset=utf-8",
+        "application/vnd.registrystack.evidence.request-batch+json;q=1",
+        "application/vnd.registrystack.evidence.request-batch+json, application/jose+json",
+        "application/json",
+    ] {
+        let response = http
+            .post("/v1/evidence/batch")
+            .add_header("authorization", format!("Bearer {token}"))
+            .add_header("accept", invalid)
+            .json(&adult_request_batch(1))
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::NOT_ACCEPTABLE,
+            "{invalid}"
+        );
+        assert_eq!(
+            response.json::<Value>()["code"],
+            "response_format_not_acceptable"
+        );
+        assert_eq!(response.header("vary"), "Accept");
+    }
+
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn request_batch_authenticates_once_and_atomically_charges_the_complete_item_count() {
+    let server = MockServer::start().await;
+    let mut ceilings = FixtureCeilings::deployment_defaults();
+    ceilings.requests_per_principal_per_minute = 3;
+    ceilings.burst_per_principal = 3;
+    let prepared = prepare_fixture(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &ceilings,
+    );
+    let authenticate_calls = Arc::new(AtomicUsize::new(0));
+    let counting_authenticator: Arc<dyn RuntimeAuthenticator> = Arc::new(CountingAuthenticator {
+        delegate: authenticator(),
+        authenticate_calls: Arc::clone(&authenticate_calls),
+    });
+    let runtime = EvidenceRuntime::initialize_with_runtime_authenticator(
+        &prepared.runtime_path,
+        counting_authenticator,
+    )
+    .await
+    .expect("runtime with a three-token principal bucket initializes");
+    let mut two_items = adult_request_batch(2);
+    two_items.purpose = "fixture-routing".to_owned();
+
+    let first = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-rate-first",
+            &access_token(None),
+            &two_items,
+        )
+        .await
+        .expect_err("authorization refusal follows the complete two-token admission");
+    assert_eq!(first.problem(), ProblemCode::NotAuthorized);
+    assert_eq!(authenticate_calls.load(Ordering::Acquire), 1);
+
+    let rejected = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-rate-atomic-refusal",
+            &access_token(None),
+            &two_items,
+        )
+        .await
+        .expect_err("two remaining tokens are required atomically");
+    assert_eq!(rejected.problem(), ProblemCode::RateLimited);
+    assert_eq!(authenticate_calls.load(Ordering::Acquire), 2);
+
+    let mut one_item = adult_request_batch(1);
+    one_item.purpose = "fixture-routing".to_owned();
+    let last_token = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-rate-last-token",
+            &access_token(None),
+            &one_item,
+        )
+        .await
+        .expect_err("the failed weighted admission consumed no partial token");
+    assert_eq!(last_token.problem(), ProblemCode::NotAuthorized);
+    assert_eq!(authenticate_calls.load(Ordering::Acquire), 3);
+    assert!(server
+        .received_requests()
+        .await
+        .expect("source journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn request_batch_sequential_fallback_serves_all_four_coequal_definitions() {
+    let fixture = acceptance_runtime().await;
+    let cases = [
+        ("adult", adult_request(), access_token(None)),
+        ("residence", residence_request(), access_token(None)),
+        ("licence", licence_request(), access_token(None)),
+        (
+            "relationship",
+            parent_request(),
+            access_token(Some(parent_grant_claims())),
+        ),
+    ];
+
+    for (name, request, token) in cases {
+        match name {
+            "adult" => mount_adult_source_expecting(&fixture.server, None, 2).await,
+            "residence" => mount_residence_source_expecting(&fixture.server, 2).await,
+            "licence" => mount_licence_source_expecting(&fixture.server, 2).await,
+            "relationship" => {
+                mount_parent_source_expecting(
+                    &fixture.server,
+                    parent_source_response(vec![PARENT_REFERENCE]),
+                    2,
+                )
+                .await;
+            }
+            _ => unreachable!("closed acceptance definition"),
+        }
+        let batch = request_batch_from_request(&request, 2);
+        let released = fixture
+            .runtime
+            .evaluate_request_batch(
+                &format!("operation-request-batch-definition-{name}"),
+                &token,
+                &batch,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{name} request batch evaluates: {error:?}"));
+        let envelope: EvidenceRequestBatchResponse =
+            serde_json::from_slice(released.bytes()).expect("request-batch response parses");
+        assert_eq!(envelope.items.len(), 2, "{name}");
+        let evidence = envelope
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| match item {
+                EvidenceRequestBatchResponseItem::Evidence { evidence } => {
+                    let evidence = decode_evidence(evidence);
+                    assert_eq!(
+                        evidence.request_nonce.as_deref(),
+                        Some(batch.items[index].request_nonce.as_str()),
+                        "{name}/{index}"
+                    );
+                    evidence
+                }
+                EvidenceRequestBatchResponseItem::EvidenceNotAvailable => {
+                    panic!("{name}/{index} is available")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(evidence[0].id, evidence[1].id, "{name}");
+        assert_eq!(
+            fixture
+                .server
+                .received_requests()
+                .await
+                .expect("source journal is available")
+                .len(),
+            2,
+            "{name} executes one sequential source call per item"
+        );
+        fixture.server.reset().await;
+    }
+}
+
+#[tokio::test]
+async fn request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies() {
+    let mut batch = adult_request_batch(3);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    set_batch_adult_given_name(&mut batch, 2, "Cara");
+
+    let sequential_server = MockServer::start().await;
+    let sequential_prepared = prepare_fixture(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &sequential_server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+    );
+    let sequential_runtime = EvidenceRuntime::initialize_with_authenticator(
+        &sequential_prepared.runtime_path,
+        authenticator(),
+    )
+    .await
+    .expect("sequential runtime initializes");
+    mount_named_adult_source(
+        &sequential_server,
+        "Amina",
+        json!({"total": 1, "date_of_birth": "2000-01-01"}),
+    )
+    .await;
+    mount_named_adult_source(&sequential_server, "Binta", json!({"total": 0})).await;
+    mount_named_adult_source(
+        &sequential_server,
+        "Cara",
+        json!({"total": 1, "date_of_birth": "2001-01-01"}),
+    )
+    .await;
+    let sequential = sequential_runtime
+        .evaluate_request_batch(
+            "operation-request-batch-source-sequential",
+            &access_token(None),
+            &batch,
+        )
+        .await
+        .expect("sequential request batch evaluates");
+    let sequential: EvidenceRequestBatchResponse =
+        serde_json::from_slice(sequential.bytes()).expect("sequential response parses");
+
+    let optimized_server = MockServer::start().await;
+    let optimized_origin = optimized_server.uri();
+    let optimized_prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &optimized_origin,
+        &FixtureCeilings::deployment_defaults(),
+        configure_optimized_adult_source_batch,
+    );
+    enable_source_batch_acquisition(&optimized_prepared.runtime_path);
+    let optimized_runtime = EvidenceRuntime::initialize_with_authenticator(
+        &optimized_prepared.runtime_path,
+        authenticator(),
+    )
+    .await
+    .expect("optimized runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(body_json(json!({
+            "requests": [
+                {
+                    "slot": 0,
+                    "lookup": {"given_name": "Amina", "family_name": "Diallo", "birth_date": "2000-01-01"},
+                    "fields": ["date_of_birth"],
+                    "limit": 2
+                },
+                {
+                    "slot": 1,
+                    "lookup": {"given_name": "Binta", "family_name": "Diallo", "birth_date": "2000-01-01"},
+                    "fields": ["date_of_birth"],
+                    "limit": 2
+                },
+                {
+                    "slot": 2,
+                    "lookup": {"given_name": "Cara", "family_name": "Diallo", "birth_date": "2000-01-01"},
+                    "fields": ["date_of_birth"],
+                    "limit": 2
+                }
+            ]
+        })))
+        // The adapter restores request order from opaque slots rather than
+        // trusting a source-controlled response order.
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                {"slot": 2, "total": 1, "date_of_birth": "2001-01-01"},
+                {"slot": 0, "total": 1, "date_of_birth": "2000-01-01"},
+                {"slot": 1, "total": 0}
+            ]
+        })))
+        .expect(1)
+        .mount(&optimized_server)
+        .await;
+    let optimized = optimized_runtime
+        .evaluate_request_batch(
+            "operation-request-batch-source-optimized",
+            &access_token(None),
+            &batch,
+        )
+        .await
+        .expect("optimized request batch evaluates");
+    let optimized: EvidenceRequestBatchResponse =
+        serde_json::from_slice(optimized.bytes()).expect("optimized response parses");
+
+    assert_eq!(
+        request_batch_public_values(&optimized),
+        request_batch_public_values(&sequential),
+        "strategy choice cannot change logical response order or outcomes"
+    );
+    assert_eq!(
+        sequential_server
+            .received_requests()
+            .await
+            .expect("sequential journal is available")
+            .len(),
+        3
+    );
+    assert_eq!(
+        optimized_server
+            .received_requests()
+            .await
+            .expect("optimized journal is available")
+            .len(),
+        1
+    );
+    assert_eq!(
+        request_batch_audit_access_indices(&optimized_prepared.audit_path),
+        [vec![0, 1, 2]]
+    );
+}
+
+#[tokio::test]
+async fn request_batch_optimized_source_failure_aborts_after_one_call_without_sequential_fanout() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        configure_optimized_adult_source_batch,
+    );
+    enable_source_batch_acquisition(&prepared.runtime_path);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("optimized runtime initializes"),
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut batch = adult_request_batch(3);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    set_batch_adult_given_name(&mut batch, 2, "Cara");
+    let http = TestServer::new(build_app(runtime));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.header("content-type"), "application/problem+json");
+    let problem = response.json::<Value>();
+    assert_eq!(problem["code"], json!("dependency_unavailable"));
+    assert!(problem.get("items").is_none());
+
+    let journal = server
+        .received_requests()
+        .await
+        .expect("source journal is available");
+    assert_eq!(
+        journal.len(),
+        1,
+        "only the optimized physical call executes"
+    );
+    let physical_request: Value =
+        serde_json::from_slice(&journal[0].body).expect("optimized source request is JSON");
+    assert_eq!(
+        physical_request["requests"]
+            .as_array()
+            .expect("optimized request carries logical members")
+            .len(),
+        3
+    );
+    assert!(
+        physical_request.get("lookup").is_none(),
+        "no sequential single-item request reached the source"
+    );
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 1);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    assert_eq!(
+        request_batch_audit_access_indices(&prepared.audit_path),
+        [vec![0, 1, 2]]
+    );
+    let terminal = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .find(|event| event["record"]["phase"] == "terminal-failure")
+        .expect("one terminal failure exists");
+    assert_eq!(terminal["record"]["decision"], json!("aborted"));
+    assert_eq!(
+        terminal["record"]["safeErrorCategory"],
+        json!("source-status")
+    );
+    for prohibited in [
+        "itemGroups",
+        "itemIndices",
+        "sourceId",
+        "adapterId",
+        "outcomes",
+        "signingKeyId",
+    ] {
+        assert!(terminal["record"].get(prohibited).is_none(), "{prohibited}");
+    }
+}
+
+#[tokio::test]
+async fn request_batch_malformed_sequential_extraction_aborts_without_partial_release() {
+    assert_sequential_batch_protocol_failure(
+        "operation-request-batch-malformed-extraction",
+        Some(
+            r#"fn extract(source_response, context) {
+    #{outcome: "no_match", extra: true}
+}
+"#,
+        ),
+        json!({"total": 1, "date_of_birth": "2000-01-01"}),
+    )
+    .await;
+    assert_sequential_batch_protocol_failure(
+        "operation-request-batch-invalid-fact-set",
+        None,
+        // The ordinary adult extraction decodes this unique response as a
+        // match with an empty FactSet, which violates its required fact schema.
+        json!({"total": 1}),
+    )
+    .await;
+}
+
+async fn assert_sequential_batch_protocol_failure(
+    operation: &str,
+    extraction: Option<&str>,
+    response: Value,
+) {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            if let Some(extraction) = extraction {
+                fs::write(
+                    bundle_root.join("adapters/adult-status-source.rhai"),
+                    extraction,
+                )
+                .expect("malformed extraction fixture writes");
+            }
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("sequential runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate_request_batch(operation, &access_token(None), &adult_request_batch(2))
+        .await
+        .expect_err("a malformed sequential member aborts the outer batch");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        1,
+        "the second logical item must not execute after the global fault"
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 1);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    let terminal = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .find(|event| event["record"]["phase"] == "terminal-failure")
+        .expect("one terminal failure exists");
+    assert_eq!(terminal["record"]["safeErrorCategory"], "source-protocol");
+    assert!(terminal["record"].get("outcomes").is_none());
+}
+
+#[tokio::test]
+async fn request_batch_later_signing_failure_releases_no_partial_envelope() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    let provider: Arc<dyn SigningProvider> = Arc::new(FailOnNthSignatureSigner {
+        delegate,
+        calls: AtomicUsize::new(0),
+        // Startup self-test is call zero, the first item is call one, and the
+        // second item fails after the first item was fully signed in memory.
+        fail_at: 2,
+    });
+    let failing_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(failing_signer);
+    mount_adult_source_expecting(&prepared.server, None, 2).await;
+
+    let http = TestServer::new(build_app(Arc::new(runtime)));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&adult_request_batch(3))
+        .await;
+    assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.header("content-type"), "application/problem+json");
+    let body = response.text();
+    assert!(!body.contains("payload") && !body.contains("signature"));
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    let terminal = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .find(|event| event["record"]["phase"] == "terminal-failure")
+        .expect("one terminal failure exists");
+    let record = terminal["record"]
+        .as_object()
+        .expect("terminal failure is an object");
+    for forbidden in [
+        "itemIndices",
+        "itemGroups",
+        "sourceId",
+        "adapterId",
+        "outcomes",
+        "signingKeyId",
+        "disclosedConcepts",
+    ] {
+        assert!(
+            !record.contains_key(forbidden),
+            "terminal carries {forbidden}"
+        );
+    }
+    assert_eq!(record["safeErrorCategory"], "signing");
+}
+
+#[tokio::test]
+async fn request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes() {
+    let fixture = acceptance_runtime().await;
+    let mut batch = adult_request_batch(3);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    set_batch_adult_given_name(&mut batch, 2, "Cara");
+    mount_named_adult_source(
+        &fixture.server,
+        "Amina",
+        json!({"total": 1, "date_of_birth": "2000-01-01"}),
+    )
+    .await;
+    mount_named_adult_source(&fixture.server, "Binta", json!({"total": 0})).await;
+    mount_named_adult_source(
+        &fixture.server,
+        "Cara",
+        json!({"total": 1, "date_of_birth": "2001-01-01"}),
+    )
+    .await;
+
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    response.assert_status_ok();
+    assert_eq!(
+        response.header("content-type"),
+        EVIDENCE_REQUEST_BATCH_MEDIA_TYPE
+    );
+    let envelope = response.json::<EvidenceRequestBatchResponse>();
+    assert_eq!(envelope.items.len(), 3);
+    let first = match &envelope.items[0] {
+        EvidenceRequestBatchResponseItem::Evidence { evidence } => decode_evidence(evidence),
+        EvidenceRequestBatchResponseItem::EvidenceNotAvailable => panic!("first is available"),
+    };
+    assert!(matches!(
+        envelope.items[1],
+        EvidenceRequestBatchResponseItem::EvidenceNotAvailable
+    ));
+    let third = match &envelope.items[2] {
+        EvidenceRequestBatchResponseItem::Evidence { evidence } => decode_evidence(evidence),
+        EvidenceRequestBatchResponseItem::EvidenceNotAvailable => panic!("third is available"),
+    };
+    assert_eq!(
+        first.request_nonce.as_deref(),
+        Some(batch.items[0].request_nonce.as_str())
+    );
+    assert_eq!(
+        third.request_nonce.as_deref(),
+        Some(batch.items[2].request_nonce.as_str())
+    );
+    assert_ne!(first.id, third.id);
+    assert_eq!(first.observed_at, third.observed_at);
+    assert_eq!(first.issued_at, third.issued_at);
+    assert_eq!(first.issued_at, first.observed_at);
+
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 3);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
+    assert!(audit.contains("\"itemIndices\":[0]"));
+    assert!(audit.contains("\"itemIndices\":[1]"));
+    assert!(audit.contains("\"itemIndices\":[2]"));
+    assert!(audit.contains("\"outcome\":\"evidence-not-available\""));
+    for item in &batch.items {
+        assert!(!audit.contains(&item.request_nonce));
+    }
+}
+
+#[tokio::test]
+async fn request_batch_all_unavailable_is_200_and_records_no_signing_key() {
+    let fixture = acceptance_runtime().await;
+    let mut batch = adult_request_batch(2);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    mount_named_adult_source(&fixture.server, "Amina", json!({"total": 0})).await;
+    mount_named_adult_source(&fixture.server, "Binta", json!({"total": 0})).await;
+
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    response.assert_status_ok();
+    assert!(response
+        .json::<EvidenceRequestBatchResponse>()
+        .items
+        .iter()
+        .all(|item| matches!(item, EvidenceRequestBatchResponseItem::EvidenceNotAvailable)));
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    let release = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .find(|event| event["record"]["phase"] == "disclosure-release")
+        .expect("one terminal release exists");
+    assert!(release["record"].get("signingKeyId").is_none());
+}
+
+#[tokio::test]
+async fn request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release() {
+    let fixture = acceptance_runtime().await;
+    let mut batch = adult_request_batch(3);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    set_batch_adult_given_name(&mut batch, 2, "Cara");
+    mount_named_adult_source(
+        &fixture.server,
+        "Amina",
+        json!({"total": 1, "date_of_birth": "2000-01-01"}),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(body_json(adult_source_request_for("Binta")))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    assert_eq!(
+        response.status_code(),
+        ProblemCode::DependencyUnavailable.status()
+    );
+    assert_eq!(response.json::<Value>()["code"], "dependency_unavailable");
+    assert_eq!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        2,
+        "a later item is not contacted after the outer abort"
+    );
+    let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    assert_eq!(audit.matches("\"decision\":\"aborted\"").count(), 1);
+    assert!(!audit.contains("Binta") && !audit.contains("Cara"));
+}
+
+#[tokio::test]
+async fn request_batch_response_above_one_mib_releases_no_partial_envelope() {
+    let server = MockServer::start().await;
+    let mut ceilings = FixtureCeilings::deployment_defaults();
+    ceilings.requests_per_principal_per_minute = 960;
+    ceilings.burst_per_principal = 16;
+    let prepared = prepare_fixture(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &ceilings,
+    );
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let delegate = LocalJwkSigner::new(private).expect("local signer builds");
+    let provider: Arc<dyn SigningProvider> = Arc::new(OversizedAfterSelfTestSigner {
+        delegate,
+        calls: AtomicUsize::new(0),
+    });
+    let oversized_signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
+        .await
+        .expect("signer passes its startup self-test");
+    runtime.replace_signer_for_test(oversized_signer);
+    mount_adult_source_expecting(&server, None, 16).await;
+
+    let error = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-response-size",
+            &access_token(None),
+            &adult_request_batch(16),
+        )
+        .await
+        .expect_err("an oversized outer envelope is never released");
+    assert_eq!(error.problem(), ProblemCode::ServiceUnavailable);
+    assert_eq!(error.category(), "release-serialization");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
 }
 
 #[tokio::test]
@@ -6011,6 +6996,202 @@ async fn acceptance_runtime() -> AcceptanceRuntime {
 }
 
 #[tokio::test]
+async fn request_batch_sequential_fallback_runs_every_multistage_plan_in_item_order() {
+    let search_server = MockServer::start().await;
+    let search_origin = search_server.uri();
+    let search_prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &search_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_search_then_fetch(bundle_root, &search_origin),
+    );
+    let search_runtime = EvidenceRuntime::initialize_with_authenticator(
+        &search_prepared.runtime_path,
+        authenticator(),
+    )
+    .await
+    .expect("search-then-fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(2)
+        .mount(&search_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .expect(2)
+        .mount(&search_server)
+        .await;
+    let search_release = search_runtime
+        .evaluate_request_batch(
+            "operation-request-batch-search-fetch-order",
+            &access_token(None),
+            &adult_request_batch(2),
+        )
+        .await
+        .expect("request batch executes search then fetch for each item");
+    assert!(
+        serde_json::from_slice::<EvidenceRequestBatchResponse>(search_release.bytes())
+            .expect("search-then-fetch response parses")
+            .items
+            .iter()
+            .all(|item| matches!(item, EvidenceRequestBatchResponseItem::Evidence { .. }))
+    );
+    let search_paths = search_server
+        .received_requests()
+        .await
+        .expect("search source journal is available")
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        search_paths,
+        [
+            "/v1/search",
+            "/v1/records/record-001",
+            "/v1/search",
+            "/v1/records/record-001"
+        ],
+        "the second item starts only after the first item completes"
+    );
+    assert_eq!(
+        request_batch_audit_access_indices(&search_prepared.audit_path),
+        [vec![0], vec![0], vec![1], vec![1]]
+    );
+
+    let set_server = MockServer::start().await;
+    let set_origin = set_server.uri();
+    let set_prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &set_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| configure_fetch_set(bundle_root, &set_origin),
+    );
+    enable_fetch_set_acquisition(&set_prepared.runtime_path);
+    let set_runtime =
+        EvidenceRuntime::initialize_with_authenticator(&set_prepared.runtime_path, authenticator())
+            .await
+            .expect("fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(2)
+        .mount(&set_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .expect(2)
+        .mount(&set_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(2)
+        .mount(&set_server)
+        .await;
+    let set_release = set_runtime
+        .evaluate_request_batch(
+            "operation-request-batch-fetch-set-order",
+            &access_token(None),
+            &adult_request_batch(2),
+        )
+        .await
+        .expect("request batch executes every fetch-set stage for each item");
+    assert!(
+        serde_json::from_slice::<EvidenceRequestBatchResponse>(set_release.bytes())
+            .expect("fetch-set response parses")
+            .items
+            .iter()
+            .all(|item| matches!(item, EvidenceRequestBatchResponseItem::Evidence { .. }))
+    );
+    let set_paths = set_server
+        .received_requests()
+        .await
+        .expect("fetch-set source journal is available")
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        set_paths,
+        [
+            "/v1/search",
+            "/v1/records/record-001",
+            "/v1/partners",
+            "/v1/search",
+            "/v1/records/record-001",
+            "/v1/partners"
+        ],
+        "fetch-set stages never overlap the next logical item"
+    );
+    assert_eq!(
+        request_batch_audit_access_indices(&set_prepared.audit_path),
+        [vec![0], vec![0], vec![0], vec![1], vec![1], vec![1]]
+    );
+}
+
+#[tokio::test]
+async fn request_batch_sequential_fallback_executes_sqlite_items_in_request_order() {
+    let server = MockServer::start().await;
+    let mut extract_path = None;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            extract_path = Some(configure_sqlite_adult_source(bundle_root));
+        },
+    );
+    let extract_path = extract_path.expect("SQLite extract path is captured");
+    bind_sqlite_extract(&prepared.runtime_path, &extract_path);
+    DeploymentInputs::load(&prepared.runtime_path)
+        .unwrap_or_else(|error| panic!("SQLite deployment inputs load: {error:?}"));
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime with a reviewed SQLite extract initializes");
+
+    let released = runtime
+        .evaluate_request_batch(
+            "operation-request-batch-sqlite-order",
+            &access_token(None),
+            &adult_request_batch(2),
+        )
+        .await
+        .expect("SQLite source evaluates every logical item sequentially");
+    let response: EvidenceRequestBatchResponse =
+        serde_json::from_slice(released.bytes()).expect("SQLite batch response parses");
+    assert!(response
+        .items
+        .iter()
+        .all(|item| matches!(item, EvidenceRequestBatchResponseItem::Evidence { .. })));
+    assert_eq!(
+        request_batch_audit_access_indices(&prepared.audit_path),
+        [vec![0], vec![1]],
+        "the local statement source still records physical calls in input order"
+    );
+    assert!(server
+        .received_requests()
+        .await
+        .expect("HTTP source journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff() {
     let server = MockServer::start().await;
     let source_origin = server.uri();
@@ -7224,6 +8405,10 @@ async fn mount_success_sources(server: &MockServer, candidate_is_parent: bool) {
 }
 
 async fn mount_residence_source(server: &MockServer) {
+    mount_residence_source_expecting(server, 1).await;
+}
+
+async fn mount_residence_source_expecting(server: &MockServer, expected: u64) {
     Mock::given(method("POST"))
         .and(path("/v1/facts"))
         .and(header("accept", "application/json"))
@@ -7237,12 +8422,16 @@ async fn mount_residence_source(server: &MockServer) {
             "total": 1,
             "official_residence_code": "R-101"
         })))
-        .expect(1)
+        .expect(expected)
         .mount(server)
         .await;
 }
 
 async fn mount_licence_source(server: &MockServer) {
+    mount_licence_source_expecting(server, 1).await;
+}
+
+async fn mount_licence_source_expecting(server: &MockServer, expected: u64) {
     let basic = format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("{BASIC_USER}:{BASIC_PASSWORD}"))
@@ -7267,13 +8456,71 @@ async fn mount_licence_source(server: &MockServer) {
                 "historical_states": ["PENDING"]
             }]
         })))
-        .expect(1)
+        .expect(expected)
         .mount(server)
         .await;
 }
 
 async fn mount_adult_source(server: &MockServer, delay: Option<Duration>) {
     mount_adult_source_expecting(server, delay, 1).await;
+}
+
+fn set_batch_adult_given_name(batch: &mut EvidenceRequestBatch, index: usize, given_name: &str) {
+    batch.items[index].subjects[0]
+        .selector
+        .values
+        .as_mut()
+        .expect("adult selector values exist")
+        .insert(
+            "given_name".to_owned(),
+            SelectorValue::String(given_name.to_owned()),
+        );
+}
+
+fn adult_source_request_for(given_name: &str) -> Value {
+    json!({
+        "lookup": {
+            "given_name": given_name,
+            "family_name": "Diallo",
+            "birth_date": "2000-01-01"
+        },
+        "fields": ["date_of_birth"],
+        "limit": 2
+    })
+}
+
+async fn mount_named_adult_source(server: &MockServer, given_name: &str, response: Value) {
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .and(header("accept", "application/json"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(adult_source_request_for(given_name)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn decode_evidence(jws: &FlattenedJws) -> Evidence {
+    let payload = URL_SAFE_NO_PAD
+        .decode(&jws.payload)
+        .expect("flattened JWS payload decodes");
+    serde_json::from_slice(&payload).expect("flattened JWS payload is Evidence")
+}
+
+fn request_batch_public_values(
+    response: &EvidenceRequestBatchResponse,
+) -> Vec<Option<PublicValue>> {
+    response
+        .items
+        .iter()
+        .map(|item| match item {
+            EvidenceRequestBatchResponseItem::Evidence { evidence } => {
+                Some(decode_evidence(evidence).supported_values[0].value.clone())
+            }
+            EvidenceRequestBatchResponseItem::EvidenceNotAvailable => None,
+        })
+        .collect()
 }
 
 /// The same fixture source mounted for an exact number of evaluations.
@@ -7303,13 +8550,17 @@ async fn mount_adult_source_expecting(server: &MockServer, delay: Option<Duratio
 }
 
 async fn mount_parent_source(server: &MockServer, response: Value) {
+    mount_parent_source_expecting(server, response, 1).await;
+}
+
+async fn mount_parent_source_expecting(server: &MockServer, response: Value, expected: u64) {
     Mock::given(method("POST"))
         .and(path("/v1/child-relationships"))
         .and(header("accept", "application/json"))
         .and(header("authorization", format!("Bearer {BEARER}").as_str()))
         .and(body_json(parent_source_request()))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
-        .expect(1)
+        .expect(expected)
         .mount(server)
         .await;
 }
@@ -7359,6 +8610,19 @@ async fn wait_for_source_request_count(server: &MockServer, expected: usize) {
     .expect("source request arrives before the test deadline");
 }
 
+fn request_batch_audit_access_indices(path: &Path) -> Vec<Vec<u8>> {
+    fs::read_to_string(path)
+        .expect("audit is readable")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .filter(|event| event["record"]["phase"] == "access-attempt")
+        .map(|event| {
+            serde_json::from_value(event["record"]["itemIndices"].clone())
+                .expect("batch access item indices parse")
+        })
+        .collect()
+}
+
 async fn wait_for_audit_counts(path: &Path, access: usize, release: usize) -> String {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -7402,6 +8666,23 @@ fn adult_request() -> EvidenceRequest {
             ]),
         )],
     )
+}
+
+fn adult_request_batch(count: usize) -> EvidenceRequestBatch {
+    request_batch_from_request(&adult_request(), count)
+}
+
+fn request_batch_from_request(template: &EvidenceRequest, count: usize) -> EvidenceRequestBatch {
+    EvidenceRequestBatch {
+        requirement: template.requirement.clone(),
+        purpose: template.purpose.clone(),
+        items: (0..count)
+            .map(|_| EvidenceRequestBatchItem {
+                request_nonce: fresh_request_nonce(),
+                subjects: template.subjects.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn residence_request() -> EvidenceRequest {
@@ -7629,6 +8910,127 @@ fn rewrite_deployment_values(bundle_root: &Path, source_origin: &str) {
     fs::write(path, text).expect("deployment-only fixture rewrite succeeds");
 }
 
+fn configure_sqlite_adult_source(bundle_root: &Path) -> PathBuf {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("copied configuration is readable");
+    let source_start = configuration
+        .find("  source-a:\n")
+        .expect("adult source begins");
+    let source_end = configuration[source_start..]
+        .find("  source-b:\n")
+        .map(|offset| source_start + offset)
+        .expect("next source begins");
+    configuration.replace_range(
+        source_start..source_end,
+        r#"  source-a:
+    transport: sqlite-extract
+    posture: field-projected
+    extractProfile: adult-register-extract
+    maximumExtractAgeSeconds: 86400
+    request:
+      statement: queries/adult-status.sql
+      columns: [{name: date_of_birth, type: string}]
+      selectorInputs:
+        - role: subject
+          alternatives: [{profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}]
+      parameterBindings:
+        given_name: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
+        family_name: {kind: selector, role: subject, profile: person-demographics-v1, field: family_name}
+        birth_date: {kind: selector, role: subject, profile: person-demographics-v1, field: birth_date}
+      projection: [/rows/*/date_of_birth]
+      maximumRows: 2
+      maximumCellBytes: 256
+      maximumStatementSteps: 100000
+      timeoutMilliseconds: 3000
+      maximumResponseBytes: 65536
+      concurrencyLimit: 8
+    responseSchema: schemas/adult-status-response.schema.yaml
+    extractScript: adapters/adult-status-source.rhai
+    factSchema: schemas/adult-status-facts.schema.yaml
+"#,
+    );
+    fs::write(configuration_path, configuration).expect("SQLite source configuration is written");
+    for unused in [
+        "adapters/adult-status-prepare.rhai",
+        "schemas/adult-status-adapter-parameters.schema.yaml",
+    ] {
+        fs::remove_file(bundle_root.join(unused))
+            .unwrap_or_else(|error| panic!("unused SQLite fixture artifact {unused}: {error}"));
+    }
+    fs::create_dir(bundle_root.join("queries")).expect("SQLite statement directory is created");
+    fs::write(
+        bundle_root.join("queries/adult-status.sql"),
+        r#"SELECT date_of_birth
+FROM person
+WHERE given_name = :given_name
+  AND family_name = :family_name
+  AND birth_date = :birth_date
+ORDER BY id
+LIMIT 2;
+"#,
+    )
+    .expect("reviewed adult SQLite statement is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-source.rhai"),
+        r#"fn extract(source_response, context) {
+    let rows = source_response["rows"];
+    if rows.len == 0 { return #{outcome: "no_match"}; }
+    if rows.len > 1 { return #{outcome: "ambiguous"}; }
+    #{outcome: "match", facts: #{date_of_birth: required(rows[0]["date_of_birth"], "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("SQLite extraction adapter is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-response.schema.yaml"),
+        r#"type: object
+additionalProperties: false
+required: [rows]
+properties:
+  rows:
+    type: array
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [date_of_birth]
+      properties:
+        date_of_birth: {type: string, format: date}
+"#,
+    )
+    .expect("SQLite response schema is written");
+
+    let extract_path = bundle_root
+        .parent()
+        .expect("bundle has a deployment root")
+        .join("adult-register.sqlite");
+    let published_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let connection = Connection::open(&extract_path).expect("SQLite extract opens");
+    connection
+        .execute_batch(&format!(
+            "CREATE TABLE evidence_extract (published_at TEXT, publisher TEXT, extract_id TEXT);\
+             INSERT INTO evidence_extract VALUES ('{published_at}', 'urn:example:fixture:adult-register', 'adult-register-001');\
+             CREATE TABLE person (id TEXT PRIMARY KEY, given_name TEXT, family_name TEXT, birth_date TEXT, date_of_birth TEXT);\
+             INSERT INTO person VALUES ('person-001', 'Amina', 'Diallo', '2000-01-01', '2000-01-01');"
+        ))
+        .expect("SQLite extract fixture is created");
+    drop(connection);
+    make_file_read_only(&extract_path);
+    extract_path
+}
+
+fn bind_sqlite_extract(runtime_path: &Path, extract_path: &Path) {
+    make_file_writable(runtime_path);
+    let mut runtime = fs::read_to_string(runtime_path).expect("runtime configuration is readable");
+    runtime.push_str(&format!(
+        "sourceExtracts:\n  adult-register-extract:\n    path: {}\n",
+        extract_path.display()
+    ));
+    fs::write(runtime_path, runtime).expect("SQLite extract binding is written");
+    make_file_read_only(runtime_path);
+}
+
 fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
     let configuration_path = bundle_root.join("evidence.yaml");
     let mut configuration =
@@ -7713,6 +9115,7 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
     let subject = selectors["subject"];
     #{query: [], body: #{lookup: #{given_name: subject["values"]["given_name"], family_name: subject["values"]["family_name"], birth_date: subject["values"]["birth_date"]}, fields: parameters["requestedFields"], limit: parameters["resultLimit"]}}
 }
+
 "#,
     )
     .expect("search preparation is written");
@@ -7783,6 +9186,85 @@ fn configure_search_then_fetch(bundle_root: &Path, source_origin: &str) {
 "#,
     )
     .expect("chained derivation is written");
+}
+
+fn configure_optimized_adult_source_batch(bundle_root: &Path) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("copied configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "\nselectorProfiles:\n",
+        "\nacquisitionCapabilities: [source-batch]\n\nselectorProfiles:\n",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        "    factSchema: schemas/adult-status-facts.schema.yaml\n",
+        r#"    factSchema: schemas/adult-status-facts.schema.yaml
+    batch:
+      maximumItems: 16
+      prepareScript: adapters/adult-status-prepare-batch.rhai
+      extractScript: adapters/adult-status-extract-batch.rhai
+      responseSchema: schemas/adult-status-batch-response.schema.yaml
+      projection: [/results/*]
+"#,
+        1,
+    );
+    fs::write(configuration_path, configuration)
+        .expect("optimized source-batch configuration is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-prepare-batch.rhai"),
+        r#"fn prepare_batch(items, context) {
+    let requests = [];
+    for item in items {
+        let subject = item["selectors"]["subject"];
+        requests.push(#{slot: item["slot"], lookup: #{given_name: subject["values"]["given_name"], family_name: subject["values"]["family_name"], birth_date: subject["values"]["birth_date"]}, fields: context["parameters"]["requestedFields"], limit: context["parameters"]["resultLimit"]});
+    }
+    #{query: [], body: #{requests: requests}}
+}
+"#,
+    )
+    .expect("optimized batch preparation is written");
+    fs::write(
+        bundle_root.join("adapters/adult-status-extract-batch.rhai"),
+        r#"fn extract_batch(response, context) {
+    let output = [];
+    for member in response["results"] {
+        if member["total"] == 0 {
+            output.push(#{slot: member["slot"], result: #{outcome: "no_match"}});
+        } else if member["total"] > 1 {
+            output.push(#{slot: member["slot"], result: #{outcome: "ambiguous"}});
+        } else {
+            output.push(#{slot: member["slot"], result: #{outcome: "match", facts: #{date_of_birth: required(get_path(member, "/date_of_birth"), "required_fact_missing")}}});
+        }
+    }
+    output
+}
+"#,
+    )
+    .expect("optimized batch extraction is written");
+    fs::write(
+        bundle_root.join("schemas/adult-status-batch-response.schema.yaml"),
+        r#"type: object
+additionalProperties: false
+required: [results]
+properties:
+  results:
+    type: array
+    minItems: 1
+    maxItems: 16
+    items:
+      type: object
+      additionalProperties: false
+      required: [slot, total]
+      properties:
+        slot: {type: integer, minimum: 0, maximum: 15}
+        total: {type: integer, minimum: 0, maximum: 1000000}
+        date_of_birth: {type: string, format: date}
+"#,
+    )
+    .expect("optimized source-batch response schema is written");
 }
 
 /// Rewrite the copied bundle into one search followed by two declared fetch
@@ -8219,6 +9701,15 @@ fn enable_fetch_set_acquisition(runtime_path: &Path) {
         fs::read_to_string(runtime_path).expect("immutable runtime configuration is readable");
     document.push_str("acquisitionCapabilities: [search-then-fetch-set]\n");
     fs::write(runtime_path, document).expect("operator capability declaration is written");
+    make_file_read_only(runtime_path);
+}
+
+fn enable_source_batch_acquisition(runtime_path: &Path) {
+    make_file_writable(runtime_path);
+    let mut document =
+        fs::read_to_string(runtime_path).expect("immutable runtime configuration is readable");
+    document.push_str("acquisitionCapabilities: [source-batch]\n");
+    fs::write(runtime_path, document).expect("operator batch capability is written");
     make_file_read_only(runtime_path);
 }
 

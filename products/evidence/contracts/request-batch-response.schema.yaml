@@ -1,0 +1,62 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/request-batch-response-v1.json
+title: Evidence multi-subject request batch response Version 1
+type: object
+additionalProperties: false
+required: [schema, type, items]
+properties:
+  schema: {const: registry.evidence-request-batch/v1}
+  type: {const: EvidenceRequestBatchResponse}
+  items:
+    type: array
+    minItems: 1
+    maxItems: 16
+    description: >-
+      Results in exact request order. The runtime emits exactly one member for
+      every request item and never releases a partial outer envelope.
+    items:
+      oneOf:
+        - $ref: '#/$defs/evidence-result'
+        - $ref: '#/$defs/unavailable-result'
+$defs:
+  evidence-result:
+    type: object
+    additionalProperties: false
+    required: [result, evidence]
+    properties:
+      result: {const: evidence}
+      evidence: {$ref: '#/$defs/flattened-jws'}
+  unavailable-result:
+    type: object
+    additionalProperties: false
+    required: [result]
+    properties:
+      result: {const: evidence_not_available}
+  flattened-jws:
+    type: object
+    additionalProperties: false
+    required: [protected, payload, signature]
+    properties:
+      protected:
+        type: string
+        minLength: 1
+        pattern: '^[A-Za-z0-9_-]+$'
+      payload:
+        type: string
+        minLength: 1
+        pattern: '^[A-Za-z0-9_-]+$'
+      signature:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{86}$'
+$comment: >-
+  This route has one exact response representation,
+  application/vnd.registrystack.evidence.request-batch+json. Every available
+  item carries a signed flattened JWS under the ordinary Evidence JWS profile.
+  Unsigned JSON, SD-JWT VC, and holder-bound issuance envelopes are forbidden.
+  The response body is refused before audit and release when its exact serialized
+  UTF-8 JSON representation would exceed 1048576 bytes. Every condition the
+  singular collapse contract exposes as evidence_not_available becomes that
+  item outcome, exactly no_match, ambiguous, required_fact_missing, and
+  derivation_input_unresolved in Version 1. Mixed and all-unavailable envelopes
+  return HTTP 200. Any other item failure aborts the outer request through the
+  existing safe Problem Details contract, with no response items released.

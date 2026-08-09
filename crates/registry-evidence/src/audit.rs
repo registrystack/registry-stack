@@ -25,8 +25,10 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::config::{AssuranceProfile, MAXIMUM_HOLDER_BOUND_BATCH_SIZE};
+use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
 
 const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
+const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v1";
 const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str = "registry.evidence.audit.authorization-refusal/v1";
 const AUTHORIZATION_REFUSAL_ERROR_CATEGORY: &str = "not-authorized";
 
@@ -169,6 +171,313 @@ pub struct AuditSubject {
     pub selector_profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selector_bundle_pseudonym: Option<String>,
+}
+
+/// The closed phase vocabulary of one multi-subject request-batch operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceRequestBatchAuditPhase {
+    AccessAttempt,
+    DisclosureRelease,
+    TerminalFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceRequestBatchAuditDecision {
+    Authorized,
+    Released,
+    Aborted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceRequestBatchAuditOutcomeKind {
+    Evidence,
+    EvidenceNotAvailable,
+}
+
+/// One group of items whose selectors a single physical source call carries
+/// under one identical authority decision.
+///
+/// Sequential execution emits one index and one group per call. A source that
+/// accepts a native batch can group equal pseudonymous subject sets without
+/// repeating them, while the ordered index partition preserves accountability
+/// for every logical item without recording any selector or source value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequestBatchAuditItemGroup {
+    pub item_indices: Vec<u8>,
+    pub authority: AuditAuthority,
+    pub subjects: Vec<AuditSubject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequestBatchAuditOutcome {
+    pub item_index: u8,
+    pub outcome: EvidenceRequestBatchAuditOutcomeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_id: Option<String>,
+}
+
+/// Batch-native audit event. It deliberately does not reuse
+/// [`EvidenceAuditEvent`]: the singular shape associates one subject set with
+/// one access, while this shape has an explicit item-to-subject grouping and
+/// exactly one terminal event for the outer operation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequestBatchAuditEvent {
+    pub schema: String,
+    pub assurance_profile: AssuranceProfile,
+    pub event_id: String,
+    pub occurred_at: String,
+    pub operation: String,
+    pub phase: EvidenceRequestBatchAuditPhase,
+    pub requirement: String,
+    pub bundle_revision: String,
+    pub purpose: String,
+    pub requester_pseudonym: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_pseudonym: Option<String>,
+    pub response_protection: ResponseProtection,
+    pub decision: EvidenceRequestBatchAuditDecision,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_indices: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_groups: Option<Vec<EvidenceRequestBatchAuditItemGroup>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disclosed_concepts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signing_key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcomes: Option<Vec<EvidenceRequestBatchAuditOutcome>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_error_category: Option<String>,
+    pub duration_milliseconds: u64,
+}
+
+impl EvidenceRequestBatchAuditEvent {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        assurance_profile: AssuranceProfile,
+        operation: String,
+        phase: EvidenceRequestBatchAuditPhase,
+        requirement: String,
+        bundle_revision: String,
+        purpose: String,
+        requester_pseudonym: String,
+        decision: EvidenceRequestBatchAuditDecision,
+        duration_milliseconds: u64,
+    ) -> Self {
+        Self {
+            schema: REQUEST_BATCH_AUDIT_SCHEMA.to_owned(),
+            assurance_profile,
+            event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
+            occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            operation,
+            phase,
+            requirement,
+            bundle_revision,
+            purpose,
+            requester_pseudonym,
+            actor_pseudonym: None,
+            response_protection: ResponseProtection::Signed,
+            decision,
+            source_id: None,
+            adapter_id: None,
+            item_indices: None,
+            item_groups: None,
+            disclosed_concepts: None,
+            signing_key_id: None,
+            outcomes: None,
+            safe_error_category: None,
+            duration_milliseconds,
+        }
+    }
+
+    pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        let common_valid = self.schema == REQUEST_BATCH_AUDIT_SCHEMA
+            && valid_uri(&self.event_id)
+            && chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_ok()
+            && (16..=128).contains(&self.operation.len())
+            && valid_uri(&self.requirement)
+            && valid_revision(&self.bundle_revision)
+            && valid_purpose(&self.purpose, 128)
+            && valid_pseudonym(&self.requester_pseudonym)
+            && self
+                .actor_pseudonym
+                .as_ref()
+                .is_none_or(|value| valid_pseudonym(value))
+            && self.response_protection == ResponseProtection::Signed
+            && self.duration_milliseconds <= 86_400_000;
+        if !common_valid {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+
+        let valid_access = || {
+            let Some(item_indices) = self.item_indices.as_ref() else {
+                return false;
+            };
+            let Some(item_groups) = self.item_groups.as_ref() else {
+                return false;
+            };
+            valid_batch_item_indices(item_indices)
+                && valid_batch_item_groups(item_groups, item_indices)
+                && self
+                    .source_id
+                    .as_ref()
+                    .is_some_and(|value| valid_local_name(value, 128))
+                && self
+                    .adapter_id
+                    .as_ref()
+                    .is_some_and(|value| valid_local_name(value, 128))
+                && self.disclosed_concepts.is_none()
+                && self.signing_key_id.is_none()
+                && self.outcomes.is_none()
+                && self.safe_error_category.is_none()
+        };
+        let valid_release = || {
+            self.source_id.is_none()
+                && self.adapter_id.is_none()
+                && self.item_indices.is_none()
+                && self.item_groups.as_ref().is_some_and(|groups| {
+                    self.outcomes.as_ref().is_some_and(|outcomes| {
+                        let expected = (0..outcomes.len())
+                            .map(|index| u8::try_from(index).unwrap_or(u8::MAX))
+                            .collect::<Vec<_>>();
+                        valid_batch_item_groups(groups, &expected)
+                    })
+                })
+                && self.safe_error_category.is_none()
+                && self.disclosed_concepts.as_ref().is_some_and(|concepts| {
+                    concepts.len() <= 16
+                        && concepts.iter().all(|concept| valid_uri(concept))
+                        && concepts.iter().collect::<BTreeSet<_>>().len() == concepts.len()
+                })
+                && self.outcomes.as_ref().is_some_and(|outcomes| {
+                    let signed_any = outcomes.iter().any(|outcome| {
+                        outcome.outcome == EvidenceRequestBatchAuditOutcomeKind::Evidence
+                    });
+                    valid_batch_outcomes(outcomes)
+                        && self.signing_key_id.is_some() == signed_any
+                        && self.signing_key_id.as_ref().is_none_or(|value| {
+                            !value.is_empty()
+                                && value.len() <= 256
+                                && !value.chars().any(char::is_control)
+                        })
+                })
+        };
+        let valid_abort = || {
+            self.source_id.is_none()
+                && self.adapter_id.is_none()
+                && self.item_indices.is_none()
+                && self.item_groups.is_none()
+                && self.disclosed_concepts.is_none()
+                && self.signing_key_id.is_none()
+                && self.outcomes.is_none()
+                && self
+                    .safe_error_category
+                    .as_ref()
+                    .is_some_and(|value| valid_local_name(value, 128))
+        };
+
+        let phase_valid = match (self.phase, self.decision) {
+            (
+                EvidenceRequestBatchAuditPhase::AccessAttempt,
+                EvidenceRequestBatchAuditDecision::Authorized,
+            ) => valid_access(),
+            (
+                EvidenceRequestBatchAuditPhase::DisclosureRelease,
+                EvidenceRequestBatchAuditDecision::Released,
+            ) => valid_release(),
+            (
+                EvidenceRequestBatchAuditPhase::TerminalFailure,
+                EvidenceRequestBatchAuditDecision::Aborted,
+            ) => valid_abort(),
+            _ => false,
+        };
+        phase_valid
+            .then_some(())
+            .ok_or(EvidenceAuditError::InvalidEvent)
+    }
+}
+
+fn valid_batch_item_indices(indices: &[u8]) -> bool {
+    !indices.is_empty()
+        && indices.len() <= EVIDENCE_REQUEST_BATCH_MAX_ITEMS
+        && indices
+            .iter()
+            .all(|index| usize::from(*index) < EVIDENCE_REQUEST_BATCH_MAX_ITEMS)
+        && indices.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+fn valid_batch_item_groups(
+    groups: &[EvidenceRequestBatchAuditItemGroup],
+    item_indices: &[u8],
+) -> bool {
+    if groups.is_empty() || groups.len() > item_indices.len() {
+        return false;
+    }
+    let mut grouped_indices = Vec::with_capacity(item_indices.len());
+    let mut previous_first = None;
+    for (group_index, group) in groups.iter().enumerate() {
+        if !valid_batch_item_indices(&group.item_indices)
+            || previous_first.is_some_and(|previous| previous >= group.item_indices[0])
+            || groups[..group_index].iter().any(|previous| {
+                previous.authority == group.authority && previous.subjects == group.subjects
+            })
+            || group
+                .authority
+                .grant_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || group.subjects.is_empty()
+            || group.subjects.len() > 8
+            || group.subjects.iter().any(|subject| {
+                !valid_local_name(&subject.role, 64)
+                    || !valid_local_name(&subject.selector_profile, 128)
+                    || subject
+                        .selector_bundle_pseudonym
+                        .as_ref()
+                        .is_some_and(|value| !valid_pseudonym(value))
+            })
+        {
+            return false;
+        }
+        previous_first = group.item_indices.first().copied();
+        grouped_indices.extend_from_slice(&group.item_indices);
+    }
+    grouped_indices.sort_unstable();
+    grouped_indices.windows(2).all(|pair| pair[0] != pair[1]) && grouped_indices == item_indices
+}
+
+fn valid_batch_outcomes(outcomes: &[EvidenceRequestBatchAuditOutcome]) -> bool {
+    (1..=EVIDENCE_REQUEST_BATCH_MAX_ITEMS).contains(&outcomes.len())
+        && outcomes.iter().enumerate().all(|(index, outcome)| {
+            usize::from(outcome.item_index) == index
+                && match outcome.outcome {
+                    EvidenceRequestBatchAuditOutcomeKind::Evidence => {
+                        outcome.evidence_id.as_ref().is_some_and(|id| valid_uri(id))
+                    }
+                    EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable => {
+                        outcome.evidence_id.is_none()
+                    }
+                }
+        })
+        && outcomes
+            .iter()
+            .filter_map(|outcome| outcome.evidence_id.as_ref())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == outcomes
+                .iter()
+                .filter(|outcome| outcome.evidence_id.is_some())
+                .count()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -608,6 +917,18 @@ impl EvidenceAuditLog {
             .map_err(EvidenceAuditError::Audit)
     }
 
+    pub async fn append_request_batch(
+        &self,
+        event: EvidenceRequestBatchAuditEvent,
+    ) -> Result<AuditEnvelope, EvidenceAuditError> {
+        event.validate_phase_fields()?;
+        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
+        self.sink
+            .append_record(record)
+            .await
+            .map_err(EvidenceAuditError::Audit)
+    }
+
     pub async fn ready(&self) -> bool {
         self.sink.ready().await
     }
@@ -985,6 +1306,257 @@ fn file_size_error() -> AuditError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request_batch_item_group(
+        indices: Vec<u8>,
+        pseudonym_digit: char,
+    ) -> EvidenceRequestBatchAuditItemGroup {
+        EvidenceRequestBatchAuditItemGroup {
+            item_indices: indices,
+            authority: AuditAuthority {
+                kind: AuthorityKind::Statutory,
+                grant_pseudonym: None,
+            },
+            subjects: vec![AuditSubject {
+                role: "subject".to_owned(),
+                selector_profile: "profile-v1".to_owned(),
+                selector_bundle_pseudonym: Some(format!(
+                    "hmac-sha256:v1:{}",
+                    pseudonym_digit.to_string().repeat(64)
+                )),
+            }],
+        }
+    }
+
+    fn request_batch_event(
+        phase: EvidenceRequestBatchAuditPhase,
+        decision: EvidenceRequestBatchAuditDecision,
+    ) -> EvidenceRequestBatchAuditEvent {
+        EvidenceRequestBatchAuditEvent::new(
+            AssuranceProfile::EvidenceGrade,
+            "operation-request-batch-audit".to_owned(),
+            phase,
+            "urn:example:requirement:v1".to_owned(),
+            format!("sha256:{}", "0".repeat(64)),
+            "casework".to_owned(),
+            "hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111"
+                .to_owned(),
+            decision,
+            5,
+        )
+    }
+
+    #[test]
+    fn request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed() {
+        let mut access = request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        );
+        access.source_id = Some("source-a".to_owned());
+        access.adapter_id = Some("adapter-a".to_owned());
+        access.item_indices = Some(vec![0, 1, 2]);
+        // Equal items may be grouped even when their positions are not
+        // adjacent. Groups remain ordered by their first item index.
+        access.item_groups = Some(vec![
+            request_batch_item_group(vec![0, 2], '2'),
+            request_batch_item_group(vec![1], '3'),
+        ]);
+        access
+            .validate_phase_fields()
+            .expect("non-adjacent equal item grouping is a complete partition");
+
+        let mut split_equivalent_groups = access.clone();
+        split_equivalent_groups.item_groups = Some(vec![
+            request_batch_item_group(vec![0], '2'),
+            request_batch_item_group(vec![1], '3'),
+            request_batch_item_group(vec![2], '2'),
+        ]);
+        assert!(matches!(
+            split_equivalent_groups.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
+
+        let mut release = request_batch_event(
+            EvidenceRequestBatchAuditPhase::DisclosureRelease,
+            EvidenceRequestBatchAuditDecision::Released,
+        );
+        release.item_groups = access.item_groups.clone();
+        release.disclosed_concepts = Some(Vec::new());
+        release.outcomes = Some(vec![
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 0,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 1,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 2,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+        ]);
+        release
+            .validate_phase_fields()
+            .expect("all-unavailable release correctly names no signing key");
+        release.signing_key_id = Some("signing-key-that-was-not-used".to_owned());
+        assert!(matches!(
+            release.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
+
+        let mut aborted = request_batch_event(
+            EvidenceRequestBatchAuditPhase::TerminalFailure,
+            EvidenceRequestBatchAuditDecision::Aborted,
+        );
+        aborted.safe_error_category = Some("source-status".to_owned());
+        aborted
+            .validate_phase_fields()
+            .expect("value-free terminal failure is valid");
+        aborted.item_groups = access.item_groups;
+        assert!(matches!(
+            aborted.validate_phase_fields(),
+            Err(EvidenceAuditError::InvalidEvent)
+        ));
+    }
+
+    #[test]
+    fn request_batch_audit_contract_schema_accepts_every_phase_and_rejects_mixed_shapes() {
+        let schema: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/request-batch-audit-event.schema.yaml"
+        ))
+        .expect("request-batch audit event schema parses");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("request-batch audit event schema compiles as Draft 2020-12");
+
+        let mut access = request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        );
+        access.source_id = Some("source-a".to_owned());
+        access.adapter_id = Some("adapter-a".to_owned());
+        access.item_indices = Some(vec![0, 1]);
+        access.item_groups = Some(vec![
+            request_batch_item_group(vec![0], '2'),
+            request_batch_item_group(vec![1], '3'),
+        ]);
+
+        let mut mixed_release = request_batch_event(
+            EvidenceRequestBatchAuditPhase::DisclosureRelease,
+            EvidenceRequestBatchAuditDecision::Released,
+        );
+        mixed_release.item_groups = access.item_groups.clone();
+        mixed_release.disclosed_concepts = Some(vec!["urn:example:concept:eligible".to_owned()]);
+        mixed_release.signing_key_id = Some("signing-key-a".to_owned());
+        mixed_release.outcomes = Some(vec![
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 0,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::Evidence,
+                evidence_id: Some("urn:example:evidence:batch-item-0".to_owned()),
+            },
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 1,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+        ]);
+
+        let mut all_unavailable_release = mixed_release.clone();
+        all_unavailable_release.disclosed_concepts = Some(Vec::new());
+        all_unavailable_release.signing_key_id = None;
+        all_unavailable_release.outcomes = Some(vec![
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 0,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+            EvidenceRequestBatchAuditOutcome {
+                item_index: 1,
+                outcome: EvidenceRequestBatchAuditOutcomeKind::EvidenceNotAvailable,
+                evidence_id: None,
+            },
+        ]);
+
+        let mut abort = request_batch_event(
+            EvidenceRequestBatchAuditPhase::TerminalFailure,
+            EvidenceRequestBatchAuditDecision::Aborted,
+        );
+        abort.safe_error_category = Some("source-status".to_owned());
+
+        for (name, event) in [
+            ("access", &access),
+            ("mixed-release", &mixed_release),
+            ("all-unavailable-release", &all_unavailable_release),
+            ("abort", &abort),
+        ] {
+            event
+                .validate_phase_fields()
+                .unwrap_or_else(|error| panic!("native rules reject {name}: {error}"));
+            let value = serde_json::to_value(event).expect("request-batch event serializes");
+            assert!(validator.is_valid(&value), "schema rejects {name}");
+        }
+
+        let mut release_fields_on_access = access.clone();
+        release_fields_on_access.disclosed_concepts = Some(Vec::new());
+        release_fields_on_access.outcomes = all_unavailable_release.outcomes.clone();
+
+        let mut source_fields_on_release = mixed_release.clone();
+        source_fields_on_release.source_id = Some("source-a".to_owned());
+        source_fields_on_release.adapter_id = Some("adapter-a".to_owned());
+
+        let mut item_fields_on_abort = abort.clone();
+        item_fields_on_abort.item_groups = access.item_groups.clone();
+
+        let mut signing_key_on_all_unavailable = all_unavailable_release.clone();
+        signing_key_on_all_unavailable.signing_key_id = Some("unused-signing-key".to_owned());
+
+        for (name, event) in [
+            ("release-fields-on-access", release_fields_on_access),
+            ("source-fields-on-release", source_fields_on_release),
+            ("item-fields-on-abort", item_fields_on_abort),
+            (
+                "signing-key-on-all-unavailable",
+                signing_key_on_all_unavailable,
+            ),
+        ] {
+            assert!(
+                matches!(
+                    event.validate_phase_fields(),
+                    Err(EvidenceAuditError::InvalidEvent)
+                ),
+                "native rules accept mixed request-batch event {name}"
+            );
+            let value = serde_json::to_value(event).expect("request-batch event serializes");
+            assert!(
+                !validator.is_valid(&value),
+                "schema accepts mixed event {name}"
+            );
+        }
+
+        let mut request_derived_canary =
+            serde_json::to_value(access).expect("request-batch access serializes");
+        request_derived_canary
+            .as_object_mut()
+            .expect("request-batch access is an object")
+            .insert(
+                "requestNonce".to_owned(),
+                serde_json::json!("request-derived-canary"),
+            );
+        assert!(
+            !validator.is_valid(&request_derived_canary),
+            "schema accepts a request-derived field"
+        );
+        assert!(
+            serde_json::from_value::<EvidenceRequestBatchAuditEvent>(request_derived_canary)
+                .is_err(),
+            "native event type accepts a request-derived field"
+        );
+    }
 
     fn event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
         EvidenceAuditEvent::new(

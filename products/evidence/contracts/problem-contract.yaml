@@ -23,6 +23,7 @@ codes:
   service_unavailable: {status: 503, title: Service temporarily unavailable}
 response_format_rules:
   negotiation: Missing Accept, */*, and exact application/jose+json select signed JWS. Only exact application/vnd.registrystack.evidence-unsigned+json selects the unsigned envelope. Duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns response_format_not_acceptable before source access.
+  request_batch_negotiation: POST /v1/evidence/batch requires the one exact application/vnd.registrystack.evidence.request-batch+json Accept value. Missing, wildcard, singular-format, holder-batch, duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns response_format_not_acceptable before source access.
   authorization: A recognized unsigned request that the immutable bundle or the complete matched grant does not permit durably appends the minimal authorization-refusal audit event, then returns the ordinary not_authorized problem before credential acquisition or source access, without revealing which layer withheld permission. Audit failure returns service_unavailable instead.
 authorization_refusal_audit:
   applies_after: successful authentication when the authorization decision refuses the request
@@ -38,6 +39,11 @@ existence_disclosure:
     same_body_shape: true
     timing_rule: Avoid intentional class-dependent delay; apply uniform bounded processing and response handling.
   explicit_existence_concept_rule: Existence may be disclosed only as a separately authorized fixed concept, never as error detail.
+request_batch:
+  singular_unavailable: Every condition the singular collapse contract exposes as evidence_not_available becomes the closed item result and does not produce an outer 422. This is exactly no_match, ambiguous, required_fact_missing, and derivation_input_unresolved in Version 1.
+  successful_mixtures: A mixed available/unavailable or all-unavailable closed envelope returns HTTP 200.
+  outer_abort: Every other failure uses this existing safe Problem Details vocabulary for the outer response and releases no completed item, JWS, evidence identifier, or partial envelope.
+  value_safety: The outer problem never includes item index, item count, nonce, selector, subject, authority, source, outcome, evidence identifier, or signed material.
 transient_failures:
   internal_classes: [source_unavailable, source_protocol_error, script_failure, signing_failure, authorization_refusal_audit_failure, access_audit_failure, release_audit_failure]
   public_codes: [dependency_unavailable, service_unavailable]

@@ -211,7 +211,7 @@ Discovery uses four separately trusted surfaces:
 
 | Artifact | Purpose | What it does not do |
 |---|---|---|
-| Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
+| Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, `POST /v1/evidence/batch`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
 | Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
 | Static onboarding material | Gives an approved consumer token-acquisition instructions, human descriptions, legal context, endpoint trust, and verifier policy through the existing API catalog, developer portal, configuration repository, or bilateral process. | It is not accepted by the runtime and grants no authority. |
 | Evidence JWKS | Publishes the active and retained public verification keys. | It is not a trust anchor and contains no definition or entitlement metadata. |
@@ -306,6 +306,13 @@ request-rate scope deliberately excludes purpose, audience, and requirement so
 a caller cannot multiply its budget by varying them. Per-client quotas are a
 gateway responsibility.
 
+`POST /v1/evidence/batch` charges the request bucket once with cost equal to
+its complete item count. The debit is atomic: capacity for all items is
+reserved or the whole request returns `rate_limited` and charges nothing.
+Authentication occurs once and all items use one evaluation instant. Every
+item is validated and authorized before any credential is resolved or source
+is contacted.
+
 Rate limits are tracked per process, in in-process memory, never shared across
 replicas. Running N instances behind a load balancer therefore multiplies
 every configured limit by N; this matters most for the failed-selector budget,
@@ -326,8 +333,8 @@ release ordering.
 
 ## Response formats
 
-Evidence releases one stateless assertion. `responseFormats` decides which
-serializations may carry it, and the closed values are `signed-jws`,
+The singular Evidence operation releases one stateless assertion.
+`responseFormats` decides which serializations may carry it, and the closed values are `signed-jws`,
 `unsigned-json`, and `sd-jwt-vc`. Both the immutable bundle and every authority
 grant declare the list, both default to `[signed-jws]` alone, and both must
 keep `signed-jws` enabled. Startup rejects a duplicate or unknown value and
@@ -386,6 +393,23 @@ Signing failure remains fail-closed for every protected format. A deployment
 that cannot sign returns a safe transient failure and never downgrades an
 SD-JWT VC request to unsigned output or to the signed default.
 [The SD-JWT VC demo](SD-JWT-VC-DEMO.md) exercises this whole path locally.
+
+The multi-subject request-batch route has a separate exact media type,
+`application/vnd.registrystack.evidence.request-batch+json`, and does not
+participate in the singular response-format intersection. It accepts one to
+sixteen ordered audience-scoped subject sets under one requirement and purpose,
+with a canonical pairwise-distinct nonce per item. Its only available result is
+a flattened signed JWS. Every condition the singular evaluation contract
+exposes as unavailable may appear as `evidence_not_available`; mixed and
+all-unavailable envelopes are successful `200` responses. Any other failure
+aborts the outer request with the existing safe Problem Details and no partial
+release. The exact envelope is capped at 1 MiB.
+
+This is not the holder-bound issuance batch. Holder-bound batching stays on
+`POST /v1/evidence`, receives several holder keys for one subject evaluation,
+and uses `application/vnd.registrystack.evidence.batch+json`. The request-batch
+route accepts no holder keys and cannot emit SD-JWT VC or its issuance
+container.
 
 ## Secrets and keys
 
@@ -517,6 +541,24 @@ to add.
 No acquisition kind is a workflow surface: neither a response nor Rhai may
 choose a source, origin, method, credentials, retry, or further call.
 
+The optional `source-batch` capability reduces physical HTTP calls for the
+multi-subject request-batch route. It is independently named in the bundle and
+`runtime.yaml`, and the selected fixed-path `http-json` source must also carry a
+`batch` block with `maximumItems`, batch preparation and extraction scripts, a
+response schema, and a projection. A block without either gate fails startup.
+An omitted block, a different transport, a path template, any multi-stage
+acquisition, or an outer item count above the source ceiling selects ordinary
+sequential execution in request order before I/O. Once an optimized attempt
+starts, it never retries as sequential fanout.
+
+The one optimized call reuses the ordinary method, origin, fixed path,
+authentication, headers, TLS, redirect denial, timeout, maximum response bytes,
+concurrency semaphore, and preparation limits. `prepare_batch` sees only opaque
+integer slots paired with minimized selectors and closed parameters.
+`extract_batch` sees only the validated projection, parameters, and slot list.
+It must return an exact slot bijection over ordinary lookup results. Missing,
+duplicate, extra, negative, or out-of-range slots abort the whole request.
+
 A source may name a logical TLS trust profile. `runtime.yaml` binds it to one
 bounded PEM CA file. Hostname and fixed-origin verification remain mandatory;
 there is no insecure or trust-all mode. Version 1 ignores `HTTP_PROXY`,
@@ -595,6 +637,24 @@ compatible because it does not interpret the event payload. Older Version 1
 schema validators and local audit readers reject or cannot display the refusal
 shape, so operators must update semantic audit readers and the service together
 before routing traffic to the changed runtime.
+
+The request-batch route adds
+`registry.evidence.audit.request-batch/v1` to that same keyed chain. One access
+event precedes every physical source call and names the bounded zero-based item
+indices it carries. `itemGroups` partition those indices by identical authority
+object and ordered pseudonymized subject set, so different grants and authority
+kinds remain accountable without recording selectors. One terminal release
+covers all item groups and every ordered outcome. It carries an evidence id per
+available item and a signing key id only when at least one assertion was signed;
+an all-unavailable release carries neither signing key use nor evidence ids.
+
+Any other failure after authorization produces one value-free terminal failure
+and no partial release. Request nonces, raw selectors, facts, source bodies,
+response bodies, JWS protected headers, payloads, signatures, and signing
+material are forbidden from every batch-native event. The service serializes
+and size-checks the complete envelope, durably appends the release, and returns
+the same bytes. Operators must update semantic audit readers to recognize all
+three native discriminators before deploying the request-batch runtime.
 
 The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
@@ -1083,6 +1143,7 @@ The native operations are:
 ```text
 GET /v1/evidence-definitions
 POST /v1/evidence
+POST /v1/evidence/batch
 GET /health
 GET /openapi.json
 GET /ready
@@ -1104,6 +1165,14 @@ A successful `POST /v1/evidence` response uses `application/jose+json` and the
 flattened JWS JSON Serialization unless the requester selected another enabled
 format under [response formats](#response-formats). No public or
 cross-requester catalog is supported.
+
+A successful `POST /v1/evidence/batch` response uses only
+`application/vnd.registrystack.evidence.request-batch+json`. The closed
+`registry.evidence-request-batch/v1` envelope preserves request order and has
+one `evidence` or `evidence_not_available` result per item. A request must send
+that exact `Accept`; missing, wildcard, singular, parameterized, combined, or
+weighted values return the existing `response_format_not_acceptable` problem
+before source access.
 
 `GET /.well-known/jwt-vc-issuer` is unauthenticated discovery for the SD-JWT VC
 format. It publishes the exact configured provider identity as `issuer` and

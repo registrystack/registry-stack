@@ -17,6 +17,7 @@ use registry_evidence_verifier::contracts::{
     evidence_schema, ContractValidationError, EVIDENCE_SCHEMA_ID, REQUEST_NONCE_PATTERN,
     SCHEMA_DIALECT,
 };
+use registry_evidence_verifier::model::EvidenceRequestBatchResponse;
 use schemars::JsonSchema;
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -24,9 +25,10 @@ use thiserror::Error;
 use crate::{
     config::MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     model::{
-        Evidence, EvidenceDefinitions, EvidenceRequest, FlattenedJws, JwksDocument, ProblemBody,
-        SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
+        Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch, FlattenedJws,
+        JwksDocument, ProblemBody, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
     },
+    EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
 
@@ -37,6 +39,9 @@ pub(crate) use registry_evidence_verifier::contracts::evidence_contract_accepts;
 
 pub const OPENAPI_FILE: &str = "registry-evidence.openapi.json";
 pub const REQUEST_SCHEMA_FILE: &str = "evidence-request-v1.schema.json";
+pub const REQUEST_BATCH_SCHEMA_FILE: &str = "evidence-request-batch-v1.schema.json";
+pub const REQUEST_BATCH_RESPONSE_SCHEMA_FILE: &str =
+    "evidence-request-batch-response-v1.schema.json";
 pub const EVIDENCE_SCHEMA_FILE: &str = "evidence-v1.schema.json";
 pub const DEFINITIONS_SCHEMA_FILE: &str = "evidence-definitions-v1.schema.json";
 pub const JWS_SCHEMA_FILE: &str = "flattened-jws-v1.schema.json";
@@ -46,6 +51,10 @@ pub const PROBLEM_SCHEMA_FILE: &str = "problem-v1.schema.json";
 pub const JWKS_SCHEMA_FILE: &str = "jwks-v1.schema.json";
 
 const REQUEST_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/request-v1.json";
+const REQUEST_BATCH_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/request-batch-v1.json";
+const REQUEST_BATCH_RESPONSE_SCHEMA_ID: &str =
+    "https://registrystack.org/schemas/evidence/request-batch-response-v1.json";
 const DEFINITIONS_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/definitions-v1.json";
 const JWS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/flattened-jws-v1.json";
@@ -90,6 +99,8 @@ const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
 
 static SERVED_OPENAPI: OnceLock<Option<String>> = OnceLock::new();
 static REQUEST_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
+static REQUEST_BATCH_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+    OnceLock::new();
 static DEFINITIONS_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
     OnceLock::new();
 
@@ -110,6 +121,8 @@ pub enum ContractGenerationError {
 /// Generate every committed public contract, keyed by its stable filename.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationError> {
     let request = request_schema();
+    let request_batch = request_batch_schema();
+    let request_batch_response = request_batch_response_schema();
     let evidence = evidence_schema();
     let definitions = definitions_schema();
     let jws = jws_schema();
@@ -118,6 +131,12 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     let problem = problem_schema();
     let jwks = jwks_schema();
     assert_model_shape::<EvidenceRequest>("EvidenceRequest", &request, true)?;
+    assert_model_shape::<EvidenceRequestBatch>("EvidenceRequestBatch", &request_batch, true)?;
+    assert_model_shape::<EvidenceRequestBatchResponse>(
+        "EvidenceRequestBatchResponse",
+        &request_batch_response,
+        true,
+    )?;
     assert_model_shape::<Evidence>("Evidence", &evidence, true)?;
     assert_model_shape::<EvidenceDefinitions>("EvidenceDefinitions", &definitions, true)?;
     assert_model_shape::<FlattenedJws>("FlattenedJws", &jws, false)?;
@@ -127,6 +146,8 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     assert_model_shape::<JwksDocument>("JwksDocument", &jwks, false)?;
     let openapi = openapi_document(
         &request,
+        &request_batch,
+        &request_batch_response,
         &evidence,
         &definitions,
         &jws,
@@ -138,6 +159,8 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
 
     let values = [
         (REQUEST_SCHEMA_FILE, request),
+        (REQUEST_BATCH_SCHEMA_FILE, request_batch),
+        (REQUEST_BATCH_RESPONSE_SCHEMA_FILE, request_batch_response),
         (EVIDENCE_SCHEMA_FILE, evidence),
         (DEFINITIONS_SCHEMA_FILE, definitions),
         (JWS_SCHEMA_FILE, jws),
@@ -176,6 +199,8 @@ pub(crate) fn served_openapi_document() -> Option<&'static str> {
         .get_or_init(|| {
             pretty_json(&openapi_document(
                 &request_schema(),
+                &request_batch_schema(),
+                &request_batch_response_schema(),
                 &evidence_schema(),
                 &definitions_schema(),
                 &jws_schema(),
@@ -192,6 +217,16 @@ pub(crate) fn served_openapi_document() -> Option<&'static str> {
 /// Validate an inbound public request against the exact generated Version 1 schema.
 pub(crate) fn request_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
     contract_validator(&REQUEST_VALIDATOR, request_schema)
+        .map(|validator| validator.is_valid(value))
+}
+
+/// Validate an inbound multi-subject request batch against the exact generated
+/// Version 1 schema. Named selector-profile and nonce-canonicality checks still
+/// follow this structural boundary in the runtime.
+pub(crate) fn request_batch_contract_accepts(
+    value: &Value,
+) -> Result<bool, ContractValidationError> {
+    contract_validator(&REQUEST_BATCH_VALIDATOR, request_batch_schema)
         .map(|validator| validator.is_valid(value))
 }
 
@@ -341,6 +376,118 @@ fn request_schema() -> Value {
             }
         },
         "$comment": "Named selector-profile validation follows this transport schema. The profile closes exact field names, scalar types, bounds, aggregate size, value origin, and source placements. Invalid selector material fails before credential acquisition or source access. requestNonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes; a noncanonical final symbol is rejected by the runtime. Callers must not encode identifiers, selectors, secrets, or document digests into it. holderKeys is meaningful only to the credential response formats, where each key is echoed into the cnf claim of the credential issued for it; a single-credential request is an array of one. The keys never reach Rhai, source requests, or audit, and a key carrying any private member, a repeated RFC 7638 thumbprint, or a batch above the deployment's declared ceiling is rejected before credential acquisition or source access. Under a holder-bound requirement each key's thumbprint additionally scopes the subject binding of that key's own credential."
+    })
+}
+
+fn request_batch_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": REQUEST_BATCH_SCHEMA_ID,
+        "title": "Evidence multi-subject request batch Version 1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement", "purpose", "items"],
+        "properties": {
+            "requirement": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 512},
+            "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {"$ref": "#/$defs/item"}
+            }
+        },
+        "$defs": {
+            "item": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["requestNonce", "subjects"],
+                "properties": {
+                    "requestNonce": {"type": "string", "pattern": REQUEST_NONCE_PATTERN},
+                    "subjects": {
+                        "type": "array", "minItems": 1, "maxItems": 8,
+                        "items": {"$ref": "#/$defs/subject"}
+                    }
+                }
+            },
+            "subject": {
+                "type": "object", "additionalProperties": false,
+                "required": ["role", "selector"],
+                "properties": {
+                    "role": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                    "selector": {"$ref": "#/$defs/selector"}
+                }
+            },
+            "selector": {
+                "type": "object", "additionalProperties": false,
+                "required": ["profile"],
+                "properties": {
+                    "profile": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
+                    "values": {
+                        "type": "object", "minProperties": 1, "maxProperties": 16,
+                        "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+                        "additionalProperties": {"$ref": "#/$defs/scalar-selector-value"}
+                    }
+                }
+            },
+            "scalar-selector-value": {
+                "oneOf": [
+                    {"type": "string", "minLength": 1, "maxLength": 512},
+                    {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64},
+                    {"type": "boolean"}
+                ]
+            }
+        },
+        "$comment": "Named selector-profile validation follows independently for every item. Every request nonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes, and all nonces in one batch are pairwise distinct. Invalid or repeated nonce and selector material fails the outer request before source access. The authenticated access token supplies the audience common to all items. holderKeys is absent because holder-bound issuance batching remains a separate profile on POST /v1/evidence."
+    })
+}
+
+fn request_batch_response_schema() -> Value {
+    json!({
+        "$schema": SCHEMA_DIALECT,
+        "$id": REQUEST_BATCH_RESPONSE_SCHEMA_ID,
+        "title": "Evidence multi-subject request batch response Version 1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "type", "items"],
+        "properties": {
+            "schema": {"const": EVIDENCE_REQUEST_BATCH_SCHEMA_V1},
+            "type": {"const": "EvidenceRequestBatchResponse"},
+            "items": {
+                "type": "array", "minItems": 1, "maxItems": 16,
+                "items": {
+                    "oneOf": [
+                        {"$ref": "#/$defs/evidence-result"},
+                        {"$ref": "#/$defs/unavailable-result"}
+                    ]
+                }
+            }
+        },
+        "$defs": {
+            "evidence-result": {
+                "type": "object", "additionalProperties": false,
+                "required": ["result", "evidence"],
+                "properties": {
+                    "result": {"const": "evidence"},
+                    "evidence": {"$ref": "#/$defs/flattened-jws"}
+                }
+            },
+            "unavailable-result": {
+                "type": "object", "additionalProperties": false,
+                "required": ["result"],
+                "properties": {"result": {"const": "evidence_not_available"}}
+            },
+            "flattened-jws": {
+                "type": "object", "additionalProperties": false,
+                "required": ["protected", "payload", "signature"],
+                "properties": {
+                    "protected": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
+                    "payload": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
+                    "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+                }
+            }
+        },
+        "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence_not_available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released."
     })
 }
 
@@ -804,6 +951,8 @@ fn evidence_response_headers(extra: Option<(&str, Value)>) -> Value {
 #[allow(clippy::too_many_arguments)]
 fn openapi_document(
     request: &Value,
+    request_batch: &Value,
+    request_batch_response: &Value,
     evidence: &Value,
     definitions: &Value,
     jws: &Value,
@@ -822,6 +971,30 @@ fn openapi_document(
             ("selector", "EvidenceRequestSelector"),
             ("scalar-selector-value", "SelectorValue"),
             ("holder-key", "HolderPublicKey"),
+        ],
+    );
+    insert_schema_family(
+        &mut schemas,
+        "EvidenceRequestBatch",
+        request_batch,
+        &[
+            ("item", "EvidenceRequestBatchItem"),
+            ("subject", "EvidenceRequestBatchSubject"),
+            ("selector", "EvidenceRequestBatchSelector"),
+            ("scalar-selector-value", "EvidenceRequestBatchSelectorValue"),
+        ],
+    );
+    insert_schema_family(
+        &mut schemas,
+        "EvidenceRequestBatchResponse",
+        request_batch_response,
+        &[
+            ("evidence-result", "EvidenceRequestBatchEvidenceResult"),
+            (
+                "unavailable-result",
+                "EvidenceRequestBatchUnavailableResult",
+            ),
+            ("flattened-jws", "FlattenedJws"),
         ],
     );
     insert_schema_family(
@@ -1021,6 +1194,61 @@ fn openapi_document(
                     }
                 }
             },
+            "/v1/evidence/batch": {
+                "post": {
+                    "operationId": "createEvidenceRequestBatch",
+                    "summary": "Produce ordered evidence outcomes for several subjects",
+                    "description": "The exact application/vnd.registrystack.evidence.request-batch+json Accept value selects this signed-JWS-only operation. The request carries one common requirement and purpose and between one and sixteen ordered subject items. The authenticated token supplies the common audience. Every item is validated and authorized before source access, and rate admission costs the complete item count atomically. Singular unavailable outcomes appear positionally inside a 200 response. Any other failure aborts the complete request. The serialized response is limited to 1048576 bytes and is released only after one durable terminal audit event.",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EvidenceRequestBatch"}}}
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "One ordered signed-evidence or evidence-not-available result per request item",
+                            "headers": evidence_response_headers(None),
+                            "content": {
+                                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE: {"schema": {"$ref": "#/components/schemas/EvidenceRequestBatchResponse"}}
+                            }
+                        },
+                        "400": {
+                            "description": "Malformed batch request or invalid selector",
+                            "headers": evidence_response_headers(None),
+                            "content": problem_content(&["malformed_request", "invalid_selector"])
+                        },
+                        "401": {
+                            "description": "Authentication failed",
+                            "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
+                                "schema": {"type": "string", "enum": ["Bearer"]}
+                            })))),
+                            "content": problem_content(&["authentication_failed"])
+                        },
+                        "403": {
+                            "description": "At least one batch item is not authorized for signed audience-scoped evidence",
+                            "headers": evidence_response_headers(None),
+                            "content": problem_content(&["not_authorized"])
+                        },
+                        "406": {
+                            "description": "The exact request-batch response media type was not selected",
+                            "headers": evidence_response_headers(None),
+                            "content": problem_content(&["response_format_not_acceptable"])
+                        },
+                        "429": {
+                            "description": "Atomic item-count rate admission was refused",
+                            "headers": evidence_response_headers(Some(("Retry-After", json!({
+                                "schema": {"type": "string", "enum": ["1"]}
+                            })))),
+                            "content": problem_content(&["rate_limited"])
+                        },
+                        "503": {
+                            "description": "A dependency, protocol, signing, serialization, or audit failure aborted the complete request",
+                            "headers": evidence_response_headers(None),
+                            "content": problem_content(&["dependency_unavailable", "service_unavailable"])
+                        }
+                    }
+                }
+            },
             "/v1/evidence-definitions": {
                 "get": {
                     "operationId": "listEvidenceDefinitions",
@@ -1154,6 +1382,8 @@ mod tests {
     fn every_json_schema_is_valid_draft_2020_12() {
         for schema in [
             request_schema(),
+            request_batch_schema(),
+            request_batch_response_schema(),
             evidence_schema(),
             definitions_schema(),
             jws_schema(),
@@ -1182,6 +1412,8 @@ mod tests {
     fn openapi_document_is_valid_utoipa_model() {
         let document = openapi_document(
             &request_schema(),
+            &request_batch_schema(),
+            &request_batch_response_schema(),
             &evidence_schema(),
             &definitions_schema(),
             &jws_schema(),
@@ -1207,6 +1439,8 @@ mod tests {
     fn openapi_has_only_the_version_one_routes_and_exact_success_media() {
         let document = openapi_document(
             &request_schema(),
+            &request_batch_schema(),
+            &request_batch_response_schema(),
             &evidence_schema(),
             &definitions_schema(),
             &jws_schema(),
@@ -1225,7 +1459,8 @@ mod tests {
                 "/openapi.json",
                 "/ready",
                 "/v1/evidence",
-                "/v1/evidence-definitions"
+                "/v1/evidence-definitions",
+                "/v1/evidence/batch"
             ]
         );
         assert!(
@@ -1250,6 +1485,20 @@ mod tests {
         assert!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["200"]["content"]
                 ["application/dc+sd-jwt"]
+                .is_object()
+        );
+        assert_eq!(
+            document["paths"]["/v1/evidence/batch"]["post"]["responses"]
+                .as_object()
+                .expect("request-batch responses are an object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["200", "400", "401", "403", "406", "429", "503"]
+        );
+        assert!(
+            document["paths"]["/v1/evidence/batch"]["post"]["responses"]["200"]["content"]
+                [EVIDENCE_REQUEST_BATCH_MEDIA_TYPE]
                 .is_object()
         );
         assert_eq!(
@@ -1358,6 +1607,47 @@ mod tests {
                         "role": "subject",
                         "selector": {"profile": "opaque-v1", "values": {"opaque": "value"}}
                     }]
+                }),
+            ),
+            (
+                request_batch_schema(),
+                json!({
+                    "requirement": "urn:example:requirement:v1",
+                    "purpose": "casework",
+                    "items": [
+                        {
+                            "requestNonce": "r1N1mq48U3PpZ5keuZEgmA5KMC2KDrF1hT6640koy6I",
+                            "subjects": [{
+                                "role": "subject",
+                                "selector": {"profile": "opaque-v1", "values": {"opaque": "one"}}
+                            }]
+                        },
+                        {
+                            "requestNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                            "subjects": [{
+                                "role": "subject",
+                                "selector": {"profile": "opaque-v1", "values": {"opaque": "two"}}
+                            }]
+                        }
+                    ]
+                }),
+            ),
+            (
+                request_batch_response_schema(),
+                json!({
+                    "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                    "type": "EvidenceRequestBatchResponse",
+                    "items": [
+                        {
+                            "result": "evidence",
+                            "evidence": {
+                                "protected": "YWxn",
+                                "payload": "ZXZpZGVuY2U",
+                                "signature": "a".repeat(86)
+                            }
+                        },
+                        {"result": "evidence_not_available"}
+                    ]
                 }),
             ),
             (

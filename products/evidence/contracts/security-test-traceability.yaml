@@ -439,3 +439,32 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_service_holds_no_credential_signing_key_and_signs_nothing}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_presenting_a_private_key_member_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: the_loaded_client_key_never_reaches_debug_output}
+  - id: sec-request-batch-admission-atomic
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_bounds_unique_nonces_and_every_item_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_authenticates_once_and_atomically_charges_the_complete_item_count}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_authorization_refusal_precedes_missing_source_credential_resolution}
+      - {file: crates/registry-evidence/src/rate_limit.rs, name: multi_token_admission_is_atomic_when_the_whole_cost_does_not_fit}
+  - id: sec-request-batch-no-partial-release
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_malformed_sequential_extraction_aborts_without_partial_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_signing_failure_releases_no_partial_envelope}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_response_above_one_mib_releases_no_partial_envelope}
+  - id: sec-source-batch-bounded
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
+      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_execution_uses_one_fixed_physical_call}
+      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_failure_is_not_retried_or_fanned_out}
+      - {file: crates/registry-evidence/src/kernel.rs, name: source_batch_items_are_revalidated_as_exact_minimized_selectors}
+      - {file: crates/registry-evidence/src/kernel.rs, name: every_malformed_batch_extraction_is_a_global_protocol_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_optimized_source_failure_aborts_after_one_call_without_sequential_fanout}
+  - id: sec-request-batch-audit-minimized
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_contract_schema_accepts_every_phase_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: graceful_shutdown_waits_for_admitted_request_batch_and_terminal_audit}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
