@@ -153,19 +153,30 @@ Each component is bounded and canonicalized under the compiled consultation cont
 Up to sixteen total inputs may also include bounded parameters that are not selector components.
 Relay reports no match, one match, or ambiguity instead of choosing between duplicate records.
 
-Evidence Gateway keeps the same discipline and adds no batch envelope over it.
-One request names one requirement and carries one selector per declared subject role, at most eight
-roles. Its closed acquisition is either one fixed source request or one fixed search followed, only
-after a unique schema-valid match, by one fixed fetch. The latter has a hard two-request ceiling and
-does not allow response-led routing or general multi-source fulfillment.
-Version 1 has no batch API, so a caller that needs several answers
-issues several independently authorized requests.
-A lookup resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never surfaces or
-chooses between candidates.
+Evidence Gateway keeps the same exact-subject discipline for each evaluation.
+A singular request names one requirement and carries one selector per declared subject role, at most
+eight roles. Its closed acquisition is either one fixed source request or one fixed search followed,
+only after a unique schema-valid match, by one fixed fetch. The latter has a hard two-request ceiling
+and does not allow response-led routing or general multi-source fulfillment.
+
+`POST /v1/evidence/batch` groups between one and sixteen ordered audience-scoped evaluations that
+share one requirement and purpose. Each item carries its own complete subject-role set and request
+nonce. Evidence Gateway validates and authorizes every item before source access, then returns one
+ordered `evidence` or `evidence_not_available` result per item. Each available result contains its
+own signed flattened JSON Web Signature (JWS). Any failure other than an ordinary unavailable
+outcome aborts the complete request without releasing a partial response.
+
+The request-batch route is distinct from holder-bound issuance batching on `POST /v1/evidence`.
+Request batching evaluates several subject sets. Holder-bound issuance batching performs one
+subject evaluation and emits one credential per presented holder key.
+A lookup still resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never
+surfaces or chooses between candidates.
 
 {/* Evidence: crates/registry-relay/src/api/consultation.rs,
     execute_body_requires_the_exact_active_contract_hash;
     products/evidence/contracts/request.schema.yaml,
+    products/evidence/contracts/request-batch.schema.yaml,
+    products/evidence/contracts/request-batch-response.schema.yaml,
     products/evidence/contracts/source-contract.yaml, and
     products/evidence/contracts/README.md. */}
 
@@ -214,6 +225,13 @@ Use this pattern when an institution wants a minimum-disclosure answer over data
 authoritative system. Evidence Gateway calls that system through its own fixed HTTP source
 contract. The reviewed bundle fixes the origin, path authority, method, authentication,
 projection, schemas, and bounded scripts. The caller cannot select or redirect the source.
+
+Request batches use the same closed sources. Sequential item evaluation is available without extra
+source configuration. An operator can enable the optional `source-batch` capability in both the
+governed bundle and runtime for an eligible fixed-path HTTP source with reviewed `prepare_batch`
+and `extract_batch` scripts. That option changes the number of physical source calls, not the
+request, authorization, disclosure, signing, or audit contract. Once an optimized call begins, a
+failure does not retry through sequential fanout.
 
 The caller's access token and the source credential serve different boundaries:
 

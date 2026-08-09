@@ -97,11 +97,11 @@
     "name": "Evidence Gateway",
     "repo_path": "../registry-stack",
     "target_repo_path": "../registry-stack",
-    "role": "Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, it answers one bounded question about one subject and returns the smallest sufficient signed assertion, composing shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.",
+    "role": "Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, each evaluation answers one bounded question about one complete subject-role set and returns the smallest sufficient signed assertion. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose. Evidence Gateway composes shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.",
     "owns": [
       "Requirement definitions, bounded evaluation, and the acquisition posture recorded with every answer.",
       "Authorization grants, purpose and audience checks, and the disclosure decision that releases an assertion.",
-      "Fixed bounded HTTP JSON source execution, and bounded script-owned request preparation, extraction, and derivation.",
+      "Fixed bounded HTTP JSON source execution, sequential request-batch fanout, and an optional fixed-path source-batch optimization with bounded script-owned preparation and extraction.",
       "Assertion construction, signing, response format selection, and redacted audit events.",
       "The `evidence` binary, one serving process, and one operator-controlled trust domain."
     ],
@@ -111,7 +111,7 @@
       "Portable metadata renderers owned by Registry Manifest.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Token issuance, end-user authentication, or identity proofing.",
-      "A credential lifecycle. No issuance workflow, holder binding, status list, revocation, delegated evaluation, or federation. SD-JWT VC adds a response format under a frozen profile, never a lifecycle.",
+      "A credential lifecycle or delivery protocol. Evidence Gateway supports the declared holder-bound subject-binding mode and its bounded issuance envelope, but no OID4VCI, interactive holder-binding ceremony, issuance session, status list, revocation, delegated evaluation, or federation. SD-JWT VC remains a response format under a frozen profile, never a lifecycle.",
       "How a consumer acts on a returned assertion."
     ],
     "source_docs": [

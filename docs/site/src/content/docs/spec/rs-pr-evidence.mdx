@@ -25,9 +25,10 @@ audience:
 ---
 
 This document defines the HTTP protocol contract that Evidence Gateway exposes: how a caller authenticates,
-discovers the request shapes it may invoke, submits one closed request against a predefined
-requirement, and receives the smallest sufficient assertion in an authorized response format, plus
-the problem, audit, and configuration-immutability behavior every request carries.
+discovers the request shapes it may invoke, submits one closed singular request or bounded request
+batch against a predefined requirement, and receives the smallest sufficient assertions in the
+authorized response envelope, plus the problem, audit, and configuration-immutability behavior
+every request carries.
 Evidence Gateway is a minimum-disclosure assertion service over data institutions already hold.
 It returns the answer a requirement asks for, not the record behind it.
 
@@ -64,6 +65,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
 | 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
 | 0.6.0 | 2026-08-08 | draft | Added Section 7.3, the holder-bound subject binding mode, its batch release envelope, and relying-party presentation verification (REQ-PR-EVIDENCE-060 through REQ-PR-EVIDENCE-069). Scoped REQ-PR-EVIDENCE-024, REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-040, and REQ-PR-EVIDENCE-041 to the audience-scoped mode without renumbering them. |
+| 0.7.0 | 2026-08-09 | draft | Added Section 7.4, the bounded multi-subject request batch, ordered signed-JWS outcomes, atomic admission and release, and the optional source-batch optimization (REQ-PR-EVIDENCE-070 through REQ-PR-EVIDENCE-075). |
 
 ## 1. Scope and references
 
@@ -77,8 +79,10 @@ This specification covers Evidence Gateway's externally observable protocol beha
 - Disclosure minimization, subject binding, and the combined-bundle disclosure surface.
 - The four response formats: the signed JSON Web Signature (JWS) assertion, the separately typed
   unsigned envelope, the SD-JWT VC (SD-JWT-based Verifiable Credentials) serialization of the
-  same assertion, and the batch envelope that carries one holder-bound credential per presented
-  holder key.
+  same assertion, and the holder-bound issuance batch envelope that carries one credential per
+  presented holder key.
+- The signed-JWS-only request-batch envelope that carries ordered outcomes for several
+  audience-scoped subject sets.
 - The two subject binding modes, and the relying-party presentation verification the holder-bound
   mode requires.
 - The problem contract, including existence collapse.
@@ -125,9 +129,9 @@ runtime depends on for the response formats, the Evidence payload contract, and 
 verification (`products/evidence/README.md`).
 
 REQ-PR-EVIDENCE-001: The reachable HTTP surface MUST be exactly the operations declared in
-`products/evidence/generated/registry-evidence.openapi.json`: one evidence operation, one
-definition-discovery operation, public key discovery, JWT VC Issuer Metadata, liveness, readiness,
-and publication of that OpenAPI document itself.
+`products/evidence/generated/registry-evidence.openapi.json`: one singular evidence operation, one
+multi-subject request-batch operation, one definition-discovery operation, public key discovery,
+JWT VC Issuer Metadata, liveness, readiness, and publication of that OpenAPI document itself.
 A conforming deployment MUST NOT add a route outside that generated document.
 
 REQ-PR-EVIDENCE-002: Definition discovery MUST be authenticated, rate limited, and requester-scoped.
@@ -154,16 +158,16 @@ Evidence Gateway runs one authentication kind, `oidc-access-token`, whose issuer
 types, algorithms, JWKS URI, and claim paths are fixed in the immutable bundle
 (`products/evidence/contracts/bundle.schema.yaml`).
 
-REQ-PR-EVIDENCE-005: The evidence and definition-discovery operations MUST require exactly one
-`Authorization` header carrying one bearer token, verified against the configured authentication
-profile (`products/evidence/generated/registry-evidence.openapi.json`,
+REQ-PR-EVIDENCE-005: Both evidence-production operations and definition discovery MUST require
+exactly one `Authorization` header carrying one bearer token, verified against the configured
+authentication profile (`products/evidence/generated/registry-evidence.openapi.json`,
 `products/evidence/contracts/bundle.schema.yaml`).
 
 REQ-PR-EVIDENCE-006: The principal MUST derive only from the one configured principal claim.
 A missing claim MUST deny, with no client-identifier, authorized-party, header, or request fallback
 (`products/evidence/contracts/authority-context.schema.yaml`, invariant `V1-I04`).
 
-REQ-PR-EVIDENCE-007: One authorization decision MUST cover the complete request.
+REQ-PR-EVIDENCE-007: One authorization decision MUST cover the complete singular request.
 The exact inputs are the principal, the optional actor, the exact requirement revision, the purpose,
 the audience, the authority profile and kind, the optional authenticated grant identifier, and the
 complete set of role, selector-profile, and value-origin tuples.
@@ -190,12 +194,14 @@ bearer token (invariant `V1-I32`).
 
 REQ-PR-EVIDENCE-011: Rate controls MUST be applied per principal using the configured request, burst,
 and failed-selector limits in `products/evidence/contracts/bundle.schema.yaml`.
+Request-batch admission MUST charge the complete item count atomically under
+REQ-PR-EVIDENCE-070.
 They are defense in depth: bundle-combination validation under REQ-PR-EVIDENCE-025 remains mandatory
 independently of any configured rate limit (invariant `V1-I20`).
 
 ## 4. Request contract
 
-REQ-PR-EVIDENCE-012: The request body MUST validate against
+REQ-PR-EVIDENCE-012: The singular request body MUST validate against
 `products/evidence/contracts/request.schema.yaml`, which closes the member set and rejects unknown
 members.
 Transport validation MUST be followed by named-profile validation, which closes the exact field
@@ -207,9 +213,10 @@ source fields, relationship types, adapter parameters, or response projections.
 Preparation, extraction, derivation, source transport, and concept projection are bundle-owned
 (invariant `V1-I02`).
 
-REQ-PR-EVIDENCE-014: Every request MUST carry one request nonce in the canonical form fixed by
-`products/evidence/contracts/request.schema.yaml`, generated independently per request by a
-cryptographically secure random source.
+REQ-PR-EVIDENCE-014: Every singular request and every request-batch item MUST carry one request
+nonce in the canonical form fixed by `products/evidence/contracts/request.schema.yaml` and
+`products/evidence/contracts/request-batch.schema.yaml`, generated independently per evaluation by
+a cryptographically secure random source.
 Evidence Gateway MUST echo it into the assertion payload and cover it by the signature, and MUST NOT store
 it, uniqueness-check it, or expose it to authorization, rate limits, scripts, source requests, logs,
 metrics, traces, or native audit (invariant `V1-I27`).
@@ -221,7 +228,8 @@ The request resolver MUST reject anything else before authorization, and unknown
 requirement identifiers MUST be indistinguishable to a caller lacking authorization
 (invariant `V1-I01`, `products/evidence/contracts/problem-contract.yaml`).
 
-REQ-PR-EVIDENCE-016: Subject roles MUST be resolved by name, not by array position.
+REQ-PR-EVIDENCE-016: Subject roles in a singular request or request-batch item MUST be resolved by
+name, not by array position.
 Duplicate, missing, unknown, or wrong-profile roles MUST fail before credential acquisition or source
 access, and accepted roles MUST be canonicalized to requirement declaration order
 (`products/evidence/contracts/request.schema.yaml`,
@@ -254,8 +262,9 @@ precedes release of the exact serialized bytes.
 REQ-PR-EVIDENCE-017: Rust MUST own authentication, authorization, minimized script inputs, fixed
 source execution, response projection, output validation, evidence construction, response protection,
 and audit.
-Scripts MUST be confined to the closed `prepare`, `extract`, and `derive` entry points and MUST NOT
-perform input or output (`products/evidence/contracts/rhai-abi.yaml`,
+Scripts MUST be confined to the closed `prepare`, `extract`, `derive`, `prepare_batch`, and
+`extract_batch` entry points and MUST NOT perform input or output
+(`products/evidence/contracts/rhai-abi.yaml`,
 `products/evidence/contracts/primitive-library.yaml`, invariant `V1-I11`).
 
 REQ-PR-EVIDENCE-018: Each requirement MUST declare exactly one closed acquisition kind: `single`,
@@ -268,6 +277,9 @@ configuration and executed only by the core
 (`products/evidence/contracts/source-contract.yaml`, invariants `V1-I09` and `V1-I40`).
 Only the validated search FactSet MAY cross into fetch preparation, only final fetch facts MAY reach
 derivation, and no response or script MAY select transport or create a third request.
+The optional request-batch source optimization under REQ-PR-EVIDENCE-073 and
+REQ-PR-EVIDENCE-074 changes only how several independent `single` evaluations share one physical
+HTTP call; it creates no additional acquisition kind or transport authority.
 
 REQ-PR-EVIDENCE-019: Provider lookup MUST return only the closed union of match, no-match, and
 ambiguous outcomes, and only a match MAY carry facts.
@@ -331,14 +343,14 @@ combined disclosure review (`products/evidence/OPERATOR-CONTRACT.md`).
 
 ## 7. Response formats and signing
 
-Evidence Gateway releases one stateless assertion.
+Each Evidence Gateway evaluation releases one stateless assertion.
 The bundle-level and grant-level `responseFormats` permission decides which serializations may carry
 it (`products/evidence/contracts/bundle.schema.yaml`).
 
-REQ-PR-EVIDENCE-028: The signed flattened JWS format MUST be available to every authorized grant and
-MUST be the default result.
-The Accept matrix is closed and MUST be resolved before source access; the exact media types and
-their selection rules are fixed by `products/evidence/contracts/jws-profile.yaml`.
+REQ-PR-EVIDENCE-028: On the singular evidence operation, the signed flattened JWS format MUST be
+available to every authorized grant and MUST be the default result.
+The singular Accept matrix is closed and MUST be resolved before source access; the exact media
+types and their selection rules are fixed by `products/evidence/contracts/jws-profile.yaml`.
 Every response varies on Accept and remains no-store (invariant `V1-I21`).
 
 REQ-PR-EVIDENCE-029: A response format other than the signed default MUST be released only when both
@@ -365,9 +377,9 @@ every response format (`products/evidence/contracts/jws-profile.yaml`, invariant
 
 ### 7.1 Signed flattened JWS
 
-REQ-PR-EVIDENCE-033: The signed response MUST be a flattened JWS JSON serialization carrying exactly
-the members required by `products/evidence/contracts/jws-profile.yaml`, with the unprotected header
-prohibited.
+REQ-PR-EVIDENCE-033: Every signed assertion, whether returned directly or nested in a request-batch
+item, MUST be a flattened JWS JSON serialization carrying exactly the members required by
+`products/evidence/contracts/jws-profile.yaml`, with the unprotected header prohibited.
 The protected header MUST carry exactly the allowlisted members with the allowlisted algorithm, and
 MUST NOT carry any of the key-reference or criticality members that file prohibits.
 
@@ -551,6 +563,72 @@ implemented, stubbed, feature-flagged, or left as an extension seam; a holder-bo
 usable by whoever holds it and the matching private key until `validUntil` passes, with no status
 list, no revocation, and no expiry beyond it.
 
+### 7.4 Multi-subject request batching
+
+This section defines request batching for several independent audience-scoped subject evaluations.
+It is separate from the holder-bound issuance batch in Section 7.3.
+
+REQ-PR-EVIDENCE-070: `POST /v1/evidence/batch` MUST validate the closed body in
+`products/evidence/contracts/request-batch.schema.yaml`: one common requirement and purpose plus
+between one and sixteen ordered items, each carrying one complete subject-role set and one canonical,
+pairwise-distinct request nonce.
+The authenticated token MUST supply the one common audience, and the route MUST reject holder keys.
+Evidence Gateway MUST authenticate once, reserve one evaluation instant, atomically charge rate cost
+equal to the complete item count, and validate and authorize every item before source credential
+resolution, access audit, or source access.
+Each item MAY resolve through its own complete matched grant or authority kind; authority MUST NOT be
+unioned between items (invariant `V1-I49`).
+
+REQ-PR-EVIDENCE-071: A successful request batch MUST validate against
+`products/evidence/contracts/request-batch-response.schema.yaml` and preserve exact request order.
+Every response item MUST be either `evidence`, carrying one flattened signed JWS, or
+`evidence_not_available`.
+Only a singular `no_match`, `ambiguous`, `required_fact_missing`, or
+`derivation_input_unresolved` outcome MAY become `evidence_not_available`; every other failure MUST
+abort the complete operation through the existing problem contract without releasing item material.
+The complete serialized envelope MUST remain within the response-byte ceiling fixed by that schema
+(invariant `V1-I50`).
+
+REQ-PR-EVIDENCE-072: The request-batch route MUST accept only the exact
+`application/vnd.registrystack.evidence.request-batch+json` media type and MUST resolve content
+negotiation before source access.
+Its available item results MUST use the ordinary signed flattened JWS profile. The route MUST NOT
+serve unsigned JSON, SD-JWT VC, holder-bound assertions, holder keys, or the holder-bound issuance
+batch media type.
+The holder-bound issuance batch on `POST /v1/evidence` evaluates one subject set and emits several
+credentials; the request batch evaluates several subject sets and signs each available assertion
+independently.
+
+REQ-PR-EVIDENCE-073: Sequential item evaluation in request order MUST support every existing
+audience-scoped source without additional source configuration.
+Rust MAY select one optimized physical HTTP call only before source access, and only when the
+governed bundle and runtime independently enable `source-batch`, the requirement uses the `single`
+acquisition kind, the fixed-path HTTP source declares the closed batch block, and the complete item
+count fits the source's declared ceiling.
+An omitted block or an ineligible request MUST select ordinary sequential execution from the start
+(`products/evidence/contracts/source-contract.yaml`, invariant `V1-I51`).
+
+REQ-PR-EVIDENCE-074: An optimized source batch MUST use the closed `prepare_batch` and
+`extract_batch` entry points in `products/evidence/contracts/rhai-abi.yaml`.
+Batch preparation MAY receive only Rust-issued opaque slots, minimized authorized selectors, and
+closed parameters. Batch extraction MAY receive only the bounded projected response, closed
+parameters, and exact slot list, and MUST return an exact slot-to-lookup-result bijection.
+The physical call MUST inherit the ordinary source's method, fixed origin and path, authentication,
+headers, TLS trust, redirect denial, timeout, response bounds, semaphore, and request-parts
+validation.
+After optimized execution begins, any failure MUST abort the outer request and MUST NOT retry,
+split, or fall back to sequential fanout (invariant `V1-I51`).
+
+REQ-PR-EVIDENCE-075: A request batch MUST use the distinct closed audit schema in
+`products/evidence/contracts/request-batch-audit-event.schema.yaml`.
+Every physical source call MUST have one durably accepted access event before credential resolution
+or source access, with bounded item indices and minimized groups that preserve each complete
+authority and subject-set boundary.
+The complete operation MUST have exactly one terminal release or value-free failure event, and audit
+MUST record no nonce, selector, source value, fact, body, signed JWS member, or signing material.
+For a successful response, the complete bounded envelope bytes MUST exist before release audit and
+only those exact bytes MAY be returned after durable acceptance (invariant `V1-I52`).
+
 ## 8. Problem reporting
 
 REQ-PR-EVIDENCE-042: A failure MUST be reported as `application/problem+json`
@@ -587,20 +665,27 @@ before those exact bytes are released.
 A sink failure MUST block the applicable step
 (`products/evidence/contracts/audit-event.schema.yaml`, invariants `V1-I13`, `V1-I29`, and
 `V1-I39` through `V1-I40`).
+The request-batch route MUST use its operation-specific access and terminal gates under
+REQ-PR-EVIDENCE-075.
 
-REQ-PR-EVIDENCE-047: Every native audit event MUST validate against
-`products/evidence/contracts/audit-event.schema.yaml`, which closes the member set, the phase and
-decision enumerations, and the conditional members.
+REQ-PR-EVIDENCE-047: Every native audit event other than a request-batch access, release, or
+terminal-failure event MUST validate against `products/evidence/contracts/audit-event.schema.yaml`,
+which closes the member set, the phase and decision enumerations, and the conditional members.
+The three request-batch event kinds MUST instead validate against the distinct closed schema named
+by REQ-PR-EVIDENCE-075.
 
 REQ-PR-EVIDENCE-048: Every authorized-material native event MUST record the closed
 response-protection mode resolved with authorization.
-A signing key identity MUST be present exactly for cryptographically protected disclosure release and
-MUST be absent for unsigned output. The standalone authorization-refusal event MUST contain neither
+A signing key identity MUST be present on a singular or holder-bound release exactly for
+cryptographically protected disclosure and MUST be absent for unsigned output.
+A request-batch release MUST carry a signing key identity exactly when at least one item contains
+evidence, as fixed by REQ-PR-EVIDENCE-075. The standalone authorization-refusal event MUST contain neither
 response protection nor a signing key identity because authorization did not resolve those fields
 (`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I30`).
 
 REQ-PR-EVIDENCE-049: Audit MUST NOT record the values listed under the never-record rule in
-`products/evidence/contracts/audit-event.schema.yaml`, including raw principal, actor, grant,
+`products/evidence/contracts/audit-event.schema.yaml` and
+`products/evidence/contracts/request-batch-audit-event.schema.yaml`, including raw principal, actor, grant,
 selector, source, and supported values, the request nonce, credentials and bodies, candidate counts
 and comparisons, and script inputs, outputs, or signing material.
 Identity MUST travel only as domain-separated keyed pseudonyms (invariant `V1-I15`).
@@ -705,9 +790,16 @@ credential format that the frozen Version 1 contracts do not provide.
   it is meaningful to one relying party and correlatable across none (REQ-PR-EVIDENCE-041). A
   requirement declaring the holder-bound mode accepts the opposite trade, and holder key reuse
   correlates a holder across every verifier that sees it (REQ-PR-EVIDENCE-061).
-- Batch linkability: A batch reduces deterministic key-based linkability and does not make
+- Holder-bound issuance batch linkability: Such a batch reduces deterministic key-based linkability and does not make
   credentials unlinkable; members share an issuance timestamp, purpose, requirement, Evidence Type,
   configuration revision, and disclosed values (REQ-PR-EVIDENCE-065).
+- Request-batch boundary: A request batch groups independent audience-scoped evaluations. It is not
+  holder-bound issuance, does not accept holder keys, and does not serve unsigned or SD-JWT VC
+  results (REQ-PR-EVIDENCE-070, REQ-PR-EVIDENCE-072).
+- Source-batch optimization: A configured source batch reduces physical calls only. It does not
+  change authorization, transport authority, result ordering, disclosure, signing, or audit, and a
+  started optimized call never falls back to sequential fanout (REQ-PR-EVIDENCE-073,
+  REQ-PR-EVIDENCE-074).
 - Possession, not freshness: A verified key-binding JWT proves possession at signing time over the
   presented bytes. Comparing a challenge nonce is not consuming it, nothing in this specification is
   replay prevention, and the challenge lifecycle belongs to the relying party
@@ -760,7 +852,8 @@ An Evidence Gateway deployment conforms to this specification when it:
   non-anchoring discovery (REQ-PR-EVIDENCE-001, REQ-PR-EVIDENCE-002, REQ-PR-EVIDENCE-003,
   REQ-PR-EVIDENCE-004);
 - authenticates every protected operation with one bearer token, derives the principal only from the
-  configured claim, and resolves one complete authorization decision without unioning entitlements
+  configured claim, and resolves one complete authorization decision for each singular request or
+  request-batch item without unioning entitlements
   (REQ-PR-EVIDENCE-005, REQ-PR-EVIDENCE-006, REQ-PR-EVIDENCE-007);
 - refuses authority from caller data, enforces value origins, denies sender-constrained tokens, and
   applies rate controls as defense in depth (REQ-PR-EVIDENCE-008, REQ-PR-EVIDENCE-009,
@@ -804,11 +897,17 @@ An Evidence Gateway deployment conforms to this specification when it:
   binding before any policy comparison, pins expected subject bindings from independent trusted
   state, and claims possession rather than freshness, replay prevention, or external conformance
   (REQ-PR-EVIDENCE-066, REQ-PR-EVIDENCE-067, REQ-PR-EVIDENCE-068, REQ-PR-EVIDENCE-069);
+- admits a request batch atomically, preserves ordered signed-JWS or unavailable outcomes, rejects
+  every other failure without partial release, supports sequential execution without extra source
+  configuration, confines the optional source-batch path behind two capability gates and an exact
+  slot bijection with no late fallback, and emits the batch-native access and terminal audit events
+  (REQ-PR-EVIDENCE-070, REQ-PR-EVIDENCE-071, REQ-PR-EVIDENCE-072,
+  REQ-PR-EVIDENCE-073, REQ-PR-EVIDENCE-074, REQ-PR-EVIDENCE-075);
 - reports failures as closed problem documents, collapses unresolved classes, refuses unacceptable
   negotiation before source access, and bounds retry hints (REQ-PR-EVIDENCE-042,
   REQ-PR-EVIDENCE-043, REQ-PR-EVIDENCE-044, REQ-PR-EVIDENCE-045);
-- audits at the refusal and authorized-material durable gates, validates every event against the
-  closed schema, records response protection only for authorized material, records a minimal refusal
+- audits at the refusal and authorized-material durable gates, validates every event against its
+  closed operation schema, records response protection only for authorized material, records a minimal refusal
   before `403`, returns `503` if that append fails, records no protected value, and verifies the
   keyed chain (REQ-PR-EVIDENCE-046,
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,
