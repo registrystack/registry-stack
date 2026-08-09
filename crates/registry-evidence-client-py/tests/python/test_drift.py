@@ -9,8 +9,9 @@ either side fails this test rather than silently drifting.
 
 Two different techniques are needed, for two different shapes of drift:
 
-- The four plain classes (`EvidenceClient`, `PreparedEvidenceRequest`,
-  `RawEvidenceResponse`, `VerifiedEvidence`) expose their methods and
+- The eight plain classes (`EvidenceClient`, both prepared request classes,
+  both raw response classes, `SdJwtVcBatchResponse`, and both verified result
+  classes) expose their methods and
   attributes as ordinary class-level descriptors, visible to `vars(cls)`
   without ever constructing an instance.
 - The nine exception classes set their stable attributes (`kind`, `status`,
@@ -66,9 +67,12 @@ EXCEPTION_SUBCLASS_NAMES = {
 PLAIN_CLASS_NAMES = {
     "EvidenceClient",
     "PreparedEvidenceRequest",
+    "PreparedEvidenceRequestBatch",
     "RawEvidenceResponse",
+    "RawEvidenceRequestBatchResponse",
     "SdJwtVcBatchResponse",
     "VerifiedEvidence",
+    "VerifiedEvidenceRequestBatch",
 }
 
 # The only class whose stub declares a constructor; PyO3 exposes it as

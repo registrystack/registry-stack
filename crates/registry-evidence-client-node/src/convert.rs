@@ -11,7 +11,8 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use registry_evidence_client::{
-    AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError, EvidenceRequestSpec,
+    AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError,
+    EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec, EvidenceRequestSpec,
     EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, HolderPublicKey,
     JwksDocument, PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken,
     SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
@@ -70,6 +71,22 @@ fn as_object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>,
     value
         .as_object()
         .ok_or_else(|| ConversionError::new(format!("{what} must be an object")))
+}
+
+fn require_exact_fields(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    what: &str,
+) -> Result<(), ConversionError> {
+    if object
+        .keys()
+        .any(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(ConversionError::new(format!(
+            "{what} contains an unsupported field"
+        )));
+    }
+    Ok(())
 }
 
 fn required_string(object: &Map<String, Value>, field: &str) -> Result<String, ConversionError> {
@@ -383,6 +400,92 @@ pub fn spec_from_json(value: &Value) -> Result<EvidenceRequestSpec, ConversionEr
         )?,
         clock_skew_seconds: required_u64(object, "clockSkewSeconds")?,
         subject_expectations,
+    })
+}
+
+/// Build the multi-subject request-batch specification the wrapped client
+/// validates. Requirement-wide expectations are read once; each positional
+/// item carries only its own subjects and subject-verification stance.
+pub fn batch_spec_from_json(value: &Value) -> Result<EvidenceRequestBatchSpec, ConversionError> {
+    let object = as_object(value, "a request batch specification")?;
+    require_exact_fields(
+        object,
+        &[
+            "requirement",
+            "purpose",
+            "audience",
+            "evidenceType",
+            "issuedBy",
+            "providedBy",
+            "configurationRevision",
+            "expectedAssuranceProfile",
+            "expectedOutputs",
+            "maximumAssertionLifetimeSeconds",
+            "clockSkewSeconds",
+            "items",
+        ],
+        "a request batch specification",
+    )?;
+
+    let expected_outputs_json = object
+        .get("expectedOutputs")
+        .ok_or_else(|| ConversionError::new("`expectedOutputs` must be present"))?;
+    let expected_outputs = expected_outputs_from_json(expected_outputs_json)?;
+
+    let expected_assurance_profile_json = object
+        .get("expectedAssuranceProfile")
+        .ok_or_else(|| ConversionError::new("`expectedAssuranceProfile` must be present"))?;
+    let expected_assurance_profile = assurance_profile_from_json(expected_assurance_profile_json)?;
+
+    let items_json = object
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ConversionError::new("`items` must be an array"))?;
+    let items = items_json
+        .iter()
+        .map(|value| {
+            let item = as_object(value, "a request batch item")?;
+            require_exact_fields(
+                item,
+                &["subjects", "subjectExpectations"],
+                "a request batch item",
+            )?;
+            let subjects_json =
+                item.get("subjects")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        ConversionError::new("each batch item `subjects` must be an array")
+                    })?;
+            let subjects = subjects_json
+                .iter()
+                .map(subject_request_from_json)
+                .collect::<Result<Vec<_>, _>>()?;
+            let subject_expectations_json = item.get("subjectExpectations").ok_or_else(|| {
+                ConversionError::new("each batch item `subjectExpectations` must be present")
+            })?;
+            Ok(EvidenceRequestBatchItemSpec {
+                subjects,
+                subject_expectations: subject_expectations_from_json(subject_expectations_json)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+
+    Ok(EvidenceRequestBatchSpec {
+        requirement: required_string(object, "requirement")?,
+        purpose: required_string(object, "purpose")?,
+        audience: required_string(object, "audience")?,
+        evidence_type: required_string(object, "evidenceType")?,
+        issued_by: required_string(object, "issuedBy")?,
+        provided_by: required_string(object, "providedBy")?,
+        configuration_revision: required_string(object, "configurationRevision")?,
+        expected_assurance_profile,
+        expected_outputs,
+        maximum_assertion_lifetime_seconds: required_u64(
+            object,
+            "maximumAssertionLifetimeSeconds",
+        )?,
+        clock_skew_seconds: required_u64(object, "clockSkewSeconds")?,
+        items,
     })
 }
 
@@ -891,6 +994,134 @@ mod tests {
             let mut spec = valid_spec_json();
             spec["responseFormat"] = value;
             assert!(spec_from_json(&spec).is_err());
+        }
+    }
+
+    // --- batch_spec_from_json ---
+
+    fn valid_batch_spec_json() -> Value {
+        let singular = valid_spec_json();
+        serde_json::json!({
+            "requirement": singular["requirement"],
+            "purpose": singular["purpose"],
+            "audience": singular["audience"],
+            "evidenceType": singular["evidenceType"],
+            "issuedBy": singular["issuedBy"],
+            "providedBy": singular["providedBy"],
+            "configurationRevision": singular["configurationRevision"],
+            "expectedAssuranceProfile": singular["expectedAssuranceProfile"],
+            "expectedOutputs": singular["expectedOutputs"],
+            "maximumAssertionLifetimeSeconds": singular["maximumAssertionLifetimeSeconds"],
+            "clockSkewSeconds": singular["clockSkewSeconds"],
+            "items": [
+                {
+                    "subjects": singular["subjects"],
+                    "subjectExpectations": "acceptFirstUse"
+                },
+                {
+                    "subjects": singular["subjects"],
+                    "subjectExpectations": {
+                        "pinned": [{"role": "subject", "binding": "binding-two"}]
+                    }
+                }
+            ]
+        })
+    }
+
+    #[test]
+    fn a_well_formed_batch_specification_converts_common_and_item_fields() {
+        let spec = batch_spec_from_json(&valid_batch_spec_json())
+            .expect("the batch specification is accepted");
+        assert_eq!(spec.requirement, "urn:example:client:requirement:status:v1");
+        assert_eq!(spec.expected_assurance_profile, AssuranceProfile::Local);
+        assert_eq!(spec.expected_outputs.len(), 1);
+        assert_eq!(spec.items.len(), 2);
+        assert_eq!(spec.items[0].subjects[0].role, "subject");
+        assert!(matches!(
+            spec.items[0].subject_expectations,
+            SubjectExpectations::AcceptFirstUse
+        ));
+        let SubjectExpectations::Pinned(subjects) = &spec.items[1].subject_expectations else {
+            panic!("the second item should keep its pinned expectation")
+        };
+        assert_eq!(subjects[0].binding, "binding-two");
+    }
+
+    #[test]
+    fn a_batch_specification_missing_common_or_item_fields_is_refused() {
+        for field in [
+            "requirement",
+            "purpose",
+            "audience",
+            "evidenceType",
+            "issuedBy",
+            "providedBy",
+            "configurationRevision",
+            "expectedAssuranceProfile",
+            "expectedOutputs",
+            "maximumAssertionLifetimeSeconds",
+            "clockSkewSeconds",
+            "items",
+        ] {
+            let mut spec = valid_batch_spec_json();
+            spec.as_object_mut().unwrap().remove(field);
+            assert!(
+                batch_spec_from_json(&spec).is_err(),
+                "missing `{field}` was accepted"
+            );
+        }
+
+        for field in ["subjects", "subjectExpectations"] {
+            let mut spec = valid_batch_spec_json();
+            spec["items"][0].as_object_mut().unwrap().remove(field);
+            assert!(
+                batch_spec_from_json(&spec).is_err(),
+                "missing item `{field}` was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_batch_specification_with_an_unknown_top_level_field_is_refused() {
+        let mut spec = valid_batch_spec_json();
+        spec["unknownBatchField"] = serde_json::json!("must-not-be-ignored");
+
+        let error = batch_spec_from_json(&spec).expect_err("the unknown field must be refused");
+        assert_eq!(
+            error,
+            ConversionError::new("a request batch specification contains an unsupported field")
+        );
+    }
+
+    #[test]
+    fn a_batch_item_refuses_every_field_outside_subjects_and_expectations() {
+        for field in [
+            "requirement",
+            "purpose",
+            "audience",
+            "evidenceType",
+            "issuedBy",
+            "providedBy",
+            "configurationRevision",
+            "expectedAssuranceProfile",
+            "expectedOutputs",
+            "maximumAssertionLifetimeSeconds",
+            "clockSkewSeconds",
+            "items",
+            "holderKeys",
+            "responseFormat",
+            "unknownItemField",
+        ] {
+            let mut spec = valid_batch_spec_json();
+            spec["items"][0][field] = serde_json::json!("must-not-be-ignored");
+
+            let error = batch_spec_from_json(&spec)
+                .expect_err("a field outside the closed item surface must be refused");
+            assert_eq!(
+                error,
+                ConversionError::new("a request batch item contains an unsupported field"),
+                "item field `{field}` was not rejected at the closed boundary"
+            );
         }
     }
 

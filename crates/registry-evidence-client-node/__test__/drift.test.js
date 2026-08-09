@@ -21,8 +21,22 @@ const native = require('../index.js');
 // `wrapAsync`, so a mapped failure normalizes to an `EvidenceClientError`
 // instead of throwing the raw JSON-envelope message. If the native surface
 // grows, this list (and `client.js`'s own wrapping calls) must grow with it.
-const SYNC_METHODS = ['prepare', 'verify', 'verifyAsOf'];
-const ASYNC_METHODS = ['discover', 'fetchJwks', 'send', 'requestAndVerify'];
+const SYNC_METHODS = [
+  'prepare',
+  'prepareBatch',
+  'verify',
+  'verifyBatch',
+  'verifyAsOf',
+  'verifyBatchAsOf',
+];
+const ASYNC_METHODS = [
+  'discover',
+  'fetchJwks',
+  'send',
+  'sendBatch',
+  'requestAndVerify',
+  'requestAndVerifyBatch',
+];
 
 function ownMethodNames(prototype) {
   return Object.getOwnPropertyNames(prototype)
@@ -47,13 +61,23 @@ test('every native EvidenceClient method is accounted for as sync or async', () 
   );
 });
 
-test('every native PreparedEvidenceRequest and RawEvidenceResponse getter is wrapped', () => {
+test('every native prepared and raw response getter is wrapped', () => {
   assert.deepEqual(ownGetterNames(native.PreparedEvidenceRequest.prototype).sort(), [
     'policyDocument',
     'requestNonce',
     'subjectExpectations',
   ]);
   assert.deepEqual(ownGetterNames(native.RawEvidenceResponse.prototype).sort(), ['body', 'operation']);
+  assert.deepEqual(ownGetterNames(native.PreparedEvidenceRequestBatch.prototype).sort(), [
+    'count',
+    'policyDocuments',
+    'requestNonces',
+    'subjectExpectations',
+  ]);
+  assert.deepEqual(ownGetterNames(native.RawEvidenceRequestBatchResponse.prototype).sort(), [
+    'body',
+    'operation',
+  ]);
 });
 
 test('every native SdJwtVcBatchResponse member is wrapped', () => {
@@ -83,6 +107,43 @@ test('every class client.js exports is declared in client.d.ts or the index.d.ts
       `neither client.d.ts nor index.d.ts mentions '${name}', which client.js exports`,
     );
   }
+});
+
+test('the handwritten request-batch input types preserve the common and item field boundary', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  const interfaceFields = (name) => {
+    const start = declaration.indexOf(`export interface ${name} {`);
+    assert.notEqual(start, -1, `${name} is missing from client.d.ts`);
+    const body = declaration.slice(start, declaration.indexOf('\n}', start));
+    return [...body.matchAll(/^  (\w+)[?:]/gm)].map((match) => match[1]);
+  };
+
+  assert.deepEqual(interfaceFields('EvidenceRequestBatchItemSpec'), [
+    'subjects',
+    'subjectExpectations',
+  ]);
+  assert.deepEqual(interfaceFields('EvidenceRequestBatchSpec'), [
+    'requirement',
+    'purpose',
+    'audience',
+    'evidenceType',
+    'issuedBy',
+    'providedBy',
+    'configurationRevision',
+    'expectedAssuranceProfile',
+    'expectedOutputs',
+    'maximumAssertionLifetimeSeconds',
+    'clockSkewSeconds',
+    'items',
+  ]);
+});
+
+test('the generated request-batch result remains an available/notAvailable union', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'index.d.ts'), 'utf8');
+  assert.match(
+    declaration,
+    /export type VerifiedEvidenceRequestBatchItem =\s*\| \{ status: 'available', verified: VerifiedEvidence \}\s*\| \{ status: 'notAvailable' \}/,
+  );
 });
 
 test('the exports map is the only resolvable entry point, not index.js', () => {

@@ -702,5 +702,7 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.EvidenceClient = nativeBinding.EvidenceClient
 module.exports.PreparedEvidenceRequest = nativeBinding.PreparedEvidenceRequest
+module.exports.PreparedEvidenceRequestBatch = nativeBinding.PreparedEvidenceRequestBatch
+module.exports.RawEvidenceRequestBatchResponse = nativeBinding.RawEvidenceRequestBatchResponse
 module.exports.RawEvidenceResponse = nativeBinding.RawEvidenceResponse
 module.exports.SdJwtVcBatchResponse = nativeBinding.SdJwtVcBatchResponse

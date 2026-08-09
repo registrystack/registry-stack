@@ -27,6 +27,11 @@ pub const EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1: &str = "registry.unsigned-eviden
 pub const EVIDENCE_JWS_TYP: &str = "evidence+jws";
 pub const EVIDENCE_JWS_CTY: &str = "application/evidence+json";
 pub const EVIDENCE_JWS_MEDIA_TYPE: &str = "application/jose+json";
+/// Ordered multi-subject request-batch response envelope.
+pub const EVIDENCE_REQUEST_BATCH_SCHEMA_V1: &str = "registry.evidence-request-batch/v1";
+/// Exact media type of the ordered multi-subject request-batch response.
+pub const EVIDENCE_REQUEST_BATCH_MEDIA_TYPE: &str =
+    "application/vnd.registrystack.evidence.request-batch+json";
 /// Compact SD-JWT VC serialization of the same assertion. The profile adds a
 /// response format only; it introduces no credential lifecycle.
 pub const EVIDENCE_SD_JWT_VC_MEDIA_TYPE: &str = "application/dc+sd-jwt";

@@ -108,19 +108,32 @@ function wrapGetter(prototype, name) {
 // `__test__/happy-path.test.js`'s single-send-guard test, which asserts this
 // identity directly).
 wrapSync(native.EvidenceClient.prototype, 'prepare');
+wrapSync(native.EvidenceClient.prototype, 'prepareBatch');
 wrapAsync(native.EvidenceClient.prototype, 'discover');
 wrapAsync(native.EvidenceClient.prototype, 'fetchJwks');
 wrapAsync(native.EvidenceClient.prototype, 'send');
+wrapAsync(native.EvidenceClient.prototype, 'sendBatch');
 wrapSync(native.EvidenceClient.prototype, 'verify');
+wrapSync(native.EvidenceClient.prototype, 'verifyBatch');
 wrapAsync(native.EvidenceClient.prototype, 'requestAndVerify');
+wrapAsync(native.EvidenceClient.prototype, 'requestAndVerifyBatch');
 wrapSync(native.EvidenceClient.prototype, 'verifyAsOf');
+wrapSync(native.EvidenceClient.prototype, 'verifyBatchAsOf');
 
 wrapGetter(native.PreparedEvidenceRequest.prototype, 'requestNonce');
 wrapGetter(native.PreparedEvidenceRequest.prototype, 'policyDocument');
 wrapGetter(native.PreparedEvidenceRequest.prototype, 'subjectExpectations');
 
+wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'requestNonces');
+wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'policyDocuments');
+wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'subjectExpectations');
+wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'count');
+
 wrapGetter(native.RawEvidenceResponse.prototype, 'body');
 wrapGetter(native.RawEvidenceResponse.prototype, 'operation');
+
+wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'body');
+wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'operation');
 
 wrapSync(native.SdJwtVcBatchResponse.prototype, 'credentialForHolderKey');
 wrapGetter(native.SdJwtVcBatchResponse.prototype, 'credentials');
@@ -163,6 +176,8 @@ module.exports = {
   EvidenceClient,
   EvidenceClientError,
   PreparedEvidenceRequest: native.PreparedEvidenceRequest,
+  PreparedEvidenceRequestBatch: native.PreparedEvidenceRequestBatch,
   RawEvidenceResponse: native.RawEvidenceResponse,
+  RawEvidenceRequestBatchResponse: native.RawEvidenceRequestBatchResponse,
   SdJwtVcBatchResponse,
 };

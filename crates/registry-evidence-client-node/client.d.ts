@@ -59,6 +59,37 @@ export interface EvidenceRequestSpec {
     | { pinned: ReadonlyArray<{ role: string; binding: string }> }
 }
 
+/** One positional item in a multi-subject Evidence request batch. */
+export interface EvidenceRequestBatchItemSpec {
+  subjects: ReadonlyArray<{
+    role: string
+    selectorProfile: string
+    selectorValues?: Readonly<Record<string, string | number | boolean>> | null
+  }>
+  subjectExpectations:
+    | 'acceptFirstUse'
+    | { pinned: ReadonlyArray<{ role: string; binding: string }> }
+}
+
+/**
+ * The common request inputs and ordered item inputs accepted by
+ * `EvidenceClient.prepareBatch`.
+ */
+export interface EvidenceRequestBatchSpec {
+  requirement: string
+  purpose: string
+  audience: string
+  evidenceType: string
+  issuedBy: string
+  providedBy: string
+  configurationRevision: string
+  expectedAssuranceProfile: unknown
+  expectedOutputs: ReadonlyArray<Readonly<Record<string, unknown>>>
+  maximumAssertionLifetimeSeconds: number
+  clockSkewSeconds: number
+  items: ReadonlyArray<EvidenceRequestBatchItemSpec>
+}
+
 /**
  * The stable eight-kind error envelope every mapped Evidence Node failure
  * carries, as properties on a thrown `Error` (see `src/lib.rs`'s

@@ -157,6 +157,7 @@ pub mod nonce;
 pub mod prepare;
 pub mod private_key_jwt;
 pub mod request;
+pub mod request_batch;
 pub mod response_format;
 pub mod retained;
 pub mod token;
@@ -204,6 +205,12 @@ pub use private_key_jwt::{
     MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
 };
 pub use request::SelectorValue;
+pub use request_batch::{
+    EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch,
+    RawEvidenceRequestBatchResponse, VerifiedEvidenceRequestBatch,
+    VerifiedEvidenceRequestBatchItem, MAXIMUM_REQUEST_BATCH_ITEMS,
+    MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES,
+};
 pub use response_format::EvidenceResponseFormat;
 pub use retained::{RetainedEvidenceVerification, RETAINED_EVIDENCE_VERIFICATION_SCHEMA_V1};
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};

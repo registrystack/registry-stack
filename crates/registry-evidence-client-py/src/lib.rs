@@ -8,6 +8,7 @@
 
 use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 // The wrapped SDK crate is `registry-evidence-client`, but this crate's own
 // `[lib] name` (the Python module name the spec requires) is also
@@ -18,16 +19,20 @@ use pyo3::prelude::*;
 // `tests/` (a hard `error[E0464]`, not a `use`-path ambiguity `::` could fix).
 use evidence_client_sdk::EvidenceClient as RealEvidenceClient;
 use evidence_client_sdk::PreparedEvidenceRequest as RealPreparedEvidenceRequest;
+use evidence_client_sdk::PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch;
+use evidence_client_sdk::RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse;
 use evidence_client_sdk::RawEvidenceResponse as RealRawEvidenceResponse;
 use evidence_client_sdk::SdJwtVcBatchResponse as RealSdJwtVcBatchResponse;
 use evidence_client_sdk::VerifiedEvidence as RealVerifiedEvidence;
+use evidence_client_sdk::VerifiedEvidenceRequestBatch as RealVerifiedEvidenceRequestBatch;
+use evidence_client_sdk::VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenceRequestBatchItem;
 
 mod convert;
 
 use convert::{
-    config_from_parts, datetime_from_unix_seconds, evidence_to_json, json_to_python,
-    map_client_error, map_config_error, map_conversion_error, python_to_json, spec_from_json,
-    subject_expectations_to_json, MappedError,
+    batch_spec_from_json, config_from_parts, datetime_from_unix_seconds, evidence_to_json,
+    json_to_python, map_client_error, map_config_error, map_conversion_error, python_to_json,
+    spec_from_json, subject_expectations_to_json, MappedError,
 };
 
 // Every instance also carries a `kind` attribute, one of the eight stable
@@ -219,6 +224,72 @@ impl PreparedEvidenceRequest {
     }
 }
 
+/// One ordered request batch, with one nonce and closed policy per item,
+/// before any byte has left the process.
+///
+/// There is no public constructor. [`EvidenceClient::prepare_batch`] is the
+/// only way to obtain this opaque value, and it owns the wrapped batch's
+/// single-send flag directly rather than copying it.
+#[pyclass(
+    name = "PreparedEvidenceRequestBatch",
+    module = "registry_evidence_client"
+)]
+struct PreparedEvidenceRequestBatch {
+    inner: RealPreparedEvidenceRequestBatch,
+}
+
+#[pymethods]
+impl PreparedEvidenceRequestBatch {
+    /// Independently generated item nonces in request order.
+    #[getter]
+    fn request_nonces(&self) -> Vec<String> {
+        self.inner
+            .request_nonces()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Independently closed policy documents in request order.
+    #[getter]
+    fn policy_documents(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = (0..self.inner.count())
+            .map(|index| {
+                serde_json::to_value(
+                    self.inner
+                        .policy_document(index)
+                        .expect("the index comes from the batch count"),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| serialization_error("a request batch policy document", error))?;
+        Ok(json_to_python(py, &serde_json::Value::Array(value))?.unbind())
+    }
+
+    /// Subject-verification stances in request order.
+    #[getter]
+    fn subject_expectations(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = serde_json::Value::Array(
+            (0..self.inner.count())
+                .map(|index| {
+                    subject_expectations_to_json(
+                        self.inner
+                            .subject_expectations(index)
+                            .expect("the index comes from the batch count"),
+                    )
+                })
+                .collect(),
+        );
+        Ok(json_to_python(py, &value)?.unbind())
+    }
+
+    /// Number of positional requests in this batch.
+    #[getter]
+    fn count(&self) -> usize {
+        self.inner.count()
+    }
+}
+
 /// A signed response, read but not yet judged.
 ///
 /// There is no constructor exposed to Python; the only way to obtain one is
@@ -244,6 +315,34 @@ impl RawEvidenceResponse {
     /// carried one, for support correlation. Present here as well as on
     /// `VerifiedEvidence`, so a response that fails verification can still be
     /// reported against the deployment's own audit trail.
+    #[getter]
+    fn operation(&self) -> Option<&str> {
+        self.inner.operation()
+    }
+}
+
+/// Request-batch response bytes read but not yet judged.
+///
+/// There is no public constructor. [`EvidenceClient::send_batch`] is the
+/// only way to obtain this opaque value, and only batch verification accepts
+/// it back.
+#[pyclass(
+    name = "RawEvidenceRequestBatchResponse",
+    module = "registry_evidence_client"
+)]
+struct RawEvidenceRequestBatchResponse {
+    inner: RealRawEvidenceRequestBatchResponse,
+}
+
+#[pymethods]
+impl RawEvidenceRequestBatchResponse {
+    /// Response envelope bytes exactly as received.
+    #[getter]
+    fn body(&self) -> &[u8] {
+        self.inner.body()
+    }
+
+    /// Deployment correlation identifier for the whole batch exchange.
     #[getter]
     fn operation(&self) -> Option<&str> {
         self.inner.operation()
@@ -335,6 +434,51 @@ fn verified_evidence_to_python(
         evidence,
         operation: verified.operation().map(str::to_owned),
         pinned_subject_expectations,
+    })
+}
+
+/// Every ordered item of an atomically verified request-batch response.
+///
+/// `items` is a sequence of discriminated mappings. An available item is
+/// `{"status": "available", "verified": VerifiedEvidence}`; an unresolved
+/// item is exactly `{"status": "not_available"}`. No value of this class is
+/// built until Rust has accepted the complete outer envelope and verified
+/// every available member.
+#[pyclass(
+    name = "VerifiedEvidenceRequestBatch",
+    module = "registry_evidence_client"
+)]
+struct VerifiedEvidenceRequestBatch {
+    #[pyo3(get)]
+    items: Py<PyAny>,
+    #[pyo3(get)]
+    operation: Option<String>,
+}
+
+fn verified_request_batch_to_python(
+    py: Python<'_>,
+    verified: &RealVerifiedEvidenceRequestBatch,
+) -> PyResult<VerifiedEvidenceRequestBatch> {
+    let items = PyList::empty(py);
+    for item in verified.items() {
+        let value = PyDict::new(py);
+        match item {
+            RealVerifiedEvidenceRequestBatchItem::Available(verified) => {
+                value.set_item("status", "available")?;
+                value.set_item(
+                    "verified",
+                    Py::new(py, verified_evidence_to_python(py, verified)?)?,
+                )?;
+            }
+            RealVerifiedEvidenceRequestBatchItem::NotAvailable => {
+                value.set_item("status", "not_available")?;
+            }
+        }
+        items.append(value)?;
+    }
+    Ok(VerifiedEvidenceRequestBatch {
+        items: items.into_any().unbind(),
+        operation: verified.operation().map(str::to_owned),
     })
 }
 
@@ -445,6 +589,25 @@ impl EvidenceClient {
         Ok(PreparedEvidenceRequest { inner: prepared })
     }
 
+    /// Close one independently nonce-bound policy for every positional item
+    /// in an ordered request batch. No I/O happens here, and the returned
+    /// opaque batch is good for exactly one exchange.
+    fn prepare_batch(
+        &self,
+        py: Python<'_>,
+        spec: &Bound<'_, PyAny>,
+    ) -> PyResult<PreparedEvidenceRequestBatch> {
+        let spec_json =
+            python_to_json(spec).map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let spec = batch_spec_from_json(&spec_json)
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let prepared = self
+            .inner
+            .prepare_batch(spec)
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        Ok(PreparedEvidenceRequestBatch { inner: prepared })
+    }
+
     /// Read the request shapes this requester is entitled to send.
     ///
     /// Discovery is authoring input, not a trust anchor: it never supplies
@@ -488,6 +651,22 @@ impl EvidenceClient {
         Ok(RawEvidenceResponse { inner: response })
     }
 
+    /// Send one prepared request batch and read its unverified envelope. The
+    /// same opaque prepared object cannot be sent twice.
+    fn send_batch(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> PyResult<RawEvidenceRequestBatchResponse> {
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.send_batch(&prepared.inner))
+            })
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        Ok(RawEvidenceRequestBatchResponse { inner: response })
+    }
+
     /// Verify a signed response against the policy its request closed, as of
     /// now. The trusted key set is the one pinned at construction, always.
     ///
@@ -508,6 +687,22 @@ impl EvidenceClient {
         verified_evidence_to_python(py, &verified)
     }
 
+    /// Atomically verify every available member against the closed policy at
+    /// its own request position. No partial result is returned when any
+    /// member fails.
+    fn verify_batch(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+    ) -> PyResult<VerifiedEvidenceRequestBatch> {
+        let verified = self
+            .inner
+            .verify_batch(&prepared.inner, &response.inner)
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        verified_request_batch_to_python(py, &verified)
+    }
+
     /// Request evidence and verify it in one step. This spends the single
     /// send `prepared` allows, exactly as `send` does, so calling it twice
     /// with one prepared request fails locally on the second call.
@@ -523,6 +718,23 @@ impl EvidenceClient {
             })
             .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         verified_evidence_to_python(py, &verified)
+    }
+
+    /// Send and atomically verify one prepared request batch in one step.
+    /// Network I/O runs with the GIL detached exactly as the singular method
+    /// does.
+    fn request_and_verify_batch(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> PyResult<VerifiedEvidenceRequestBatch> {
+        let verified = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.request_and_verify_batch(&prepared.inner))
+            })
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        verified_request_batch_to_python(py, &verified)
     }
 
     /// Verify a retained response as of an explicit instant, given as seconds
@@ -553,6 +765,24 @@ impl EvidenceClient {
             .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         verified_evidence_to_python(py, &verified)
     }
+
+    /// Atomically verify a retained request-batch response as of an explicit
+    /// instant, given as seconds since the UNIX epoch.
+    fn verify_batch_as_of(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+        as_of_unix_seconds: f64,
+    ) -> PyResult<VerifiedEvidenceRequestBatch> {
+        let now = datetime_from_unix_seconds(as_of_unix_seconds)
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let verified = self
+            .inner
+            .verify_batch_as_of(&prepared.inner, &response.inner, now)
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        verified_request_batch_to_python(py, &verified)
+    }
 }
 
 // `pub` so `tests/happy_path.rs` (a separate integration-test crate) can call
@@ -567,9 +797,12 @@ impl EvidenceClient {
 pub fn registry_evidence_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<EvidenceClient>()?;
     module.add_class::<PreparedEvidenceRequest>()?;
+    module.add_class::<PreparedEvidenceRequestBatch>()?;
     module.add_class::<RawEvidenceResponse>()?;
+    module.add_class::<RawEvidenceRequestBatchResponse>()?;
     module.add_class::<SdJwtVcBatchResponse>()?;
     module.add_class::<VerifiedEvidence>()?;
+    module.add_class::<VerifiedEvidenceRequestBatch>()?;
 
     let py = module.py();
     module.add("EvidenceClientError", py.get_type::<EvidenceClientError>())?;

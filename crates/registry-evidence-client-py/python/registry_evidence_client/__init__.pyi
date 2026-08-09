@@ -107,6 +107,33 @@ EvidenceRequestSpecWithHolderKeys = TypedDict(
     },
 )
 
+EvidenceRequestBatchItem = TypedDict(
+    "EvidenceRequestBatchItem",
+    {
+        "subjects": Sequence[Union[SubjectRequest, SubjectRequestWithValues]],
+        "subject_expectations": Union[
+            Literal["accept_first_use"], Sequence[ExpectedSubject]
+        ],
+    },
+)
+EvidenceRequestBatchSpec = TypedDict(
+    "EvidenceRequestBatchSpec",
+    {
+        "requirement": str,
+        "purpose": str,
+        "audience": str,
+        "evidence_type": str,
+        "issued_by": str,
+        "provided_by": str,
+        "configuration_revision": str,
+        "expected_assurance_profile": Any,
+        "expected_outputs": Sequence[Mapping[str, Any]],
+        "maximum_assertion_lifetime_seconds": int,
+        "clock_skew_seconds": int,
+        "items": Sequence[EvidenceRequestBatchItem],
+    },
+)
+
 class EvidenceClientError(Exception):
     """Base exception for every mapped failure this client reports.
 
@@ -192,11 +219,29 @@ class PreparedEvidenceRequest:
     policy_document: Any
     subject_expectations: Union[str, Sequence[Any]]
 
+class PreparedEvidenceRequestBatch:
+    """One ordered request batch with one independently generated nonce and
+    closed policy per item. No public constructor: obtain one only from
+    `EvidenceClient.prepare_batch`. Good for exactly one `send_batch` or
+    `request_and_verify_batch` call."""
+
+    request_nonces: Sequence[str]
+    policy_documents: Sequence[Any]
+    subject_expectations: Sequence[Union[str, Sequence[Any]]]
+    count: int
+
 class RawEvidenceResponse:
     """A signed response, read but not yet judged. No public constructor:
     obtain one only from `EvidenceClient.send`. Reading either attribute
     judges nothing; `verify` is what decides whether these bytes are
     trustworthy."""
+
+    body: bytes
+    operation: Optional[str]
+
+class RawEvidenceRequestBatchResponse:
+    """A request-batch envelope read but not yet judged. No public
+    constructor: obtain one only from `EvidenceClient.send_batch`."""
 
     body: bytes
     operation: Optional[str]
@@ -221,6 +266,24 @@ class VerifiedEvidence:
     operation: Optional[str]
     pinned_subject_expectations: Any
 
+AvailableEvidenceRequestBatchItem = TypedDict(
+    "AvailableEvidenceRequestBatchItem",
+    {"status": Literal["available"], "verified": VerifiedEvidence},
+)
+UnavailableEvidenceRequestBatchItem = TypedDict(
+    "UnavailableEvidenceRequestBatchItem",
+    {"status": Literal["not_available"]},
+)
+VerifiedEvidenceRequestBatchItem = Union[
+    AvailableEvidenceRequestBatchItem, UnavailableEvidenceRequestBatchItem
+]
+
+class VerifiedEvidenceRequestBatch:
+    """Every ordered item of an atomically verified request-batch response."""
+
+    items: Sequence[VerifiedEvidenceRequestBatchItem]
+    operation: Optional[str]
+
 class EvidenceClient:
     """A relying party's connection to one Evidence deployment."""
 
@@ -241,20 +304,40 @@ class EvidenceClient:
         self,
         spec: Union[EvidenceRequestSpec, EvidenceRequestSpecWithHolderKeys],
     ) -> PreparedEvidenceRequest: ...
+    def prepare_batch(
+        self, spec: EvidenceRequestBatchSpec
+    ) -> PreparedEvidenceRequestBatch: ...
     def discover(self) -> Any: ...
     def fetch_jwks(self) -> Any: ...
     def send(self, prepared: PreparedEvidenceRequest) -> RawEvidenceResponse: ...
+    def send_batch(
+        self, prepared: PreparedEvidenceRequestBatch
+    ) -> RawEvidenceRequestBatchResponse: ...
     def verify(
         self,
         prepared: PreparedEvidenceRequest,
         response: RawEvidenceResponse,
     ) -> VerifiedEvidence: ...
+    def verify_batch(
+        self,
+        prepared: PreparedEvidenceRequestBatch,
+        response: RawEvidenceRequestBatchResponse,
+    ) -> VerifiedEvidenceRequestBatch: ...
     def request_and_verify(
         self, prepared: PreparedEvidenceRequest
     ) -> VerifiedEvidence: ...
+    def request_and_verify_batch(
+        self, prepared: PreparedEvidenceRequestBatch
+    ) -> VerifiedEvidenceRequestBatch: ...
     def verify_as_of(
         self,
         prepared: PreparedEvidenceRequest,
         response: RawEvidenceResponse,
         as_of_unix_seconds: float,
     ) -> VerifiedEvidence: ...
+    def verify_batch_as_of(
+        self,
+        prepared: PreparedEvidenceRequestBatch,
+        response: RawEvidenceRequestBatchResponse,
+        as_of_unix_seconds: float,
+    ) -> VerifiedEvidenceRequestBatch: ...
