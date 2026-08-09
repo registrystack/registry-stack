@@ -399,6 +399,23 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-language-server", strict["rust_packages"])
         self.assertIn("registryctl", strict["rust_packages"])
 
+    def test_editor_integration_routing_follows_language_server_dependency_closure(
+        self,
+    ) -> None:
+        for path in (
+            "crates/registry-evidence-authoring/src/lib.rs",
+            "crates/registry-language-server/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["editors"])
+
+        self.assertFalse(
+            classify(
+                self.workspace,
+                ("crates/registry-evidence-client/src/lib.rs",),
+            )["editors"]
+        )
+
     def test_a_test_only_editor_edge_does_not_satisfy_the_authoring_routing(
         self,
     ) -> None:

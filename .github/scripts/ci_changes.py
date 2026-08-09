@@ -536,7 +536,11 @@ def classify(
         }
         for path in paths
     )
-    editors = complete or any(path.startswith("editors/") for path in paths)
+    editors = (
+        complete
+        or any(path.startswith("editors/") for path in paths)
+        or "registry-language-server" in affected
+    )
     # Reverse dependents, not changed paths: both bindings are Cargo path
     # dependents of the SDK and the verifier, so a change to either can move
     # the native surface or the error envelope the packages wrap without
