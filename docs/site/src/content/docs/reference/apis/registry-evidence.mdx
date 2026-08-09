@@ -31,7 +31,9 @@ duties, see the [Evidence Gateway product documentation](../../../products/regis
 Evidence Gateway is a minimum-disclosure assertion service. Given an authenticated requester, an
 authorized purpose, a predefined requirement, and the configured selector data an authoritative
 provider needs, `POST /v1/evidence` returns the smallest sufficient JSON assertion in an
-authorized response format. `GET /v1/evidence-definitions` is an authenticated, requester-scoped
+authorized response format. `POST /v1/evidence/batch` evaluates between one and sixteen ordered
+audience-scoped subject sets for one common requirement and purpose. `GET /v1/evidence-definitions`
+is an authenticated, requester-scoped
 description of the complete request shapes the deployed bundle already authorizes; it is not a
 public catalog. The remaining routes are operational: `GET /health`, `GET /ready`,
 `GET /openapi.json`, the signing keys at `GET /.well-known/evidence/jwks.json`, and JWT VC issuer
@@ -39,7 +41,7 @@ metadata at `GET /.well-known/jwt-vc-issuer`.
 
 The assertion is the product's CCCEV-aligned domain object, expressed as a documented Evidence Gateway
 JSON profile rather than RDF or XML (`products/evidence/CONCEPT.md`). The Version 1 contract is
-frozen: the two versioned operations and their envelopes are the complete evidence surface.
+frozen: the three versioned operations and their envelopes are the complete evidence surface.
 
 ## Source of truth
 
@@ -64,16 +66,18 @@ handler in `crates/registry-evidence/src/server.rs` takes no credential, and the
 
 ## Authentication
 
-The two evidence routes require exactly one `Authorization` header containing one Bearer token.
+The two evidence-production routes and definition discovery require exactly one `Authorization`
+header containing one Bearer token.
 Evidence Gateway verifies OIDC access tokens against one reviewed profile: exactly one trusted issuer with
 exact audience, token type, and algorithm allowlists, and one configured principal claim with no
 `client_id`, `azp`, header, or request fallback (`products/evidence/OPERATOR-CONTRACT.md`). There
 is no API-key mode. The operational routes take no credential and reveal no deployment
 definitions or entitlements.
 
-## Response formats
+## Singular response formats
 
-Version 1 governs three response formats; signed flattened JWS is the mandatory default:
+`POST /v1/evidence` governs three single-assertion formats; signed flattened JWS is the mandatory
+default:
 
 - `application/jose+json`: the signed flattened JWS, the default and the durable-verification
   format.
@@ -84,6 +88,40 @@ Version 1 governs three response formats; signed flattened JWS is the mandatory 
   in `products/evidence/contracts/sd-jwt-vc-profile.yaml`. Values use one root disclosure by
   default. A governed structured value can instead disclose each direct field independently.
   Enabling the format adds a serialization, not a credential lifecycle.
+
+A holder-bound requirement can also select
+`application/vnd.registrystack.evidence.batch+json`. That holder-bound issuance envelope performs
+one subject evaluation and carries one SD-JWT VC credential per distinct presented holder key. It
+is not the multi-subject request batch.
+
+## Multi-subject request batch
+
+`POST /v1/evidence/batch` requires the exact
+`Accept: application/vnd.registrystack.evidence.request-batch+json` value. Missing, wildcard,
+combined, parameterized, and singular-response values are rejected before source access. The
+request has one common `requirement` and `purpose` plus one to sixteen ordered items. Each item has
+its own canonical, pairwise-distinct `requestNonce` and complete `subjects` array. The authenticated
+token supplies the common audience, and `holderKeys` are not accepted.
+
+The response preserves request order. Each item is one of these closed results:
+
+- `evidence`, with one signed flattened JWS in the `evidence` member.
+- `evidence_not_available`, when the corresponding singular evaluation produced `no_match`,
+  `ambiguous`, `required_fact_missing`, or `derivation_input_unresolved`.
+
+Evidence Gateway authenticates once, uses one evaluation instant, charges rate admission for the
+complete item count, and validates and authorizes every item before source access. Any malformed,
+unauthorized, dependency, protocol, signing, serialization, or audit failure, and any derivation
+failure outside the closed `derivation_input_unresolved` class, aborts the complete request without
+releasing item material. The serialized envelope is limited to 1 MiB and is released only after one
+durable terminal audit event.
+
+Every existing audience-scoped source works through sequential item evaluation. For an eligible
+fixed-path HTTP source, operators can enable the optional `source-batch` capability in both the
+[governed bundle and runtime](../../../products/registry-evidence/operator-contract/). Its closed
+`prepare_batch` and `extract_batch` scripts can construct and map one physical source call. The
+optimization does not change the public response, transport authority, or failure contract, and a
+started optimized call never falls back to sequential fanout.
 
 ## What the specification does not cover
 
@@ -102,6 +140,9 @@ Version 1 governs three response formats; signed flattened JWS is the mandatory 
   disclosure-release record is durably accepted before the response bytes reach the caller
   (`products/evidence/contracts/security-invariant-matrix.yaml`; the measured cost is recorded in
   `products/evidence/PERFORMANCE.md`).
+- Request-batch atomicity: all item admission gates precede source access, each physical source call
+  has a durable access event, and one terminal event gates the complete response or records a
+  value-free failure (`products/evidence/contracts/request-batch-audit-event.schema.yaml`).
 
 :::caution
 Because release is gated on durable audit acceptance, an unavailable audit store surfaces as

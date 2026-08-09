@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 254,
+      "field_count": 261,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -20,7 +20,7 @@
           "values_conditional": false,
           "constraints": [
             [
-              "maxItems: 1",
+              "maxItems: 2",
               "uniqueItems: true"
             ]
           ],
@@ -29,7 +29,7 @@
               "contains: search-then-fetch-set"
             ]
           ],
-          "description": "Gated acquisition kinds this bundle opts in to. The Version 1 forms are absent from the vocabulary on purpose, because every bundle already had them; omission and an explicit empty list both enable nothing.",
+          "description": "Gated acquisition kinds and source-call optimizations this bundle opts in to. The original Version 1 forms are absent from the vocabulary on purpose, because every bundle already had them; omission and an explicit empty list both enable nothing.",
           "runtime_validation": null
         },
         {
@@ -38,12 +38,13 @@
           "type": "string",
           "required": "no",
           "values": [
-            "search-then-fetch-set"
+            "search-then-fetch-set",
+            "source-batch"
           ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "One gated acquisition kind this bundle declares, which is the bundle half of a two-sided gate; a requirement using a kind absent here is rejected at startup.",
+          "description": "One gated acquisition kind or source-call optimization this bundle declares, which is the bundle half of a two-sided gate. A requirement using an absent kind is rejected at startup; an absent optimization is never selected.",
           "runtime_validation": null
         },
         {
@@ -2967,6 +2968,119 @@
           "runtime_validation": null
         },
         {
+          "key_path": "sources.*.batch",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Optional reviewed one-call optimization for the public multi-subject request batch. It is eligible only for a `single` acquisition using this HTTP source's fixed `path`, when the complete item set fits `maximumItems`, and when both bundle and runtime name `source-batch` under `acquisitionCapabilities`. Omission selects ordinary sequential execution. The block cannot change source, method, origin, path, authentication, headers, TLS, redirect, timeout, response-byte, concurrency, or preparation-limit authority.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.extractScript",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bundle-relative Rhai script implementing `extract_batch/2` over the projected, schema-validated response. Rust requires one closed lookup result for every opaque slot and rejects missing, duplicated, extra, negative, or out-of-range slots.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.maximumItems",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maximum: 16",
+              "minimum: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Largest complete logical request batch this source accepts in one physical call. A larger outer batch uses sequential execution from the start and is never split into optimized sub-batches.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.prepareScript",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bundle-relative Rhai script implementing `prepare_batch/2` over ordered opaque slots and minimized selectors. Its RequestParts output is checked under the ordinary source request's preparationLimits before credentials are resolved.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.projection",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 64",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Allowlist of response leaves Rust retains for optimized batch extraction under the same extended JSON Pointer and projected-input bounds as ordinary extraction.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.projection[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 256",
+              "minLength: 2",
+              "pattern: ^/(?!/)([^/~]|~[01]|/|\\*)+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.batch.responseSchema",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Bundle-relative closed JSON Schema the batch projection must satisfy before `extract_batch/2` runs. It governs only the optional optimized response and does not replace the ordinary source responseSchema used by sequential execution.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "sources.*.extractProfile",
           "kind": "property",
           "type": "string",
@@ -4151,13 +4265,13 @@
           "values_conditional": false,
           "constraints": [
             [
-              "maxItems: 1",
+              "maxItems: 2",
               "uniqueItems: true"
             ]
           ],
           "conditional_constraints": [],
-          "description": "Gated acquisition kinds this deployment enables, the operator half of the same two-sided gate the bundle declares. Omission and an explicit empty list both enable nothing.",
-          "runtime_validation": "A bundle whose requirement needs a gated acquisition kind absent from this list is refused at startup, before the deployment serves anything."
+          "description": "Gated acquisition kinds and source-call optimizations this deployment enables, the operator half of the same two-sided gate the bundle declares. Omission and an explicit empty list both enable nothing.",
+          "runtime_validation": "A bundle whose requirement needs a gated acquisition kind, or whose HTTP source carries a batch block, is refused at startup when the corresponding capability is absent from this list, before the deployment serves anything."
         },
         {
           "key_path": "acquisitionCapabilities[]",
@@ -4165,12 +4279,13 @@
           "type": "string",
           "required": "no",
           "values": [
-            "search-then-fetch-set"
+            "search-then-fetch-set",
+            "source-batch"
           ],
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "One gated acquisition kind this deployment permits; a bundle needing a kind absent here is refused before the listener binds.",
+          "description": "One gated acquisition kind or source-call optimization this deployment permits. A bundle needing an acquisition kind absent here is refused before the listener binds; an absent optimization is never selected.",
           "runtime_validation": null
         },
         {
