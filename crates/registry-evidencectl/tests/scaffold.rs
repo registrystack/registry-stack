@@ -195,6 +195,28 @@ fn automatic_keys_are_transactional_unbound_owner_only_and_print_no_secret() {
 }
 
 #[test]
+fn new_writes_the_project_marker_byte_for_byte() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
+    let project = workspace.path().join("project");
+    let output = openapi_new(&project, path(&spec), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert_eq!(
+        fs::read(project.join("evidence-project.yaml")).expect("project marker"),
+        registry_evidence_authoring::default_project_marker_document().as_bytes()
+    );
+    assert_eq!(
+        fs::metadata(project.join("evidence-project.yaml"))
+            .expect("project marker metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+}
+
+#[test]
 fn existing_paths_and_force_are_refused_without_changes() {
     let workspace = TempDir::new().expect("temporary directory");
     let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
@@ -233,9 +255,13 @@ fn existing_paths_and_force_are_refused_without_changes() {
 fn assert_minimal_project(project: &Path, with_keys: bool) {
     let expected = if with_keys {
         vec![
+            ".evidence-editor",
             ".gitignore",
+            ".vscode",
+            ".zed",
             "adapters",
             "derivations",
+            "evidence-project.yaml",
             "fixtures",
             "questions",
             "schemas",
@@ -246,9 +272,13 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
         ]
     } else {
         vec![
+            ".evidence-editor",
             ".gitignore",
+            ".vscode",
+            ".zed",
             "adapters",
             "derivations",
+            "evidence-project.yaml",
             "fixtures",
             "questions",
             "schemas",
@@ -258,6 +288,7 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
         ]
     };
     assert_eq!(entries(project), expected);
+    assert_editor_schema_mappings(project);
     assert!(entries(&project.join("questions")).is_empty());
     assert!(entries(&project.join("derivations")).is_empty());
     assert!(entries(&project.join("selectors")).is_empty());
@@ -275,6 +306,52 @@ fn assert_minimal_project(project: &Path, with_keys: bool) {
             "unexpected generated {absent}"
         );
     }
+}
+
+/// A scaffolded project is editable before it is buildable, so the schema
+/// mappings a YAML-aware editor reads ship with it rather than after it.
+fn assert_editor_schema_mappings(project: &Path) {
+    assert_eq!(
+        entries(&project.join(".evidence-editor")),
+        vec!["manifest.json", "schemas"]
+    );
+    assert_eq!(
+        entries(&project.join(".evidence-editor/schemas")),
+        vec!["project-marker.schema.json", "question.schema.json"]
+    );
+    assert_eq!(
+        entries(&project.join(".vscode")),
+        vec!["extensions.json", "settings.json"]
+    );
+    assert_eq!(entries(&project.join(".zed")), vec!["settings.json"]);
+
+    // The schemas an editor reads must be the committed generated artifact,
+    // byte for byte, or the drift gate is guarding nothing an adopter sees.
+    for (relative, committed) in [
+        (
+            ".evidence-editor/schemas/question.schema.json",
+            include_str!("../schemas/authoring/question.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/project-marker.schema.json",
+            include_str!("../schemas/authoring/project-marker.schema.json"),
+        ),
+    ] {
+        assert_eq!(
+            fs::read_to_string(project.join(relative)).expect("installed editor schema"),
+            committed,
+            "{relative} is not the committed generated schema"
+        );
+    }
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project.join(".vscode/settings.json")).expect("VS Code settings"),
+    )
+    .expect("VS Code settings are JSON");
+    assert_eq!(
+        settings["yaml.schemas"]["./.evidence-editor/schemas/question.schema.json"],
+        serde_json::Value::String("questions/*.yaml".to_string())
+    );
 }
 
 fn openapi_new(project: &Path, openapi: &str, extra: &[&str]) -> Output {

@@ -24,6 +24,11 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "workspaceContains:registry-stack.yaml",
+    "workspaceContains:**/registry-stack.yaml",
+    "workspaceContains:evidence-project.yaml",
+    "workspaceContains:**/evidence-project.yaml",
+    "workspaceContains:source.openapi.yaml",
+    "workspaceContains:**/source.openapi.yaml",
     "onCommand:registryStack.restartLanguageServer"
   ],
   "extensionKind": [
@@ -52,7 +57,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses the installer-selected registryctl when available, then searches PATH for registry-language-server or registryctl."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the workspace folder whose language server is starting. When empty, the extension uses the installer-selected registryctl or evidencectl when available, then searches PATH for registry-language-server, registryctl, or evidencectl."
         }
       }
     }
@@ -60,11 +65,13 @@
   "scripts": {
     "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap --minify",
     "compile-tests": "tsc -p tsconfig.test.json",
-    "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "compile-unit-tests": "tsc -p tsconfig.unit.json",
+    "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.unit.json --noEmit",
     "package:dev": "npm run check && npm run compile && vsce package --no-dependencies --out registry-stack-dev.vsix && npm run verify:package",
     "verify:package": "node scripts/verify-vsix.cjs registry-stack-dev.vsix",
     "pretest": "npm run compile && npm run compile-tests",
-    "test": "vscode-test",
+    "test:unit": "npm run compile-unit-tests && node --test out/unit/test/unit/projectRoot.test.js out/unit/test/unit/serverCommand.test.js",
+    "test": "npm run test:unit && vscode-test",
     "vscode:prepublish": "npm run compile"
   },
   "dependencies": {

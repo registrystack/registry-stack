@@ -10,6 +10,9 @@ import {
   ServerOptions,
 } from 'vscode-languageclient/node';
 
+import { isProjectRoot } from './projectRoot.js';
+import { findLanguageServerOnPath, isExecutableFile } from './serverCommand.js';
+
 const clients = new Map<string, LanguageClient>();
 let lifecycle = Promise.resolve();
 
@@ -25,6 +28,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       await enqueueLifecycle(() => reconcileClients(context));
+    }),
+    vscode.workspace.onDidOpenTextDocument(async (document) => {
+      if (document.uri.scheme === 'file' && document.languageId === 'yaml') {
+        await enqueueLifecycle(() => reconcileClients(context));
+      }
     }),
   );
 
@@ -122,10 +130,43 @@ function findProjectFolders(): vscode.WorkspaceFolder[] {
     if (folder.uri.scheme !== 'file') {
       return false;
     }
-    try {
-      return fs.statSync(path.join(folder.uri.fsPath, 'registry-stack.yaml')).isFile();
-    } catch {
+    return (
+      clients.has(folderKey(folder)) ||
+      isProjectRoot(folder.uri.fsPath) ||
+      hasOpenDocumentInProject(folder)
+    );
+  });
+}
+
+function hasOpenDocumentInProject(folder: vscode.WorkspaceFolder): boolean {
+  const folderPath = path.resolve(folder.uri.fsPath);
+  return vscode.workspace.textDocuments.some((document) => {
+    if (document.uri.scheme !== 'file' || document.languageId !== 'yaml') {
       return false;
+    }
+    const relative = path.relative(folderPath, document.uri.fsPath);
+    if (
+      relative === '' ||
+      relative === '..' ||
+      path.isAbsolute(relative) ||
+      relative.startsWith(`..${path.sep}`)
+    ) {
+      return false;
+    }
+
+    let directory = path.resolve(path.dirname(document.uri.fsPath));
+    while (true) {
+      if (isProjectRoot(directory)) {
+        return true;
+      }
+      if (directory === folderPath) {
+        return false;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) {
+        return false;
+      }
+      directory = parent;
     }
   });
 }
@@ -157,33 +198,24 @@ function resolveServerCommand(
     return { command: resolved, args: [] };
   }
 
-  const executable = process.platform === 'win32'
-    ? 'registry-language-server.exe'
-    : 'registry-language-server';
-  const packagedRegistryctl = findPackagedRegistryctl(context);
-  if (packagedRegistryctl !== undefined) {
+  const packagedCli = findPackagedRegistryStackCli(context);
+  if (packagedCli !== undefined) {
     return {
-      command: packagedRegistryctl,
+      command: packagedCli,
       args: ['tooling', 'language-server'],
     };
   }
-  const standalone = findExecutableOnPath(executable);
-  if (standalone !== undefined) {
-    return { command: standalone, args: [] };
-  }
-  const registryctl = findExecutableOnPath(
-    process.platform === 'win32' ? 'registryctl.exe' : 'registryctl',
-  );
-  if (registryctl !== undefined) {
-    return { command: registryctl, args: ['tooling', 'language-server'] };
+  const onPath = findLanguageServerOnPath();
+  if (onPath !== undefined) {
+    return onPath;
   }
   throw new Error(
-    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl tooling language-server".',
+    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl or evidencectl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl or evidencectl to PATH so it can run "<cli> tooling language-server".',
   );
 }
 
-function findPackagedRegistryctl(context: vscode.ExtensionContext): string | undefined {
-  const metadataPath = context.asAbsolutePath(path.join('dist', 'registryctl-path'));
+function findPackagedRegistryStackCli(context: vscode.ExtensionContext): string | undefined {
+  const metadataPath = context.asAbsolutePath(path.join('dist', 'registry-stack-cli-path'));
   try {
     const candidate = fs.readFileSync(metadataPath, 'utf8').trim();
     if (candidate !== '' && path.isAbsolute(candidate) && isExecutableFile(candidate)) {
@@ -191,34 +223,6 @@ function findPackagedRegistryctl(context: vscode.ExtensionContext): string | und
     }
   } catch {
     // Manual packages intentionally omit installer metadata and continue with PATH discovery.
-  }
-  return undefined;
-}
-
-function isExecutableFile(candidate: string): boolean {
-  try {
-    if (!fs.statSync(candidate).isFile()) {
-      return false;
-    }
-    if (process.platform !== 'win32') {
-      fs.accessSync(candidate, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function findExecutableOnPath(executable: string): string | undefined {
-  const pathEntries = process.env.PATH?.split(path.delimiter) ?? [];
-  for (const entry of pathEntries) {
-    if (entry === '') {
-      continue;
-    }
-    const candidate = path.join(entry, executable);
-    if (isExecutableFile(candidate)) {
-      return candidate;
-    }
   }
   return undefined;
 }

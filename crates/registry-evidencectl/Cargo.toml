@@ -21,8 +21,13 @@ base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 getrandom.workspace = true
+# `tooling editor` records the hash of every schema it writes into a project so
+# a later run can tell its own output apart from an author's edit.
+hex.workspace = true
 inquire.workspace = true
+registry-evidence-authoring.workspace = true
 registry-evidence-client.workspace = true
+registry-language-server.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-crypto.workspace = true
 p256.workspace = true
@@ -31,8 +36,13 @@ rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+sha2.workspace = true
 signal-hook.workspace = true
+tokio = { workspace = true, features = ["io-util", "process"] }
 ureq.workspace = true
 url.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+registry-evidence-authoring = { workspace = true, features = ["testing"] }

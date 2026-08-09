@@ -8,7 +8,10 @@ DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly DEFAULT_REPO_ROOT
 readonly REPO_ROOT="${REGISTRY_STACK_INSTALLER_REPO_ROOT:-${DEFAULT_REPO_ROOT}}"
 readonly EXTENSION_ID="registrystack.registry-stack"
-REGISTRYCTL_PATH=''
+REGISTRY_STACK_CLI_NAME=''
+REGISTRY_STACK_CLI_PATH=''
+REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
+REGISTRY_STACK_CLI_VERSION=''
 
 usage() {
   cat <<'EOF'
@@ -26,7 +29,8 @@ The installer never trusts a workspace automatically. Installing for VS Code
 updates the active profile unless --profile selects an existing profile. Zed
 requires one final command-palette action because its CLI cannot install a
 local development extension. Project configuration remains a separate
-registryctl init or registryctl -C <project> tooling editor operation.
+registryctl init or registryctl -C <project> tooling editor operation
+(evidencectl provides equivalent commands for an Evidence project).
 EOF
 }
 
@@ -74,17 +78,27 @@ workspace_version() {
   ' "${REPO_ROOT}/Cargo.toml"
 }
 
-registryctl_version() {
+# Publishes its result through REGISTRY_STACK_CLI_VERSION (success) or
+# REGISTRY_STACK_CLI_CANDIDATE_ERROR (failure) rather than stdout, so callers
+# must invoke it as a plain statement, not inside a $(...) command
+# substitution: bash runs a substitution in a subshell, and a subshell's
+# variable assignments do not survive it.
+registry_stack_cli_version() {
+  REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
+  REGISTRY_STACK_CLI_VERSION=''
   local version_output
-  version_output="$("${REGISTRYCTL_PATH}" --version)" ||
-    fail "could not run registryctl --version"
+  version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" || {
+    REGISTRY_STACK_CLI_CANDIDATE_ERROR="could not run ${REGISTRY_STACK_CLI_NAME} --version"
+    return 1
+  }
   case "${version_output}" in
-    'registryctl '*)
-      version_output="${version_output#registryctl }"
-      printf '%s\n' "${version_output%% *}"
+    "${REGISTRY_STACK_CLI_NAME} "*)
+      version_output="${version_output#* }"
+      REGISTRY_STACK_CLI_VERSION="${version_output%% *}"
       ;;
     *)
-      fail "unexpected registryctl version output: ${version_output}"
+      REGISTRY_STACK_CLI_CANDIDATE_ERROR="unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
+      return 1
       ;;
   esac
 }
@@ -97,28 +111,58 @@ canonical_open_path() {
   (cd -- "${requested_path}" && pwd -P)
 }
 
-verify_registryctl() {
-  REGISTRYCTL_PATH="$(external_command_path registryctl)"
-
+verify_registry_stack_cli() {
   local expected_version
-  local installed_version
   expected_version="$(workspace_version)"
   [[ -n "${expected_version}" ]] ||
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
-  installed_version="$(registryctl_version)"
 
-  # A registryctl built from a source checkout reports a development version of
-  # the workspace version it was built from, so both spellings match this
-  # checkout. Only the version itself has to agree.
-  if [[ "${installed_version}" != "${expected_version}" &&
-    "${installed_version}" != "${expected_version}-dev" ]]; then
-    fail "this checkout is ${expected_version} but registryctl is ${installed_version}; install the matching registryctl"
+  # registryctl is tried first so a Relay adopter, who has never heard of
+  # evidencectl, sees no change from before this fallback existed.
+  local -a candidate_names=(registryctl evidencectl)
+  local -a candidate_errors=()
+  local candidate_name
+
+  for candidate_name in "${candidate_names[@]}"; do
+    command -v "${candidate_name}" >/dev/null 2>&1 || continue
+    REGISTRY_STACK_CLI_NAME="${candidate_name}"
+    REGISTRY_STACK_CLI_PATH="$(external_command_path "${candidate_name}")"
+
+    if ! registry_stack_cli_version; then
+      candidate_errors+=("${REGISTRY_STACK_CLI_CANDIDATE_ERROR}")
+      continue
+    fi
+    local installed_version="${REGISTRY_STACK_CLI_VERSION}"
+
+    # registryctl and evidencectl ship from this same workspace and share its
+    # version. A CLI built from a source checkout reports a development version
+    # of the workspace version it was built from, so both spellings match this
+    # checkout. Only the version itself has to agree.
+    if [[ "${installed_version}" != "${expected_version}" &&
+      "${installed_version}" != "${expected_version}-dev" ]]; then
+      candidate_errors+=("this checkout is ${expected_version} but ${candidate_name} is ${installed_version}; install the matching ${candidate_name}")
+      continue
+    fi
+
+    if ! "${REGISTRY_STACK_CLI_PATH}" tooling language-server --help >/dev/null; then
+      candidate_errors+=("${candidate_name} ${installed_version} does not provide tooling language-server")
+      continue
+    fi
+
+    printf 'Using %s %s from %s\n' \
+      "${candidate_name}" "${installed_version}" "${REGISTRY_STACK_CLI_PATH}"
+    return 0
+  done
+
+  if ((${#candidate_errors[@]} == 0)); then
+    fail "required external command 'registryctl' or 'evidencectl' was not found on PATH"
   fi
 
-  "${REGISTRYCTL_PATH}" tooling language-server --help >/dev/null ||
-    fail "registryctl ${installed_version} does not provide tooling language-server"
-  printf 'Using registryctl %s from %s\n' \
-    "${installed_version}" "${REGISTRYCTL_PATH}"
+  local candidate_error
+  for candidate_error in "${candidate_errors[@]}"; do
+    printf 'error: %s\n' "${candidate_error}" >&2
+  done
+  exit 1
 }
 
 install_vscode() {
@@ -126,12 +170,12 @@ install_vscode() {
   local profile="$2"
   local vscode_root="${REPO_ROOT}/editors/vscode"
   local vsix="${vscode_root}/registry-stack-dev.vsix"
-  local install_metadata="${vscode_root}/dist/registryctl-path"
-  local registryctl_path
+  local install_metadata="${vscode_root}/dist/registry-stack-cli-path"
+  local cli_path
   local profile_label='active profile'
   local -a profile_args=()
 
-  registryctl_path="${REGISTRYCTL_PATH}"
+  cli_path="${REGISTRY_STACK_CLI_PATH}"
 
   if [[ -n "${profile}" ]]; then
     profile_label="profile ${profile}"
@@ -164,8 +208,8 @@ install_vscode() {
     fail "temporary installer metadata already exists: ${install_metadata}"
   if ! (
     trap 'rm -f -- "${install_metadata}"' EXIT HUP INT TERM
-    printf '%s\n' "${registryctl_path}" > "${install_metadata}"
-    REGISTRY_STACK_EXPECT_REGISTRYCTL_PATH="${registryctl_path}" \
+    printf '%s\n' "${cli_path}" > "${install_metadata}"
+    REGISTRY_STACK_EXPECT_CLI_PATH="${cli_path}" \
       npm --prefix "${vscode_root}" run package:dev
   ); then
     fail "VS Code extension packaging failed"
@@ -177,7 +221,7 @@ install_vscode() {
   code "${profile_args[@]}" --install-extension "${vsix}" --force
 
   printf '\nRegistry Stack editor support is installed for VS Code.\n'
-  printf 'Project setup remains a separate registryctl operation.\n'
+  printf 'Project setup remains a separate registryctl or evidencectl operation.\n'
   printf 'Workspace trust remains your decision when a project opens.\n'
   if [[ -n "${open_path}" ]]; then
     printf 'Opening %s with the VS Code %s.\n' "${open_path}" "${profile_label}"
@@ -210,7 +254,7 @@ install_zed() {
   fi
 
   printf '\nRegistry Stack editor support is prepared for Zed.\n'
-  printf 'Project setup remains a separate registryctl operation.\n'
+  printf 'Project setup remains a separate registryctl or evidencectl operation.\n'
   printf 'Zed requires one manual installation step:\n'
   printf '  1. Run "Zed: Install Dev Extension" from the command palette.\n'
   printf '  2. Select %s\n' "${zed_root}"
@@ -289,7 +333,7 @@ main() {
   if [[ -n "${requested_open_path}" ]]; then
     open_path="$(canonical_open_path "${requested_open_path}")"
   fi
-  verify_registryctl
+  verify_registry_stack_cli
 
   case "${editor}" in
     vscode)

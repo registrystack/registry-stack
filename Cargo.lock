@@ -5603,6 +5603,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-evidence-authoring"
+version = "0.17.0"
+dependencies = [
+ "anyhow",
+ "jsonschema 0.18.3",
+ "rhai",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "url",
+]
+
+[[package]]
 name = "registry-evidence-client"
 version = "0.17.0"
 dependencies = [
@@ -5705,9 +5719,12 @@ dependencies = [
  "chrono",
  "clap",
  "getrandom 0.4.3",
+ "hex",
  "inquire",
  "p256",
+ "registry-evidence-authoring",
  "registry-evidence-client",
+ "registry-language-server",
  "registry-platform-buildinfo",
  "registry-platform-crypto",
  "rhai",
@@ -5715,8 +5732,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.0",
  "signal-hook",
  "tempfile",
+ "tokio",
  "ureq",
  "url",
  "zeroize",
@@ -5727,9 +5746,14 @@ name = "registry-language-server"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "futures",
+ "registry-evidence-authoring",
+ "rustix",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "tokio",
+ "tower",
  "tower-lsp-server",
  "tree-sitter",
  "tree-sitter-yaml",

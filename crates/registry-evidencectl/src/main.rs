@@ -19,6 +19,8 @@ mod keygen;
 mod request;
 mod scaffold;
 mod suggest;
+mod tooling;
+mod tooling_editor;
 mod verify;
 
 #[derive(Debug, Parser)]
@@ -64,6 +66,9 @@ enum Command {
     /// Inspect stopped local audit history.
     #[command(subcommand)]
     Audit(audit_view::AuditCommand),
+    /// Advanced: editor and tooling integration surfaces.
+    #[command(subcommand)]
+    Tooling(tooling::ToolingCommand),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
 }
@@ -83,6 +88,7 @@ fn main() -> ExitCode {
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
         Command::Audit(command) => audit_view::run(command),
+        Command::Tooling(command) => tooling::run(command),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {

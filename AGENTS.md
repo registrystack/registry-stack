@@ -35,10 +35,12 @@ client against a real authorization server.
 | `crates/registry-evidence-client-node` | Node.js binding for `registry-evidence-client`, via napi-rs |
 | `crates/registry-evidence-client-py` | Python binding for `registry-evidence-client`, via PyO3 |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
+| `crates/registry-evidence-authoring` | The authoring form: the single implementation of the model an adopter writes and the checks it must satisfy, shared by adopter tooling |
 | `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registryctl` | Relay adopter tooling |
+| `crates/registry-language-server` | Editor language server for Relay manifests and Evidence authoring documents, linked into both adopter tools |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -78,13 +80,29 @@ runtime.
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
 like `registryctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
-OpenAPI authoring workspaces, and drives fixture runs for complete deployment
-projects. It delegates runtime evaluation, signing, bundle validation, and
+OpenAPI authoring workspaces, writes the project-local editor schema mappings
+an adopter's YAML tooling reads, and drives fixture runs for complete
+deployment projects. It delegates runtime evaluation, signing, bundle validation, and
 fixture evaluation to the `evidence` binary, and reuses
 `registry-evidence-client` and `registry-evidence-verifier` for relying-party
-request preparation and offline response verification. It adds no Evidence
-semantics of its own. Its source is covered by the same source-product and
-domain neutrality checks as the runtime.
+request preparation and offline response verification. It links
+`registry-language-server`, so an adopter's editor reports the authoring
+sentences the command line already reports. It adds no Evidence semantics of
+its own. Its source is covered by the same source-product and domain neutrality
+checks as the runtime, and so is the language server's in full: every line of
+that crate ships inside `evidencectl`, and the modules its Relay half and its
+Evidence half share are where a term would leak from one into the other.
+
+`registry-evidence-authoring` is the library beside `evidencectl` holding the
+single implementation of the authoring form: the model an adopter writes, the
+checks that shape must satisfy, and the reading of an OpenAPI description that
+turns a published operation into the leaves a question may select. It sits
+outside the frozen Version 1
+runtime contract, is not a second runtime, and adds no Evidence semantics of
+its own; the sentences it reports are the ones adopter tooling already
+reported. It performs no input or output, so a caller may run the same checks
+against a file or an unsaved buffer, and its source is covered by the same
+source-product and domain neutrality checks as the runtime.
 
 Evidence configuration and scripts are trusted, startup-only deployment
 artifacts. Rust owns authentication, authorization, fixed source execution,
@@ -158,10 +176,42 @@ products/evidence/scripts/check-verifier-portability.sh
 products/evidence/scripts/check-config-key-paths.sh
 ```
 
-The last check holds the configuration reference in exact parity with the
-frozen `bundle.schema.yaml` and `runtime.schema.yaml` grammars. After changing
-a contract, run it with `--write` to regenerate the key-path blocks in
-`CONFIG.md`, then document each new key in the prose above them.
+The last check holds every Evidence configuration reference in exact parity
+with the schema it explains: the frozen `bundle.schema.yaml` and
+`runtime.schema.yaml` grammars against
+`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`,
+and the authoring-form schemas below against
+`products/evidence/reference/authoring-projects/CONFIG.md`. Parity is the same
+rule in both places and not the same promise: only the two grammars are frozen.
+After changing any of them, run the check with `--write` to regenerate the
+key-path blocks in the reference that carries them, then document each new key
+in the prose above them.
+
+The authoring-form JSON Schemas under
+`crates/registry-evidencectl/schemas/authoring/` are adopter tooling, not part
+of the frozen Version 1 contract set, so they carry their own gate:
+
+```bash
+products/evidence/scripts/check-authoring-schema.sh
+```
+
+Regenerate them with the generator the gate runs, never by hand:
+
+```bash
+cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+```
+
+`registry-evidence-authoring` is linked into the language server, so it reads no
+file, opens no socket, starts no process, and touches neither standard stream.
+`crates/registry-evidence-authoring/clippy.toml` is what holds that, by
+disallowing the resolved types, methods, and macros that would break it; every
+clippy run applies it, and this gate additionally fails the build when an entry
+stops resolving and proves the lints still refuse the shapes they were written
+for:
+
+```bash
+products/evidence/scripts/check-authoring-no-io.sh
+```
 
 Evidence client bindings, from `crates/registry-evidence-client-node`:
 

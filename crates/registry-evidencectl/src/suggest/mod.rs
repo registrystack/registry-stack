@@ -10,12 +10,14 @@
 
 pub mod emit;
 pub mod fetch;
-pub mod flatten;
 pub mod interactive;
-pub mod narrow;
-pub mod openapi;
+pub mod load;
 pub mod sample;
-pub mod types;
+
+// The reading of an OpenAPI document is the authoring library's, and the stages
+// keep the names they had here so every sibling module below still reaches them
+// through `super::`.
+pub use registry_evidence_authoring::openapi::{flatten, narrow, openapi, types};
 
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
@@ -108,7 +110,7 @@ pub(crate) struct PreparedSuggestion {
 /// prepared draft.
 pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
     let source = suggestion_openapi(args)?;
-    let spec = Spec::open(&source)?;
+    let spec = load::open(&source)?;
     let operations = spec.operations();
     if operations.is_empty() {
         bail!(

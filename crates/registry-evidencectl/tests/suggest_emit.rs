@@ -6,9 +6,7 @@
 //! rule and never a bug in the OpenAPI loader, the sampler, or the narrowing
 //! heuristics (all still placeholders as this file is written).
 
-#[allow(dead_code)]
-#[path = "../src/suggest/types.rs"]
-mod types;
+use registry_evidence_authoring::openapi::types;
 
 #[allow(dead_code)]
 #[path = "../src/fixtures.rs"]

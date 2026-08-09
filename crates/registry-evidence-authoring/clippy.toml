@@ -1,0 +1,169 @@
+# The no-input-output invariant, enforced after name resolution.
+#
+# This crate is linked into a language server that speaks JSON-RPC over standard
+# input and output, and its checks run against an author's unsaved buffer. So it
+# reads no file, opens no socket, starts no process, and touches neither
+# standard stream. `tests/no_io.rs` sweeps this crate's source text for the
+# spellings that would break that, which is a cheap tripwire and nothing more:
+# text has as many spellings as an author cares to invent, and three rounds of
+# adversarial review found new ones each time.
+#
+# These lists are the guarantee the sweep is not. Clippy matches the path the
+# compiler resolved, so an alias, a type alias, a `Default::default()` against
+# an annotated binding, and a module redirected to another directory all arrive
+# here as the name below, and a rename cannot dodge them. Everything the
+# compiler compiles into this crate is read, including code spliced in by
+# `include!` and modules a `#[path]` attribute points elsewhere, which is source
+# no walk of this directory would ever open.
+#
+# Clippy finds this file from this package's directory and applies it to this
+# package only: a sibling crate resolves the workspace file at the repository
+# root instead, so nothing here reaches one. It is applied by every clippy run,
+# the workspace run in CI included, and
+# `products/evidence/scripts/check-authoring-no-io.sh` is what additionally
+# fails the build when an entry below stops resolving, because clippy reports
+# that as a warning that `-D warnings` does not deny.
+#
+# `src/derivation.rs` holds the one expectation against these lists. That is
+# what makes this file load-bearing rather than advisory: empty it, delete it,
+# or stop applying it, and the expectation goes unfulfilled and the build fails.
+#
+# The scope is this package, so the test targets and the schema generator carry
+# their own allowances. The invariant is about what this library links into a
+# caller, which is the same boundary the dependency sweep draws when it leaves
+# `dev-dependencies` alone.
+
+# Matching the workspace file, which this one replaces rather than extends.
+cognitive-complexity-threshold = 25
+
+disallowed-types = [
+  # A new engine carries a `FileModuleResolver`, so it opens whatever path an
+  # author's `import` names. Disallowing the type rather than only its
+  # constructors is what reaches the spellings that never say `new`.
+  { path = "rhai::Engine", reason = "opens whatever file an authored `import` names, and prints to standard output; `src/derivation.rs` builds the one engine and disarms it" },
+  { path = "rhai::module_resolvers::FileModuleResolver", reason = "resolves an authored `import` by reading a file" },
+  { path = "std::fs::File", reason = "opens a file" },
+  { path = "std::fs::OpenOptions", reason = "opens a file" },
+  { path = "std::fs::DirBuilder", reason = "creates a directory" },
+  { path = "std::fs::ReadDir", reason = "lists a directory" },
+  { path = "std::fs::DirEntry", reason = "lists a directory" },
+  { path = "std::net::TcpStream", reason = "opens a socket" },
+  { path = "std::net::TcpListener", reason = "opens a socket" },
+  { path = "std::net::UdpSocket", reason = "opens a socket" },
+  # Not every socket lives under `std::net`: the Docker socket is a file path.
+  { path = "std::os::unix::net::UnixStream", reason = "opens a socket" },
+  { path = "std::os::unix::net::UnixListener", reason = "opens a socket" },
+  { path = "std::os::unix::net::UnixDatagram", reason = "opens a socket" },
+  { path = "std::process::Command", reason = "starts a process" },
+  { path = "std::process::Child", reason = "starts a process" },
+  # The standard streams themselves. The host's JSON-RPC conversation runs over
+  # them: writing one corrupts it, reading one takes the requests away.
+  { path = "std::io::Stdin", reason = "reads the host's protocol channel" },
+  { path = "std::io::Stdout", reason = "writes the host's protocol channel" },
+  { path = "std::io::Stderr", reason = "writes to standard error" },
+]
+
+disallowed-methods = [
+  # Every constructor of an engine. `rhai::Engine::default` is absent because it
+  # is not a reachable path for clippy to resolve; the disallowed type above is
+  # what refuses it, at the `rhai::Engine` it names.
+  { path = "rhai::Engine::new", reason = "builds an engine carrying a file-reading module resolver and a printing handler" },
+  { path = "rhai::Engine::new_raw", reason = "builds an engine the crate's one disarmed engine does not speak for" },
+  # Reading a program is safe only while it stays reading. Each of these
+  # evaluates one, and an evaluated program is what reaches a print handler, a
+  # debug handler, and an unbounded loop inside an editor.
+  { path = "rhai::Engine::run", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::run_with_scope", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::run_ast", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::run_ast_with_scope", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval_with_scope", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval_ast", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval_ast_with_scope", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval_expression", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::eval_expression_with_scope", reason = "evaluates an authored program" },
+  { path = "rhai::Engine::call_fn", reason = "evaluates an authored function" },
+  { path = "rhai::Engine::call_fn_with_options", reason = "evaluates an authored function" },
+  # Compiling that reads. This one resolves an authored `import` as it parses,
+  # so it opens a file for every module the author named.
+  { path = "rhai::Engine::compile_into_self_contained", reason = "resolves an authored `import`, which reads a file" },
+  { path = "rhai::Engine::compile_file", reason = "reads a program from a file" },
+  { path = "rhai::Engine::compile_file_with_scope", reason = "reads a program from a file" },
+  { path = "rhai::Engine::eval_file", reason = "runs a program from a file" },
+  { path = "rhai::Engine::eval_file_with_scope", reason = "runs a program from a file" },
+  { path = "rhai::Engine::run_file", reason = "runs a program from a file" },
+  { path = "rhai::Engine::run_file_with_scope", reason = "runs a program from a file" },
+  { path = "std::fs::read", reason = "reads a file" },
+  { path = "std::fs::read_to_string", reason = "reads a file" },
+  { path = "std::fs::write", reason = "writes a file" },
+  { path = "std::fs::copy", reason = "reads and writes a file" },
+  { path = "std::fs::rename", reason = "renames a file" },
+  { path = "std::fs::remove_file", reason = "removes a file" },
+  { path = "std::fs::remove_dir", reason = "removes a directory" },
+  { path = "std::fs::remove_dir_all", reason = "removes a directory tree" },
+  { path = "std::fs::create_dir", reason = "creates a directory" },
+  { path = "std::fs::create_dir_all", reason = "creates a directory tree" },
+  { path = "std::fs::read_dir", reason = "lists a directory" },
+  { path = "std::fs::read_link", reason = "reads where a link points" },
+  { path = "std::fs::metadata", reason = "stats a file" },
+  { path = "std::fs::symlink_metadata", reason = "stats a file without following it" },
+  { path = "std::fs::canonicalize", reason = "resolves a path against the file system" },
+  { path = "std::fs::hard_link", reason = "links a file" },
+  { path = "std::fs::soft_link", reason = "links a file" },
+  { path = "std::fs::set_permissions", reason = "changes a file's permissions" },
+  { path = "std::fs::exists", reason = "asks whether a path is there" },
+  { path = "std::os::unix::fs::symlink", reason = "links a file" },
+  # The file system reached through `std::path` rather than `std::fs`. These are
+  # the entries the source sweep cannot make: `Path::is_dir` is a system call and
+  # `Metadata::is_dir` is a bit test, and they are the same eleven characters.
+  # Here they are different functions, so only the first is refused.
+  { path = "std::path::Path::exists", reason = "asks whether a path is there" },
+  { path = "std::path::Path::try_exists", reason = "asks whether a path is there" },
+  { path = "std::path::Path::is_file", reason = "asks the file system what a path is" },
+  { path = "std::path::Path::is_dir", reason = "asks the file system what a path is" },
+  { path = "std::path::Path::is_symlink", reason = "asks the file system what a path is" },
+  { path = "std::path::Path::metadata", reason = "stats a file" },
+  { path = "std::path::Path::symlink_metadata", reason = "stats a file without following it" },
+  { path = "std::path::Path::canonicalize", reason = "resolves a path against the file system" },
+  { path = "std::path::Path::read_link", reason = "reads where a link points" },
+  { path = "std::path::Path::read_dir", reason = "lists a directory" },
+  { path = "std::env::var", reason = "reads the process environment" },
+  { path = "std::env::var_os", reason = "reads the process environment" },
+  { path = "std::env::vars", reason = "reads the process environment" },
+  { path = "std::env::vars_os", reason = "reads the process environment" },
+  { path = "std::env::set_var", reason = "writes the process environment" },
+  { path = "std::env::remove_var", reason = "writes the process environment" },
+  { path = "std::env::args", reason = "reads the host's command line" },
+  { path = "std::env::args_os", reason = "reads the host's command line" },
+  { path = "std::env::current_dir", reason = "asks the operating system where the host is" },
+  { path = "std::env::set_current_dir", reason = "moves the host" },
+  { path = "std::env::current_exe", reason = "asks the operating system what the host is" },
+  { path = "std::env::temp_dir", reason = "names a directory this crate has no business in" },
+  { path = "std::env::home_dir", reason = "names a directory this crate has no business in" },
+  { path = "std::io::stdin", reason = "reads the host's protocol channel" },
+  { path = "std::io::stdout", reason = "writes the host's protocol channel" },
+  { path = "std::io::stderr", reason = "writes to standard error" },
+  { path = "std::io::copy", reason = "reads and writes a stream" },
+  { path = "std::io::read_to_string", reason = "reads a stream to its end" },
+  { path = "std::process::exit", reason = "ends the host process" },
+  { path = "std::process::abort", reason = "ends the host process" },
+  { path = "std::process::id", reason = "asks the operating system about the host" },
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "resolves a host name over the network" },
+]
+
+disallowed-macros = [
+  # A print inside a language server is not a log line, it is a malformed
+  # JSON-RPC frame on the channel the editor is waiting on.
+  { path = "std::println", reason = "writes the host's protocol channel" },
+  { path = "std::print", reason = "writes the host's protocol channel" },
+  { path = "std::eprintln", reason = "writes to standard error" },
+  { path = "std::eprint", reason = "writes to standard error" },
+  { path = "std::dbg", reason = "writes to standard error" },
+  { path = "std::include_str", reason = "reads a file at build time" },
+  { path = "std::include_bytes", reason = "reads a file at build time" },
+  # `std::include` is deliberately absent. It expands before any lint runs, so
+  # an entry for it would never fire and a rule that never fires is worse than
+  # no rule. The source sweep keeps `include!` on its list, and whatever the
+  # splice brings in is read by everything above, because the compiler compiled
+  # it.
+]

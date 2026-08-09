@@ -27,13 +27,25 @@ temporary_root=$(mktemp -d)
 trap 'rm -rf "$temporary_root"' EXIT HUP INT TERM
 production_text="$temporary_root/production-rust.txt"
 
+# `registry-language-server` is here because `evidencectl` links it, so every
+# line of it ships inside Evidence adopter tooling. The whole crate is swept,
+# not only its `evidence/` modules: the parts it shares with its Relay half
+# (`yaml.rs`, `workspace.rs`, `refs.rs`, `safety.rs`, `server.rs`) are exactly
+# where a term would leak from one half into the other, and a per-directory
+# carve-out would leave that spine unread. The Relay half loses nothing by the
+# rule, because it indexes Registry Manifest structure, which is portable by
+# construction and names manifest keys rather than any source product. Where
+# the Relay family does name one, in `registryctl`'s starter templates, that
+# code is not linked into `evidencectl` and is not swept here.
 source_roots=(
   "$repository_root/crates/registry-evidence/src"
+  "$repository_root/crates/registry-evidence-authoring/src"
   "$repository_root/crates/registry-evidence-client/src"
   "$repository_root/crates/registry-evidence-client-node/src"
   "$repository_root/crates/registry-evidence-client-py/src"
   "$repository_root/crates/registry-evidence-verifier/src"
   "$repository_root/crates/registry-evidencectl/src"
+  "$repository_root/crates/registry-language-server/src"
 )
 
 # The two bindings ship a non-Rust surface that the Rust sweep cannot see.
@@ -59,11 +71,13 @@ shipped_package_manifests=(
 
 cargo_manifests=(
   "$repository_root/crates/registry-evidence/Cargo.toml"
+  "$repository_root/crates/registry-evidence-authoring/Cargo.toml"
   "$repository_root/crates/registry-evidence-client/Cargo.toml"
   "$repository_root/crates/registry-evidence-client-node/Cargo.toml"
   "$repository_root/crates/registry-evidence-client-py/Cargo.toml"
   "$repository_root/crates/registry-evidence-verifier/Cargo.toml"
   "$repository_root/crates/registry-evidencectl/Cargo.toml"
+  "$repository_root/crates/registry-language-server/Cargo.toml"
   "$repository_root/Cargo.toml"
 )
 
@@ -224,6 +238,18 @@ if [[ ! -s "$production_text" ]]; then
   fail 'Masking left no Evidence production Rust text to search.'
 fi
 
+# `SPDX-License-Identifier` is a licensing declaration, and it is the one
+# spelling of `licence` a neutral source file is expected to carry: the crates
+# outside the Evidence family head every file with it. The shipped package
+# manifests above meet the same collision and answer it by taking the
+# source-product sweep only. Answer it more narrowly here, by dropping that one
+# tag from the copy the vocabulary sweep reads. Only the tag goes: the rest of
+# every line it sits on is still searched, the source-product sweep still reads
+# the unaltered text, and no term either sweep refuses can hide behind a fixed
+# string that contains none of them.
+vocabulary_text="$temporary_root/vocabulary-rust.txt"
+sed 's/SPDX-License-Identifier/SPDX/g' "$production_text" >"$vocabulary_text"
+
 published_files=()
 while IFS= read -r published_file; do
   published_files+=("$published_file")
@@ -264,7 +290,7 @@ sweep \
 sweep \
   'Evidence production Rust, adopter tooling, or the shipped binding surface contains acceptance-case or jurisdiction-specific vocabulary.' \
   'adult|age[_ -]?at|residence|licen[cs]e|parentage|legal[_ -]?parent|given_name|family_name|birth_date|national[_ -]?identifier' \
-  "$production_text" \
+  "$vocabulary_text" \
   "${shipped_binding_surface[@]}"
 
 sweep \

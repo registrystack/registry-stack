@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  adaptCommentsForMdx,
   applyDocsetMetadataOverrides,
   applyRepoDisplayName,
   frontmatterBlock,
@@ -59,6 +60,31 @@ test('uses the Evidence Gateway display name in generated product prose', () => 
 test('leaves other product documentation unchanged', () => {
   const md = 'Evidence is a generic noun here.';
   assert.equal(applyRepoDisplayName(md, 'registry-relay'), md);
+});
+
+test('adapts standalone HTML comments for MDX without changing fenced examples', () => {
+  const md = [
+    '<!-- generated:start -->',
+    '',
+    '```markdown',
+    '<!-- example -->',
+    '```',
+    '',
+    '<!-- generated:end -->',
+  ].join('\n');
+
+  assert.equal(
+    adaptCommentsForMdx(md),
+    [
+      '{/* generated:start */}',
+      '',
+      '```markdown',
+      '<!-- example -->',
+      '```',
+      '',
+      '{/* generated:end */}',
+    ].join('\n'),
+  );
 });
 
 test('strips a leading Page-type banner and its trailing blank line', () => {

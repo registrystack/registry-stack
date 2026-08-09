@@ -32,16 +32,36 @@ const requiredLabels: Record<Field['required'], string> = {
   conditional: 'Conditional',
 };
 
-const contracts = reference.contracts as Array<{
+type Contract = {
   id: string;
   file: string;
   title: string;
+  status: string;
+  reference: string;
   field_count: number;
   fields: Field[];
-}>;
+};
+
+// The frozen Version 1 grammar and the adopter-tooling authoring schemas are
+// published side by side. A reader who takes one for the other has read the
+// page wrongly, so every section states which it is instead of leaving the
+// difference to the file name.
+const statusLabels: Record<string, string> = {
+  frozen: 'Frozen Version 1 contract',
+  tooling: 'Adopter tooling, not frozen',
+};
+
+const contracts = reference.contracts as Array<Contract>;
 
 if (contracts.length === 0) {
   throw new Error('the Evidence configuration reference is empty; run npm run generate');
+}
+
+const unlabelled = contracts.find((contract) => !statusLabels[contract.status]);
+if (unlabelled) {
+  throw new Error(
+    `the Evidence configuration reference publishes ${unlabelled.id} under an unknown status ${unlabelled.status}`,
+  );
 }
 
 const slug = (id: string) => `evidence-${id}-configuration`;
@@ -61,7 +81,9 @@ const segments = (text: string) =>
           <a href={`#${slug(contract.id)}`}>
             <code>{contract.title}</code>
           </a>{' '}
-          <span>{contract.field_count} key paths</span>
+          <span>
+            {statusLabels[contract.status]}, {contract.field_count} key paths
+          </span>
         </li>
       ))
     }
@@ -74,8 +96,12 @@ const segments = (text: string) =>
       <h2 id={slug(contract.id)}>
         <code>{contract.title}</code>
       </h2>
+      <p class={`contract-status contract-status-${contract.status}`}>
+        {statusLabels[contract.status]}
+      </p>
       <p class="contract-source">
-        Generated from <code>{contract.file}</code>. {contract.field_count} key paths.
+        Generated from <code>{contract.file}</code>. {contract.field_count} key paths. Explained in{' '}
+        <code>{contract.reference}</code>.
       </p>
       <div class="table-scroll">
         <table>
@@ -200,6 +226,26 @@ const segments = (text: string) =>
 
   .contract-reference {
     margin-block: 2.5rem;
+  }
+
+  .contract-status {
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 0.25rem;
+    display: inline-block;
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.04em;
+    margin: 0.25rem 0 0.5rem;
+    padding: 0.15rem 0.5rem;
+    text-transform: uppercase;
+  }
+
+  .contract-status-frozen {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-accent);
+  }
+
+  .contract-status-tooling {
+    color: var(--sl-color-gray-2);
   }
 
   .table-scroll {

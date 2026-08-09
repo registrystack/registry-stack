@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    collections::BTreeSet,
     fs,
     io::{BufRead, BufReader, Read, Write},
     process::{ChildStdin, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    thread,
+    time::Duration,
 };
 
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower_lsp_server::ls_types::Uri;
+
+/// How long a test waits for one more message before concluding the server has stopped
+/// producing them. A regression that drops a notification should fail the waiting assertion
+/// within this budget, not hang until the CI job's own timeout kills the run without a
+/// diagnostic.
+const MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn write_project() -> TempDir {
     let temp = TempDir::new().unwrap();
@@ -42,12 +52,14 @@ fn send(stdin: &mut ChildStdin, message: Value) {
     stdin.flush().unwrap();
 }
 
-fn receive(stdout: &mut BufReader<ChildStdout>) -> Value {
+/// Reads one framed LSP message from the server's stdout, or `None` once it closes stdout.
+fn read_one_message(stdout: &mut BufReader<ChildStdout>) -> Option<Value> {
     let mut content_length = None;
     loop {
         let mut header = String::new();
-        stdout.read_line(&mut header).unwrap();
-        assert!(!header.is_empty(), "language server closed stdout");
+        if stdout.read_line(&mut header).unwrap() == 0 {
+            return None;
+        }
         if header == "\r\n" {
             break;
         }
@@ -57,27 +69,93 @@ fn receive(stdout: &mut BufReader<ChildStdout>) -> Value {
     }
     let mut body = vec![0; content_length.expect("response has Content-Length")];
     stdout.read_exact(&mut body).unwrap();
-    serde_json::from_slice(&body).unwrap()
+    Some(serde_json::from_slice(&body).unwrap())
 }
 
-fn receive_response(stdout: &mut BufReader<ChildStdout>, id: i64) -> Value {
-    for _ in 0..50 {
-        let message = receive(stdout);
+/// Reads framed LSP messages off the server's stdout on a background thread and forwards each
+/// one to the returned channel. The blocking read stays confined to that thread, so a caller
+/// waiting for a message that never arrives times out on `Receiver::recv_timeout` instead of
+/// hanging on the pipe.
+fn spawn_message_reader(stdout: ChildStdout) -> Receiver<Value> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        while let Some(message) = read_one_message(&mut reader) {
+            if sender.send(message).is_err() {
+                break; // the test dropped its receiver
+            }
+        }
+    });
+    receiver
+}
+
+/// Waits for one more message within [`MESSAGE_TIMEOUT`], panicking with a diagnosis instead of
+/// blocking forever when the server has stopped producing them.
+fn receive(messages: &Receiver<Value>) -> Value {
+    receive_within(messages, MESSAGE_TIMEOUT)
+}
+
+/// [`receive`] with an explicit deadline, so the timeout itself can be exercised on a short
+/// budget instead of waiting out [`MESSAGE_TIMEOUT`] for real.
+fn receive_within(messages: &Receiver<Value>, timeout: Duration) -> Value {
+    match messages.recv_timeout(timeout) {
+        Ok(message) => message,
+        Err(RecvTimeoutError::Timeout) => panic!("language server sent nothing for {timeout:?}"),
+        Err(RecvTimeoutError::Disconnected) => panic!("language server closed stdout"),
+    }
+}
+
+fn receive_response(messages: &Receiver<Value>, id: i64) -> Value {
+    let mut others = Vec::new();
+    loop {
+        let message = receive(messages);
         if message.get("id").and_then(Value::as_i64) == Some(id) {
             return message;
         }
+        others.push(message);
+        assert!(
+            others.len() < 50,
+            "language server did not return response {id}; received instead: {others:?}"
+        );
     }
-    panic!("language server did not return response {id}");
 }
 
-fn receive_method(stdout: &mut BufReader<ChildStdout>, method: &str) -> Value {
-    for _ in 0..50 {
-        let message = receive(stdout);
+fn receive_method(messages: &Receiver<Value>, method: &str) -> Value {
+    let mut others = Vec::new();
+    loop {
+        let message = receive(messages);
         if message.get("method").and_then(Value::as_str) == Some(method) {
             return message;
         }
+        others.push(message);
+        assert!(
+            others.len() < 50,
+            "language server did not send {method}; received instead: {others:?}"
+        );
     }
-    panic!("language server did not send {method}");
+}
+
+/// A regression that stops the server from ever sending an awaited notification must fail this
+/// wait within a bounded deadline, not hang until the CI job's own timeout kills the run without
+/// a diagnostic. This exercises the deadline on a short budget, on a channel that will never
+/// produce anything, instead of waiting out the real `MESSAGE_TIMEOUT` used against a live server.
+#[test]
+fn receive_times_out_instead_of_hanging_when_nothing_arrives() {
+    let (sender, messages) = mpsc::channel::<Value>();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        receive_within(&messages, Duration::from_millis(200))
+    }))
+    .expect_err("a message that never arrives is a panic, not a hang");
+    drop(sender); // held open so the channel times out rather than disconnecting
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
+    assert!(
+        message.contains("sent nothing"),
+        "expected a timeout panic, got: {message}"
+    );
 }
 
 #[test]
@@ -104,7 +182,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let stdout = spawn_message_reader(child.stdout.take().unwrap());
 
     send(
         &mut stdin,
@@ -124,7 +202,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             }
         }),
     );
-    let initialize = receive_response(&mut stdout, 1);
+    let initialize = receive_response(&stdout, 1);
     assert_eq!(
         initialize.pointer("/result/capabilities/definitionProvider"),
         Some(&Value::Bool(true))
@@ -134,7 +212,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
     );
-    let registration = receive(&mut stdout);
+    let registration = receive(&stdout);
     assert_eq!(
         registration.get("method").and_then(Value::as_str),
         Some("client/registerCapability")
@@ -145,11 +223,31 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             .and_then(Value::as_str),
         Some("workspace/didChangeWatchedFiles")
     );
+    // Every authored extension gets its own glob and so does every directory a source's artifacts
+    // sit in, so a watched-file event fires for a Relay project document, an Evidence derivation,
+    // and a schema written as JSON alike; a glob lost here is a family of file the server would
+    // stop hearing about.
+    let watched_globs = registration
+        .pointer("/params/registrations/0/registerOptions/watchers")
+        .and_then(Value::as_array)
+        .expect("the registration carries a watcher list")
+        .iter()
+        .map(|watcher| {
+            watcher
+                .pointer("/globPattern")
+                .and_then(Value::as_str)
+                .expect("a watcher names its glob pattern")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        registration
-            .pointer("/params/registrations/0/registerOptions/watchers/0/globPattern")
-            .and_then(Value::as_str),
-        Some("**/*.yaml")
+        watched_globs,
+        BTreeSet::from([
+            "**/*.yaml".to_owned(),
+            "**/*.rhai".to_owned(),
+            "**/adapters/*".to_owned(),
+            "**/schemas/*".to_owned(),
+        ])
     );
     send(
         &mut stdin,
@@ -161,7 +259,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
     );
     let mut published_manifest_diagnostics = false;
     for _ in 0..3 {
-        let notification = receive(&mut stdout);
+        let notification = receive(&stdout);
         if notification.get("method").and_then(Value::as_str)
             == Some("textDocument/publishDiagnostics")
             && notification.pointer("/params/uri").and_then(Value::as_str)
@@ -187,7 +285,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             }
         }),
     );
-    let definition = receive_response(&mut stdout, 2);
+    let definition = receive_response(&stdout, 2);
     assert_eq!(
         definition.pointer("/result/0/uri").and_then(Value::as_str),
         Some(integration_uri.as_str())
@@ -206,7 +304,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             }
         }),
     );
-    let references = receive_response(&mut stdout, 3);
+    let references = receive_response(&stdout, 3);
     assert!(
         references
             .get("result")
@@ -224,7 +322,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             "params": { "query": "lookup" }
         }),
     );
-    let symbols = receive_response(&mut stdout, 4);
+    let symbols = receive_response(&stdout, 4);
     assert_eq!(
         symbols.pointer("/result/0/name").and_then(Value::as_str),
         Some("lookup")
@@ -255,7 +353,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
                 "params": { "query": "external-demo" }
             }),
         );
-        let reloaded_symbols = receive_response(&mut stdout, id);
+        let reloaded_symbols = receive_response(&stdout, id);
         if reloaded_symbols
             .pointer("/result/0/name")
             .and_then(Value::as_str)
@@ -272,7 +370,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         &mut stdin,
         json!({ "jsonrpc": "2.0", "id": 15, "method": "shutdown", "params": null }),
     );
-    receive_response(&mut stdout, 15);
+    receive_response(&stdout, 15);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
@@ -298,7 +396,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
             .spawn()
             .unwrap();
         let mut stdin = child.stdin.take().unwrap();
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let stdout = spawn_message_reader(child.stdout.take().unwrap());
 
         send(
             &mut stdin,
@@ -314,19 +412,19 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
                 }
             }),
         );
-        receive_response(&mut stdout, 1);
+        receive_response(&stdout, 1);
         send(
             &mut stdin,
             json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
         );
 
         if lazy {
-            let initial_log = receive_method(&mut stdout, "window/logMessage");
+            let initial_log = receive_method(&stdout, "window/logMessage");
             assert_eq!(
                 initial_log
                     .pointer("/params/message")
                     .and_then(Value::as_str),
-                Some("No registry-stack.yaml project found in the workspace")
+                Some("No Relay or Evidence project found in the workspace")
             );
             fs::write(&manifest, [0xff, 0xfe]).unwrap();
             send(
@@ -346,7 +444,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
             );
         }
 
-        let error_log = receive_method(&mut stdout, "window/logMessage");
+        let error_log = receive_method(&stdout, "window/logMessage");
         assert_eq!(
             error_log.pointer("/params/type").and_then(Value::as_i64),
             Some(1),
@@ -357,7 +455,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
             .and_then(Value::as_str)
             .unwrap();
         assert!(message.starts_with("Could not index Registry Stack project:"));
-        assert!(!message.contains("No registry-stack.yaml project found"));
+        assert!(!message.contains("No Relay or Evidence project found"));
         assert!(
             message.len() <= 560,
             "load error was not bounded: {message}"
@@ -367,7 +465,7 @@ fn reports_initial_and_lazy_project_load_failures_over_lsp() {
             &mut stdin,
             json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null }),
         );
-        receive_response(&mut stdout, 2);
+        receive_response(&stdout, 2);
         send(
             &mut stdin,
             json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
@@ -393,7 +491,7 @@ fn publishes_malformed_project_document_diagnostics() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let stdout = spawn_message_reader(child.stdout.take().unwrap());
 
     send(
         &mut stdin,
@@ -409,12 +507,12 @@ fn publishes_malformed_project_document_diagnostics() {
             }
         }),
     );
-    receive_response(&mut stdout, 1);
+    receive_response(&stdout, 1);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
     );
-    let diagnostics = receive_method(&mut stdout, "textDocument/publishDiagnostics");
+    let diagnostics = receive_method(&stdout, "textDocument/publishDiagnostics");
     assert_eq!(
         diagnostics.pointer("/params/uri").and_then(Value::as_str),
         Some(manifest_uri.as_str())
@@ -431,7 +529,135 @@ fn publishes_malformed_project_document_diagnostics() {
         &mut stdin,
         json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null }),
     );
-    receive_response(&mut stdout, 2);
+    receive_response(&stdout, 2);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+/// Two projects of different families, each with a document that stops parsing, in one session. A
+/// reader has to be able to tell which tool is reporting, so each diagnostic carries the name of
+/// the family that produced it.
+#[test]
+fn diagnostics_name_the_family_that_produced_them() {
+    use std::collections::BTreeMap;
+
+    use registry_evidence_authoring::{
+        layout::QUESTIONS_DIRECTORY,
+        marker::{default_project_marker_document, PROJECT_MARKER_FILE},
+    };
+
+    let workspace = TempDir::new().unwrap();
+    let relay = workspace.path().join("relay");
+    let evidence = workspace.path().join("evidence");
+    fs::create_dir_all(&relay).unwrap();
+    fs::create_dir_all(evidence.join(QUESTIONS_DIRECTORY)).unwrap();
+    fs::write(relay.join("registry-stack.yaml"), "registry: [\n").unwrap();
+    fs::write(
+        evidence.join(PROJECT_MARKER_FILE),
+        default_project_marker_document(),
+    )
+    .unwrap();
+    let question = evidence.join(QUESTIONS_DIRECTORY).join("adult-status.yaml");
+    fs::write(&question, "id: [\n").unwrap();
+
+    let uri_of = |path: &std::path::Path| {
+        Uri::from_file_path(path.canonicalize().unwrap())
+            .unwrap()
+            .to_string()
+    };
+    let manifest_uri = uri_of(&relay.join("registry-stack.yaml"));
+    let question_uri = uri_of(&question);
+    let relay_folder_uri = uri_of(&relay);
+    let evidence_folder_uri = uri_of(&evidence);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-language-server"))
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = spawn_message_reader(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "capabilities": {},
+                "workspaceFolders": [
+                    { "uri": relay_folder_uri, "name": "relay" },
+                    { "uri": evidence_folder_uri, "name": "evidence" }
+                ]
+            }
+        }),
+    );
+    receive_response(&stdout, 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+
+    let mut sources = BTreeMap::new();
+    for _ in 0..50 {
+        let message = receive(&stdout);
+        if message.get("method").and_then(Value::as_str) != Some("textDocument/publishDiagnostics")
+        {
+            continue;
+        }
+        let uri = message
+            .pointer("/params/uri")
+            .and_then(Value::as_str)
+            .expect("a published document names its URI")
+            .to_owned();
+        for diagnostic in message
+            .pointer("/params/diagnostics")
+            .and_then(Value::as_array)
+            .expect("a published document carries a diagnostics array")
+        {
+            if diagnostic
+                .pointer("/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("Invalid YAML syntax"))
+            {
+                sources.insert(
+                    uri.clone(),
+                    diagnostic
+                        .pointer("/source")
+                        .and_then(Value::as_str)
+                        .expect("a diagnostic names its source")
+                        .to_owned(),
+                );
+            }
+        }
+        if sources.len() == 2 {
+            break;
+        }
+    }
+
+    assert_eq!(
+        sources.get(&manifest_uri).map(String::as_str),
+        Some("registry-stack"),
+        "{sources:?}"
+    );
+    assert_eq!(
+        sources.get(&question_uri).map(String::as_str),
+        Some("evidence"),
+        "{sources:?}"
+    );
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null }),
+    );
+    receive_response(&stdout, 2);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
@@ -495,7 +721,7 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let stdout = spawn_message_reader(child.stdout.take().unwrap());
 
     send(
         &mut stdin,
@@ -511,7 +737,7 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
             }
         }),
     );
-    let initialize = receive_response(&mut stdout, 1);
+    let initialize = receive_response(&stdout, 1);
     assert_eq!(
         initialize
             .pointer("/result/capabilities/textDocumentSync/save/includeText")
@@ -545,7 +771,7 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
             "params": { "query": "save-content" }
         }),
     );
-    let symbols = receive_response(&mut stdout, 2);
+    let symbols = receive_response(&stdout, 2);
     assert_eq!(
         symbols.pointer("/result").and_then(Value::as_array),
         Some(&vec![])
@@ -605,7 +831,7 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
             "params": { "query": "included-save-content" }
         }),
     );
-    let symbols = receive_response(&mut stdout, 3);
+    let symbols = receive_response(&stdout, 3);
     assert_eq!(
         symbols.pointer("/result/0/name").and_then(Value::as_str),
         Some("included-save-content")
@@ -628,7 +854,7 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
             "params": { "query": "initial" }
         }),
     );
-    let reloaded = receive_response(&mut stdout, 4);
+    let reloaded = receive_response(&stdout, 4);
     assert_eq!(
         reloaded.pointer("/result/0/name").and_then(Value::as_str),
         Some("initial")
@@ -636,9 +862,137 @@ fn did_save_only_indexes_included_text_and_never_reads_uri_paths() {
 
     send(
         &mut stdin,
-        json!({ "jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": null }),
+        json!({ "jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": null }),
     );
-    receive_response(&mut stdout, 5);
+    receive_response(&stdout, 6);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn serves_untitled_and_rootless_documents_without_error() {
+    let project = write_project();
+    let root_uri = Uri::from_file_path(project.path()).unwrap().to_string();
+    let elsewhere = TempDir::new().unwrap();
+    let rootless = elsewhere.path().join("notes.yaml");
+    fs::write(&rootless, "version: 1\nid: rootless\n").unwrap();
+    let rootless_uri = Uri::from_file_path(rootless.canonicalize().unwrap())
+        .unwrap()
+        .to_string();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-language-server"))
+        .current_dir(project.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = spawn_message_reader(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": root_uri,
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": root_uri, "name": "demo" }]
+            }
+        }),
+    );
+    receive_response(&stdout, 1);
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+
+    // An `untitled:` buffer and a `zipfile:` document name nothing on this filesystem, so the
+    // server declines them outright; a real file outside every project is served with an empty
+    // answer instead.
+    for (id, uri, answers) in [
+        (2, "untitled:Untitled-1", false),
+        (3, "zipfile:///archive.zip::/registry-stack.yaml", false),
+        (4, rootless_uri.as_str(), true),
+    ] {
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "yaml",
+                        "version": 1,
+                        "text": "version: 1\nid: scratch\n"
+                    }
+                }
+            }),
+        );
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "textDocument/documentSymbol",
+                "params": { "textDocument": { "uri": uri } }
+            }),
+        );
+
+        let mut symbols = None;
+        for _ in 0..50 {
+            let message = receive(&stdout);
+            if message.get("id").and_then(Value::as_i64) == Some(id) {
+                symbols = Some(message);
+                break;
+            }
+            assert_ne!(
+                message.pointer("/params/type").and_then(Value::as_i64),
+                Some(1),
+                "{uri} logged an error: {message}"
+            );
+            assert_ne!(
+                message.pointer("/params/uri").and_then(Value::as_str),
+                Some(uri),
+                "{uri} was published diagnostics: {message}"
+            );
+        }
+        let symbols = symbols.expect("the server always answers a documentSymbol request");
+        assert_eq!(
+            symbols.pointer("/result").and_then(Value::as_array),
+            answers.then_some(&vec![]),
+            "{symbols}"
+        );
+    }
+
+    // The project the client did open is still indexed.
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "workspace/symbol",
+            "params": { "query": "lookup" }
+        }),
+    );
+    let indexed = receive_response(&stdout, 5);
+    assert_eq!(
+        indexed.pointer("/result/0/name").and_then(Value::as_str),
+        Some("lookup")
+    );
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": null }),
+    );
+    receive_response(&stdout, 6);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),

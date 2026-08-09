@@ -1,5 +1,5 @@
 {
-  "format_version": "1.0",
+  "format_version": "1.1",
   "generator": "docs/site/scripts/generate-evidence-configuration.mjs",
   "contracts": [
     {
@@ -7,6 +7,8 @@
       "file": "products/evidence/contracts/bundle.schema.yaml",
       "title": "bundle/evidence.yaml",
       "marker": "evidence-bundle-key-paths",
+      "status": "frozen",
+      "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
       "field_count": 232,
       "fields": [
         {
@@ -3774,6 +3776,8 @@
       "file": "products/evidence/contracts/runtime.schema.yaml",
       "title": "runtime.yaml",
       "marker": "evidence-runtime-key-paths",
+      "status": "frozen",
+      "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
       "field_count": 35,
       "fields": [
         {
@@ -4317,6 +4321,760 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "Pins the runtime document to Version 1 of this grammar; the loader rejects any other value, so a future incompatible runtime shape is never read as if it were this one.",
+          "runtime_validation": null
+        }
+      ]
+    },
+    {
+      "id": "authoring-question",
+      "file": "crates/registry-evidencectl/schemas/authoring/question.schema.json",
+      "title": "questions/<name>.yaml",
+      "marker": "evidence-authoring-question-key-paths",
+      "status": "tooling",
+      "reference": "products/evidence/reference/authoring-projects/CONFIG.md",
+      "field_count": 55,
+      "fields": [
+        {
+          "key_path": "answers",
+          "kind": "property",
+          "type": "array",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One governed concept a question answers, and the shape of that answer.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].concept",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].id",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].maximum",
+          "kind": "property",
+          "type": "integer | null",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: int64"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].maximumSerializedBytes",
+          "kind": "property",
+          "type": "integer | null",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint64",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].minimum",
+          "kind": "property",
+          "type": "integer | null",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: int64"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].schema",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].sdJwtVc",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "How an answer appears in the SD-JWT VC serialization of a response.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].sdJwtVc.claim",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].sdJwtVc.disclosure",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "top-level"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Where a projected claim sits in the disclosure structure.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].type",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "boolean",
+            "bounded-integer",
+            "controlled-category",
+            "reviewed-structured-value"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "The shape of one answer.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].values",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "answers[].values[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "derivation",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "disclosure",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Which of a question's concepts a response may carry.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "disclosure.allow",
+          "kind": "property",
+          "type": "array",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "disclosure.allow[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "The published description of what a question decides and under what rules.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.disclosureFamilies",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.disclosureFamilies[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.evidenceType",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.fixtures",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.kind",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": [
+            "constraint",
+            "criterion",
+            "information-requirement"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "What kind of rule a question's requirement is.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.observationTimezone",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.referenceFrameworks",
+          "kind": "property",
+          "type": "array",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.referenceFrameworks[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.requirement",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "governance.validitySeconds",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint64",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "id",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "purpose",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "question",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "responseFormats",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "responseFormats[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": [
+            "sd-jwt-vc",
+            "signed-jws"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "A serialization an answer may be returned in.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source",
+          "kind": "property",
+          "type": "object",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Where a question reads from: a named source, or an operation of the\nproject's own OpenAPI description together with the facts it projects.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.collectionBounds",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.collectionBounds.*",
+          "kind": "map_value",
+          "type": "integer",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint64",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.facts",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.facts[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One value projected out of a source response and handed to the derivation.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.facts[].combine",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "collect",
+            "exactly-one"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "How many values a fact's path is expected to reach.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.facts[].name",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.facts[].path",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.operation",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "source.ref",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject",
+          "kind": "property",
+          "type": "null | object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One party a question is asked about.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject.derivation",
+          "kind": "property",
+          "type": "boolean",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject.profile",
+          "kind": "property",
+          "type": "null | string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject.role",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subject.selector",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects",
+          "kind": "property",
+          "type": "array",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[]",
+          "kind": "array_item",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "One party a question is asked about.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].derivation",
+          "kind": "property",
+          "type": "boolean",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].profile",
+          "kind": "property",
+          "type": "null | string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].role",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].selector",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        }
+      ]
+    },
+    {
+      "id": "authoring-project-marker",
+      "file": "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json",
+      "title": "evidence-project.yaml",
+      "marker": "evidence-authoring-project-marker-key-paths",
+      "status": "tooling",
+      "reference": "products/evidence/reference/authoring-projects/CONFIG.md",
+      "field_count": 2,
+      "fields": [
+        {
+          "key_path": "project",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": [
+            "evidence-authoring"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "The one kind of project this crate's marker names today.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "version",
+          "kind": "property",
+          "type": "integer",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uint8",
+              "maximum: 255",
+              "minimum: 0"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
           "runtime_validation": null
         }
       ]

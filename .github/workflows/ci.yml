@@ -440,7 +440,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.evidence_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -457,6 +457,12 @@ jobs:
 
       - name: Reproduce Evidence generated contracts
         run: products/evidence/scripts/check-contracts.sh
+
+      - name: Reproduce the Evidence authoring schemas
+        run: products/evidence/scripts/check-authoring-schema.sh
+
+      - name: Enforce the authoring library's no-input-output invariant
+        run: products/evidence/scripts/check-authoring-no-io.sh
 
       - name: Self-test the Evidence neutrality gate
         run: products/evidence/scripts/test-check-source-neutrality.sh

@@ -1,0 +1,354 @@
+{
+  "$defs": {
+    "AnswerType": {
+      "description": "The shape of one answer.",
+      "enum": [
+        "boolean",
+        "controlled-category",
+        "bounded-integer",
+        "reviewed-structured-value"
+      ],
+      "type": "string"
+    },
+    "FactCombination": {
+      "description": "How many values a fact's path is expected to reach.",
+      "enum": [
+        "exactly-one",
+        "collect"
+      ],
+      "type": "string"
+    },
+    "QuestionAnswer": {
+      "additionalProperties": false,
+      "description": "One governed concept a question answers, and the shape of that answer.",
+      "properties": {
+        "concept": {
+          "type": "string"
+        },
+        "id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maximumSerializedBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimum": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sdJwtVc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuestionSdJwtVc"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/AnswerType"
+        },
+        "values": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "concept",
+        "type"
+      ],
+      "type": "object"
+    },
+    "QuestionDisclosure": {
+      "additionalProperties": false,
+      "description": "Which of a question's concepts a response may carry.",
+      "properties": {
+        "allow": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allow"
+      ],
+      "type": "object"
+    },
+    "QuestionFact": {
+      "additionalProperties": false,
+      "description": "One value projected out of a source response and handed to the derivation.",
+      "properties": {
+        "combine": {
+          "$ref": "#/$defs/FactCombination"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "combine"
+      ],
+      "type": "object"
+    },
+    "QuestionGovernance": {
+      "additionalProperties": false,
+      "description": "The published description of what a question decides and under what rules.",
+      "properties": {
+        "disclosureFamilies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidenceType": {
+          "type": "string"
+        },
+        "fixtures": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RequirementKind"
+        },
+        "observationTimezone": {
+          "type": "string"
+        },
+        "referenceFrameworks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requirement": {
+          "type": "string"
+        },
+        "validitySeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requirement",
+        "kind",
+        "referenceFrameworks",
+        "evidenceType",
+        "validitySeconds",
+        "observationTimezone",
+        "fixtures",
+        "disclosureFamilies"
+      ],
+      "type": "object"
+    },
+    "QuestionResponseFormat": {
+      "description": "A serialization an answer may be returned in.",
+      "enum": [
+        "signed-jws",
+        "sd-jwt-vc"
+      ],
+      "type": "string"
+    },
+    "QuestionSdJwtVc": {
+      "additionalProperties": false,
+      "description": "How an answer appears in the SD-JWT VC serialization of a response.",
+      "properties": {
+        "claim": {
+          "type": "string"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/QuestionSdJwtVcDisclosure"
+        }
+      },
+      "required": [
+        "claim",
+        "disclosure"
+      ],
+      "type": "object"
+    },
+    "QuestionSdJwtVcDisclosure": {
+      "description": "Where a projected claim sits in the disclosure structure.",
+      "enum": [
+        "top-level"
+      ],
+      "type": "string"
+    },
+    "QuestionSource": {
+      "additionalProperties": false,
+      "description": "Where a question reads from: a named source, or an operation of the\nproject's own OpenAPI description together with the facts it projects.",
+      "properties": {
+        "collectionBounds": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/QuestionFact"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "QuestionSubject": {
+      "additionalProperties": false,
+      "description": "One party a question is asked about.",
+      "properties": {
+        "derivation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "profile": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "selector"
+      ],
+      "type": "object"
+    },
+    "RequirementKind": {
+      "description": "What kind of rule a question's requirement is.",
+      "enum": [
+        "criterion",
+        "information-requirement",
+        "constraint"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://registrystack.example/schemas/evidence-authoring/question.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One authored question: what is asked, of which subjects, from which source,\nand which governed concepts the answer carries.",
+  "properties": {
+    "answers": {
+      "items": {
+        "$ref": "#/$defs/QuestionAnswer"
+      },
+      "type": "array"
+    },
+    "derivation": {
+      "type": "string"
+    },
+    "disclosure": {
+      "$ref": "#/$defs/QuestionDisclosure"
+    },
+    "governance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuestionGovernance"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "question": {
+      "type": "string"
+    },
+    "responseFormats": {
+      "items": {
+        "$ref": "#/$defs/QuestionResponseFormat"
+      },
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/QuestionSource"
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuestionSubject"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/QuestionSubject"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "question",
+    "purpose",
+    "source",
+    "answers",
+    "derivation",
+    "disclosure"
+  ],
+  "title": "Evidence authored question",
+  "type": "object"
+}

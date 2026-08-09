@@ -631,32 +631,16 @@ impl Fixture {
     }
 
     fn stage_authoring_project(&self) {
-        for directory in [
-            "selectors",
-            "sources",
-            "adapters",
-            "schemas",
-            "questions",
-            "derivations",
-            "fixtures",
-        ] {
-            fs::create_dir_all(self.project.join(directory)).expect("authoring directory");
-        }
-        fs::write(
-            self.project.join("source.openapi.yaml"),
-            "openapi: 3.1.0\ninfo: {title: Acceptance source, version: 1.0.0}\npaths: {}\n",
-        )
-        .expect("OpenAPI");
-        fs::write(
-            self.project.join("selectors/person-reference-v1.yaml"),
-            "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n",
-        )
-        .expect("selector");
         let source_origin = format!("https://127.0.0.1:{}", self.https_port);
-        fs::write(
-            self.project.join("sources/people.yaml"),
-            format!(
-                r#"transport: http-json
+        let source_files = [
+            (
+                "selectors/person-reference-v1.yaml",
+                "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
+            ),
+            (
+                "sources/people.yaml",
+                format!(
+                    r#"transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -681,10 +665,8 @@ responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml
 "#
+                ),
             ),
-        )
-        .expect("source");
-        for (path, contents) in [
             (
                 "adapters/people-prepare.rhai",
                 r#"fn prepare(selectors, context) {
@@ -698,7 +680,8 @@ factSchema: schemas/people-facts.schema.yaml
         }
     }
 }
-"#,
+"#
+                .to_owned(),
             ),
             (
                 "adapters/people-extract.rhai",
@@ -710,27 +693,33 @@ factSchema: schemas/people-facts.schema.yaml
     if is_missing(value) { return #{outcome: "match", facts: #{}}; }
     #{outcome: "match", facts: #{date_of_birth: value}}
 }
-"#,
+"#
+                .to_owned(),
             ),
             (
                 "schemas/people-parameters.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [date_of_birth]}\n  resultLimit: {const: 2}\n",
+                "type: object\nadditionalProperties: false\nrequired: [requestedFields, resultLimit]\nproperties:\n  requestedFields: {const: [date_of_birth]}\n  resultLimit: {const: 2}\n".to_owned(),
             ),
             (
                 "schemas/people-response.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  date_of_birth: {type: string, format: date}\n",
+                "type: object\nadditionalProperties: false\nrequired: [total]\nproperties:\n  total: {type: integer, minimum: 0, maximum: 1000000}\n  date_of_birth: {type: string, format: date}\n".to_owned(),
             ),
             (
                 "schemas/people-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: [date_of_birth]\nproperties:\n  date_of_birth: {type: string, format: date}\n",
+                "type: object\nadditionalProperties: false\nrequired: [date_of_birth]\nproperties:\n  date_of_birth: {type: string, format: date}\n".to_owned(),
             ),
-        ] {
-            fs::write(self.project.join(path), contents).expect("source artifact");
-        }
-        fs::write(
-            self.project.join("questions/adult-status.yaml"),
-            format!(
-                r#"id: adult-status
+        ]
+        .into_iter()
+        .map(
+            |(path, contents)| registry_evidence_authoring::testing::ProjectFile {
+                path: path.to_owned(),
+                contents,
+            },
+        )
+        .collect::<Vec<_>>();
+
+        let question = format!(
+            r#"id: adult-status
 question: Is the person at least 18 years old?
 purpose: {PURPOSE}
 subject:
@@ -756,22 +745,14 @@ governance:
   fixtures: fixtures/adult-status.yaml
   disclosureFamilies: [urn:example:disclosure-families:adult-status]
 "#
-            ),
-        )
-        .expect("question");
-        fs::write(
-            self.project.join("derivations/adult-status.rhai"),
-            r#"fn answer(facts, selectors, context) {
+        );
+        let derivation = r#"fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     #{is_adult: compare_dates(context.legal_local_date, add_calendar_years(born, 18)) >= 0}
 }
-"#,
-        )
-        .expect("derivation");
-        fs::write(
-            self.project.join("fixtures/adult-status.yaml"),
-            format!(
-                r#"fixture: registry.evidence.acceptance.production-handoff/v1
+"#;
+        let fixture = format!(
+            r#"fixture: registry.evidence.acceptance.production-handoff/v1
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -801,9 +782,22 @@ privacy_expectation:
   evidence_excludes: [date_of_birth, person_id]
   diagnostics_exclude: [{SELECTOR_CANARY}, fixture-source-canary]
 "#
-            ),
-        )
-        .expect("fixture");
+        );
+
+        for file in registry_evidence_authoring::testing::referenced_form_project(
+            "openapi: 3.1.0\ninfo: {title: Acceptance source, version: 1.0.0}\npaths: {}\n",
+            "adult-status",
+            &question,
+            derivation,
+            Some(&fixture),
+            &source_files,
+        ) {
+            let path = self.project.join(&file.path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("authoring directory");
+            }
+            fs::write(&path, file.contents).expect("authoring project file");
+        }
     }
 
     fn stage_local_project_without_governance(&self) {

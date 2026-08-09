@@ -2,17 +2,15 @@
 //!
 //! `registry-evidencectl` is a binary-only crate (no library target), so the
 //! module under test is pulled in directly by path rather than through
-//! normal `use registry_evidencectl::...` linkage. `types` is included the
-//! same way and declared as a sibling of `sample`, mirroring their real
-//! relationship as siblings under `suggest`: `sample.rs` reaches it through
-//! `super::types`, and `super` from a crate-root `mod sample;` here is this
-//! same crate root, where `mod types;` also lives.
+//! normal `use registry_evidencectl::...` linkage. `sample.rs` reaches the
+//! pipeline's type vocabulary through `super::types`, and `super` from a
+//! crate-root `mod sample;` here is this same crate root, so the vocabulary is
+//! bound under that name below.
+
+use registry_evidence_authoring::openapi::types;
 
 #[path = "../src/suggest/sample.rs"]
 mod sample;
-#[allow(dead_code)]
-#[path = "../src/suggest/types.rs"]
-mod types;
 
 use std::{fs, path::PathBuf};
 

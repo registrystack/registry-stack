@@ -11,5 +11,8 @@
   },
   "include": [
     "test/**/*.ts"
+  ],
+  "exclude": [
+    "test/unit/**"
   ]
 }

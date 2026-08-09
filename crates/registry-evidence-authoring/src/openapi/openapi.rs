@@ -1,7 +1,10 @@
-//! Loads an OpenAPI 3.0.x or 3.1.x document, from a file or from a URL (see
-//! [`super::fetch`]), and resolves the pieces the `source suggest` pipeline
-//! needs: operation listings and one operation's response schema with every
-//! local `$ref` inlined.
+//! Reads an OpenAPI 3.0.x or 3.1.x document that a caller has already fetched,
+//! and resolves the pieces the drafting pipeline needs: operation listings and
+//! one operation's response schema with every local `$ref` inlined.
+//!
+//! Whoever obtained the text decides where it came from, and this module never
+//! asks: a path, a URL, and an unsaved editor buffer all arrive here as the
+//! same `&str`.
 //!
 //! Only local `#/components/...` refs are followed, whichever way the
 //! document arrived: one document is fetched, never a graph of them. An
@@ -20,14 +23,11 @@
 //! belongs to. Neither adds a constraint the document does not state; each is
 //! reported as a note so the reading stays the operator's to reject.
 
-use std::path::Path;
-
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
-use super::fetch;
 use super::types::{
-    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, SpecSource, RECURSIVE_REF_KEY,
+    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
 };
 
 /// Path Item Object keys this pipeline can draft a source from.
@@ -37,12 +37,6 @@ use super::types::{
 /// other method would only produce a source the runtime rejects, so the
 /// listing is filtered here rather than at the far end of the pipeline.
 const OPERATION_METHODS: [&str; 2] = ["get", "post"];
-
-/// OpenAPI documents larger than this are rejected before they are read, the
-/// way `sample::load_sample` rejects an oversized sample. The largest published
-/// registry API descriptions are a few megabytes; a document past this ceiling
-/// is a mistaken path rather than a specification to draft from.
-const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Query parameter names that bound how many items one response carries,
 /// compared against the parameter's name lowercased with `_`, `-` and `.`
@@ -76,45 +70,26 @@ fn is_page_size_name(name: &str) -> bool {
     PAGE_SIZE_NAMES.contains(&normalized.as_str())
 }
 
-/// A loaded, dialect-checked OpenAPI document.
+/// A parsed, dialect-checked OpenAPI document.
 ///
-/// `open` accepts OpenAPI 3.0.x and 3.1.x, in YAML or JSON, from a local file
-/// or URL. It does not otherwise validate the document against the OpenAPI
-/// meta-schema; malformed structure surfaces as an error from whichever
-/// accessor first needs the missing or mistyped piece.
+/// `parse` accepts OpenAPI 3.0.x and 3.1.x, in YAML or JSON. It does not
+/// otherwise validate the document against the OpenAPI meta-schema; malformed
+/// structure surfaces as an error from whichever accessor first needs the
+/// missing or mistyped piece.
 #[derive(Debug, Clone)]
 pub struct Spec {
     document: Value,
 }
 
 impl Spec {
-    /// Reads and parses the OpenAPI document `source` names, from disk or
-    /// from the network. Accepts YAML or JSON (YAML is a superset for this
-    /// purpose, so both are parsed the same way) and requires a top-level
-    /// `openapi: 3.0.x` or `3.1.x` version string.
-    pub fn open(source: &SpecSource) -> Result<Spec> {
-        Self::open_retained(source).map(|(spec, _)| spec)
-    }
-
-    /// Read and validate a document once while retaining its exact UTF-8 text.
-    ///
-    /// `evidencectl new` stores this text for the later question-authoring
-    /// step. Returning it from the same read that produced `Spec` prevents a
-    /// file change or a second network response from making the retained
-    /// document differ from the one that was validated.
-    pub(crate) fn open_retained(source: &SpecSource) -> Result<(Spec, String)> {
-        let text = match source {
-            SpecSource::File(path) => read_local(path)?,
-            SpecSource::Url(url) => fetch::get(url, MAX_DOCUMENT_BYTES)?,
-        };
-        let spec = Spec::parse(&text, &source.display())?;
-        Ok((spec, text))
-    }
-
     /// Parses one already-read document, naming it `origin` in any error so
     /// the message points at the file path or URL the operator passed rather
     /// than at a buffer.
-    fn parse(text: &str, origin: &str) -> Result<Spec> {
+    ///
+    /// YAML is a superset of JSON for this purpose, so both spellings are
+    /// parsed the same way, and the document must declare a top-level
+    /// `openapi: 3.0.x` or `3.1.x` version string.
+    pub fn parse(text: &str, origin: &str) -> Result<Spec> {
         let document: Value = serde_norway::from_str(text)
             .with_context(|| format!("parsing {origin} as YAML or JSON"))?;
         Self::from_value(document, origin)
@@ -125,7 +100,7 @@ impl Spec {
     /// Local authoring reads its retained file once with owner and size checks,
     /// then uses this constructor to share response reference resolution with
     /// `source suggest` without reopening the file.
-    pub(crate) fn from_value(document: Value, origin: &str) -> Result<Spec> {
+    pub fn from_value(document: Value, origin: &str) -> Result<Spec> {
         let version = document
             .get("openapi")
             .and_then(Value::as_str)
@@ -636,23 +611,6 @@ fn infer_structural_type(
         "`{}` declares no `type` but does declare `{keyword}`, so it is read as `{inferred}`",
         display_pointer(pointer)
     ));
-}
-
-/// Reads a local document, refusing one past the size ceiling before any of
-/// it is read into memory.
-fn read_local(path: &Path) -> Result<String> {
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("reading OpenAPI document metadata at {}", path.display()))?;
-    if metadata.len() > MAX_DOCUMENT_BYTES {
-        bail!(
-            "OpenAPI document at {} is {} bytes, exceeding the {} byte limit",
-            path.display(),
-            metadata.len(),
-            MAX_DOCUMENT_BYTES
-        );
-    }
-    std::fs::read_to_string(path)
-        .with_context(|| format!("reading OpenAPI document at {}", path.display()))
 }
 
 /// Escapes an object member name into one RFC 6901 pointer segment, matching

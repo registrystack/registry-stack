@@ -4,6 +4,14 @@ use zed_extension_api as zed;
 
 struct RegistryStackExtension;
 
+// The subcommand an adopter CLI answers to when it hosts the language server.
+const HOSTED_SERVER_ARGS: [&str; 2] = ["tooling", "language-server"];
+
+// The adopter CLIs that may host the server, in the order a Relay adopter's
+// PATH is expected to answer them. Both are tried: an Evidence adopter can
+// have an older registryctl on PATH that this extension is not installed for.
+const HOSTING_CLI_NAMES: [&str; 2] = ["registryctl", "evidencectl"];
+
 impl zed::Extension for RegistryStackExtension {
     fn new() -> Self {
         Self
@@ -14,25 +22,111 @@ impl zed::Extension for RegistryStackExtension {
         _language_server_id: &zed::LanguageServerId,
         worktree: &zed::Worktree,
     ) -> zed::Result<zed::Command> {
-        let (command, args) = if let Some(command) = worktree.which("registry-language-server") {
-            (command, Vec::new())
-        } else if let Some(command) = worktree.which("registryctl") {
-            (
+        // A standalone registry-language-server on PATH is trusted by name: it
+        // has no subcommands, so there is nothing to probe with
+        // "tooling language-server --help".
+        if let Some(command) = worktree.which("registry-language-server") {
+            return Ok(zed::Command {
                 command,
-                vec!["tooling".to_owned(), "language-server".to_owned()],
+                args: Vec::new(),
+                env: worktree.shell_env(),
+            });
+        }
+
+        let mut hosting_errors = Vec::new();
+        for name in HOSTING_CLI_NAMES {
+            let Some(command) = worktree.which(name) else {
+                continue;
+            };
+            match hosts_language_server(&command) {
+                Ok(true) => {
+                    return Ok(zed::Command {
+                        command,
+                        args: HOSTED_SERVER_ARGS.into_iter().map(str::to_owned).collect(),
+                        env: worktree.shell_env(),
+                    });
+                }
+                Ok(false) => {
+                    hosting_errors.push(format!("{name} does not provide tooling language-server"));
+                }
+                Err(error) => {
+                    hosting_errors.push(format!("{name} could not be probed: {error}"));
+                }
+            }
+        }
+
+        if hosting_errors.is_empty() {
+            Err(
+                "neither registry-language-server, registryctl, nor evidencectl was found on PATH; install Registry Stack before enabling this extension"
+                    .to_owned(),
             )
         } else {
-            return Err(
-                "neither registry-language-server nor registryctl was found on PATH; install Registry Stack before enabling this extension"
-                    .to_owned(),
-            );
-        };
-        Ok(zed::Command {
-            command,
-            args,
-            env: worktree.shell_env(),
-        })
+            Err(format!(
+                "registry-language-server was not found on PATH, and no CLI on PATH can host it: {}; install a matching registryctl or evidencectl",
+                hosting_errors.join("; ")
+            ))
+        }
     }
 }
 
+// Whether this command hosts the language server, asked of the command rather
+// than inferred from its name. The probe is the CLI's own help for the
+// subcommand, so it starts no server and reads no project.
+fn hosts_language_server(command: &str) -> Result<bool, String> {
+    let mut probe = hosting_probe_command(command);
+    let output = probe.output()?;
+    Ok(probe_succeeded(&output))
+}
+
+// The probe command itself, split out so its shape (the exact program and
+// arguments run against a PATH candidate) can be checked without starting a
+// process.
+fn hosting_probe_command(command: &str) -> zed::process::Command {
+    zed::process::Command::new(command)
+        .args(HOSTED_SERVER_ARGS)
+        .arg("--help")
+}
+
+// Whether a finished probe counts as hosting the language server. A clean
+// exit is success; a nonzero exit or termination by signal is not.
+fn probe_succeeded(output: &zed::process::Output) -> bool {
+    output.status == Some(0)
+}
+
 zed::register_extension!(RegistryStackExtension);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosting_probe_command_asks_for_tooling_language_server_help() {
+        let probe = hosting_probe_command("registryctl");
+        assert_eq!(probe.command, "registryctl");
+        assert_eq!(probe.args, ["tooling", "language-server", "--help"]);
+    }
+
+    #[test]
+    fn probe_succeeded_requires_a_clean_exit() {
+        let clean_exit = zed::process::Output {
+            status: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(probe_succeeded(&clean_exit));
+
+        let nonzero_exit = zed::process::Output {
+            status: Some(1),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(!probe_succeeded(&nonzero_exit));
+
+        let killed_by_signal = zed::process::Output {
+            status: None,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(!probe_succeeded(&killed_by_signal));
+    }
+}

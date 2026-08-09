@@ -8,19 +8,14 @@
 //! closed objects, `required` as the spec-guaranteed subset of kept members,
 //! bounded arrays and strings, and the `[T, "null"]` response pair.
 
-#[allow(dead_code)]
-#[path = "../src/suggest/types.rs"]
-mod types;
-
-#[allow(dead_code)]
-#[path = "../src/suggest/narrow.rs"]
-mod narrow;
-
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use narrow::{AdvisoryKind, Plan, Resolution};
+use registry_evidence_authoring::openapi::{
+    narrow::{self, AdvisoryKind, Plan, Resolution},
+    types,
+};
 use types::{
     BoundKind, BoundValues, NarrowOutcome, Observations, Observed, Provenance, ResolvedSchema,
     SuggestedBound,

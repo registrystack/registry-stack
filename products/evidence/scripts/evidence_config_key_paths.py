@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Hold the Evidence configuration reference in parity with the frozen contracts.
+"""Hold every Evidence configuration reference in parity with its schema.
 
-`bundle.schema.yaml` and `runtime.schema.yaml` are the normative Version 1
-configuration grammar. CONFIG.md is the prose that explains it. This check makes
-the pair inseparable: every key path in a contract must appear in that contract's
-delimited key-path block in CONFIG.md, and every documented path must exist in
-the contract. Prose outside the block stays free-form.
+A schema states which keys a document may carry. A CONFIG.md is the prose that
+explains them. This check makes each pair inseparable: every key path in a
+schema must appear in that schema's delimited key-path block in the reference
+it feeds, and every documented path must exist in the schema. Prose outside the
+block stays free-form.
+
+Two kinds of schema are held to that rule, and they are not the same promise.
+`bundle.schema.yaml` and `runtime.schema.yaml` are the normative, frozen
+Version 1 configuration grammar. The authoring-form schemas under
+`crates/registry-evidencectl/schemas/authoring/` are adopter tooling: generated
+from the `registry-evidence-authoring` model, outside the frozen Version 1
+contract set, and free to change with the tooling that generates them. Parity
+is a documentation rule here, not a freeze.
 
 Run the check:
 
     products/evidence/scripts/check-config-key-paths.sh
 
-After changing a contract, rewrite the blocks and review the diff:
+After changing a schema, rewrite the blocks and review the diff:
 
     products/evidence/scripts/check-config-key-paths.sh --write
 """
@@ -20,16 +28,53 @@ After changing a contract, rewrite the blocks and review the diff:
 import argparse
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
-CONTRACT_DIRECTORY = Path("products/evidence/contracts")
-REFERENCE_PATH = Path(
+
+class Contract(NamedTuple):
+    """One schema, and the delimited block in the prose that documents it.
+
+    Both paths are repository-relative and complete, so a schema is free to
+    live wherever it is generated and to document into whichever reference
+    explains it.
+    """
+
+    schema: str
+    reference: str
+    marker: str
+
+
+# The prose explaining the frozen Version 1 deployment grammar.
+DEPLOYMENT_REFERENCE = (
     "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md"
 )
 
-# Contract file -> the CONFIG.md marker naming its key-path block.
+# The prose explaining the authoring form, which is adopter tooling.
+AUTHORING_REFERENCE = "products/evidence/reference/authoring-projects/CONFIG.md"
+
 CONTRACTS = {
-    "bundle": ("bundle.schema.yaml", "evidence-bundle-key-paths"),
-    "runtime": ("runtime.schema.yaml", "evidence-runtime-key-paths"),
+    "bundle": Contract(
+        schema="products/evidence/contracts/bundle.schema.yaml",
+        reference=DEPLOYMENT_REFERENCE,
+        marker="evidence-bundle-key-paths",
+    ),
+    "runtime": Contract(
+        schema="products/evidence/contracts/runtime.schema.yaml",
+        reference=DEPLOYMENT_REFERENCE,
+        marker="evidence-runtime-key-paths",
+    ),
+    "authoring-question": Contract(
+        schema="crates/registry-evidencectl/schemas/authoring/question.schema.json",
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-question-key-paths",
+    ),
+    "authoring-project-marker": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-project-marker-key-paths",
+    ),
 }
 
 FENCE = "```"
@@ -43,16 +88,17 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def load_yaml(path: Path) -> object:
+def load_schema(path: Path) -> object:
+    """Read one schema document. JSON is YAML, so one loader reads both forms."""
     try:
         import yaml
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on the host
-        raise ContractError("PyYAML is required to read the Evidence contracts") from exc
+        raise ContractError("PyYAML is required to read the Evidence schemas") from exc
     try:
         with path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle)
     except yaml.YAMLError as exc:
-        raise ContractError(f"invalid YAML in {path}: {exc}") from exc
+        raise ContractError(f"{path} does not parse: {exc}") from exc
 
 
 def resolve(document: dict, reference: str) -> dict:
@@ -128,7 +174,7 @@ def key_paths(document: object) -> set:
     `startup`, `platform`) are not schema keywords and contribute no paths.
     """
     if not isinstance(document, dict):
-        raise ContractError("a contract must be a mapping")
+        raise ContractError("a schema must be a mapping")
     found: set = set()
     _walk(document, document, "", found, frozenset())
     return found
@@ -160,13 +206,22 @@ def documented_key_paths(text: str, marker: str) -> set:
     return set(paths)
 
 
-def compare(schema_paths: set, documented_paths: set, label: str) -> list:
-    """Report both directions of drift, so neither artifact can lead silently."""
+def compare(
+    schema_paths: set, documented_paths: set, label: str, reference: str
+) -> list:
+    """Report both directions of drift, so neither artifact can lead silently.
+
+    More than one reference carries blocks, so a problem names the file that
+    should have carried the path as well as the schema that decided it.
+    """
     problems = []
     for path in sorted(schema_paths - documented_paths):
-        problems.append(f"{label}: key path is not documented in CONFIG.md: {path}")
+        problems.append(f"{label}: key path is not documented in {reference}: {path}")
     for path in sorted(documented_paths - schema_paths):
-        problems.append(f"{label}: CONFIG.md documents a key path that {label} does not define: {path}")
+        problems.append(
+            f"{label}: {reference} documents a key path that {label} does not "
+            f"define: {path}"
+        )
     return problems
 
 
@@ -184,42 +239,72 @@ def rewrite_block(text: str, marker: str, paths: set) -> str:
     return f"{head}{start}\n{FENCE}text\n{body}\n{FENCE}\n{end}{rest}"
 
 
+def references() -> dict:
+    """Every reference, with the contracts whose blocks it carries, in order."""
+    grouped: dict = {}
+    for contract in CONTRACTS.values():
+        grouped.setdefault(contract.reference, []).append(contract)
+    return grouped
+
+
 def write_all(root: Path) -> bool:
-    """Regenerate every block in place. Returns whether the reference changed."""
-    reference_path = root / REFERENCE_PATH
-    original = reference_path.read_text(encoding="utf-8")
-    updated = original
-    for filename, marker in CONTRACTS.values():
-        paths = key_paths(load_yaml(root / CONTRACT_DIRECTORY / filename))
-        updated = rewrite_block(updated, marker, paths)
-    if updated != original:
-        reference_path.write_text(updated, encoding="utf-8")
-    return updated != original
+    """Regenerate every block in place. Returns whether any reference changed.
+
+    Every reference is read and rewritten in memory before any file is
+    written, so a schema that fails to parse or a reference missing a marker
+    raises before a single byte reaches disk: a failed run leaves the
+    committed references exactly as they were, matching the generated-output
+    rule that a regeneration is reproduced whole or not at all. This does not
+    make the final write step atomic; a `write_text` failure partway through
+    that step (a permissions error, a full disk) can still leave some
+    references updated and others not.
+    """
+    updates = {}
+    for reference, contracts in references().items():
+        path = root / reference
+        original = path.read_text(encoding="utf-8")
+        updated = original
+        for contract in contracts:
+            paths = key_paths(load_schema(root / contract.schema))
+            updated = rewrite_block(updated, contract.marker, paths)
+        if updated != original:
+            updates[path] = updated
+
+    for path, updated in updates.items():
+        path.write_text(updated, encoding="utf-8")
+
+    return bool(updates)
 
 
 def check_all(root: Path) -> list:
-    reference = (root / REFERENCE_PATH).read_text(encoding="utf-8")
+    documents = {
+        reference: (root / reference).read_text(encoding="utf-8")
+        for reference in references()
+    }
     problems = []
-    for filename, marker in CONTRACTS.values():
-        contract = root / CONTRACT_DIRECTORY / filename
-        schema_paths = key_paths(load_yaml(contract))
+    for contract in CONTRACTS.values():
+        schema_paths = key_paths(load_schema(root / contract.schema))
         try:
-            documented = documented_key_paths(reference, marker)
+            documented = documented_key_paths(
+                documents[contract.reference], contract.marker
+            )
         except ContractError as error:
-            problems.append(f"{filename}: {error}")
+            problems.append(f"{contract.schema}: {error}")
             continue
-        problems.extend(compare(schema_paths, documented, filename))
+        problems.extend(
+            compare(schema_paths, documented, contract.schema, contract.reference)
+        )
     return problems
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Check the Evidence configuration reference against the frozen contracts."
+        description="Check every Evidence configuration reference against its schema."
     )
     parser.add_argument(
         "--write",
         action="store_true",
-        help="rewrite the CONFIG.md key-path blocks from the contracts",
+        help="rewrite the CONFIG.md key-path blocks from the schemas",
     )
     arguments = parser.parse_args()
     root = repository_root()
@@ -241,8 +326,8 @@ def main() -> int:
         for problem in problems:
             print(problem, file=sys.stderr)
         print(
-            "\nEvidence configuration reference is out of parity with the frozen "
-            "contracts.\nRun this check with --write, then document every new key in "
+            "\nAn Evidence configuration reference is out of parity with its "
+            "schema.\nRun this check with --write, then document every new key in "
             "the prose above the blocks.",
             file=sys.stderr,
         )

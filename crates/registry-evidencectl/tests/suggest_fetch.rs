@@ -7,16 +7,15 @@
 //! `http` is permitted. Nothing in this file reaches a public host, so the
 //! suite stays hermetic and runs the same on a machine with no network.
 
+// `fetch.rs` and `load.rs` name the pipeline's type vocabulary through
+// `super::types`, the way they do under `src/suggest/`; this binding is what
+// `super::` finds here.
+use registry_evidence_authoring::openapi::types;
+
 #[path = "../src/suggest/fetch.rs"]
 mod fetch;
-// `openapi.rs` pulls in the whole pipeline's type vocabulary; this binary
-// exercises the loading slice of it.
-#[allow(dead_code)]
-#[path = "../src/suggest/openapi.rs"]
-mod openapi;
-#[allow(dead_code)]
-#[path = "../src/suggest/types.rs"]
-mod types;
+#[path = "../src/suggest/load.rs"]
+mod load;
 
 use std::{
     io::{BufRead, BufReader, Write},
@@ -146,9 +145,8 @@ fn a_document_served_over_loopback_is_opened_exactly_as_the_file_would_be() {
     let fixture = fixture_text("records-3.0.yaml");
     let address = serve(move |_target| ok(&fixture, "application/yaml"));
 
-    let from_url = openapi::Spec::open(&url_source(address, "/openapi.yaml")).expect("opens");
-    let from_file =
-        openapi::Spec::open(&SpecSource::File(fixture_path("records-3.0.yaml"))).expect("opens");
+    let from_url = load::open(&url_source(address, "/openapi.yaml")).expect("opens");
+    let from_file = load::open(&SpecSource::File(fixture_path("records-3.0.yaml"))).expect("opens");
 
     assert_eq!(
         from_url
@@ -173,7 +171,7 @@ fn a_non_success_status_is_reported_with_its_code() {
         b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
     });
 
-    let error = openapi::Spec::open(&url_source(address, "/openapi.yaml")).unwrap_err();
+    let error = load::open(&url_source(address, "/openapi.yaml")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("401") && message.contains("authentication"),
@@ -220,7 +218,7 @@ fn a_redirect_is_followed_and_its_destination_is_read() {
         .into_bytes()
     });
 
-    let spec = openapi::Spec::open(&url_source(entry, "/latest.yaml")).expect("opens");
+    let spec = load::open(&url_source(entry, "/latest.yaml")).expect("opens");
     assert!(!spec.operations().is_empty());
 }
 

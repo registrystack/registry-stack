@@ -10,24 +10,30 @@ const testRunDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-stack-v
 const trustedUserData = path.join(testRunDirectory, 'trusted-user-data');
 const projectAlpha = path.join(testRunDirectory, 'project-alpha');
 const projectBeta = path.join(testRunDirectory, 'project-beta');
+const projectEvidence = path.join(testRunDirectory, 'project-evidence');
 const workspaceFolder = path.join(testRunDirectory, 'multi-root.code-workspace');
 const languageServer = path.resolve(__dirname, '../../target/debug/registry-language-server');
+// The registryctl wrapper is deliberately kept off PATH and reachable only
+// through the installer metadata below, so the tests can prove the metadata
+// route works. evidencectl sits in a directory added to PATH instead, so a
+// later test can delete the metadata and prove the PATH fallback tier finds
+// it on its own.
 const registryctlWrapper = path.join(testRunDirectory, 'registryctl');
-const installerMetadata = path.join(__dirname, 'dist', 'registryctl-path');
+const pathBinDirectory = path.join(testRunDirectory, 'path-bin');
+const evidencectlWrapper = path.join(pathBinDirectory, 'evidencectl');
+// An Evidence adopter can hold a registryctl built before the language server
+// was hosted in it. It stands ahead of evidencectl on PATH and must not be
+// taken for an answer, so the PATH tier is exercised against the shape that
+// once hid the CLI standing behind it.
+const legacyRegistryctlWrapper = path.join(pathBinDirectory, 'registryctl');
+const installerMetadata = path.join(__dirname, 'dist', 'registry-stack-cli-path');
 fs.mkdirSync(projectAlpha, { recursive: true });
 fs.mkdirSync(projectBeta, { recursive: true });
-fs.writeFileSync(
-  registryctlWrapper,
-  [
-    '#!/bin/sh',
-    'if [ "$#" -ne 2 ] || [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
-    '  exit 64',
-    'fi',
-    `exec ${shellQuote(languageServer)}`,
-    '',
-  ].join('\n'),
-);
-fs.chmodSync(registryctlWrapper, 0o755);
+fs.mkdirSync(path.join(projectEvidence, 'selectors'), { recursive: true });
+fs.mkdirSync(pathBinDirectory, { recursive: true });
+writeToolingLanguageServerWrapper(registryctlWrapper);
+writeToolingLanguageServerWrapper(evidencectlWrapper);
+writeLegacyWrapper(legacyRegistryctlWrapper);
 fs.mkdirSync(path.dirname(installerMetadata), { recursive: true });
 fs.writeFileSync(installerMetadata, `${registryctlWrapper}\n`);
 fs.writeFileSync(
@@ -39,14 +45,53 @@ fs.writeFileSync(
   'version: 1\nregistry: { id: beta-registry }\nservices: {}\n',
 );
 fs.writeFileSync(
+  path.join(projectEvidence, 'evidence-project.yaml'),
+  'version: 1\nproject: evidence-authoring\n',
+);
+fs.writeFileSync(
+  path.join(projectEvidence, 'source.openapi.yaml'),
+  'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
+);
+fs.writeFileSync(path.join(projectEvidence, 'selectors', 'smoke.yaml'), 'fields: {}\n');
+fs.writeFileSync(
   workspaceFolder,
   JSON.stringify({
     folders: [
       { name: 'alpha', path: projectAlpha },
       { name: 'beta', path: projectBeta },
+      { name: 'evidence', path: projectEvidence },
     ],
   }),
 );
+process.env.PATH = `${pathBinDirectory}${path.delimiter}${process.env.PATH ?? ''}`;
+
+function writeToolingLanguageServerWrapper(wrapperPath) {
+  fs.writeFileSync(
+    wrapperPath,
+    [
+      '#!/bin/sh',
+      'if [ "$1" != "tooling" ] || [ "$2" != "language-server" ]; then',
+      '  exit 64',
+      'fi',
+      '# The capability probe the extension makes before it starts a candidate',
+      '# found on PATH. A real CLI answers it from the same subcommand.',
+      'if [ "$#" -eq 3 ] && [ "$3" = "--help" ]; then',
+      '  exit 0',
+      'fi',
+      'if [ "$#" -ne 2 ]; then',
+      '  exit 64',
+      'fi',
+      `exec ${shellQuote(languageServer)}`,
+      '',
+    ].join('\n'),
+  );
+  fs.chmodSync(wrapperPath, 0o755);
+}
+
+function writeLegacyWrapper(wrapperPath) {
+  fs.writeFileSync(wrapperPath, ['#!/bin/sh', 'exit 64', ''].join('\n'));
+  fs.chmodSync(wrapperPath, 0o755);
+}
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -57,5 +102,5 @@ module.exports = defineConfig({
   version: '1.91.1',
   workspaceFolder,
   launchArgs: ['--disable-extensions', '--user-data-dir', trustedUserData],
-  mocha: { timeout: 30_000 },
+  mocha: { timeout: 60_000 },
 });

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out/unit",
+    "rootDir": ".",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/projectRoot.ts",
+    "src/serverCommand.ts",
+    "test/unit/**/*.ts"
+  ]
+}

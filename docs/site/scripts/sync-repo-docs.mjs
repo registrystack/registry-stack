@@ -151,6 +151,28 @@ export function stripPageTypeBanner(md) {
   return lines.slice(end).join('\n');
 }
 
+// MDX does not accept Markdown's HTML comment syntax. Product references use
+// standalone comments as machine-owned block markers, so preserve those
+// markers as MDX comments without changing comments inside code fences.
+export function adaptCommentsForMdx(md) {
+  let fence = null;
+  return md
+    .split('\n')
+    .map((line) => {
+      const fenceMatch = line.match(/^\s*(```+|~~~+)/);
+      if (fenceMatch) {
+        const marker = fenceMatch[1][0];
+        fence = fence === marker ? null : marker;
+        return line;
+      }
+      if (fence) return line;
+
+      const comment = line.match(/^(\s*)<!--\s*(.*?)\s*-->\s*$/);
+      return comment ? `${comment[1]}{/* ${comment[2]} */}` : line;
+    })
+    .join('\n');
+}
+
 // Product sources keep their implementation-era name, while the public docs
 // use the approved display name. Rewrite prose only. Technical identifiers in
 // code spans and fences stay byte-for-byte unchanged, as do CCCEV and OOTS
@@ -533,17 +555,19 @@ async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards)
 
   const outFile = resolve(docsDir, `${entry.dest}.mdx`);
   const assetsToCopy = [];
-  const body = applyRepoDisplayName(
-    rewriteLinks(bodyBase, {
-      repo: { ...repo, id: repoId },
-      entry,
-      destIndex,
-      sourceFileDir: dirname(sourceFile),
-      repoRoot: source.path,
-      assetsToCopy,
-      outFile,
-    }),
-    repoId,
+  const body = adaptCommentsForMdx(
+    applyRepoDisplayName(
+      rewriteLinks(bodyBase, {
+        repo: { ...repo, id: repoId },
+        entry,
+        destIndex,
+        sourceFileDir: dirname(sourceFile),
+        repoRoot: source.path,
+        assetsToCopy,
+        outFile,
+      }),
+      repoId,
+    ),
   );
 
   const description = entry.description || deriveDescription(stripped, `${title} for ${repoId}.`);

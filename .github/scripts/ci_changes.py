@@ -34,6 +34,7 @@ SHARDS = {
     "relay": ("registry-relay",),
     "evidence": (
         "registry-evidence",
+        "registry-evidence-authoring",
         "registry-evidence-client",
         "registry-evidence-client-node",
         "registry-evidence-client-py",
@@ -80,6 +81,37 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
         "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     }
+)
+
+# This guide explains the authoring form across three intentionally separate
+# enforcement layers: the shared form model, the evidencectl compiler, and the
+# frozen bundle validator. Keep the routing list at module ownership rather
+# than duplicating its fields and rules in another semantic manifest. The
+# sample gives the focused CI test one existing path for each route.
+EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
+    (
+        "crates/registry-evidence-authoring/src/**",
+        "crates/registry-evidence-authoring/src/model.rs",
+    ),
+    (
+        "crates/registry-evidencectl/src/**",
+        "crates/registry-evidencectl/src/authoring.rs",
+    ),
+    (
+        "crates/registry-evidence/src/bundle.rs",
+        "crates/registry-evidence/src/bundle.rs",
+    ),
+    (
+        "crates/registry-evidence/src/config.rs",
+        "crates/registry-evidence/src/config.rs",
+    ),
+    (
+        "crates/registry-platform-crypto/src/lib.rs",
+        "crates/registry-platform-crypto/src/lib.rs",
+    ),
+)
+EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
+    pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
 )
 
 # Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
@@ -444,9 +476,17 @@ def classify(
             "docs/site/*",
             "products/manifest/docs/*",
             # The Evidence configuration reference page is generated from the
-            # frozen contracts, so a contract change goes stale without a
-            # docs rebuild.
+            # frozen contracts and from the authoring-form schemas beside
+            # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
+            "crates/registry-evidencectl/schemas/authoring/*",
+            # The same page names the product reference that explains each
+            # schema, and the docs tests read those references to prove the
+            # published key paths and the documented ones agree.
+            "products/evidence/reference/*/CONFIG.md",
+            # The published authoring guide states behavior enforced in these
+            # modules, not only the generated question and marker schemas.
+            *EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS,
             *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
@@ -496,7 +536,11 @@ def classify(
         }
         for path in paths
     )
-    editors = complete or any(path.startswith("editors/") for path in paths)
+    editors = (
+        complete
+        or any(path.startswith("editors/") for path in paths)
+        or "registry-language-server" in affected
+    )
     # Reverse dependents, not changed paths: both bindings are Cargo path
     # dependents of the SDK and the verifier, so a change to either can move
     # the native surface or the error envelope the packages wrap without

@@ -307,6 +307,15 @@ repos:
             standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc]
             last_reviewed: unreviewed
         description: Approved Version 1 product concept covering the boundary, data model, trust and privacy invariants, native API, and acceptance set.
+      - src: products/evidence/reference/authoring-projects/CONFIG.md
+        dest: products/registry-evidence/authoring-form
+        label: Authoring form reference
+        nav_order: 15
+        doc_type: reference
+        last_reviewed: unreviewed
+        standards_referenced: [json-schema, openapi, sd-jwt-vc]
+        exclude_docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+        description: Complete reference for the editable Evidence authoring project, its validation layers, local key material, and access policies.
       - src: products/evidence/FIRST-CURL-TEST.md
         dest: products/registry-evidence/first-curl-test
         label: First server curl

@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import {
   CONTRACTS,
+  CONTRACT_STATUSES,
   FORMAT_VERSION,
   buildEvidenceConfiguration,
   collectFields,
@@ -511,9 +512,37 @@ test('validation rejects a document with repeated or missing key paths', () => {
   assert.doesNotThrow(() => validateEvidenceConfiguration(good));
   good.contracts[0].field_count = 5;
   assert.throws(() => validateEvidenceConfiguration(good), /field_count/);
+
+  const missing = document([entry('a')]);
+  missing.contracts.pop();
+  assert.throws(() => validateEvidenceConfiguration(missing), /exactly the schemas/);
+
+  const unlabelled = document([entry('a')]);
+  delete unlabelled.contracts[0].status;
+  assert.throws(() => validateEvidenceConfiguration(unlabelled), /known status/);
+
+  const unreferenced = document([entry('a')]);
+  delete unreferenced.contracts[0].reference;
+  assert.throws(() => validateEvidenceConfiguration(unreferenced), /reference explaining it/);
 });
 
-test('the committed contracts produce a valid reference for both configuration files', async () => {
+test('every published schema declares whether it is frozen or adopter tooling', async () => {
+  // A reader who takes the authoring schemas for the frozen Version 1 grammar
+  // has read the page wrongly, so the status is generated data rather than a
+  // sentence a page author has to remember to write.
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const byId = new Map(document.contracts.map((contract) => [contract.id, contract]));
+  for (const contract of CONTRACTS) {
+    assert.ok(CONTRACT_STATUSES.includes(contract.status), `${contract.id} status is unknown`);
+    assert.equal(byId.get(contract.id).status, contract.status);
+  }
+  assert.equal(byId.get('bundle').status, 'frozen');
+  assert.equal(byId.get('runtime').status, 'frozen');
+  assert.equal(byId.get('authoring-question').status, 'tooling');
+  assert.equal(byId.get('authoring-project-marker').status, 'tooling');
+});
+
+test('the committed schemas produce a valid reference for every configuration file', async () => {
   const document = await buildEvidenceConfiguration(repoRoot);
   validateEvidenceConfiguration(document);
   assert.deepEqual(
@@ -542,16 +571,24 @@ test('a bound outside double precision is reported exactly as the contract state
   assert.ok(constraints.includes('minimum: -9223372036854775808'));
 });
 
-test('the rendered key paths match the ones CONFIG.md documents', async () => {
+test('the rendered key paths match the ones each CONFIG.md documents', async () => {
   // `products/evidence/scripts/check-config-key-paths.sh` owns the CONFIG.md
   // blocks. Comparing against them keeps this walk and that one from drifting
-  // apart without either side going quiet.
-  const reference = await readFile(
-    resolve(repoRoot, 'products/evidence/reference/request-adapter/deployment-projects/CONFIG.md'),
-    'utf8',
-  );
-  const documented = (marker) => {
-    const body = reference.split(`<!-- ${marker}:start -->`)[1].split(`<!-- ${marker}:end -->`)[0];
+  // apart without either side going quiet. Each entry names the reference it
+  // documents into, so a schema is compared against the prose that explains it
+  // rather than against one file every schema is assumed to share.
+  const references = new Map();
+  const documented = async (contract) => {
+    if (!references.has(contract.reference)) {
+      references.set(
+        contract.reference,
+        await readFile(resolve(repoRoot, contract.reference), 'utf8'),
+      );
+    }
+    const reference = references.get(contract.reference);
+    const body = reference
+      .split(`<!-- ${contract.marker}:start -->`)[1]
+      .split(`<!-- ${contract.marker}:end -->`)[0];
     return body
       .split('\n')
       .map((line) => line.trim())
@@ -559,8 +596,12 @@ test('the rendered key paths match the ones CONFIG.md documents', async () => {
   };
 
   const document = await buildEvidenceConfiguration(repoRoot);
+  assert.ok(
+    new Set(document.contracts.map((contract) => contract.reference)).size > 1,
+    'more than one reference must be exercised, or the per-entry addressing is untested',
+  );
   for (const contract of document.contracts) {
-    const expected = documented(contract.marker);
+    const expected = await documented(contract);
     assert.deepEqual(pathsOf(contract.fields), expected, `${contract.id} key paths drifted`);
   }
 });

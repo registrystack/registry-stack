@@ -3,23 +3,33 @@
 This beta integration is installed from a Registry Stack source release.
 It is not yet published to the VS Code Marketplace and no release VSIX is provided.
 For the stable beta path, run `registryctl init <directory> --template http` or
-`registryctl -C <project> tooling editor` and use the generated YAML schema settings.
-Install this integration for optional semantic navigation.
+`registryctl -C <project> tooling editor` for a Relay project, or
+`evidencectl tooling editor --project <directory>` for an Evidence authoring project, and use the
+generated YAML schema settings. Install this integration for optional semantic navigation.
 
-This extension starts `registry-language-server` for a workspace whose root contains
-`registry-stack.yaml`. It adds cross-file definitions, references, workspace/document symbols,
-and Registry Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax,
-schema validation, completion, formatting, and ordinary hover information.
+This extension activates when a workspace contains a Registry Stack project marker at its root or
+below it. A Relay project root contains `registry-stack.yaml`. An Evidence authoring project root
+contains `evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a
+`questions` directory. A workspace folder that is itself a project starts its language server
+immediately. For a project nested below a workspace folder, opening its first YAML document starts
+one language server for the containing workspace folder; the server then discovers the project by
+walking upward from that document. This avoids recursively scanning the workspace from the
+extension. It adds cross-file definitions, references, workspace/document symbols, and Registry
+Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax, schema validation,
+completion, formatting, and ordinary hover information.
 
-Multi-root workspaces are supported. The extension starts one isolated language-server process for
-each folder whose root contains `registry-stack.yaml`, and it responds when workspace folders are
-added or removed. Because the server executes a local binary and reads local files, the extension
-is disabled in untrusted and virtual workspaces.
+Multi-root workspaces are supported. The extension starts at most one isolated language-server
+process for each eligible local workspace folder and responds when workspace folders are added or
+removed. One process serves every project discovered inside that folder across both families, so a
+workspace holding a Relay project and an Evidence project needs no separate configuration. Because
+the server executes a local binary and reads local files, the extension is disabled in untrusted
+and virtual workspaces.
 
 ## Install and launch
 
-Prerequisites are Node.js 22 or newer, the `code` command-line tool, and the `registryctl` version
-that matches this source checkout.
+Prerequisites are Node.js 22 or newer, the `code` command-line tool, and either the `registryctl` or
+the `evidencectl` version that matches this source checkout. Both embed the same language server, so
+either satisfies the installer.
 
 1. From the repository root, install the integration into the active VS Code profile:
 
@@ -27,10 +37,11 @@ that matches this source checkout.
    ./editors/install.sh vscode
    ```
 
-   The installer checks the `registryctl` version and embedded language server, packages the
-   extension, and installs it without reading or changing a project. The locally built VSIX records
-   the verified absolute `registryctl` path, so it also works when an existing VS Code process did
-   not inherit the shell `PATH`. Use `--profile <name>` to select an existing profile.
+   The installer checks the version and embedded language server of `registryctl`, or of
+   `evidencectl` when `registryctl` is absent, packages the extension, and installs it without
+   reading or changing a project. The locally built VSIX records the verified absolute path of the
+   CLI it selected, so it also works when an existing VS Code process did not inherit the shell
+   `PATH`. Use `--profile <name>` to select an existing profile.
 
 2. Complete the [shared smoke-project setup](../README.md#local-end-to-end-smoke-test), then open
    it in the same profile:
@@ -50,12 +61,15 @@ that matches this source checkout.
    `F12` for definitions, `Shift+F12` for references, `Cmd+Shift+O`/`Ctrl+Shift+O` for document
    symbols, and `Cmd+T`/`Ctrl+T` for workspace symbols.
 
-The source VSIX contains the extension runtime and the verified path to `registryctl`, not a
-platform server binary. Its server discovery order is: the explicit
-`registryStack.languageServer.path` setting, the installer-selected `registryctl`,
-`registry-language-server` on `PATH`, then a matching `registryctl` on `PATH`. Registryctl runs
-`registryctl tooling language-server` in both cases. A manually packaged VSIX omits the local
-path metadata and retains the PATH-based discovery behavior.
+The source VSIX contains the extension runtime and the verified path to the CLI the installer
+selected, not a platform server binary. Its server discovery order is: the explicit
+`registryStack.languageServer.path` setting, the installer-selected CLI,
+`registry-language-server` on `PATH`, a matching `registryctl` on `PATH`, then a matching
+`evidencectl` on `PATH`. Every tier but the standalone server runs `<cli> tooling language-server`.
+A CLI found on `PATH` is asked whether it hosts the server before it is used, so one built before
+the subcommand existed is passed over rather than taken as the answer, and the CLI behind it is
+still reached. A manually packaged VSIX omits the local path metadata and retains the PATH-based
+discovery behavior.
 
 ## Manual packaging
 
@@ -86,14 +100,16 @@ and verifies that the VSIX contains no external `node_modules` runtime.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm each intended workspace folder root itself contains
-  `registry-stack.yaml` and that VS Code trusts the workspace. Opening only a YAML file or a parent
-  directory does not activate it. Select **Workspaces: Manage Workspace Trust**, trust the reviewed
-  project, and run **Registry Stack: Restart Language Server**.
+- If activation does not occur, confirm the workspace contains `registry-stack.yaml`,
+  `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions` directory, and that VS
+  Code trusts the workspace. For a project below the workspace-folder root, open one of that
+  project's YAML documents to start its folder's language server. Select **Workspaces: Manage
+  Workspace Trust**, trust the reviewed project, and run **Registry Stack: Restart Language
+  Server** if needed.
 - If startup reports that no server was found, set `registryStack.languageServer.path` to the
   standalone executable built for source iteration. Otherwise, add `registry-language-server` to
-  `PATH`, or ensure the matching `registryctl` is on the environment inherited by VS Code and
-  restart the language server. The output message names the project folder that failed.
+  `PATH`, or ensure a matching `registryctl` or `evidencectl` is on the environment inherited by VS
+  Code and restart the language server. The output message names the project folder that failed.
 - If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the output
   channel named for that workspace folder.
 - Red Hat YAML still owns schema validation, completion, hover, formatting, and syntax errors. Its
