@@ -467,6 +467,190 @@
         "title": "Evidence request Version 1",
         "type": "object"
       },
+      "EvidenceRequestBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRequestBatchItem"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "purpose": {
+            "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "requirement": {
+            "format": "uri",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirement",
+          "purpose",
+          "items"
+        ],
+        "title": "Evidence multi-subject request batch Version 1",
+        "type": "object"
+      },
+      "EvidenceRequestBatchEvidenceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/FlattenedJws"
+          },
+          "result": {
+            "enum": [
+              "evidence"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "EvidenceRequestBatchItem": {
+        "additionalProperties": false,
+        "properties": {
+          "requestNonce": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRequestBatchSubject"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "requestNonce",
+          "subjects"
+        ],
+        "type": "object"
+      },
+      "EvidenceRequestBatchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EvidenceRequestBatchEvidenceResult"
+                },
+                {
+                  "$ref": "#/components/schemas/EvidenceRequestBatchUnavailableResult"
+                }
+              ]
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "schema": {
+            "enum": [
+              "registry.evidence-request-batch/v1"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "EvidenceRequestBatchResponse"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "type",
+          "items"
+        ],
+        "title": "Evidence multi-subject request batch response Version 1",
+        "type": "object"
+      },
+      "EvidenceRequestBatchSelector": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EvidenceRequestBatchSelectorValue"
+            },
+            "maxProperties": 16,
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "EvidenceRequestBatchSelectorValue": {
+        "oneOf": [
+          {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "EvidenceRequestBatchSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/EvidenceRequestBatchSelector"
+          }
+        },
+        "required": [
+          "role",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "EvidenceRequestBatchUnavailableResult": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {
+            "enum": [
+              "evidence_not_available"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object"
+      },
       "EvidenceRequestSelector": {
         "additionalProperties": false,
         "properties": {
@@ -2651,6 +2835,583 @@
           }
         ],
         "summary": "List the complete Evidence request shapes available to the authenticated caller"
+      }
+    },
+    "/v1/evidence/batch": {
+      "post": {
+        "description": "The exact application/vnd.registrystack.evidence.request-batch+json Accept value selects this signed-JWS-only operation. The request carries one common requirement and purpose and between one and sixteen ordered subject items. The authenticated token supplies the common audience. Every item is validated and authorized before source access, and rate admission costs the complete item count atomically. Singular unavailable outcomes appear positionally inside a 200 response. Any other failure aborts the complete request. The serialized response is limited to 1048576 bytes and is released only after one durable terminal audit event.",
+        "operationId": "createEvidenceRequestBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceRequestBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.registrystack.evidence.request-batch+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRequestBatchResponse"
+                }
+              }
+            },
+            "description": "One ordered signed-evidence or evidence-not-available result per request item",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "malformed_request"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                400
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Request is not valid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://registrystack.org/problems/evidence/malformed_request"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "invalid_selector"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                400
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Request is not valid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://registrystack.org/problems/evidence/invalid_selector"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Malformed batch request or invalid selector",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication_failed"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            401
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Authentication failed"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/authentication_failed"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Authentication failed",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "schema": {
+                  "enum": [
+                    "Bearer"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "not_authorized"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            403
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Request is not authorized"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/not_authorized"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "At least one batch item is not authorized for signed audience-scoped evidence",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "response_format_not_acceptable"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            406
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Requested response format is not acceptable"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The exact request-batch response media type was not selected",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate_limited"
+                          ],
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            429
+                          ],
+                          "type": "integer"
+                        },
+                        "title": {
+                          "enum": [
+                            "Request rate exceeded"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "https://registrystack.org/problems/evidence/rate_limited"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Atomic item-count rate admission was refused",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "schema": {
+                  "enum": [
+                    "1"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "dependency_unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                503
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Service temporarily unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://registrystack.org/problems/evidence/dependency_unavailable"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "service_unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                503
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Service temporarily unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://registrystack.org/problems/evidence/service_unavailable"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A dependency, protocol, signing, serialization, or audit failure aborted the complete request",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response format is negotiated through the exact Accept matrix.",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+                "schema": {
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Produce ordered evidence outcomes for several subjects"
       }
     }
   }

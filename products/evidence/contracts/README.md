@@ -8,13 +8,18 @@ OpenAPI artifacts implementing these semantics are committed under
 `../generated/` and reproduced exactly with
 `../scripts/check-contracts.sh`; generated files are never hand-edited. The
 generated set includes `evidence-unsigned-envelope-v1.schema.json`, the closed
-envelope returned when unsigned output is explicitly requested and permitted.
+envelope returned when unsigned output is explicitly requested and permitted,
+plus `evidence-request-batch-v1.schema.json` and
+`evidence-request-batch-response-v1.schema.json` for the bounded signed-JWS-only
+multi-subject operation.
 
 The normative source set is:
 
 - `cccev-field-mapping.yaml`: CCCEV 2.2.0 alignment and Evidence extensions;
-- `request.schema.yaml`, `definitions.schema.yaml`, `evidence.schema.yaml`, and
-  `jws-profile.yaml`: public discovery, request, the required `requestNonce`
+- `request.schema.yaml`, `request-batch.schema.yaml`,
+  `request-batch-response.schema.yaml`, `definitions.schema.yaml`,
+  `evidence.schema.yaml`, and `jws-profile.yaml`: public discovery, singular
+  requests and bounded ordered request batches, the required `requestNonce`
   and its echo in the Evidence payload, response-format negotiation, payload,
   ES256 service signing, RFC 7638 key identifiers, publication, revocation,
   rotation, and strict verifier rules;
@@ -31,17 +36,21 @@ The normative source set is:
 - `authority-context.schema.yaml` and `selector-contract.yaml`: normalized
   authority, one-decision authorization inputs, exact selector profiles, and
   value-origin rules;
-- `audit-event.schema.yaml`: the protected native audit-record union, with
+- `audit-event.schema.yaml` and `request-batch-audit-event.schema.yaml`: the
+  protected native audit-record shapes, with
   distinct discriminators for mutually exclusive complete authorized-material
   and minimal authenticated authorization-refusal shapes. Complete events carry
   the closed `responseProtection` mode and require `signingKeyId` exactly for
-  cryptographically protected release; the refusal shape omits both;
+  cryptographically protected release; the refusal shape omits both; the
+  request-batch shape groups bounded item indices by authority and pseudonymized
+  subject set and records one ordered terminal outcome set;
 - `bundle.schema.yaml` and `runtime.schema.yaml`: the immutable governed bundle,
   its bundle-level and grant-level `responseFormats` permission, closed
   process-local runtime bindings, and their non-override boundary;
 - `supported-value-forms.yaml`: the complete closed value-form vocabulary;
 - `rhai-abi.yaml` and `primitive-library.yaml`: the closed `prepare/2`,
-  `extract/2`, and selector-aware `derive/3` entry points, domain-neutral
+  `extract/2`, `prepare_batch/2`, `extract_batch/2`, and selector-aware
+  `derive/3` entry points, domain-neutral
   primitive allowlist, and resource limits;
 - `source-contract.yaml`: the fixed HTTP JSON source boundary and the closed set
   of acquisition kinds a requirement may declare; and
@@ -83,7 +92,8 @@ Evidence vocabulary.
 4. Rust owns authorization, minimized script inputs, fixed path and header
    authority, networking, credentials, TLS trust, response projection, output
    validation, evidence construction, signing, and audit. Rhai prepares only
-   ordered query pairs and one JSON body, extracts the closed lookup result,
+   ordered query pairs and one JSON body, extracts the closed lookup result or
+   an exact opaque-slot bijection for an eligible source batch,
    and derives declared concepts from matched facts and explicitly declared
    authorized selectors. It cannot perform I/O.
 5. Signed flattened JWS over the exact UTF-8 payload bytes is mandatory and the
@@ -108,6 +118,11 @@ Evidence vocabulary.
 9. Active, published, and revoked key sets are explicit and disjoint. Denied
    identifiers are checked before selecting a cached key, and configuration
    changes take effect only through restart.
+10. The multi-subject request-batch route authenticates once, uses one
+    evaluation instant, atomically charges its complete item count, and
+    validates and authorizes every item before I/O. It releases one ordered,
+    signed-JWS-only envelope after durable batch-native terminal audit, or one
+    safe outer problem with no partial results.
 
 Version 1 stops before documents, credential issuance protocols and credential
 lifecycle, replay or nonce state beyond the stateless request-nonce echo and

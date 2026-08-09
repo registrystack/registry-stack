@@ -252,6 +252,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multi_token_admission_is_atomic_when_the_whole_cost_does_not_fit() {
+        let limiter = EvidenceRateLimiter::new(RateLimitConfig {
+            requests_per_principal_per_minute: 60,
+            burst_per_principal: 3,
+            failed_selector_attempts_per_principal_authority_per_minute: 2,
+        })
+        .expect("limiter builds");
+
+        assert_eq!(
+            limiter.check_request_cost("batch-principal", 4).await,
+            Err(RateLimitError::RequestExceeded)
+        );
+        limiter
+            .check_request_cost("batch-principal", 3)
+            .await
+            .expect("a refused four-item admission consumed no partial tokens");
+        assert_eq!(
+            limiter.check_request("batch-principal").await,
+            Err(RateLimitError::RequestExceeded)
+        );
+    }
+
+    #[tokio::test]
     async fn selector_failure_budget_is_separate_and_authority_scoped() {
         let limiter = limiter();
         limiter

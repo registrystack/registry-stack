@@ -153,7 +153,7 @@ must use them:
 | Source authentication | Secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin. A statement source presents no credential at all |
 | Audit | `registry-platform-audit` JSONL sink on explicitly durable storage, fail-closed |
 | Signing | Flattened JWS JSON with one active ES256/P-256 key, RFC 7638 `kid`, explicit published and revoked sets, and a public JWKS endpoint |
-| Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it |
+| Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it; the request-batch route has only `application/vnd.registrystack.evidence.request-batch+json` and signed JWS item results |
 | Evidence storage | None |
 | Runtime mutation | None |
 
@@ -221,6 +221,43 @@ Signing failure on the signed path never produces an unsigned success response.
 Authentication, malformed-request, and invalid-selector failures have no native
 audit event and remain in the closed operational channel.
 
+The multi-subject request-batch path wraps this pipeline without weakening it:
+
+1. Parse one common requirement and purpose plus one to sixteen ordered items.
+   Validate each complete subject set and every canonical nonce, including
+   pairwise distinctness, before source access.
+2. Authenticate the bearer token once, mint one operation identifier, reserve
+   one evaluation instant, and debit the principal's request-rate bucket by the
+   complete item count atomically. A failed debit charges nothing.
+3. Resolve and authorize every item independently against the same token-derived
+   audience and required signed-JWS format. Any failure aborts before source
+   credential resolution or I/O. Items may match different grants or authority
+   kinds.
+4. Select the source strategy before any access audit, credential resolution,
+   semaphore admission, or I/O. Sequential execution supports every existing
+   audience-scoped acquisition and evaluates in request order. The optional
+   one-call HTTP strategy requires both `source-batch` capability gates, a
+   `single` acquisition, one fixed-path HTTP source with a batch block, and a
+   complete item count within that source's `maximumItems`.
+5. For each physical source call, durably record one batch-native access event
+   containing bounded item indices and groups of identical authority plus
+   pseudonymized subject sets. Once optimized execution begins, failure never
+   retries through sequential fanout.
+6. Map every condition the singular collapse contract exposes as
+   `evidence_not_available` to that per-item outcome, including no-match,
+   ambiguous, required-fact-missing, and derivation-input-unresolved. Construct
+   and sign every available item as an ordinary flattened JWS at the common
+   evaluation instant. Any other failure aborts without releasing completed
+   items.
+7. Serialize the complete closed response, enforce the 1 MiB exact-envelope
+   ceiling, durably record one terminal release with every grouped item and
+   ordered outcome, then return the same bytes. A post-authorization abort
+   records one value-free terminal failure instead.
+
+The route does not admit unsigned output, SD-JWT VC, holder keys, or the
+holder-bound issuance batch. It remains a separate audience-scoped evaluation
+operation even where both features are enabled in one deployment.
+
 ## Bundle and runtime contracts
 
 The governed atomic bundle contains:
@@ -263,6 +300,10 @@ Bundle checking must validate:
 - for HTTP, fixed scheme, host, method, fixed path or tagged selector/prior-fact-
   bound path template, fixed non-secret headers, fields, credentials, logical
   TLS trust-profile name, limits, and redirect policy;
+- for an optional HTTP source batch block, fixed-path-only eligibility, a
+  `maximumItems` ceiling of one through sixteen, distinct `prepare_batch/2` and
+  `extract_batch/2` scripts, a closed response schema and projection, and the
+  bundle's independent `source-batch` capability declaration;
 - for SQLite, one reviewed statement, exact result columns and parameter
   origins, logical extract profile, publication-age policy, and row, cell,
   statement-step, elapsed-time, response-size, and concurrency bounds;
@@ -331,6 +372,19 @@ without script involvement, and
 constructs the request before credential acquisition. It applies the configured
 extended JSON Pointer allowlist after bounded parsing and before extraction.
 The core does not normalize names or implement source matching semantics.
+
+An HTTP source may additionally declare `batch` with `maximumItems`,
+`prepareScript`, `extractScript`, `responseSchema`, and `projection`. This block
+is a one-call optimization only. It inherits the ordinary source method, fixed
+origin and path, authentication, fixed headers, TLS, redirect denial, timeout,
+maximum response bytes, concurrency semaphore, and request preparation limits.
+It is rejected beside a path template or without bundle `source-batch`
+capability. Runtime capability is the independent operator gate, and a source
+block whose runtime gate is absent fails runtime binding before serving.
+Omission of the optional block and an outer item count above its ceiling select
+ordinary sequential execution before I/O. SQLite, path templates, and
+multi-stage acquisitions are also sequential. A started optimized execution
+never falls back, retries, fans out, or splits the outer batch.
 
 Private-CA files are runtime bindings for logical bundle trust-profile names.
 Hostname and fixed-origin verification remain mandatory. Version 1 has no
@@ -463,19 +517,32 @@ overfitting.
 
 ## Rhai contracts
 
-Use three functions with separate responsibilities:
+The ordinary evaluation path uses three functions with separate
+responsibilities. The optional fixed-path HTTP batch optimization adds two
+source functions:
 
 ```text
 prepare(source_required_selectors, adapter_context) -> RequestParts
 extract(source_response, adapter_context) -> LookupResult
 derive(facts, declared_authorized_selectors, evaluation_context)
     -> array<DerivedConceptValue>
+prepare_batch(items, {parameters}) -> RequestParts
+extract_batch(response, {parameters, slots}) -> array<{slot, result}>
 ```
 
 `adapter_context` has the exact keys `parameters` and `prior_facts`.
 `prior_facts` is empty except when Rust supplies the schema-validated search
 FactSet to a fixed fetch source, whole or projected onto the allowlist that
 stage declares.
+
+`prepare_batch` receives one ordered exact `{slot, selectors}` map per logical
+item. Selectors have the ordinary minimized source shape; `slot` is a
+Rust-issued opaque integer used only for correlation. `extract_batch` receives
+the batch projection after its response schema and bounds have passed, plus the
+exact slot list but no selectors. It returns each slot exactly once with one
+ordinary `LookupResult`; ordering may differ because Rust restores request
+order. Missing, duplicate, extra, negative, non-integer, or out-of-range slots
+abort the outer request as a source-protocol failure.
 
 `LookupResult` is exactly `match(FactSet)`, `no_match`, or `ambiguous`. The
 source adapter performs source-specific response parsing and cardinality
@@ -830,18 +897,18 @@ follow-up issue.
 | Area | Done when |
 |---|---|
 | Scope and architecture | One `registry-evidence` crate and one `evidence` binary implement the complete Version 1 path without any `registry-notary*`, PDP, credential-issuance, replay, worker, or interoperability subsystem dependency. |
-| Public contracts | The CCCEV-aligned Evidence JSON profile, request nonce, request and selector schemas, flattened JWS and unsigned-envelope responses, exact content negotiation, governed-bundle and runtime YAML schemas, closed `prepare/2`, `extract/2`, and selector-aware `derive/3` Rhai ABIs, projection and fixture contracts, audit events, problem codes, JSON Schema, and OpenAPI are reviewed, versioned, generated where applicable, and protected by CI drift tests. Subject-array order is not semantic; Rust resolves unique roles and emits declaration order internally. |
-| Initial assertion cases | Adult status, residence region, professional licence status, and legal-parent relationship each pass offline and through the real HTTP service, including authentication, authorization, response-format permission, source access, both audit gates, output validation, signed JWS, explicitly authorized unsigned output, and strict verification. |
+| Public contracts | The CCCEV-aligned Evidence JSON profile, singular and multi-subject request schemas, request nonce, selector schemas, flattened JWS, unsigned, and request-batch responses, exact content negotiation, governed-bundle and runtime YAML schemas, closed `prepare/2`, `extract/2`, `prepare_batch/2`, `extract_batch/2`, and selector-aware `derive/3` Rhai ABIs, projection and fixture contracts, audit events, problem codes, JSON Schema, and OpenAPI are reviewed, versioned, generated where applicable, and protected by CI drift tests. Subject-array order is not semantic; Rust resolves unique roles and emits declaration order internally. |
+| Initial assertion cases | Adult status, residence region, professional licence status, and legal-parent relationship each pass offline and through the real HTTP service, including authentication, authorization, response-format permission, source access, both audit gates, output validation, signed JWS, explicitly authorized unsigned output, and strict verification. The multi-subject request-batch path exercises the same domain-neutral resolution and signing path without adding a preferred definition or domain branch. |
 | Generic domain model | The four cases use one model and operation. Production Rust has no adult, age, residence, licence, parentage, personal-name-part, national-identifier, or other acceptance-case or jurisdiction-specific type, field, operation, route, feature, or conditional. Deployment-defined selector field names are opaque stable names. |
 | Source-product neutrality | Production code, Cargo metadata, and generated public contracts have no DHIS2 or OpenCRVS module, type, dependency, feature, configuration variant, route, CLI option, or conditional. Product names and shapes appear only in tests, sanitized fixtures, test-only bundles, and design or local-smoke documentation. |
-| Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
+| Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Batch preparation receives only ordered opaque slots with minimized selectors plus `{parameters}`; batch extraction receives only the bounded projected response plus `{parameters, slots}` and returns an exact slot bijection over ordinary lookup results. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
 | Values and validation | Every Version 1 Supported Value form declared in `CONCEPT.md` passes positive, negative, boundary, size, cardinality, Evidence construction, JWS serialization, and verification tests. The four initial assertion cases exercise boolean, controlled-code, time-bucket, multiple-concept, and multi-subject behavior through the full service. |
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
-| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Authorization header, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same HTTP executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
+| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. Request batches run sequentially in order unless both capability gates and one fixed-path HTTP source batch block authorize exactly one optimized call within its ceiling. Strategy is fixed before I/O, and optimized failure never fans out. The effective posture is the weakest among the acquisition's sources. Basic, static Authorization header, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same HTTP executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
 | Statement source minimization | A `sqlite-extract` source executes exactly one bundle-fixed reviewed statement, held to one statement per artifact and covered by the bundle hash, against the one extract file the runtime bound, and Rust binds every value into it by index so no value is ever rendered into statement text. SQLite's authorizer decides every action the compiled statement would take while it is prepared, permitting reads and refusing every write, schema, and control action, `ATTACH`, `DETACH`, `PRAGMA`, extension loading, non-deterministic functions, and the whole clock family; a denied action fails the bundle at load rather than at request time. The reserved `evidence_now` parameter carries the same evaluation instant the assertion reports, and a bundle declaring that name is refused. Every declared parameter has exactly one origin, so a preparation script cannot fill a selector parameter, return a name the source never declared, reach the reserved name, or leave a declared prepared parameter unfilled, and a preparation script and a prepared parameter are refused unless declared together. Startup proves the statement's real result columns and parameters against the bundle over the extract it will read, refuses an extract profile the runtime did not bind and a binding no source names, and refuses a symbolic link, a non-regular file, a file this process could write, and a path replaced before it was opened; the bound file's digest enters the computed runtime revision. The reserved `evidence_extract` table must carry exactly one publication row, and the declared `maximumExtractAgeSeconds` is compared against the evaluation instant before a single row is read. Row, cell, and response-byte bounds are enforced as the result is read, the statement-step and time bounds by the progress handler inside the engine, and a cancelled request returns its connection and its permit. The transport holds no credential of any kind, and no diagnostic, log, snapshot, or audit record carries statement text, a bound or result value, the extract path, or engine message text. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
-| Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
-| Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
+| Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes final immutable response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Request batches use their distinct audit schema, one access event per physical call with bounded item groups by authority and subject set, and one terminal release with every ordered outcome or one value-free terminal failure. An all-unavailable release carries no signing key id. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for a release that signed at least one assertion, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, signed material, or raw subject identifiers. |
+| Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, the unsigned envelope, and the request-batch envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Request-batch available items are signed JWS only, stay in request order, and the exact complete envelope is bounded to 1 MiB, pre-audited, and returned unchanged. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact singular API selection, and makes no later-verification claim. Signed failure never falls back to unsigned or partial batch release. |
 | Failure and operations | Stable safe errors, reviewed existence-disclosure semantics, public collapse of `no_match` and `ambiguous` by default, request limits, per-principal and failed-selector-attempt rate controls, authenticated requester-scoped discovery, health, readiness, dependency timeouts, and graceful shutdown work without exposing protected data. Discovery performs no source access and exposes no source plan, scripts, credentials, internal authority metadata, selector values, codelist values, or unrelated definitions. Readiness fails for missing bundle, selector binding, credential, audit, or signing dependencies required by the configured deployment. |
 | Multiple definitions | All four definitions run concurrently in one process and one trust domain without script state, limits, identifiers, subjects, source responses, audit context, or results crossing definition boundaries. Unsafe combined disclosure and mutually distrustful issuer configurations are rejected. |
 | Verification evidence | Focused invariant tests, all package tests, contract drift checks, dependency policy, formatting, package and workspace check, Clippy with warnings denied, and workspace tests pass. Security-sensitive behavior has a named threat, enforcement point, and negative test. |
@@ -1119,6 +1186,50 @@ At minimum, pin these acceptance and negative cases:
     staleness, and a missing parameter reach their request outcomes; the source
     contract suite proves a refused statement fails at startup. Extract columns
     the statement never selects are absent from every assertion and diagnostic.
+77. `POST /v1/evidence/batch` requires exact
+    `application/vnd.registrystack.evidence.request-batch+json`, accepts one
+    through sixteen ordered items under one requirement and purpose, and
+    rejects malformed, noncanonical, or repeated nonces before source access.
+    The route accepts no holder keys, unsigned or SD-JWT VC format, or
+    holder-bound issuance media type.
+78. One batch authenticates the bearer token once, mints one operation, uses
+    one evaluation instant for every available assertion, and atomically
+    charges the principal's rate bucket by item count. An insufficient bucket
+    charges nothing and contacts no source.
+79. Selector resolution, complete request validation, and one full
+    authorization decision per item finish before source credential resolution
+    or I/O. Items may resolve through different grants or authority kinds;
+    failure of any item aborts the outer request before access.
+80. Sequential strategy supports `single`, `search-then-fetch`,
+    `search-then-fetch-set`, SQLite, path templates, and ordinary fixed HTTP in
+    exact request order. Omitted source batching, ineligible sources, and a
+    complete batch above `maximumItems` select sequential execution before I/O.
+81. The closed `registry.evidence-request-batch/v1`
+    `EvidenceRequestBatchResponse` contains exactly one ordered member per
+    request. Available members carry flattened signed JWS. Every condition the
+    singular collapse contract exposes as `evidence_not_available` becomes
+    that item outcome, including mixed and all-unavailable `200` envelopes.
+    Every other failure returns the existing safe outer problem and releases no
+    partial member.
+82. Optimized source batching requires bundle and runtime `source-batch`
+    capability, a `single` acquisition, one fixed-path `http-json` source, and
+    its complete `batch` block. The one call reuses ordinary method, origin,
+    path, authentication, headers, TLS, redirect, timeout, response,
+    concurrency, and preparation bounds; the block cannot override them.
+83. `prepare_batch` receives only ordered `{slot, selectors}` items and
+    `{parameters}`. `extract_batch` receives only the validated projected
+    response and `{parameters, slots}` and must return an exact slot bijection
+    over ordinary lookup results. Missing, duplicate, extra, negative,
+    non-integer, or out-of-range slots abort globally, and no optimized failure
+    retries through sequential fanout.
+84. `registry.evidence.audit.request-batch/v1` writes one access event before
+    every physical source call with bounded item indices and item groups by
+    identical authority plus pseudonymized subject set. It writes exactly one
+    terminal release covering every ordered outcome or one value-free terminal
+    failure on abort. An all-unavailable release carries no signing key id.
+    Nonces, selectors, facts, bodies, and signed material are absent. The exact
+    complete envelope is limited to 1 MiB, serialized before durable release
+    audit, and returned byte-for-byte afterward.
 
 Cases 67 through 76 are traced to their executable tests by the
 `sec-statement-source-bounded` entry in

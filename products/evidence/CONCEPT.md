@@ -1076,10 +1076,12 @@ Rust evaluates these declarations with fail-closed semantics. Requirement-specif
 
 ## 11. Native JSON API
 
-Version one exposes one evidence operation:
+Version one exposes one singular evidence operation and one bounded
+multi-subject request-batch operation:
 
 ```text
 POST /v1/evidence
+POST /v1/evidence/batch
 ```
 
 Illustrative request:
@@ -1417,6 +1419,51 @@ The JWKS endpoint publishes verification keys only. Version one has no public,
 cross-requester, searchable, mutable, or federated definition catalog and no
 registration editor or `describe` CLI command.
 
+### 11.7 Multi-subject request batch
+
+`POST /v1/evidence/batch` evaluates between one and sixteen ordered,
+audience-scoped requests for one common requirement and purpose. Each item has
+its own canonical, pairwise-distinct `requestNonce` and complete `subjects`
+array. The audience comes only from the one authenticated token and is common
+to every item. The caller opts into the route's only representation with exact
+`Accept: application/vnd.registrystack.evidence.request-batch+json`.
+
+The service authenticates once, reserves one evaluation instant, and charges
+the principal's rate bucket atomically for the complete item count. It validates
+and authorizes every item before credential resolution or source I/O. A failed
+validation, authorization, or atomic rate charge aborts the outer request and
+starts no source call. Authority is still decided per item, so items may
+legitimately resolve through different grants or authority kinds.
+
+The response is the closed `registry.evidence-request-batch/v1`
+`EvidenceRequestBatchResponse`. Its `items` are in exact request order. An
+available result carries one flattened JWS under the ordinary signed Evidence
+profile. Every condition that singular evaluation already exposes as
+`evidence_not_available` becomes that closed outcome for the item, including
+`no_match`, `ambiguous`, required-fact-missing, and
+derivation-input-unresolved. Mixed and all-unavailable
+envelopes return `200`. Every other failure aborts the outer request through the
+existing safe Problem Details contract, and no completed item is released.
+Unsigned, SD-JWT VC, and holder-bound formats are not accepted on this route.
+The exact serialized envelope is capped at 1 MiB.
+
+Ordinary execution evaluates items sequentially in request order and supports
+every existing audience-scoped acquisition. An HTTP JSON source with one fixed
+path may optionally declare a one-call batch block. Rust chooses that strategy
+before any I/O only when the bundle and runtime both enable `source-batch`, the
+requirement uses `single`, the source carries the block, and the complete item
+set fits its ceiling. A source block without both capability gates is a startup
+error. An omitted block, an item count above its ceiling, SQLite, path
+templates, and multi-stage acquisitions stay sequential. Once optimized
+execution begins, no failure retries through sequential fanout.
+
+This operation is independent of holder-bound issuance batch. That profile
+accepts several holder keys on `POST /v1/evidence`, performs one acquisition and
+derivation, and emits several credentials for one subject evaluation. The
+request-batch route instead evaluates several audience-scoped subject sets,
+issues only signed JWS results, accepts no holder keys, and never selects the
+holder-bound batch media type.
+
 ## 12. Audit and operational logging
 
 Operational logs describe service health and performance. They may contain:
@@ -1449,6 +1496,27 @@ Authorized-material audit events contain only reviewed fields:
 - evidence identifier on release and signing key identifier only on
   cryptographically protected release;
 - timing and safe error category.
+
+The multi-subject request batch uses the distinct
+`registry.evidence.audit.request-batch/v1` shape. Each physical source call has
+one access event naming its bounded item indices and `itemGroups`. A group
+contains the items sharing one identical authority object and ordered
+pseudonymized subject set. Groups partition the event's relevant item indices,
+so different grants or authority kinds remain explicit without repeating the
+same pseudonymous set for each optimized item. Sequential execution normally
+has one item per access event; optimized execution names every item carried by
+its one call.
+
+One terminal release records `itemGroups` for every item plus ordered outcomes,
+with an evidence identifier exactly for each `evidence` outcome. It records a
+signing key identifier exactly when at least one assertion was signed, never on
+an all-unavailable release. An abort after authorization records one value-free
+terminal failure with a safe category and no item, authority, subject, source,
+outcome, evidence, signing, or disclosure material. Batch-native audit never
+records request nonces, raw selectors, facts, bodies, flattened JWS members, or
+other signed material. The full exact envelope is serialized and size-checked
+first, the terminal release is durably accepted second, and those same bytes
+are returned third.
 
 After successful authentication, an authorization refusal produces a separate
 minimal native event with the
@@ -1507,7 +1575,8 @@ Three audit gates are fail-closed:
 1. An authenticated authorization-refusal event must be durably accepted
    before the generic `403` is returned.
 2. The access-attempt event must be durably accepted before the first source
-   read.
+   read of each physical call. On the request-batch route this is the distinct
+   batch-native access event covering that call's item indices.
 3. The disclosure-release event must be durably accepted after final response
    serialization and before those exact bytes are released.
 
@@ -1594,7 +1663,8 @@ Version one must preserve these invariants:
     bundle's permission, that grant's permission, and the mode's own allowlist,
     and a request outside that intersection is refused through the ordinary
     format denial, which never reveals which layer withheld it.
-32. A batch release is one authorization decision, one source acquisition, and
+32. A holder-bound issuance batch release is one authorization decision, one
+    source acquisition, and
     one derivation, then one member per distinct holder key under a ceiling the
     bundle declares. Keys are distinct by RFC 7638 thumbprint and a duplicate
     is refused before source access. Each member carries its own subject
@@ -1609,6 +1679,27 @@ Version one must preserve these invariants:
     as an issuer-only assertion, and key binding is checked before any policy
     comparison runs, so a failed possession proof never becomes an oracle for a
     policy expectation.
+34. A multi-subject request batch authenticates once, uses one evaluation
+    instant, and charges rate cost equal to its complete item count atomically.
+    Every item is validated and authorized before any source I/O, and failure
+    of any such gate starts no acquisition and releases no partial result.
+35. Each request-batch item is evaluated in request order and produces exactly
+    one ordered response member. Every class the singular collapse contract
+    exposes as `evidence_not_available` becomes that item outcome; every other
+    failure aborts the outer request through the existing safe problem
+    contract.
+36. Optional source batching has two independent authorizers, the governed
+    bundle and runtime, and one source-local batch declaration. Rust selects the
+    strategy before I/O. Omission, ineligibility, or a batch above the source
+    ceiling selects sequential execution from the start; an optimized attempt
+    never retries through fanout. Opaque slots and exact extraction bijection
+    prevent result substitution, omission, and duplication.
+37. A request-batch operation emits one access event per physical source call
+    and exactly one terminal event. Grouped item indices bind every access and
+    release to per-item authority plus complete subject-set pseudonyms. The
+    exact bounded envelope is serialized before durable release audit and
+    returned byte-for-byte afterward, with no nonce, selector, fact, body, or
+    signed material in audit.
 
 ## 14. Complementary deployment patterns
 
@@ -2216,8 +2307,9 @@ mandatory default and includes:
 - generic Rust-provided date, time, codelist, numeric, and collection primitives;
 - Rust-owned validation of derived values, evidence construction, and projection;
 - authenticated `GET /v1/evidence-definitions` requester-scoped discovery and
-  one `POST /v1/evidence` assertion operation with a required fixed-size
-  request nonce;
+  `POST /v1/evidence` singular assertions plus bounded audience-scoped
+  `POST /v1/evidence/batch` requests with one fixed-size nonce per ordered
+  subject set;
 - one active ES256/P-256 service signing key with RFC 7638 identity, explicit
   published and revoked key sets, default flattened JWS JSON responses, a
   governed explicitly selected unsigned envelope, and a public JWKS endpoint;
@@ -2557,6 +2649,14 @@ This concept fixes the following decisions:
     proves it cannot write or leave its file, Rust supplies the only clock
     through a reserved parameter, and an extract without publication metadata
     or past its bundle-declared maximum age is refused before any row is read.
+27. `POST /v1/evidence/batch` is a bounded audience-scoped evaluation envelope,
+    not the holder-bound issuance batch. It returns ordered signed JWS or
+    `evidence_not_available` outcomes, applies all admission gates before I/O,
+    and never releases a partial envelope.
+28. A fixed-path HTTP JSON source may declare an optional one-call batch
+    optimization. It requires bundle and runtime `source-batch` capability,
+    uses the closed `prepare_batch/2` and `extract_batch/2` ABIs, and otherwise
+    leaves all transport authority and fallback behavior with Rust.
 
 ## 22. Production deployment decisions
 

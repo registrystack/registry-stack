@@ -1,0 +1,116 @@
+{
+  "$comment": "Named selector-profile validation follows independently for every item. Every request nonce is the canonical unpadded base64url encoding of exactly 32 independently generated random bytes, and all nonces in one batch are pairwise distinct. Invalid or repeated nonce and selector material fails the outer request before source access. The authenticated access token supplies the audience common to all items. holderKeys is absent because holder-bound issuance batching remains a separate profile on POST /v1/evidence.",
+  "$defs": {
+    "item": {
+      "additionalProperties": false,
+      "properties": {
+        "requestNonce": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/subject"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "requestNonce",
+        "subjects"
+      ],
+      "type": "object"
+    },
+    "scalar-selector-value": {
+      "oneOf": [
+        {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "selector": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "$ref": "#/$defs/scalar-selector-value"
+          },
+          "maxProperties": 16,
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "subject": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "required": [
+        "role",
+        "selector"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/request-batch-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "purpose": {
+      "pattern": "^[a-z][a-z0-9._:-]{0,127}$",
+      "type": "string"
+    },
+    "requirement": {
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "requirement",
+    "purpose",
+    "items"
+  ],
+  "title": "Evidence multi-subject request batch Version 1",
+  "type": "object"
+}

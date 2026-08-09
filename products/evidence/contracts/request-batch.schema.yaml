@@ -1,0 +1,86 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/request-batch-v1.json
+title: Evidence multi-subject request batch Version 1
+type: object
+additionalProperties: false
+required: [requirement, purpose, items]
+properties:
+  requirement:
+    type: string
+    format: uri
+    minLength: 1
+    maxLength: 512
+  purpose:
+    type: string
+    pattern: '^[a-z][a-z0-9._:-]{0,127}$'
+  items:
+    type: array
+    minItems: 1
+    maxItems: 16
+    description: >-
+      Ordered independent requests. Array position determines response position
+      and the zero-based item index used only in native batch audit. Every item
+      supplies a complete subject-role set for the common requirement.
+    items: {$ref: '#/$defs/item'}
+$defs:
+  item:
+    type: object
+    additionalProperties: false
+    required: [requestNonce, subjects]
+    properties:
+      requestNonce:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{43}$'
+      subjects:
+        type: array
+        minItems: 1
+        maxItems: 8
+        description: >-
+          Unordered role set encoded as an array. Each configured role appears
+          exactly once. Runtime resolves roles by name and emits the
+          requirement's declaration order internally.
+        items: {$ref: '#/$defs/subject'}
+  subject:
+    type: object
+    additionalProperties: false
+    required: [role, selector]
+    properties:
+      role:
+        type: string
+        pattern: '^[a-z][a-z0-9._-]{0,63}$'
+      selector: {$ref: '#/$defs/selector'}
+  selector:
+    type: object
+    additionalProperties: false
+    required: [profile]
+    properties:
+      profile:
+        type: string
+        pattern: '^[a-z][a-z0-9._-]{0,127}$'
+      values:
+        type: object
+        minProperties: 1
+        maxProperties: 16
+        propertyNames:
+          pattern: '^[a-z][a-z0-9._-]{0,63}$'
+        additionalProperties: {$ref: '#/$defs/scalar-selector-value'}
+  scalar-selector-value:
+    oneOf:
+      - {type: string, minLength: 1, maxLength: 512}
+      - {type: integer, minimum: -9007199254740991, maximum: 9007199254740991}
+      - {type: boolean}
+$comment: >-
+  Named selector-profile validation follows this transport schema independently
+  for every item. The profile closes exact field names, scalar types, bounds,
+  aggregate size, value origin, and source placements. Unknown, missing, extra,
+  mistyped, empty, oversized, wrong-origin, or unauthorized values fail the
+  outer request before any source access. Every requestNonce is the canonical
+  unpadded base64url encoding of exactly 32 independently generated random
+  bytes. All nonces in one batch are pairwise distinct. Padded, wrong-length,
+  noncanonical, or repeated values fail the outer request before source access.
+  Nonces remain uninterpreted correlation data, are echoed only in their own
+  signed Evidence payloads, and never reach authorization, rate limits, Rhai,
+  source requests, logs, metrics, traces, or native audit. The authenticated
+  access token supplies the audience common to all items. holderKeys is not a
+  member of this request, because holder-bound issuance batch is a separate
+  profile on POST /v1/evidence.

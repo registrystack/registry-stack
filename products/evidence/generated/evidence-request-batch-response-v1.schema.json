@@ -1,0 +1,91 @@
+{
+  "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence_not_available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released.",
+  "$defs": {
+    "evidence-result": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/flattened-jws"
+        },
+        "result": {
+          "const": "evidence"
+        }
+      },
+      "required": [
+        "result",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "flattened-jws": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
+        "protected": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
+        "signature": {
+          "pattern": "^[A-Za-z0-9_-]{86}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protected",
+        "payload",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "unavailable-result": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "const": "evidence_not_available"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://registrystack.org/schemas/evidence/request-batch-response-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/evidence-result"
+          },
+          {
+            "$ref": "#/$defs/unavailable-result"
+          }
+        ]
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema": {
+      "const": "registry.evidence-request-batch/v1"
+    },
+    "type": {
+      "const": "EvidenceRequestBatchResponse"
+    }
+  },
+  "required": [
+    "schema",
+    "type",
+    "items"
+  ],
+  "title": "Evidence multi-subject request batch response Version 1",
+  "type": "object"
+}

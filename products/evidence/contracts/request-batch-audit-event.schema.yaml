@@ -1,0 +1,169 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/request-batch-audit-event-v1.json
+title: Evidence multi-subject request batch audit event Version 1
+type: object
+additionalProperties: false
+required:
+  - schema
+  - assuranceProfile
+  - eventId
+  - occurredAt
+  - operation
+  - phase
+  - requirement
+  - bundleRevision
+  - purpose
+  - requesterPseudonym
+  - responseProtection
+  - decision
+  - durationMilliseconds
+properties:
+  schema: {const: registry.evidence.audit.request-batch/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
+  eventId: {type: string, format: uri, maxLength: 512}
+  occurredAt: {type: string, format: date-time}
+  operation: {type: string, minLength: 16, maxLength: 128}
+  phase: {enum: [access-attempt, disclosure-release, terminal-failure]}
+  requirement: {type: string, format: uri, maxLength: 512}
+  bundleRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+  requesterPseudonym: {$ref: '#/$defs/pseudonym'}
+  actorPseudonym: {$ref: '#/$defs/pseudonym'}
+  responseProtection: {const: signed}
+  decision: {enum: [authorized, released, aborted]}
+  sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  itemIndices: {$ref: '#/$defs/item-indices'}
+  itemGroups:
+    type: array
+    minItems: 1
+    maxItems: 16
+    items: {$ref: '#/$defs/item-group'}
+  disclosedConcepts:
+    type: array
+    maxItems: 16
+    uniqueItems: true
+    items: {type: string, format: uri, maxLength: 512}
+  signingKeyId: {type: string, minLength: 1, maxLength: 256}
+  outcomes:
+    type: array
+    minItems: 1
+    maxItems: 16
+    items: {$ref: '#/$defs/outcome'}
+  safeErrorCategory: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  durationMilliseconds: {type: integer, minimum: 0, maximum: 86400000}
+$defs:
+  pseudonym:
+    type: string
+    pattern: '^hmac-sha256:v[1-9][0-9]*:[a-f0-9]{64}$'
+  item-indices:
+    type: array
+    minItems: 1
+    maxItems: 16
+    uniqueItems: true
+    items: {type: integer, minimum: 0, maximum: 15}
+  authority:
+    type: object
+    additionalProperties: false
+    required: [kind]
+    properties:
+      kind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
+      grantPseudonym: {$ref: '#/$defs/pseudonym'}
+  subject:
+    type: object
+    additionalProperties: false
+    required: [role, selectorProfile]
+    properties:
+      role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      selectorBundlePseudonym: {$ref: '#/$defs/pseudonym'}
+  item-group:
+    type: object
+    additionalProperties: false
+    required: [itemIndices, authority, subjects]
+    properties:
+      itemIndices: {$ref: '#/$defs/item-indices'}
+      authority: {$ref: '#/$defs/authority'}
+      subjects:
+        type: array
+        minItems: 1
+        maxItems: 8
+        items: {$ref: '#/$defs/subject'}
+  outcome:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [itemIndex, outcome, evidenceId]
+        properties:
+          itemIndex: {type: integer, minimum: 0, maximum: 15}
+          outcome: {const: evidence}
+          evidenceId: {type: string, format: uri, maxLength: 512}
+      - type: object
+        additionalProperties: false
+        required: [itemIndex, outcome]
+        properties:
+          itemIndex: {type: integer, minimum: 0, maximum: 15}
+          outcome: {const: evidence-not-available}
+oneOf:
+  - title: Physical source access
+    required: [sourceId, adapterId, itemIndices, itemGroups]
+    properties:
+      phase: {const: access-attempt}
+      decision: {const: authorized}
+    not:
+      anyOf:
+        - {required: [disclosedConcepts]}
+        - {required: [signingKeyId]}
+        - {required: [outcomes]}
+        - {required: [safeErrorCategory]}
+  - title: Terminal disclosure release
+    required: [itemGroups, disclosedConcepts, outcomes]
+    properties:
+      phase: {const: disclosure-release}
+      decision: {const: released}
+    not:
+      anyOf:
+        - {required: [sourceId]}
+        - {required: [adapterId]}
+        - {required: [itemIndices]}
+        - {required: [safeErrorCategory]}
+  - title: Value-free terminal failure
+    required: [safeErrorCategory]
+    properties:
+      phase: {const: terminal-failure}
+      decision: {const: aborted}
+    not:
+      anyOf:
+        - {required: [sourceId]}
+        - {required: [adapterId]}
+        - {required: [itemIndices]}
+        - {required: [itemGroups]}
+        - {required: [disclosedConcepts]}
+        - {required: [signingKeyId]}
+        - {required: [outcomes]}
+allOf:
+  - if:
+      required: [outcomes]
+      properties:
+        outcomes:
+          contains:
+            type: object
+            required: [outcome]
+            properties: {outcome: {const: evidence}}
+    then: {required: [signingKeyId]}
+    else: {not: {required: [signingKeyId]}}
+audit_rules:
+  item_indices: Every itemIndices array is strictly increasing. Indices are zero-based positions in the outer request.
+  item_group_partition: itemGroups are ordered by their first index. Their itemIndices are non-overlapping and partition the event's relevant item set exactly. An access event's relevant set is its top-level itemIndices. A release event's relevant set is every item index from zero through outcomes.length minus one.
+  item_group_equivalence: Items share a group exactly when their complete authority object and ordered pseudonymized subjects array are identical. Items resolving through different grants or authority kinds are never forced into one group and do not invalidate the outer request.
+  access_gate: One access event is durably accepted before every physical source call. Sequential fallback therefore records one index per call. An optimized source batch records the complete bounded index set carried by its one call. A physical call that never begins records no access event.
+  outcome_order: outcomes contains one member for every request item in exact request order. itemIndex values are the contiguous sequence beginning at zero. evidenceId is required exactly for evidence and forbidden for evidence-not-available. signingKeyId is required exactly when at least one outcome is evidence and is forbidden for an all-unavailable release, because no assertion was signed.
+  release_gate: The exact complete response envelope is serialized and checked against its 1048576-byte ceiling, then one disclosure-release event is durably accepted, then those same bytes are returned unchanged. There is exactly one terminal event for an authorized outer request and never one release per item.
+  terminal_failure: Any non-singular-unavailable failure after authorization produces one terminal-failure event before the existing safe outer Problem Details response. It carries only common request metadata and safeErrorCategory, with no item, authority, subject, source, outcome, evidence, signing, or disclosure material.
+  pre_source_refusal: Authentication, malformed-request, invalid-selector, and authorization-refusal behavior remains governed by the existing native audit contract. In particular, an authenticated authorization refusal uses registry.evidence.audit.authorization-refusal/v1 and occurs before source access.
+  never_record:
+    - request nonces
+    - raw selectors, source values, facts, or bodies
+    - signed JWS material, signatures, payloads, or protected headers
+    - credentials, tokens, script inputs or outputs, or signing material
+    - candidates, counts, scores, hints, comparisons, or intermediate lookup identifiers

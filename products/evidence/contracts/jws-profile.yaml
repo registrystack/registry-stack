@@ -8,6 +8,12 @@ response:
     prohibited: [header]
   payload: base64url without padding of the exact UTF-8 Evidence JSON bytes
   negotiation: Missing Accept, */*, and exact application/jose+json select this default signed format. Only the exact application/vnd.registrystack.evidence-unsigned+json media type selects the separately governed unsigned envelope, and only when the immutable bundle and the complete matched authority grant permit it. Every response varies on Accept and remains no-store.
+request_batch:
+  route: POST /v1/evidence/batch
+  media_type: application/vnd.registrystack.evidence.request-batch+json
+  rule: Every available item is one flattened JWS under this profile. The route admits no unsigned or SD-JWT VC serialization and performs no fallback between representations. An evidence_not_available item contains no JWS.
+  envelope_integrity: The complete exact JSON envelope is bounded to 1048576 bytes, serialized before durable terminal release audit, and returned byte-for-byte afterward. The envelope itself has no additional signature; each evidence member is independently signed.
+  singular_noninteraction: This media type is not accepted by POST /v1/evidence. The singular holder-bound batch media type application/vnd.registrystack.evidence.batch+json is not accepted by this route.
 unsigned_envelope:
   media_type: application/vnd.registrystack.evidence-unsigned+json
   schema: registry.unsigned-evidence-envelope/v1

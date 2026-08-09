@@ -483,3 +483,101 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_holder_bound_acceptance_bundle}
       - {file: crates/registry-evidence/src/model.rs, name: the_offline_stand_in_holder_key_is_a_key_the_request_boundary_would_accept}
+  - id: acceptance-row-73
+    summary: A bound extract is a regular non-symlink file the process cannot write, its digest enters the runtime revision, binding names are exact in both directions, and replacement between digest and open fails startup.
+    tests:
+      - {file: crates/registry-evidence/src/bundle.rs, name: every_unusable_extract_is_refused_by_its_own_name_and_cause}
+      - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_bound_extract_refuses_a_path_replaced_before_it_was_opened}
+      - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}
+  - id: acceptance-row-74
+    summary: Extract publication metadata has exactly one complete valid row, and maximum age is compared against the evaluation instant before a row is read with inclusive boundary behavior and a value-free governed-profile failure.
+    tests:
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: an_extract_without_its_metadata_table_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_table_without_exactly_one_row_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_metadata_table_missing_a_column_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: malformed_metadata_is_refused}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: the_configured_age_bound_refuses_a_stale_extract}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: an_extract_older_than_the_source_allows_fails_before_a_row_is_read}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: a_stale_extract_names_only_its_governed_profile}
+  - id: acceptance-row-75
+    summary: Statement text, bound and result values, extract paths, and engine messages never reach rendering, diagnostics, logs, snapshots, or audit, while syntax and contract failures remain distinguishable through value-free location and cause.
+    tests:
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: no_rendering_carries_statement_text_or_extract_data}
+      - {file: crates/registry-evidence/src/source_sqlite.rs, name: a_located_syntax_fault_carries_no_statement_text}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: a_refused_statement_names_the_artifact_and_a_closed_cause}
+  - id: acceptance-row-76
+    summary: Professional licence status passes through the complete SQLite reference deployment fixture, including real extract materialization, ordinary derivation, output validation, signing, and the required unavailable and bounded-source cases.
+    tests:
+      - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_every_reference_deployment_fixture}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: a_statement_source_executes_and_returns_projected_json}
+      - {file: crates/registry-evidence/tests/statement_source.rs, name: a_statement_source_needs_no_credentials}
+  - id: acceptance-row-77
+    summary: POST /v1/evidence/batch has its exact media type and closed schemas, accepts one through sixteen ordered items under common requirement and purpose, rejects malformed or repeated nonces before source access, and does not interact with holder-bound issuance batch.
+    tests:
+      - {file: crates/registry-evidence/src/contracts.rs, name: openapi_has_only_the_version_one_routes_and_exact_success_media}
+      - {file: crates/registry-evidence/src/contracts.rs, name: schemas_accept_the_exact_public_wire_shapes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_accept_negotiation_is_exact_and_precedes_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_bounds_unique_nonces_and_every_item_before_source_access}
+  - id: acceptance-row-78
+    summary: One request batch authenticates once, uses one evaluation instant for every available assertion, and atomically charges the principal's rate bucket by item count without a partial charge or source access when admission fails.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_authenticates_once_and_atomically_charges_the_complete_item_count}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/rate_limit.rs, name: multi_token_admission_is_atomic_when_the_whole_cost_does_not_fit}
+  - id: acceptance-row-79
+    summary: Every item completes selector resolution, request validation, and its own authorization before any source access; different grants or authority kinds remain valid, while any admission failure aborts before access.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_bounds_unique_nonces_and_every_item_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_authorization_refusal_precedes_missing_source_credential_resolution}
+      - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed}
+  - id: acceptance-row-80
+    summary: Sequential request-batch execution preserves request order and supports every existing acquisition kind; absent or ineligible source batching and a batch above the source ceiling select sequential execution before I/O.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_serves_all_four_coequal_definitions}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_runs_every_multistage_plan_in_item_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_sequential_fallback_executes_sqlite_items_in_request_order}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies}
+      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
+      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage}
+  - id: acceptance-row-81
+    summary: The closed ordered response carries flattened signed JWS or evidence_not_available under the existing singular collapse contract; mixed and all-unavailable envelopes return 200, while every other failure aborts without partial release.
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_malformed_sequential_extraction_aborts_without_partial_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_signing_failure_releases_no_partial_envelope}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
+      - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
+      - {file: crates/registry-evidence-verifier/src/model.rs, name: request_batch_response_has_the_closed_ordered_wire_shape}
+      - {file: crates/registry-evidence-verifier/src/model.rs, name: request_batch_response_refuses_open_envelopes_and_items}
+  - id: acceptance-row-82
+    summary: Optimized source batching requires both capability gates, single acquisition, one fixed-path HTTP JSON source, and its complete block; its one call inherits every ordinary transport and preparation bound.
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
+      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_execution_uses_one_fixed_physical_call}
+      - {file: crates/registry-evidence/src/bundle.rs, name: source_batch_artifacts_change_bundle_and_requirement_revisions}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_source_neutral_fixture_matches_sequential_and_optimized_strategies}
+  - id: acceptance-row-83
+    summary: Batch Rhai receives only opaque slots, minimized selectors, parameters, projected response, and the expected slots; extraction requires an exact slot bijection and optimized failure never retries through fanout.
+    tests:
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_preparation_receives_only_slotted_minimized_items_and_parameters}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_context_is_parameters_and_rust_slots_only}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_accepts_reordering_and_restores_request_order}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_and_sequential_extraction_share_lookup_result_primitives}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: batch_extraction_requires_an_exact_slot_bijection}
+      - {file: crates/registry-evidence/src/kernel.rs, name: source_batch_items_are_revalidated_as_exact_minimized_selectors}
+      - {file: crates/registry-evidence/src/kernel.rs, name: every_malformed_batch_extraction_is_a_global_protocol_failure}
+      - {file: crates/registry-evidence/src/source.rs, name: optimized_batch_failure_is_not_retried_or_fanned_out}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_optimized_source_failure_aborts_after_one_call_without_sequential_fanout}
+  - id: acceptance-row-84
+    summary: Batch audit records one bounded grouped access per physical source call and one complete terminal release or value-free terminal failure; all-unavailable releases omit signing key id, forbidden values stay absent, and the exact 1 MiB-bounded bytes are durably audited before release.
+    tests:
+      - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_contract_schema_accepts_every_phase_and_rejects_mixed_shapes}
+      - {file: crates/registry-evidence/src/audit.rs, name: request_batch_audit_groups_partition_items_and_terminal_shapes_are_closed}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: graceful_shutdown_waits_for_admitted_request_batch_and_terminal_audit}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_response_above_one_mib_releases_no_partial_envelope}
