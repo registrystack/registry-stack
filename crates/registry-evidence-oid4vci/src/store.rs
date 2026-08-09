@@ -81,16 +81,18 @@ pub enum StoreError {
 pub struct PreparedRequest {
     kind: String,
     body: String,
+    maximum_holder_keys: usize,
 }
 
 redacted_debug!(PreparedRequest);
 
 impl PreparedRequest {
     #[must_use]
-    pub fn new(kind: &str, body: &str) -> Self {
+    pub fn new(kind: &str, body: &str, maximum_holder_keys: usize) -> Self {
         Self {
             kind: kind.to_owned(),
             body: body.to_owned(),
+            maximum_holder_keys,
         }
     }
 
@@ -104,6 +106,14 @@ impl PreparedRequest {
     #[must_use]
     pub fn body(&self) -> &str {
         &self.body
+    }
+
+    /// The effective Evidence batch ceiling captured when the offer was
+    /// created. Keeping it with the prepared request prevents a later discovery
+    /// change from making metadata, offer creation, and redemption disagree.
+    #[must_use]
+    pub fn maximum_holder_keys(&self) -> usize {
+        self.maximum_holder_keys
     }
 }
 
@@ -145,10 +155,12 @@ struct StoreState {
 }
 
 impl StoreState {
-    fn prune(&mut self, now: i64) {
+    fn prune(&mut self, now: i64) -> usize {
+        let before = self.offers.len() + self.ledgers.len() + self.tokens.len();
         self.offers.retain(|_, entry| entry.expires_at > now);
         self.ledgers.retain(|_, ledger| ledger.expires_at > now);
         self.tokens.retain(|_, entry| entry.expires_at > now);
+        before.saturating_sub(self.offers.len() + self.ledgers.len() + self.tokens.len())
     }
 }
 
@@ -436,13 +448,14 @@ impl OfferStore {
     /// Writes prune as they go, so this exists for the quiet deployment: one
     /// that stops receiving requests must not keep the last minutes of state in
     /// memory indefinitely.
-    pub fn sweep(&self, now: i64) {
+    pub fn sweep(&self, now: i64) -> usize {
         // A poisoned lock means a panic already happened while state was being
         // changed. There is nothing safe to prune and nothing to report to, so
         // the sweep skips this round; every read and write still fails loudly.
         if let Ok(mut state) = self.state.lock() {
-            state.prune(now);
+            return state.prune(now);
         }
+        0
     }
 
     /// How many entries the store holds, across every key-space.
@@ -509,8 +522,10 @@ fn transaction_code_matches(expected: Option<&String>, presented: Option<&String
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum NonceError {
-    #[error("the nonce is not a nonce this process minted")]
-    Refused,
+    #[error("the nonce is not structurally valid")]
+    Invalid,
+    #[error("the nonce integrity tag was refused")]
+    Tampered,
     #[error("the nonce has expired")]
     Expired,
 }
@@ -568,14 +583,17 @@ impl NonceMinter {
     /// Verify a nonce by recomputing it. Never reads a stored value, because
     /// there is none.
     pub fn verify(&self, nonce: &str, now: i64) -> Result<(), NonceError> {
-        let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Refused)?;
-        let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Refused)?;
+        let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Invalid)?;
+        if presented.is_empty() || presented.contains('.') {
+            return Err(NonceError::Invalid);
+        }
+        let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Invalid)?;
         let expected = self.tag(expires_at);
         // The MAC is checked before the expiry, so a caller cannot learn
         // anything about a nonce it did not receive by reading the refusal.
         let matches: bool = expected.as_bytes().ct_eq(presented.as_bytes()).into();
         if !matches {
-            return Err(NonceError::Refused);
+            return Err(NonceError::Tampered);
         }
         if expires_at <= now {
             return Err(NonceError::Expired);
@@ -602,7 +620,11 @@ mod tests {
     }
 
     fn prepared() -> PreparedRequest {
-        PreparedRequest::new("urn:example:kind", r#"{"selector":"held-by-the-adopter"}"#)
+        PreparedRequest::new(
+            "urn:example:kind",
+            r#"{"selector":"held-by-the-adopter"}"#,
+            4,
+        )
     }
 
     fn store() -> OfferStore {
@@ -956,7 +978,7 @@ mod tests {
         let second = NonceMinter::new(120);
         let nonce = first.mint(NOW);
 
-        assert_eq!(second.verify(&nonce, NOW), Err(NonceError::Refused));
+        assert_eq!(second.verify(&nonce, NOW), Err(NonceError::Tampered));
     }
 
     #[test]

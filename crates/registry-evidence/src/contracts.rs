@@ -499,13 +499,18 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "issuedBy", "providedBy", "definitions"
+            "schema", "assuranceProfile", "issuedBy", "providedBy",
+            "holderBoundBatchMaxSize", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
+            "holderBoundBatchMaxSize": {
+                "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
+                "type": "integer", "minimum": 1, "maximum": MAXIMUM_HOLDER_BOUND_BATCH_SIZE
+            },
             "definitions": {
                 "type": "array", "maxItems": 16384, "uniqueItems": true,
                 "items": {"$ref": "#/$defs/definition"}
@@ -1686,6 +1691,7 @@ mod tests {
                     "assuranceProfile": "evidence-grade",
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
+                    "holderBoundBatchMaxSize": 4,
                     "definitions": [{
                         "requirement": "urn:example:requirement:v1",
                         "configurationRevision": format!("sha256:{}", "0".repeat(64)),

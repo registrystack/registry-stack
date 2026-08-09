@@ -411,6 +411,41 @@
     "notes": "The projects emit JSON-LD artifacts and contexts; a pinned JSON-LD fixture is cited as a concrete emitted artifact. No broad RDF dataset conformance claim is made here."
   },
   {
+    "id": "oid4vci",
+    "name": "OpenID for Verifiable Credential Issuance",
+    "standards_body": "OpenID Foundation",
+    "official_url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0-final.html",
+    "version_or_profile": "OpenID for Verifiable Credential Issuance 1.0 Final, frozen Registry pre-authorized-code profile",
+    "status": "used",
+    "claim_level": "implements",
+    "adoption_mode": "profiled",
+    "used_by": [
+      "registry-evidence-oid4vci"
+    ],
+    "surfaces": [
+      "credential issuer and authorization server metadata",
+      "issuer-initiated pre-authorized code flow",
+      "nonce and credential endpoints",
+      "holder-bound SD-JWT VC batch delivery"
+    ],
+    "evidence_docs": [
+      {
+        "label": "Frozen Evidence OID4VCI profile",
+        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/products/evidence/contracts/oid4vci-profile.yaml"
+      },
+      {
+        "label": "OID4VCI metadata implementation and contract tests",
+        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/crates/registry-evidence-oid4vci/src/metadata.rs"
+      },
+      {
+        "label": "OID4VCI public route and proof tests",
+        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/crates/registry-evidence-oid4vci/src/service.rs"
+      }
+    ],
+    "last_checked": "2026-08-09",
+    "notes": "The separate `registry-evidence-oid4vci` supporting service implements a frozen subset of OID4VCI 1.0 Final for holder-bound Evidence credentials. The profile permits issuer-initiated anonymous pre-authorized-code delivery, a stateless nonce, ES256 JWT proofs with an inline public JWK or self-contained `did:jwk#0`, and plural `dc+sd-jwt` credentials. It excludes authorization code, PAR, DPoP, remote DID resolution, other credential formats, deferred issuance, notifications, status or revocation, persistence, and multiple replicas. This is a profile implementation claim, not full issuer certification or conformance. External Inji interoperability evidence is candidate-only until a frozen release artifact records the pinned client revisions and reproducible result."
+  },
+  {
     "id": "sd-jwt-vc",
     "name": "SD-JWT VC",
     "standards_body": "IETF",

@@ -344,6 +344,7 @@ export default defineConfig({
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Enable SD-JWT VC in a deployment', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Configure OID4VCI wallet delivery', slug: 'configure/evidence-oid4vci' },
+                { label: 'Run OID4VCI interoperability checks', slug: 'tutorials/run-oid4vci-interoperability-checks' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },

@@ -61,6 +61,9 @@ pub struct CredentialCatalog {
     pub issued_by: String,
     pub provided_by: String,
     pub assurance_profile: AssuranceProfile,
+    /// Effective holder-key ceiling reported by the backing Evidence
+    /// deployment, bounded again by the requester's compile-time ceiling.
+    maximum_holder_keys: usize,
     entries: BTreeMap<String, CredentialConfiguration>,
 }
 
@@ -87,10 +90,19 @@ impl CredentialCatalog {
         for requirement in ambiguous {
             entries.remove(&requirement);
         }
+        let maximum_holder_keys =
+            usize::from(document.holder_bound_batch_max_size).min(MAXIMUM_HOLDER_KEYS);
+        // Zero is outside the definitions contract. Treat such a document as
+        // incapable of serving holder-bound credentials instead of silently
+        // widening it to one.
+        if maximum_holder_keys == 0 {
+            entries.clear();
+        }
         Self {
             issued_by: document.issued_by.clone(),
             provided_by: document.provided_by.clone(),
             assurance_profile: document.assurance_profile,
+            maximum_holder_keys,
             entries,
         }
     }
@@ -109,6 +121,13 @@ impl CredentialCatalog {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Effective batch ceiling shared by metadata, offers, and credential
+    /// validation. It is derived once from authenticated Evidence discovery.
+    #[must_use]
+    pub fn maximum_holder_keys(&self) -> usize {
+        self.maximum_holder_keys
     }
 
     /// The published issuer metadata document.
@@ -137,18 +156,21 @@ impl CredentialCatalog {
                 }),
             );
         }
-        json!({
+        let mut metadata = json!({
             "credential_issuer": issuer,
             "credential_endpoint": format!("{issuer}{}", crate::service::CREDENTIAL_PATH),
             "nonce_endpoint": format!("{issuer}{}", crate::service::NONCE_PATH),
             "authorization_servers": [issuer],
-            // The ceiling the credential endpoint enforces, published rather
-            // than restated: a wallet that reads this and sends that many
-            // proofs is sending a request this service accepts, and a published
-            // number of its own could drift away from the one enforced.
-            "batch_credential_issuance": {"batch_size": MAXIMUM_HOLDER_KEYS},
             "credential_configurations_supported": Value::Object(supported),
-        })
+        });
+        if self.maximum_holder_keys() > 0 {
+            // The ceiling comes from authenticated Evidence discovery and is
+            // pinned into each offer. It can never exceed either the backing
+            // deployment's effective bundle limit or the client request limit.
+            metadata["batch_credential_issuance"] =
+                json!({"batch_size": self.maximum_holder_keys()});
+        }
+        metadata
     }
 }
 
@@ -216,6 +238,7 @@ pub(crate) mod tests {
       "assuranceProfile": "local",
       "issuedBy": "https://registry.example.org",
       "providedBy": "https://provider.example.org",
+      "holderBoundBatchMaxSize": 4,
       "definitions": [
         {
           "requirement": "urn:example:requirement:holder-bound",
@@ -277,6 +300,7 @@ pub(crate) mod tests {
     fn every_published_configuration_is_derived_from_the_evidence_bundle() {
         let catalog = catalog();
         assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog.maximum_holder_keys, 4);
         let entry = catalog
             .get("urn:example:requirement:holder-bound")
             .expect("the holder-bound requirement is published");
@@ -352,11 +376,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// The published batch ceiling is the one the credential endpoint enforces.
+    /// The published batch ceiling is the effective backing Evidence ceiling,
+    /// bounded by the client ceiling the credential endpoint also enforces.
     ///
-    /// Asserted against the constant rather than against a number written here,
-    /// because a literal would let the two drift apart in exactly the way a
-    /// published ceiling must not.
     #[test]
     fn the_published_batch_size_is_the_ceiling_the_service_enforces() {
         let config = crate::config::tests::valid_config();
@@ -364,8 +386,74 @@ pub(crate) mod tests {
 
         assert_eq!(
             metadata["batch_credential_issuance"]["batch_size"],
+            json!(4)
+        );
+
+        let mut narrow = document();
+        narrow.holder_bound_batch_max_size = 2;
+        assert_eq!(
+            CredentialCatalog::derive(&narrow).issuer_metadata(&config)
+                ["batch_credential_issuance"]["batch_size"],
+            json!(2)
+        );
+
+        let mut wider = document();
+        wider.holder_bound_batch_max_size = u16::MAX;
+        assert_eq!(
+            CredentialCatalog::derive(&wider).issuer_metadata(&config)["batch_credential_issuance"]
+                ["batch_size"],
             json!(MAXIMUM_HOLDER_KEYS)
         );
+    }
+
+    #[test]
+    fn metadata_advertises_no_capability_outside_the_frozen_profile() {
+        let config = crate::config::tests::valid_config();
+        let issuer = catalog().issuer_metadata(&config);
+        let authorization = authorization_server_metadata(&config);
+        assert_eq!(
+            issuer
+                .as_object()
+                .expect("issuer metadata")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            [
+                "authorization_servers",
+                "batch_credential_issuance",
+                "credential_configurations_supported",
+                "credential_endpoint",
+                "credential_issuer",
+                "nonce_endpoint",
+            ]
+        );
+        assert_eq!(
+            authorization
+                .as_object()
+                .expect("authorization metadata")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            [
+                "grant_types_supported",
+                "issuer",
+                "pre-authorized_grant_anonymous_access_supported",
+                "response_types_supported",
+                "token_endpoint",
+                "token_endpoint_auth_methods_supported",
+            ]
+        );
+        let rendered = format!("{issuer}{authorization}");
+        for unsupported in [
+            "authorization_endpoint",
+            "pushed_authorization_request_endpoint",
+            "dpop_signing_alg_values_supported",
+            "notification_endpoint",
+            "deferred_credential_endpoint",
+            "vc+sd-jwt",
+        ] {
+            assert!(!rendered.contains(unsupported), "advertised {unsupported}");
+        }
     }
 
     #[test]

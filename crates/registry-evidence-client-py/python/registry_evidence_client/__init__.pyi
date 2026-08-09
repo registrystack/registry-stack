@@ -38,11 +38,32 @@ ExpectedSubject = TypedDict("ExpectedSubject", {"role": str, "binding": str})
 # A holder public key a request may present. Public material only: there is no
 # member here for a private key half, and a key carrying one (`d`, or any other
 # private JWK member) is refused with that stated as the reason. `alg` and `kid`
-# may each be `None`, which the binding reads exactly as omitting them; that is
-# how the labelled shape below covers a key carrying only one of the two.
+# may each be `None`, which the binding reads exactly as omitting them. The four
+# shapes below keep `alg` and `kid` independently optional instead of making a
+# caller supply both whenever it supplies either.
 HolderPublicKey = TypedDict(
     "HolderPublicKey",
     {"kty": Literal["EC"], "crv": Literal["P-256"], "x": str, "y": str},
+)
+HolderPublicKeyWithAlgorithm = TypedDict(
+    "HolderPublicKeyWithAlgorithm",
+    {
+        "kty": Literal["EC"],
+        "crv": Literal["P-256"],
+        "x": str,
+        "y": str,
+        "alg": Optional[Literal["ES256"]],
+    },
+)
+HolderPublicKeyWithKeyId = TypedDict(
+    "HolderPublicKeyWithKeyId",
+    {
+        "kty": Literal["EC"],
+        "crv": Literal["P-256"],
+        "x": str,
+        "y": str,
+        "kid": Optional[str],
+    },
 )
 HolderPublicKeyWithLabels = TypedDict(
     "HolderPublicKeyWithLabels",
@@ -55,7 +76,14 @@ HolderPublicKeyWithLabels = TypedDict(
         "kid": Optional[str],
     },
 )
-HolderPublicKeys = Sequence[Union[HolderPublicKey, HolderPublicKeyWithLabels]]
+HolderPublicKeys = Sequence[
+    Union[
+        HolderPublicKey,
+        HolderPublicKeyWithAlgorithm,
+        HolderPublicKeyWithKeyId,
+        HolderPublicKeyWithLabels,
+    ]
+]
 
 EvidenceRequestSpec = TypedDict(
     "EvidenceRequestSpec",

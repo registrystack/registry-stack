@@ -1,0 +1,1414 @@
+{
+  "components": {
+    "schemas": {
+      "AuthorizationServerMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "grant_types_supported": {
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+              }
+            ],
+            "type": "array"
+          },
+          "issuer": {
+            "format": "uri",
+            "type": "string"
+          },
+          "pre-authorized_grant_anonymous_access_supported": {
+            "const": true
+          },
+          "response_types_supported": {
+            "maxItems": 0,
+            "type": "array"
+          },
+          "token_endpoint": {
+            "format": "uri",
+            "type": "string"
+          },
+          "token_endpoint_auth_methods_supported": {
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "none"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "required": [
+          "issuer",
+          "token_endpoint",
+          "grant_types_supported",
+          "response_types_supported",
+          "token_endpoint_auth_methods_supported",
+          "pre-authorized_grant_anonymous_access_supported"
+        ],
+        "type": "object"
+      },
+      "CredentialConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_signing_alg_values_supported": {
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "const": "ES256"
+              }
+            ],
+            "type": "array"
+          },
+          "cryptographic_binding_methods_supported": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "const": "jwk"
+              },
+              {
+                "const": "did:jwk"
+              }
+            ],
+            "type": "array"
+          },
+          "format": {
+            "const": "dc+sd-jwt"
+          },
+          "proof_types_supported": {
+            "additionalProperties": false,
+            "properties": {
+              "jwt": {
+                "additionalProperties": false,
+                "properties": {
+                  "proof_signing_alg_values_supported": {
+                    "maxItems": 1,
+                    "minItems": 1,
+                    "prefixItems": [
+                      {
+                        "const": "ES256"
+                      }
+                    ],
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "proof_signing_alg_values_supported"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "jwt"
+            ],
+            "type": "object"
+          },
+          "vct": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "vct",
+          "cryptographic_binding_methods_supported",
+          "credential_signing_alg_values_supported",
+          "proof_types_supported"
+        ],
+        "type": "object"
+      },
+      "CredentialIssuerMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "authorization_servers": {
+            "items": {
+              "format": "uri",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "batch_credential_issuance": {
+            "additionalProperties": false,
+            "properties": {
+              "batch_size": {
+                "maximum": 16,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "batch_size"
+            ],
+            "type": "object"
+          },
+          "credential_configurations_supported": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CredentialConfiguration"
+            },
+            "type": "object"
+          },
+          "credential_endpoint": {
+            "format": "uri",
+            "type": "string"
+          },
+          "credential_issuer": {
+            "format": "uri",
+            "type": "string"
+          },
+          "nonce_endpoint": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential_issuer",
+          "credential_endpoint",
+          "nonce_endpoint",
+          "authorization_servers",
+          "batch_credential_issuance",
+          "credential_configurations_supported"
+        ],
+        "type": "object"
+      },
+      "CredentialOffer": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_configuration_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "credential_issuer": {
+            "format": "uri",
+            "type": "string"
+          },
+          "grants": {
+            "additionalProperties": false,
+            "properties": {
+              "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "$ref": "#/components/schemas/PreAuthorizedCodeGrant"
+              }
+            },
+            "required": [
+              "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "credential_issuer",
+          "credential_configuration_ids",
+          "grants"
+        ],
+        "type": "object"
+      },
+      "CredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_configuration_id": {
+            "type": "string"
+          },
+          "proofs": {
+            "additionalProperties": false,
+            "properties": {
+              "jwt": {
+                "items": {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "jwt"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "credential_configuration_id",
+          "proofs"
+        ],
+        "type": "object"
+      },
+      "CredentialResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credentials": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "credential": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "credential"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "credentials"
+        ],
+        "type": "object"
+      },
+      "NonceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "c_nonce": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "c_nonce"
+        ],
+        "type": "object"
+      },
+      "OfferRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credentialConfigurationId": {
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "$ref": "#/components/schemas/RequestedSubject"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
+          "transactionCode": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "credentialConfigurationId",
+          "subjects"
+        ],
+        "type": "object"
+      },
+      "OfferResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credentialOffer": {
+            "$ref": "#/components/schemas/CredentialOffer"
+          },
+          "credentialOfferUri": {
+            "format": "uri",
+            "type": "string"
+          },
+          "expiresIn": {
+            "maximum": 900,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "transactionCode": {
+            "pattern": "^[0-9]{6}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credentialOffer",
+          "credentialOfferUri",
+          "expiresIn"
+        ],
+        "type": "object"
+      },
+      "PreAuthorizedCodeGrant": {
+        "additionalProperties": false,
+        "properties": {
+          "pre-authorized_code": {
+            "type": "string"
+          },
+          "tx_code": {
+            "$ref": "#/components/schemas/TransactionCodeDescription"
+          }
+        },
+        "required": [
+          "pre-authorized_code"
+        ],
+        "type": "object"
+      },
+      "ProbeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "ready"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "enum": [
+              "invalid_request",
+              "invalid_token",
+              "unsupported_grant_type",
+              "invalid_grant",
+              "invalid_credential_request",
+              "invalid_proof",
+              "invalid_nonce",
+              "temporarily_unavailable",
+              "server_error"
+            ]
+          },
+          "error_description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "error_description"
+        ],
+        "type": "object"
+      },
+      "RequestedSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "selectorValues": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "maxProperties": 16,
+            "type": "object"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "TokenRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "grant_type": {
+            "const": "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+          },
+          "pre-authorized_code": {
+            "type": "string"
+          },
+          "tx_code": {
+            "pattern": "^[0-9]{6}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_type",
+          "pre-authorized_code"
+        ],
+        "type": "object"
+      },
+      "TokenResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "maximum": 900,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "token_type": {
+            "const": "Bearer"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "type": "object"
+      },
+      "TransactionCodeDescription": {
+        "additionalProperties": false,
+        "properties": {
+          "input_mode": {
+            "const": "numeric"
+          },
+          "length": {
+            "const": 6
+          }
+        },
+        "required": [
+          "input_mode",
+          "length"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "credentialBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "offerBearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Narrow OID4VCI 1.0 Final delivery profile. The normative source is products/evidence/contracts/oid4vci-profile.yaml. This contract does not claim full issuer certification or conformance.",
+    "title": "Registry Evidence OID4VCI delivery API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "operationId": "getAuthorizationServerMetadata",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationServerMetadata"
+                }
+              }
+            },
+            "description": "Authorization server metadata",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Discover the anonymous pre-authorized token endpoint"
+      }
+    },
+    "/.well-known/openid-credential-issuer": {
+      "get": {
+        "operationId": "getCredentialIssuerMetadata",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialIssuerMetadata"
+                }
+              }
+            },
+            "description": "Credential issuer metadata",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Backing Evidence discovery is unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Discover the frozen wallet-delivery profile"
+      }
+    },
+    "/credential": {
+      "post": {
+        "operationId": "issueHolderBoundCredentials",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialResponse"
+                }
+              }
+            },
+            "description": "Evidence credentials, byte-for-byte",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configuration, nonce, or proof was refused after token claim",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The access token is missing, unknown, expired, or already claimed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Evidence refused the request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured byte limit",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Evidence or bounded state is unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "credentialBearer": []
+          }
+        ],
+        "summary": "Exchange one claimed token and plural proofs for plural credentials"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResponse"
+                }
+              }
+            },
+            "description": "Process status",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Liveness probe"
+      }
+    },
+    "/nonce": {
+      "post": {
+        "operationId": "createCredentialNonce",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "maxProperties": 0,
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonceResponse"
+                }
+              }
+            },
+            "description": "Stateless nonce",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The nonce request was not empty",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured byte limit",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Mint one stateless proof nonce"
+      }
+    },
+    "/offers": {
+      "post": {
+        "operationId": "createCredentialOffer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferResponse"
+                }
+              }
+            },
+            "description": "Credential offer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The offer request is outside the published catalog",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The offer bearer token is missing or refused",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured byte limit",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Authorization, Evidence discovery, or bounded state is unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "offerBearer": []
+          }
+        ],
+        "summary": "Create one adopter-authorized credential offer"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResponse"
+                }
+              }
+            },
+            "description": "Process status",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Process readiness probe"
+      }
+    },
+    "/token": {
+      "post": {
+        "operationId": "redeemPreAuthorizedCode",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Single-use access token",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The grant or code was refused",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured byte limit",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The request is not form encoded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The form body cannot be decoded",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The bounded state store is unavailable",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Redeem one pre-authorized code anonymously"
+      }
+    }
+  },
+  "x-unsupported-capabilities": [
+    "authorization-code",
+    "par",
+    "dpop",
+    "remote-did-resolution",
+    "additional-credential-formats",
+    "deferred-issuance",
+    "notifications",
+    "credential-status-or-lifecycle",
+    "multi-replica-state",
+    "plugin-extensibility",
+    "draft-13"
+  ]
+}

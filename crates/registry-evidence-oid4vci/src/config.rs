@@ -60,6 +60,59 @@ pub struct ListenerConfig {
     pub request_timeout_milliseconds: u64,
 }
 
+/// Optional operator-only metrics listener.
+///
+/// Absent means no metrics endpoint exists. When present it is a distinct
+/// private binding that serves no wallet or adopter route.
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    pub address: String,
+    pub port: u16,
+}
+
+impl MetricsListenerConfig {
+    pub fn bind_address(&self) -> Result<IpAddr, ConfigError> {
+        let address: IpAddr = self.address.parse().map_err(|_| {
+            ConfigError::Invalid("metrics listener address is not a private IP address")
+        })?;
+        let is_private = match address {
+            IpAddr::V4(address) => {
+                address.is_loopback() || address.is_private() || address.is_link_local()
+            }
+            IpAddr::V6(address) => {
+                address.is_loopback()
+                    || address.is_unique_local()
+                    || address.is_unicast_link_local()
+            }
+        };
+        if !is_private || address.is_unspecified() || address.is_multicast() {
+            return Err(ConfigError::Invalid(
+                "the metrics listener must bind a loopback or private address",
+            ));
+        }
+        Ok(address)
+    }
+
+    fn validate(&self, listener: &ListenerConfig) -> Result<(), ConfigError> {
+        if self.port == 0 {
+            return Err(ConfigError::Invalid(
+                "the metrics listener port must be non-zero",
+            ));
+        }
+        let address = self.bind_address()?;
+        let public_address = listener.bind_address()?;
+        if self.port == listener.port
+            && (public_address.is_unspecified() || public_address == address)
+        {
+            return Err(ConfigError::Invalid(
+                "the metrics listener must not share the delivery listener binding",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ListenerConfig {
     pub fn bind_address(&self) -> Result<IpAddr, ConfigError> {
         self.address
@@ -346,6 +399,8 @@ pub struct DeliveryConfig {
     /// so what is published and what is compared are the same bytes.
     pub credential_issuer: String,
     pub listener: ListenerConfig,
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub evidence: EvidenceConfig,
     pub mint: MintClientConfig,
     pub offers: OfferAuthorizationConfig,
@@ -390,7 +445,7 @@ impl DeliveryConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::Invalid(
                 "only configuration version 1 is supported",
@@ -414,6 +469,9 @@ impl DeliveryConfig {
         }
         self.listener.bind_address()?;
         self.listener.validate()?;
+        if let Some(metrics) = &self.metrics_listener {
+            metrics.validate(&self.listener)?;
+        }
 
         if self.mint.client_id.trim().is_empty() || self.mint.client_id.len() > 128 {
             return Err(ConfigError::Invalid(
@@ -934,6 +992,40 @@ store:
             assert!(
                 matches!(load_from(&text), Err(ConfigError::Invalid(_))),
                 "the listener accepted {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_are_absent_by_default_and_the_optional_listener_is_private_and_distinct() {
+        assert!(valid_config().metrics_listener.is_none());
+
+        let configured = VALID.replace(
+            "listener: {address: 127.0.0.1, port: 8090}",
+            "listener: {address: 127.0.0.1, port: 8090}\nmetricsListener: {address: 127.0.0.1, port: 9090}",
+        );
+        let config = load_from(&configured).expect("a distinct loopback listener loads");
+        assert_eq!(
+            config
+                .metrics_listener
+                .expect("metrics were configured")
+                .port,
+            9090
+        );
+
+        for listener in [
+            "metricsListener: {address: 0.0.0.0, port: 9090}",
+            "metricsListener: {address: 8.8.8.8, port: 9090}",
+            "metricsListener: {address: 127.0.0.1, port: 8090}",
+            "metricsListener: {address: 127.0.0.1, port: 0}",
+        ] {
+            let refused = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!("listener: {{address: 127.0.0.1, port: 8090}}\n{listener}"),
+            );
+            assert!(
+                matches!(load_from(&refused), Err(ConfigError::Invalid(_))),
+                "metrics accepted {listener}"
             );
         }
     }

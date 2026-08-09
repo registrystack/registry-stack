@@ -37,6 +37,10 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.equal(code, 0, output);
   assert.match(output, /first-evidence-assertion: 18 sh fences, 16 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
+  assert.match(
+    output,
+    /run-oid4vci-interoperability-checks: 4 sh fences, 3 executed/u,
+  );
   // Two of its sixteen are the documented clone and build of the client, which
   // the replay substitutes with a build of this checkout.
   assert.match(
@@ -48,7 +52,7 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
   assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
   assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
-  assert.match(output, /Checked 8 tutorials\./u);
+  assert.match(output, /Checked 9 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {

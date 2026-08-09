@@ -36,8 +36,10 @@ compile_error!(
 
 pub mod authorizer;
 pub mod config;
+pub mod contracts;
 pub mod issuer;
 pub mod metadata;
+mod observability;
 pub mod offer;
 pub mod secretfile;
 pub mod service;

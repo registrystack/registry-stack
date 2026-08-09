@@ -25,6 +25,7 @@
 //! read into has no member a private one could be written to.
 
 use std::{
+    collections::BTreeSet,
     future::{Future, IntoFuture},
     io,
     net::SocketAddr,
@@ -47,12 +48,14 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use registry_evidence_client::{HolderPublicKey, MAXIMUM_HOLDER_KEYS};
+use registry_evidence_verifier::sdjwt_vc::holder_thumbprint;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_sdjwt::{validate_oid4vci_proof_jwt, Oid4vciProofPolicy};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 use crate::{
@@ -60,6 +63,7 @@ use crate::{
     config::DeliveryConfig,
     issuer::{CredentialIssuer, EvidenceIssuer, IssuanceError},
     metadata::authorization_server_metadata,
+    observability::{self, Metrics, Outcome, ProblemCode},
     offer::{
         credential_offer, credential_offer_uri, generate_secret, generate_transaction_code,
         offered_request, OfferError, OfferedRequest, RequestedSubject,
@@ -76,6 +80,48 @@ pub const OFFERS_PATH: &str = "/offers";
 pub const TOKEN_PATH: &str = "/token";
 pub const NONCE_PATH: &str = "/nonce";
 pub const CREDENTIAL_PATH: &str = "/credential";
+
+/// The public listener's route table, shared with the contract drift test.
+///
+/// `build_app` is driven by this table, so adding a runtime route without
+/// adding it to the generated contract is mechanically visible.
+#[derive(Clone, Copy)]
+pub(crate) enum PublicRoute {
+    Health,
+    Ready,
+    IssuerMetadata,
+    AuthorizationServerMetadata,
+    Offers,
+    Token,
+    Nonce,
+    Credential,
+}
+
+impl PublicRoute {
+    pub(crate) const fn path(self) -> &'static str {
+        match self {
+            Self::Health => HEALTH_PATH,
+            Self::Ready => READY_PATH,
+            Self::IssuerMetadata => ISSUER_METADATA_PATH,
+            Self::AuthorizationServerMetadata => AUTHORIZATION_SERVER_METADATA_PATH,
+            Self::Offers => OFFERS_PATH,
+            Self::Token => TOKEN_PATH,
+            Self::Nonce => NONCE_PATH,
+            Self::Credential => CREDENTIAL_PATH,
+        }
+    }
+}
+
+pub(crate) const PUBLIC_ROUTES: [PublicRoute; 8] = [
+    PublicRoute::Health,
+    PublicRoute::Ready,
+    PublicRoute::IssuerMetadata,
+    PublicRoute::AuthorizationServerMetadata,
+    PublicRoute::Offers,
+    PublicRoute::Token,
+    PublicRoute::Nonce,
+    PublicRoute::Credential,
+];
 
 const JSON_MEDIA_TYPE: &str = "application/json";
 
@@ -110,14 +156,13 @@ pub struct DeliveryService {
     nonces: NonceMinter,
     authorizer: Arc<dyn OfferAuthorizer>,
     issuer: Arc<dyn CredentialIssuer>,
+    metrics: Arc<Metrics>,
 }
 
 impl std::fmt::Debug for DeliveryService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DeliveryService")
-            .field("credentialIssuer", &self.config.credential_issuer)
-            .field("clientId", &self.config.mint.client_id)
             .field("offers", &self.store.len())
             .finish_non_exhaustive()
     }
@@ -148,12 +193,14 @@ impl DeliveryService {
     ) -> Self {
         let store = OfferStore::new(&config.store);
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
+        let metrics = Arc::new(Metrics::new(config.store.maximum_offers));
         Self {
             config,
             store,
             nonces,
             authorizer,
             issuer,
+            metrics,
         }
     }
 
@@ -171,6 +218,24 @@ impl DeliveryService {
     pub fn config(&self) -> &DeliveryConfig {
         &self.config
     }
+
+    /// Explicit diagnostic view of the metadata derived from this deployment.
+    ///
+    /// The command that calls this writes the requested document to stdout.
+    /// Operational logs never copy these raw deployment identifiers.
+    pub async fn inspect(&self) -> Result<Value, IssuanceError> {
+        let catalog = self.issuer.catalog().await?;
+        Ok(json!({
+            "profile": "registry.evidence.oid4vci-profile/v1",
+            "credentialIssuerMetadata": catalog.issuer_metadata(&self.config),
+            "authorizationServerMetadata": authorization_server_metadata(&self.config),
+            "deployment": {
+                "replicas": 1,
+                "restartInvalidatesOutstandingExchanges": true,
+                "metricsEnabled": self.config.metrics_listener.is_some(),
+            }
+        }))
+    }
 }
 
 /// Build the router over an already loaded service.
@@ -185,18 +250,21 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
     let body_limit = service.config.listener.maximum_request_bytes as usize;
     let request_timeout =
         Duration::from_millis(service.config.listener.request_timeout_milliseconds);
-    let routes = Router::new()
-        .route(HEALTH_PATH, get(health))
-        .route(READY_PATH, get(ready))
-        .route(ISSUER_METADATA_PATH, get(issuer_metadata))
-        .route(
-            AUTHORIZATION_SERVER_METADATA_PATH,
-            get(authorization_server),
-        )
-        .route(OFFERS_PATH, post(create_offer))
-        .route(TOKEN_PATH, post(token))
-        .route(NONCE_PATH, post(nonce))
-        .route(CREDENTIAL_PATH, post(credential))
+    let metrics = Arc::clone(&service.metrics);
+    let routes = PUBLIC_ROUTES
+        .into_iter()
+        .fold(Router::new(), |router, route| match route {
+            PublicRoute::Health => router.route(route.path(), get(health)),
+            PublicRoute::Ready => router.route(route.path(), get(ready)),
+            PublicRoute::IssuerMetadata => router.route(route.path(), get(issuer_metadata)),
+            PublicRoute::AuthorizationServerMetadata => {
+                router.route(route.path(), get(authorization_server))
+            }
+            PublicRoute::Offers => router.route(route.path(), post(create_offer)),
+            PublicRoute::Token => router.route(route.path(), post(token)),
+            PublicRoute::Nonce => router.route(route.path(), post(nonce)),
+            PublicRoute::Credential => router.route(route.path(), post(credential)),
+        })
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(service);
@@ -206,6 +274,7 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
             request_timeout,
             refuse_a_stalled_request,
         ))
+        .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
 }
 
@@ -214,6 +283,10 @@ pub async fn serve<F>(service: Arc<DeliveryService>, shutdown: F) -> io::Result<
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    service
+        .config
+        .validate()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let bind_ip = service
         .config
         .listener
@@ -221,16 +294,99 @@ where
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let address = SocketAddr::new(bind_ip, service.config.listener.port);
     let listener = TcpListener::bind(address).await?;
+    let metrics_listener = if let Some(config) = &service.config.metrics_listener {
+        let address = SocketAddr::new(
+            config
+                .bind_address()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+            config.port,
+        );
+        Some(TcpListener::bind(address).await?)
+    } else {
+        None
+    };
     tracing::info!(
         target: "registry_evidence_oid4vci::service",
-        credential_issuer = %service.config.credential_issuer,
         "delivery service listening"
     );
-    let app = build_app(service);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .into_future()
-        .await
+    let app = build_app(Arc::clone(&service));
+    let metrics_app = observability::metrics_app(Arc::clone(&service.metrics));
+    let (stop, stopped) = watch::channel(false);
+    let public_stopped = stopped.clone();
+    let metrics_stopped = stopped.clone();
+    let cleanup_stopped = stopped;
+    let cleanup_service = Arc::clone(&service);
+
+    let public = axum::serve(listener, app)
+        .with_graceful_shutdown(wait_for_stop(public_stopped))
+        .into_future();
+    let metrics = async move {
+        match metrics_listener {
+            Some(listener) => {
+                axum::serve(listener, metrics_app)
+                    .with_graceful_shutdown(wait_for_stop(metrics_stopped))
+                    .into_future()
+                    .await
+            }
+            None => {
+                wait_for_stop(metrics_stopped).await;
+                Ok(())
+            }
+        }
+    };
+    let cleanup = cleanup_expired(cleanup_service, cleanup_stopped);
+    tokio::pin!(public);
+    tokio::pin!(metrics);
+    tokio::pin!(cleanup);
+    tokio::pin!(shutdown);
+
+    tokio::select! {
+        result = &mut public => {
+            let _ = stop.send(true);
+            let _ = tokio::join!(&mut metrics, &mut cleanup);
+            result
+        }
+        result = &mut metrics => {
+            let _ = stop.send(true);
+            let _ = tokio::join!(&mut public, &mut cleanup);
+            result
+        }
+        () = &mut shutdown => {
+            let _ = stop.send(true);
+            let (public, metrics, _) = tokio::join!(&mut public, &mut metrics, &mut cleanup);
+            public.and(metrics)
+        }
+    }
+}
+
+async fn wait_for_stop(mut stopped: watch::Receiver<bool>) {
+    while !*stopped.borrow() {
+        if stopped.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Periodically release expired request material even when no protocol write
+/// arrives. The interval is deliberately much shorter than the minimum state
+/// lifetime and carries no per-entry task or timer.
+async fn cleanup_expired(service: Arc<DeliveryService>, mut stopped: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let expired = service.store.sweep(now());
+                service.metrics.record_cleanup(expired);
+                service.metrics.record_store_entries(service.store.len());
+            }
+            changed = stopped.changed() => {
+                if changed.is_err() || *stopped.borrow() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 async fn health() -> Response {
@@ -253,7 +409,7 @@ async fn ready() -> Response {
 async fn issuer_metadata(State(service): State<Arc<DeliveryService>>) -> Response {
     match service.issuer.catalog().await {
         Ok(catalog) => value_response(StatusCode::OK, &catalog.issuer_metadata(&service.config)),
-        Err(error) => issuance_response(&error),
+        Err(error) => issuance_response(&service, &error),
     }
 }
 
@@ -287,9 +443,14 @@ async fn create_offer(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let authorized = match authorize_offer(&service, &headers).await {
+    let _authorized = match authorize_offer(&service, &headers).await {
         Ok(authorized) => authorized,
-        Err(response) => return response,
+        Err(response) => {
+            service
+                .metrics
+                .record_outcome(Outcome::OfferAuthorizationRefused);
+            return response;
+        }
     };
 
     let Ok(request) = serde_json::from_str::<OfferRequest>(&body) else {
@@ -302,7 +463,7 @@ async fn create_offer(
 
     let catalog = match service.issuer.catalog().await {
         Ok(catalog) => catalog,
-        Err(error) => return issuance_response(&error),
+        Err(error) => return issuance_response(&service, &error),
     };
     // An identifier this catalog does not carry is one Evidence does not
     // publish as holder-bound. Refusing it here is what keeps an
@@ -348,20 +509,24 @@ async fn create_offer(
 
     let code = generate_secret();
     let transaction_code = request.transaction_code.then(generate_transaction_code);
-    let prepared = PreparedRequest::new(&request.credential_configuration_id, &body);
+    let prepared = PreparedRequest::new(
+        &request.credential_configuration_id,
+        &body,
+        catalog.maximum_holder_keys(),
+    );
     if let Err(error) = service.store.remember_offer(
         &code,
         transaction_code.as_ref().map(|code| code.as_str()),
         prepared,
         now(),
     ) {
-        return store_response(&error);
+        return store_response(&service, &error, Outcome::StoreSaturated);
     }
+    service.metrics.record_outcome(Outcome::OfferCreated);
+    service.metrics.record_store_entries(service.store.len());
 
     tracing::info!(
         target: "registry_evidence_oid4vci::service",
-        client = authorized.client.as_deref().unwrap_or("unnamed"),
-        credential_configuration_id = %request.credential_configuration_id,
         "offer created"
     );
 
@@ -423,8 +588,10 @@ async fn token(
         &access_token,
         now(),
     ) {
-        return store_response(&error);
+        return store_response(&service, &error, Outcome::CodeClaimRefused);
     }
+    service.metrics.record_outcome(Outcome::CodeRedeemed);
+    service.metrics.record_store_entries(service.store.len());
     value_response(
         StatusCode::OK,
         &json!({
@@ -444,7 +611,20 @@ async fn token(
 /// challenge rather than a second authorization: it is a keyed tag over its own
 /// expiry, and a proof echoing it is bounded by the single-use access token the
 /// credential request must also present.
-async fn nonce(State(service): State<Arc<DeliveryService>>) -> Response {
+async fn nonce(State(service): State<Arc<DeliveryService>>, body: String) -> Response {
+    let body = body.trim();
+    let carries_fields = match serde_json::from_str::<serde_json::Map<String, Value>>(body) {
+        Ok(document) => !document.is_empty(),
+        Err(_) => !body.is_empty(),
+    };
+    if carries_fields {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the nonce request must be empty",
+        );
+    }
+    service.metrics.record_outcome(Outcome::NonceMinted);
     value_response(
         StatusCode::OK,
         &json!({"c_nonce": service.nonces.mint(now())}),
@@ -481,12 +661,19 @@ async fn credential(
     let access_token = Zeroizing::new(access_token.to_owned());
     let prepared = match service.store.claim_access_token(&access_token, now()) {
         Ok(prepared) => prepared,
-        Err(StoreError::Unknown) => return unauthorized("the access token cannot be used"),
-        Err(error) => return store_response(&error),
+        Err(StoreError::Unknown) => {
+            service.metrics.record_outcome(Outcome::TokenClaimRefused);
+            return unauthorized("the access token cannot be used");
+        }
+        Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };
-    service.store.sweep(now());
+    service.metrics.record_outcome(Outcome::TokenClaimed);
+    let expired = service.store.sweep(now());
+    service.metrics.record_cleanup(expired);
+    service.metrics.record_store_entries(service.store.len());
 
     let Ok(request) = serde_json::from_str::<CredentialRequest>(&body) else {
+        service.metrics.record_outcome(Outcome::ProofRefused);
         return problem(
             StatusCode::BAD_REQUEST,
             "invalid_credential_request",
@@ -494,26 +681,54 @@ async fn credential(
         );
     };
     if request.credential_configuration_id != prepared.kind() {
+        service.metrics.record_outcome(Outcome::ProofRefused);
         return problem(
             StatusCode::BAD_REQUEST,
             "invalid_credential_request",
             "the credential configuration is not the one this token was issued for",
         );
     }
-    if request.proofs.jwt.is_empty() || request.proofs.jwt.len() > MAXIMUM_HOLDER_KEYS {
+    if request.proofs.jwt.is_empty()
+        || request.proofs.jwt.len() > prepared.maximum_holder_keys()
+        || request.proofs.jwt.len() > MAXIMUM_HOLDER_KEYS
+    {
+        service.metrics.record_outcome(Outcome::ProofRefused);
         return problem(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            "a credential request must carry between one and sixteen proofs",
+            "the proof set is empty or exceeds this deployment's batch ceiling",
         );
     }
 
     let mut holder_keys = Vec::with_capacity(request.proofs.jwt.len());
+    let mut thumbprints = BTreeSet::new();
     for proof in &request.proofs.jwt {
         match holder_key_from_proof(&service, proof) {
-            Ok(key) => holder_keys.push(key),
+            Ok(key) => {
+                let Ok(thumbprint) = holder_thumbprint(&key) else {
+                    service.metrics.record_outcome(Outcome::ProofRefused);
+                    return problem(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "the proof presented a key this service cannot forward",
+                    );
+                };
+                if !thumbprints.insert(thumbprint) {
+                    service.metrics.record_outcome(Outcome::ProofRefused);
+                    return problem(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "every proof must present a distinct holder key",
+                    );
+                }
+                holder_keys.push(key);
+            }
             Err(refusal) => {
-                return problem(StatusCode::BAD_REQUEST, refusal.error, refusal.description)
+                service.metrics.record_outcome(match refusal.nonce_outcome {
+                    Some(outcome) => outcome,
+                    None => Outcome::ProofRefused,
+                });
+                return problem(StatusCode::BAD_REQUEST, refusal.error, refusal.description);
             }
         }
     }
@@ -530,8 +745,9 @@ async fn credential(
     // credentials the wallet asked for.
     let credentials = match service.issuer.issue(offered.into_spec(holder_keys)).await {
         Ok(credentials) => credentials,
-        Err(error) => return issuance_response(&error),
+        Err(error) => return issuance_response(&service, &error),
     };
+    service.metrics.record_outcome(Outcome::CredentialIssued);
 
     // Always plural, and always what Evidence signed: this service reads no
     // credential it passes on and rewrites none of them.
@@ -554,11 +770,24 @@ async fn credential(
 struct ProofRefusal {
     error: &'static str,
     description: &'static str,
+    nonce_outcome: Option<Outcome>,
 }
 
 impl ProofRefusal {
     const fn new(error: &'static str, description: &'static str) -> Self {
-        Self { error, description }
+        Self {
+            error,
+            description,
+            nonce_outcome: None,
+        }
+    }
+
+    const fn nonce(description: &'static str, outcome: Outcome) -> Self {
+        Self {
+            error: "invalid_nonce",
+            description,
+            nonce_outcome: Some(outcome),
+        }
     }
 }
 
@@ -588,12 +817,21 @@ fn holder_key_from_proof(
     match service.nonces.verify(&nonce, now()) {
         Ok(()) => {}
         Err(NonceError::Expired) => {
-            return Err(ProofRefusal::new("invalid_nonce", "the nonce has expired"))
+            return Err(ProofRefusal::nonce(
+                "the nonce has expired",
+                Outcome::NonceExpired,
+            ))
         }
-        Err(NonceError::Refused) => {
-            return Err(ProofRefusal::new(
-                "invalid_nonce",
+        Err(NonceError::Invalid) => {
+            return Err(ProofRefusal::nonce(
                 "the nonce is not one this service issued",
+                Outcome::NonceInvalid,
+            ))
+        }
+        Err(NonceError::Tampered) => {
+            return Err(ProofRefusal::nonce(
+                "the nonce is not one this service issued",
+                Outcome::NonceTampered,
             ))
         }
     }
@@ -683,7 +921,12 @@ fn now() -> i64 {
 /// A wallet is told the same thing whether its code was never issued, was
 /// already redeemed, or was locked out, because the difference between those is
 /// exactly what a caller working through codes would want to learn.
-fn store_response(error: &StoreError) -> Response {
+fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcome) -> Response {
+    service.metrics.record_outcome(match error {
+        StoreError::Saturated => Outcome::StoreSaturated,
+        _ => refused,
+    });
+    service.metrics.record_store_entries(service.store.len());
     match error {
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
@@ -708,19 +951,28 @@ fn store_response(error: &StoreError) -> Response {
 }
 
 /// Every Evidence failure, as much as a caller is told.
-fn issuance_response(error: &IssuanceError) -> Response {
+fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
     match error {
-        IssuanceError::Refused => problem(
-            StatusCode::FORBIDDEN,
-            "invalid_credential_request",
-            "the credential source refused this request",
-        ),
-        IssuanceError::NotAvailable => problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential_request",
-            "the credential source has no evidence for this request",
-        ),
+        IssuanceError::Refused => {
+            service.metrics.record_outcome(Outcome::EvidenceRefused);
+            problem(
+                StatusCode::FORBIDDEN,
+                "invalid_credential_request",
+                "the credential source refused this request",
+            )
+        }
+        IssuanceError::NotAvailable => {
+            service
+                .metrics
+                .record_outcome(Outcome::EvidenceNotAvailable);
+            problem(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential_request",
+                "the credential source has no evidence for this request",
+            )
+        }
         IssuanceError::Unavailable | IssuanceError::Malformed | IssuanceError::Configuration(_) => {
+            service.metrics.record_outcome(Outcome::EvidenceUnavailable);
             tracing::warn!(
                 target: "registry_evidence_oid4vci::service",
                 "the credential source did not answer usably"
@@ -738,7 +990,7 @@ async fn unknown_route() -> Response {
     problem(StatusCode::NOT_FOUND, "invalid_request", "no such route")
 }
 
-fn unauthorized(description: &str) -> Response {
+fn unauthorized(description: &'static str) -> Response {
     let mut response = problem(StatusCode::UNAUTHORIZED, "invalid_token", description);
     response
         .headers_mut()
@@ -748,11 +1000,13 @@ fn unauthorized(description: &str) -> Response {
 
 /// One error shape for every refusal: the OAuth members a wallet already reads,
 /// carrying fixed text chosen here and never any part of the request.
-fn problem(status: StatusCode, error: &str, description: &str) -> Response {
-    value_response(
+fn problem(status: StatusCode, error: &'static str, description: &'static str) -> Response {
+    let mut response = value_response(
         status,
         &json!({"error": error, "error_description": description}),
-    )
+    );
+    response.extensions_mut().insert(ProblemCode(error));
+    response
 }
 
 fn value_response(status: StatusCode, value: &Value) -> Response {
@@ -835,6 +1089,31 @@ mod tests {
 
     const OFFER_TOKEN: &str = "offer-token";
     const CONFIGURATION_ID: &str = "urn:example:requirement:holder-bound";
+
+    #[derive(Clone, Default)]
+    struct TestLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TestLogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for TestLogBuffer {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
 
     /// Authorizes exactly one credential, and nothing else.
     ///
@@ -1073,10 +1352,77 @@ mod tests {
         let service = DeliveryService::load(config).expect("the service loads");
 
         let rendered = format!("{service:?}");
-        for member in ["kty", "\"d\"", "delivery-client"] {
+        for member in [
+            "kty",
+            "\"d\"",
+            "delivery-client",
+            "https://wallet.example.org",
+            "https://mint.example.org",
+        ] {
             assert!(!rendered.contains(member), "rendered: {rendered}");
         }
-        assert!(rendered.contains("https://wallet.example.org"));
+        assert!(rendered.contains("DeliveryService"));
+    }
+
+    #[test]
+    fn operational_logs_omit_deployment_and_offer_canaries() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the test runtime starts");
+        let buffer = TestLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(buffer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+                let directory = tempfile::tempdir().expect("temp dir");
+                let (service, _) = wired_service(directory.path());
+                let server = TestServer::new(build_app(service));
+                let response = server
+                    .post(OFFERS_PATH)
+                    .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                    .json(&offer_body(false))
+                    .await;
+                assert_eq!(response.status_code(), StatusCode::CREATED);
+            });
+        });
+
+        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
+            .expect("logs are UTF-8");
+        assert!(rendered.contains("offer created"), "logs: {rendered}");
+        assert!(rendered.contains("route=\"/offers\""), "logs: {rendered}");
+        for canary in [
+            OFFER_TOKEN,
+            SELECTOR_VALUE,
+            CONFIGURATION_ID,
+            "adopter-front-end",
+            "evidence-oid4vci",
+            "https://wallet.example.org",
+            "https://mint.example.org",
+        ] {
+            assert!(!rendered.contains(canary), "logs rendered {canary}");
+        }
+    }
+
+    #[tokio::test]
+    async fn inspect_reports_the_same_derived_profile_the_service_serves() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, _) = wired_service(directory.path());
+        let inspected = service.inspect().await.expect("inspection succeeds");
+        assert_eq!(
+            inspected["profile"],
+            json!("registry.evidence.oid4vci-profile/v1")
+        );
+        assert_eq!(
+            inspected["credentialIssuerMetadata"]["batch_credential_issuance"]["batch_size"],
+            json!(4)
+        );
+        assert_eq!(inspected["deployment"]["replicas"], json!(1));
+        assert_eq!(inspected["deployment"]["metricsEnabled"], json!(false));
     }
 
     #[tokio::test]
@@ -1425,6 +1771,16 @@ mod tests {
         let response = server.post(NONCE_PATH).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         assert!(response.json::<Value>()["c_nonce"].is_string());
+
+        let response = server.post(NONCE_PATH).json(&json!({})).await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let response = server
+            .post(NONCE_PATH)
+            .json(&json!({"unsupported": true}))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_request"));
     }
 
     /// A wallet that follows the specification can collect its credential.
@@ -2341,5 +2697,87 @@ mod tests {
             .await
             .expect("the serving task joins")
             .expect("serving ends cleanly");
+    }
+
+    #[tokio::test]
+    async fn a_configured_private_metrics_listener_serves_beside_the_delivery_listener() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public_port = {
+            let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe public port");
+            probe.local_addr().expect("public address").port()
+        };
+        let metrics_port = {
+            let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe metrics port");
+            probe.local_addr().expect("metrics address").port()
+        };
+        let path = write_deployment(directory.path(), public_port, 0o600);
+        let document = fs::read_to_string(&path).expect("read the configuration");
+        fs::write(
+            &path,
+            document.replace(
+                "evidence:\n",
+                &format!(
+                    "metricsListener:\n  address: 127.0.0.1\n  port: {metrics_port}\nevidence:\n"
+                ),
+            ),
+        )
+        .expect("configure metrics");
+        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let service = Arc::new(DeliveryService::load(config).expect("the service loads"));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn(serve(service, async move {
+            let _ = stopped.await;
+        }));
+
+        async fn get(port: u16, path: &str) -> String {
+            let mut stream = connect(port).await;
+            stream
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .expect("write request");
+            let mut answer = Vec::new();
+            stream
+                .read_to_end(&mut answer)
+                .await
+                .expect("read response");
+            String::from_utf8(answer).expect("HTTP is UTF-8")
+        }
+
+        let metrics = get(metrics_port, "/metrics").await;
+        assert!(metrics.starts_with("HTTP/1.1 200"), "{metrics}");
+        assert!(metrics.contains("evidence_oid4vci_outcomes_total"));
+        let public = get(public_port, "/metrics").await;
+        assert!(public.starts_with("HTTP/1.1 404"), "{public}");
+        let wallet_route = get(metrics_port, ISSUER_METADATA_PATH).await;
+        assert!(wallet_route.starts_with("HTTP/1.1 404"), "{wallet_route}");
+
+        stop.send(()).expect("request shutdown");
+        serving
+            .await
+            .expect("serving task joins")
+            .expect("serving ends cleanly");
+    }
+
+    #[tokio::test]
+    async fn serve_revalidates_the_metrics_listener_before_any_socket_is_bound() {
+        for (address, port) in [("0.0.0.0", 9090), ("127.0.0.1", 8090)] {
+            let directory = tempfile::tempdir().expect("temp dir");
+            let mut config = load_deployment(directory.path());
+            config.metrics_listener = Some(crate::config::MetricsListenerConfig {
+                address: address.to_owned(),
+                port,
+            });
+            let (service, _) = wired_service_over(config);
+
+            let error = serve(service, std::future::pending())
+                .await
+                .expect_err("a mutated unsafe metrics listener is refused");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
     }
 }

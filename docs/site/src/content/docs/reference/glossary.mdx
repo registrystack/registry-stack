@@ -17,6 +17,7 @@ standards_referenced:
   - dcat
   - bregdcat-ap
   - cpsv-ap
+  - oid4vci
   - openapi
   - shacl
   - json-schema
@@ -325,7 +326,7 @@ Product names are always in English, including on future translated pages.
   <dd>The institutional boundary whose operators, runtime identities, policy, and deployment approval govern one Registry Stack project. A country can contain several trust domains, and a trust domain does not need to represent a country. One Evidence Gateway serving process serves exactly one operator-controlled trust domain.</dd>
 
   <dt>wallet</dt>
-  <dd>Holder-owned application that stores credentials and presents them to verifiers. No current Registry Stack service integrates with one, and wallet onboarding, wallet attestation, trust-list membership, and holder key generation, holding, escrow, or recovery by the service are non-goals under both subject binding modes. The holder-bound mode defines what a relying party verifies when a holder presents a credential; no test in this repository covers a wallet holding or presenting an Evidence Gateway credential.</dd>
+  <dd>Holder-owned application that stores credentials and presents them to verifiers. The separate `registry-evidence-oid4vci` supporting service exposes a frozen OID4VCI delivery profile to a wallet, while Evidence Gateway itself integrates with none. Wallet onboarding, wallet attestation, trust-list membership, and holder key generation, holding, escrow, or recovery by a service remain non-goals. The holder-bound profile defines what a relying party verifies when a holder presents a credential; no test in this repository covers a wallet storing or presenting an Evidence Gateway credential.</dd>
 </dl>
 
 ## Style notes

@@ -311,6 +311,12 @@
       "type": "array",
       "uniqueItems": true
     },
+    "holderBoundBatchMaxSize": {
+      "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
+      "maximum": 16,
+      "minimum": 1,
+      "type": "integer"
+    },
     "issuedBy": {
       "format": "uri",
       "maxLength": 512,
@@ -330,6 +336,7 @@
     "assuranceProfile",
     "issuedBy",
     "providedBy",
+    "holderBoundBatchMaxSize",
     "definitions"
   ],
   "title": "Requester-scoped Evidence definitions Version 1",

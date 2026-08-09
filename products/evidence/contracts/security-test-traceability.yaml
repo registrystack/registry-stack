@@ -409,6 +409,13 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_access_token_is_claimed_once}
       - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_redeemed_pre_authorized_code_is_refused_on_reuse}
       - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_claimed_access_token_is_refused_on_reuse}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: a_recognized_token_is_claimed_before_every_later_validation_failure}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: concurrent_code_and_token_claims_allow_one_issuance_per_generation}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: offer_saturation_fails_closed_without_evicting_a_live_exchange}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: token_saturation_does_not_spend_the_offer_that_could_not_be_exchanged}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: restart_invalidates_outstanding_state_with_value_free_errors}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: unknown_redeemed_and_locked_codes_share_one_value_free_error}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: expiry_cleanup_preserves_live_state_and_releases_expired_state}
   - id: sec-oid4vci-tx-code-bounded
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_wrong_transaction_code_is_refused_and_bounded}
@@ -428,6 +435,8 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_proof_payload_naming_a_claim_twice_is_refused_rather_than_resolved}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_this_service_did_not_mint_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_nonce_whose_expiry_was_rewritten_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: a_recognized_token_is_claimed_before_every_later_validation_failure}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: one_stateless_nonce_is_reusable_across_separate_authorizations}
   - id: sec-oid4vci-no-audience-scoped-laundering
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_audience_scoped_requirement_cannot_be_offered_to_a_wallet}
@@ -468,3 +477,12 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: graceful_shutdown_waits_for_admitted_request_batch_and_terminal_audit}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
+  - id: sec-oid4vci-telemetry-private
+    tests:
+      - {file: crates/registry-evidence-oid4vci/src/observability.rs, name: rendered_metrics_use_only_closed_labels_and_never_render_canaries}
+      - {file: crates/registry-evidence-oid4vci/src/observability.rs, name: operational_request_logs_do_not_render_request_or_deployment_canaries}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: operational_logs_omit_deployment_and_offer_canaries}
+      - {file: crates/registry-evidence-oid4vci/src/observability.rs, name: the_metrics_listener_serves_only_metrics}
+      - {file: crates/registry-evidence-oid4vci/src/config.rs, name: metrics_are_absent_by_default_and_the_optional_listener_is_private_and_distinct}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_configured_private_metrics_listener_serves_beside_the_delivery_listener}
+      - {file: crates/registry-evidence-oid4vci/src/service.rs, name: serve_revalidates_the_metrics_listener_before_any_socket_is_bound}

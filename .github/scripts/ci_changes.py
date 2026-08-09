@@ -82,8 +82,13 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
         "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
         "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
+        "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
         "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
         "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+        "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
+        "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
+        "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
+        "products/evidence/scripts/compat/inji-oid4vci.sh",
     }
 )
 
@@ -131,13 +136,10 @@ EVIDENCE_BINDING_PACKAGES = frozenset(
 # The Python binding is what `request-evidence-from-an-application` imports, so
 # a change to it has to replay that tutorial and is not listed here. Move a
 # package out of this set as soon as a registered tutorial exercises it, or its
-# regressions reach readers before they reach CI. Evidence OID4VCI has its own
-# Rust and frozen-profile contract coverage; the current tutorial gate neither
-# builds the adapter nor executes a wallet flow. Exemption is from the tutorial
-# trigger alone, never from Evidence contracts or package tests.
-EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset(
-    {"registry-evidence-client-node", "registry-evidence-oid4vci"}
-)
+# regressions reach readers before they reach CI. The registered OID4VCI
+# interoperability tutorial builds the adapter and executes its sanitized
+# wallet-flow test, so the adapter is deliberately not exempt.
+EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset({"registry-evidence-client-node"})
 
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.

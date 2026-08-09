@@ -685,6 +685,7 @@ impl EvidenceRuntime {
             assurance_profile: self.bundle().config.assurance_profile,
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
+            holder_bound_batch_max_size: self.bundle().config.holder_bound_batch_ceiling(),
             definitions,
         };
         let contract_value = serde_json::to_value(&response)

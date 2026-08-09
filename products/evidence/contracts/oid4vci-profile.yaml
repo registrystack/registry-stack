@@ -31,6 +31,18 @@ standards_profile:
     wire shapes would double the protocol surface to chase an ecosystem that is
     mid-migration, and the Final identifier is the one the frozen SD-JWT VC
     profile already emits.
+  interoperability_target:
+    status: exact-pinned-evidence-passed
+    tested_on: 2026-08-09
+    inji_wallet_develop: 2fa12c3285b6523db340c3dd2333454b750b40a4
+    inji_vci_client_android_develop: f1d7ee2b14e996e18bfc7c40fbf89ec31b768951
+    inji_vci_client_ios_develop: dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c
+    claim_rule: >-
+      The sanitized Registry flow and these revisions' focused public client
+      tests passed through the reproducible runner tracked by issue 690. This
+      is bounded interoperability evidence for the exact revisions and test
+      conditions, not device or UI evidence, another-revision compatibility,
+      certification, full conformance, or general Inji compatibility.
 service_boundary:
   rule: >-
     Each of the following is a property the service must not have. The first
@@ -63,9 +75,12 @@ endpoints:
       credential_configurations_supported entry is derived from the Evidence
       bundle rather than hand-written, so published metadata cannot drift from
       what Evidence will actually issue. The batch_credential_issuance
-      batch_size is the holder-key ceiling the Evidence client enforces, read
-      from that constant rather than restated, so the number a wallet is told it
-      may send is the number the credential endpoint accepts.
+      batch_size is the backing deployment's effective holder-bound batch
+      ceiling from authenticated Evidence discovery, bounded again by the
+      Evidence client's compile-time request ceiling. That effective value is
+      captured with each offer and enforced before proof processing, so neither
+      metadata nor a later discovery change can advertise a batch the complete
+      deployment will refuse.
   - path: GET /.well-known/oauth-authorization-server
     authorization: none
     rule: >-
@@ -99,7 +114,8 @@ endpoints:
   - path: POST /nonce
     authorization: none, as the specification requires
     rule: >-
-      Empty request, a c_nonce response, and Cache-Control no-store. Nothing
+      Empty body or empty JSON object, a c_nonce response, and Cache-Control
+      no-store. Nothing
       about the caller is read: no header is inspected, so a nonce is minted for
       a caller this service cannot name and is bound to no access token. The
       nonce is a freshness challenge, a keyed tag over its own expiry, verified
@@ -155,6 +171,18 @@ state_model:
     - Single use is enforced per process. A second replica breaks it, which is why there is exactly one. Adding a replica means a shared store, and that decision is not taken here.
     - Single use is mostly a detection property. It turns silent duplicate issuance from a stolen offer into one party receiving an error and complaining. The short lifetime and the transaction code are the primary defenses, not the marker.
     - Selector values are held in the deployment's memory rather than encrypted into a client-held code, so they are never placed in a QR code that can be forwarded or photographed.
+operational_telemetry:
+  rule: >-
+    Metrics are absent by default. When configured, the process binds a second
+    loopback-or-private listener that serves only GET /metrics. Its route,
+    method, status, problem, and outcome labels come from closed vocabularies,
+    state pressure and cleanup are unlabeled gauges or counters, and neither
+    metrics nor request logs carry a request-derived or deployment-specific
+    identifier.
+  excluded_values:
+    - offer codes, transaction codes, access tokens, nonces, and proofs
+    - holder keys, credentials, selectors, and subject identifiers
+    - raw issuer, audience, client, and credential-configuration identifiers
 prohibitions:
   rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
   items:
@@ -166,6 +194,11 @@ prohibitions:
     - wallet attestation, trust-list membership, and any judgement about which wallet is asking
     - remote DID resolution or any key lookup selected by a proof
     - draft-13 compatibility in either direction
+    - the authorization code flow, pushed authorization requests, and DPoP
+    - any credential format other than dc+sd-jwt
+    - credential status, revocation, lifecycle, or management operations
+    - multi-replica state or any second replica under the process-local store
+    - protocol plugins, format plugins, or general issuer extensibility
 # Each identifier is a named security negative resolved through
 # security-test-traceability.yaml to executable tests, and each is the negative
 # of a row in security-invariant-matrix.yaml. The traceability checker requires
@@ -178,3 +211,4 @@ negative_tests:
   - sec-oid4vci-proof-closed
   - sec-oid4vci-no-audience-scoped-laundering
   - sec-oid4vci-service-holds-no-key
+  - sec-oid4vci-telemetry-private

@@ -103,6 +103,25 @@ def _stub_base_names(class_def: ast.ClassDef) -> set[str]:
     return {base.id for base in class_def.bases if isinstance(base, ast.Name)}
 
 
+def _functional_typed_dict_keys(tree: ast.Module, name: str) -> set[str]:
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            continue
+        if not isinstance(node.value, ast.Call) or len(node.value.args) != 2:
+            break
+        members = node.value.args[1]
+        if not isinstance(members, ast.Dict):
+            break
+        return {
+            key.value
+            for key in members.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+    raise AssertionError(f"{name} is not a functional TypedDict in the stub")
+
+
 def _live_member_names(cls: type) -> set[str]:
     return set(vars(cls)) - {"__doc__", "__module__"}
 
@@ -134,6 +153,22 @@ class DriftTest(unittest.TestCase):
     def test_the_base_exception_declares_exactly_the_settable_attributes(self):
         stub_names = _stub_member_names(self.stub_classes["EvidenceClientError"])
         self.assertEqual(stub_names, SETTABLE_EXCEPTION_ATTRIBUTES)
+
+    def test_holder_key_labels_are_independently_optional_in_the_stub(self):
+        required = {"kty", "crv", "x", "y"}
+        expected = {
+            "HolderPublicKey": required,
+            "HolderPublicKeyWithAlgorithm": required | {"alg"},
+            "HolderPublicKeyWithKeyId": required | {"kid"},
+            "HolderPublicKeyWithLabels": required | {"alg", "kid"},
+        }
+        self.assertEqual(
+            {
+                name: _functional_typed_dict_keys(self.tree, name)
+                for name in expected
+            },
+            expected,
+        )
 
     def test_every_exception_subclass_is_declared_and_live_under_the_base(self):
         stub_subclass_names = set(self.stub_classes) & EXCEPTION_SUBCLASS_NAMES

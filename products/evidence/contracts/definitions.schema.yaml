@@ -3,12 +3,19 @@ $id: https://registrystack.org/schemas/evidence/definitions-v1.json
 title: Requester-scoped Evidence definitions Version 1
 type: object
 additionalProperties: false
-required: [schema, assuranceProfile, issuedBy, providedBy, definitions]
+required: [schema, assuranceProfile, issuedBy, providedBy, holderBoundBatchMaxSize, definitions]
 properties:
   schema: {const: registry.evidence-definitions/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
+  holderBoundBatchMaxSize:
+    description: >-
+      The effective deployment ceiling for one holder-bound batch. A protocol
+      adapter may advertise no larger batch than this value.
+    type: integer
+    minimum: 1
+    maximum: 16
   definitions:
     type: array
     maxItems: 16384
