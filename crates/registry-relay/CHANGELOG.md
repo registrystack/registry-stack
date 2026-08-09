@@ -4,7 +4,9 @@
 
 ## 0.18.0 - 2026-08-09
 
-- No user-visible Registry Relay changes.
+- Build identity is now explicit: exact-tag release binaries report `0.18.0`,
+  while source and development builds report `0.18.0-dev`. Scripts that
+  inspect source builds must not assume a bare semantic version.
 
 ## 0.17.0 - 2026-08-07
 
